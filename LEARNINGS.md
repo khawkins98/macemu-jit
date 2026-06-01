@@ -169,3 +169,64 @@ Root theme: autoconf 2.73 (Homebrew) probes the compiler and bakes `-std=gnu23` 
 - **Boot result (interpreter mode, `jit false`, the user's Mac OS 8.6 ISO):** **the CD now opens — the spurious EAGAIN is gone, and the boot proceeds past the SCSI scan.** Before the fix the emulator printed `WARNING: Cannot open …iso (Resource temporarily unavailable)` and then spun the SCSI bus scan forever (1.81M log lines / ~18 MB in ~30 s, no boot volume). After the fix: **zero "Cannot open" warnings, zero SCSI-spin output** — the log stays at a single harmless line (`PPC-JIT-A64: failed to allocate 4096 KB code cache`, irrelevant in interpreter mode). The process ran continuously and was alive at the 30 s / 60 s / 120 s / 240 s checkpoints, burning **100% CPU with ~4m37s of CPU time over 4m37s elapsed** (RSS ~69 MB) — i.e. actively executing the PPC boot, not idle-waiting on a missing device. No crash, no `DiagnosticReports` entry. This is exactly the behavior expected once a boot volume becomes available: the SCSI manager finds the CD and hands off to the OS boot, which runs quietly (no console logging) inside the SDL/Metal window.
 - **Screenshot caveat:** could **not** capture the emulator window — `screencapture -x` fails in this environment with `could not create image from display` (the agent's shell lacks macOS Screen Recording permission). So the *visual* boot stage (Happy Mac → "Welcome to Mac OS" splash → desktop/installer) was not directly observed; the evidence is the absence of the failure signature plus sustained 100%-CPU PPC execution. To see the screen the user (or a process with Screen Recording permission) should re-run `./SheepShaver` and watch the window directly.
 - **Net:** item 2 of the Phase-1 conclusion is resolved; interpreter-mode boot is now unblocked at the I/O layer. Remaining for a confirmed boot-to-desktop: visually verify the window (needs Screen Recording permission). JIT-mode boot still blocked on item 1 (W^X / `MAP_JIT`).
+
+## 2026-06-01 — Phase 2 design research (addressing model & W^X)
+
+### __PAGEZERO cannot be shrunk on macOS arm64 (Option "REAL_ADDRESSING with low memory" is impossible)
+- Apple DTS states explicitly that custom `pagezero_size` is "not a supportable option in the arm64
+  environment" — arm64 code must be ASLR-compatible, and a small pagezero is incompatible with that.
+  `-Wl,-pagezero_size,0x1000` produces "Malformed Mach-O" at link time on arm64; the minimum viable
+  __PAGEZERO is 0x100000000 (4 GB). Source: https://developer.apple.com/forums/thread/655950
+- The classic pagezero hack only ever worked on x86_64 (cebix's `PAGEZERO_HACK` exists only in the
+  x86 config headers; `config-macosx-aarch64.h:431` leaves it commented out).
+- macOS has no `personality()` equivalent to disable ASLR (upstream's Linux workaround,
+  `main_unix.cpp:822-835`). Net: guest addresses can NEVER equal host addresses on macOS arm64.
+
+### DIRECT_ADDRESSING is the correct model — and it's already half-wired
+- `configure.ac` already sets `NATMEM_OFFSET 0x400000000000` for `arm-apple-*` hosts; when
+  NATMEM_OFFSET is defined (and EMULATED_PPC), `sysdeps.h:90-99` selects DIRECT_ADDRESSING.
+- Under DIRECT: host = NATMEM_OFFSET + (guest & 0xFFFFFFFF) (`vm.hpp:188-223`). This is the proven
+  approach kanjitalk755 uses for macOS x86_64 (with `gZeroPage`/`gKernelData` redirection for the
+  few regions Mac OS needs at fixed low guest addresses — `vm.hpp:207-219`).
+- CONFIRMED WORKING at runtime: the Task 6 interpreter boot allocated RAM/framebuffer at
+  0x400050590000 (= NATMEM_OFFSET + guest range) and executed PPC code through ROM init into the OS.
+  The interpreter path is already DIRECT-correct on macOS arm64.
+- The SS_TEST harness path (`sheepshaver_glue.cpp:935-984`) is the ONLY runtime piece still assuming
+  REAL addressing (low-4GB identity); it needs to be ported to the same DIRECT model so the opcode
+  harness can serve as a regression gate.
+
+### The aarch64 JIT hardcodes REAL addressing — the core Phase 2 code change
+- `ppc-jit.cpp` contains zero references to NATMEM_OFFSET / VMBaseDiff / vm_wrap_address. Load/store
+  codegen (`emit_load_ea_base`, `ppc-jit.cpp:516-524`, lwz at ~1846-1862, etc.) uses the bare 32-bit
+  guest EA as a host pointer (`LDR Wt, [Xn]` with no base offset).
+- This works on Linux only because upstream maps guest RAM at low addresses (ASLR disabled via
+  personality()). On macOS (RAM at NATMEM_OFFSET) every JIT memory access would fault or read garbage.
+- Fix shape (mechanical, well-contained): reserve a callee-saved register (prologue at
+  ppc-jit.cpp:~3570 currently saves x20=RSTATE), load NATMEM_OFFSET once, convert guest accesses to
+  register-offset form (`LDR Wt, [Xbase, Xea]`). All access sites funnel through the EA-in-RTMP0
+  idiom, so a small set of helpers centralizes the change. AArch64 has native register-offset
+  load/store encodings — usually zero extra instructions per access.
+- Bonus: this also closes a latent interpreter-vs-JIT divergence that exists upstream (interpreter
+  nominally DIRECT, JIT effectively REAL — only coincidentally consistent on Linux).
+
+### W^X / MAP_JIT facts (verified on this machine + Apple docs)
+- The JIT cache RWX mmap fails with EPERM on macOS arm64. Adding MAP_JIT makes it succeed.
+- `pthread_jit_write_protect_np(0/1)` is the per-thread W↔X toggle; `sys_icache_invalidate()` is
+  mandatory after emission (separate I/D caches on arm64).
+- `com.apple.security.cs.allow-jit` is only enforced when the Hardened Runtime is enabled (a
+  code-signing flag, off by default). Ad-hoc/linker-signed dev builds (what we have:
+  `flags=0x20002(adhoc,linker-signed)`) can use MAP_JIT freely — expected, stable behavior, not an
+  accident. The entitlement becomes mandatory in Phase 4 when we sign with Hardened Runtime for
+  notarization.
+- Guest RAM/ROM should drop PROT_EXEC entirely: emulated PPC code is only ever read as data; the JIT
+  never branches into guest memory (translated code lives in the separate MAP_JIT cache).
+
+### Phase 2 task ordering (informed by all of the above)
+1. MAP_JIT + write-protect toggling for `jit_cache_alloc` — single shared blocker for JIT boot,
+   rom-harness, and JIT opcode vectors
+2. Port SS_TEST harness RAM allocation to DIRECT addressing — makes the opcode harness usable as the
+   regression gate for step 3
+3. aarch64 JIT DIRECT_ADDRESSING codegen (base register) — the centerpiece; verified family-by-family
+   with the harness
+4. Visual confirmation of interpreter boot-to-desktop (needs Screen Recording permission or the user
+   watching) — already unblocked by the CD-open fix

@@ -199,7 +199,7 @@ depend dep:
 $(OBJ_DIR)/SDLMain.o : SDLMain.m
 	$(CC) $(CPPFLAGS) $(DEFS) $(CFLAGS) -c $< -o $@
 $(OBJ_DIR)/%.o : ../slirp/%.c
-	$(CC) $(CPPFLAGS) $(DEFS) $(CFLAGS) $(SLIRP_CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(DEFS) $(CFLAGS) $(SLIRP_CFLAGS) -std=gnu89 -c $< -o $@
 $(OBJ_DIR)/%.o : %.c
 	$(CC) $(CPPFLAGS) $(DEFS) $(CFLAGS) -c $< -o $@
 $(OBJ_DIR)/DiskType.o : DiskType.m

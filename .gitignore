@@ -42,3 +42,6 @@ SheepShaver/rom-harness/rom-harness
 SheepShaver/rom-harness/rom-harness
 SheepShaver/rom-harness/*.o
 *.log
+
+# AI
+CLAUDE.md

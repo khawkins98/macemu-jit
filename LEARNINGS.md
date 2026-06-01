@@ -298,3 +298,23 @@ nothing when the cache allocates successfully.
 spinlock. Identical to kanjitalk755. Not the cause here (the loop never even reached the poll), and a
 trial `volatile` did not change behavior, so it was left untouched — but it's a real
 memory-visibility smell worth revisiting if interrupt-latency bugs surface later.
+
+## 2026-06-01 — MILESTONE: First boot to desktop on macOS arm64
+
+**Mac OS 8.6 boots to the Finder desktop, natively on Apple Silicon (macOS 26.4.1, M-series), in
+interpreter mode** — confirmed visually by Ken (screenshot: Finder running, "Mac OS Internal
+Edition" CD mounted and browsable, Unix extfs volume on desktop, menu bar/Trash functional).
+
+What it took (the full chain, all on branch macos-arm64):
+1. configure fix: host_cpu=arm on macOS → JIT/build wiring (214b1a3a)
+2. Three build portability fixes: slirp/C23, genexec $(CXX) -E, MAP_FIXED_NOREPLACE (5d950374..705d3dad)
+3. CD-image open fix: O_EXLOCK spurious EAGAIN → read-only opens retry without lock (9bc215cd)
+4. Boot-hang fix: zero-initialized JIT block cache + failed cache alloc = infinite loop; now falls
+   back to interpreter cleanly (3ed724ea)
+
+Boot sequence observed: ROM load → SCSI scan finds CD → Sony/Disk drivers up → video (SDL2/Metal,
+800x600) → Mac OS 8.6 splash → Finder desktop. Boot time: a few minutes (interpreter).
+
+Remaining for full Phase 2: MAP_JIT cache fix (Task 2a) → JIT initializes; SS_TEST DIRECT port
+(2b) → harness gates work; JIT DIRECT addressing (2c) → JIT actually executes correctly. Then
+this same boot should be ~5x faster.

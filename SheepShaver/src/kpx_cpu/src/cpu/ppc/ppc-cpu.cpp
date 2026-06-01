@@ -722,24 +722,30 @@ void powerpc_cpu::execute(uint32 entry)
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
 					/* GATE 3: PC range check.
-					 * If the JIT produced an out-of-range PC, the block branched to
-					 * hardware-mapped Mac OS space (e.g. NuBus/MMIO) that SheepShaver
-					 * doesn't map. The interpreter handles these gracefully via the
-					 * SIGSEGV skip path (ignoresegv). So:
-					 *   1. Restore PC to block entry (safe interpreter start)
-					 *   2. Invalidate this block from JIT cache
-					 *   3. Fall through to interpreter (goto skip_jit)
+					 * If the JIT produced a PC outside the JIT's compile range, the
+					 * block branched into ROM, SheepMem, or other valid Mac OS space
+					 * that the JIT can't compile but the interpreter handles natively.
+					 * The JIT computed the correct next PC — do NOT reset it. Just
+					 * evict the block from the JIT cache (so it stays interpreter-only)
+					 * and dispatch the interpreter for the correct jit_pc.
+					 * Former "Reset to block entry" was wrong: it caused non-idempotent
+					 * side effects (register writes, memory stores) to be replayed,
+					 * corrupting state and leading to spurious crashes.
 					 * Contract: see AARCH64_JIT_RUNTIME_CONTRACT.md */
 					uint32 jit_pc = pc();
+					/* Exclude ROM (0x50000000-0x504FFFFF), SIG_STACK, and SheepMem
+					 * (0x50510000-0x5058FFFF) which are valid Mac OS execution targets.
+					 * 0x600000 covers ROM_AREA_SIZE + SIG_STACK_SIZE + SheepMem::size. */
 					if (jit_pc >= (uint32)(uintptr_t)RAMBaseHost + RAMSize &&
-					    !(jit_pc >= (uint32)ROMBase && jit_pc < (uint32)ROMBase + 0x500000)) {
-						fprintf(stderr, "PPC-JIT-A64: GATE3: out-of-range PC 0x%08x after block at 0x%08x — handing to interpreter\n",
+					    !(jit_pc >= (uint32)ROMBase && jit_pc < (uint32)ROMBase + 0x600000)) {
+						fprintf(stderr, "PPC-JIT-A64: GATE3: out-of-range PC 0x%08x after block at 0x%08x — interpreter dispatch\n",
 						        jit_pc, jblk.ppc_start_pc);
-						/* Reset to block entry so interpreter starts from a known-good PC */
-						set_register(powerpc_registers::PC, any_register(jblk.ppc_start_pc));
-						/* Evict from block cache so this block always goes to interpreter */
+						/* Evict so future visits use interpreter, not JIT */
 						ppc_jit_aarch64_invalidate_pc(jblk.ppc_start_pc);
-						goto skip_jit;
+						/* Find or compile interpreter block for the correct jit_pc */
+						bi = my_block_cache.find(pc());
+						if (bi) goto pdi_execute;
+						continue; /* outer for(;;): compile interpreter block for pc() */
 					}
 					if (!spcflags().empty()) {
 						if (!check_spcflags()) goto return_site;

@@ -119,6 +119,7 @@ extern "C" {
 #define SIGSEGV_THREAD_STATE_COUNT		ARM_THREAD_STATE64_COUNT
 #define SIGSEGV_REGISTER_FILE			((SIGSEGV_REGISTER_TYPE *)&SIP->thr_state.MACH_FIELD_NAME(x[0])) /* x[0] is the first GPR we consider */
 #define SIGSEGV_SKIP_INSTRUCTION		aarch64_skip_instruction
+#define SIGSEGV_FAULT_INSTRUCTION		SIP->thr_state.MACH_FIELD_NAME(pc)
 #endif
 
 #ifdef __x86_64__

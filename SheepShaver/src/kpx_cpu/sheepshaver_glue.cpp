@@ -54,8 +54,10 @@
 
 /* MAP_FIXED_NOREPLACE is a Linux-only mmap flag (Linux >= 4.17). macOS and
    other BSDs lack it. Define it as a no-op (0) so the fixed-address hint is
-   simply ignored; the caller already retries with a kernel-chosen address
-   and validates the result, so behaviour is unchanged. */
+   simply ignored; without MAP_FIXED the address hint becomes advisory-only
+   and the kernel may place the mapping elsewhere.  The caller's retry-and-
+   validate logic (low-4GB check) handles any mismatch, so behaviour is
+   unchanged. */
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0
 #endif

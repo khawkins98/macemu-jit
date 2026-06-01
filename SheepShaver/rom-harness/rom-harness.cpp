@@ -42,6 +42,17 @@
 #define MAP_FIXED_NOREPLACE 0
 #endif
 
+/* The emulated RAM+ROM region holds PPC data/instructions that the JIT *reads*;
+ * native ARM64 code is executed from the separate JIT code cache (jit_cache_alloc,
+ * MAP_JIT). This region therefore never needs PROT_EXEC. On macOS arm64 a RWX
+ * anonymous mapping is rejected with EPERM (W^X policy), so request only RW there.
+ * Linux keeps the original RWX request unchanged. */
+#if defined(__APPLE__) && defined(__aarch64__)
+#define ROM_HARNESS_MEM_PROT (PROT_READ | PROT_WRITE)
+#else
+#define ROM_HARNESS_MEM_PROT (PROT_READ | PROT_WRITE | PROT_EXEC)
+#endif
+
 /* ---------- Forward declarations for the JIT ---------- */
 #include "ppc-jit.h"
 
@@ -1144,12 +1155,12 @@ int main(int argc, char **argv) {
 	
 	uint8_t *mem = (uint8_t *)mmap(
 		(void *)0x10000000UL, total_size,
-		PROT_READ | PROT_WRITE | PROT_EXEC,
+		ROM_HARNESS_MEM_PROT,
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
 		-1, 0);
 	if (mem == MAP_FAILED) {
 		mem = (uint8_t *)mmap(NULL, total_size,
-			PROT_READ | PROT_WRITE | PROT_EXEC,
+			ROM_HARNESS_MEM_PROT,
 			MAP_PRIVATE | MAP_ANONYMOUS,
 			-1, 0);
 	}

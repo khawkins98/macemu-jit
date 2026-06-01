@@ -318,3 +318,60 @@ Boot sequence observed: ROM load → SCSI scan finds CD → Sony/Disk drivers up
 Remaining for full Phase 2: MAP_JIT cache fix (Task 2a) → JIT initializes; SS_TEST DIRECT port
 (2b) → harness gates work; JIT DIRECT addressing (2c) → JIT actually executes correctly. Then
 this same boot should be ~5x faster.
+
+## 2026-06-01 — Phase 2 implementation
+
+### Task 2a: MAP_JIT code cache — results
+
+Implemented MAP_JIT + per-thread write-protect toggling for the aarch64 JIT code cache.
+The W^X RWX-mmap blocker is resolved for the code cache and the rom-harness.
+
+**Inventory (cache alloc + every cache-write site):**
+- Alloc: `jit-target-cache.hpp:jit_cache_alloc()` — the single `mmap` for the code cache.
+- Write site 1 — block compilation: `ppc-jit.cpp ppc_jit_aarch64_compile()`, all `emit32()` between
+  `code_start` and the final `jit_cache_flush(code_start, code_bytes)`.
+- Write site 2 — runtime chain back-patch: `ppc-jit.cpp patch_chain_sites()`, the single-word
+  `*site->patch_loc = B<off>` overwrite (one bracket per patched word).
+- rom-harness: its `mem` mmap is the emulated RAM+ROM **data** region (read by the JIT, never
+  executed); native code runs only from the separate `jit_cache_alloc` cache.
+
+**Changes:**
+- `jit-target-cache.hpp`: added `JIT_CACHE_MAP_FLAGS` (`+MAP_JIT` on Apple arm64),
+  `jit_cache_begin_write()` = `pthread_jit_write_protect_np(0)`, `jit_cache_end_write()` =
+  `pthread_jit_write_protect_np(1)` + `sys_icache_invalidate()`. `jit_cache_alloc()` uses the new
+  flags (kept `PROT_READ|WRITE|EXEC`). `jit_cache_flush()` early-returns on Apple (icache handled by
+  `sys_icache_invalidate`); Linux DC CVAU / IC IVAU path is byte-identical, behind `#else`.
+- `ppc-jit.cpp`: bracketed the whole-block compile with `begin_write` (after setting `jit_code_ptr`)
+  and `end_write` (after the flush); also restore executable state on the early `return false` empty-block
+  bail. Bracketed each `patch_chain_sites` word write. Added a one-time `code cache allocated (MAP_JIT)`
+  log on Apple.
+- `rom-harness.cpp`: emulated `mem` region now requests `PROT_READ|PROT_WRITE` (no EXEC) on Apple
+  arm64 via `ROM_HARNESS_MEM_PROT` — it is never executed, so dropping EXEC clears the RWX EPERM.
+  Linux keeps RWX.
+
+**Thread-safety:** `pthread_jit_write_protect_np` is per-thread. The JIT is single-threaded:
+`ppc-cpu.cpp` execute loop (and rom-harness) compile a block, then immediately call `fn()` into the
+cache on the SAME thread, serially. Every write bracket ends with `end_write` (write-protect ON =
+executable) BEFORE any call into compiled code, so the executing thread always sees the executable
+state. No nested brackets: `jit_bc_insert`→`patch_chain_sites` runs after the compile bracket already
+closed.
+
+**Verification:**
+- SheepShaver builds clean; rom-harness builds (only pre-existing warnings).
+- Plain RWX anon mmap still fails EPERM on this machine; MAP_JIT succeeds (reconfirmed).
+- Standalone test using the actual `jit-target-cache.hpp` helpers: alloc → begin_write → write
+  (MOVZ/RET) → flush → end_write → execute returned correct value; back-patch path (rewrite one word,
+  re-flush, re-exec) also correct. ALL PASS.
+- rom-harness on the New World ROM (`--count=100`): no "mmap: Permission denied"; prints
+  `code cache allocated (MAP_JIT)`; 27 blocks compiled, 228 JIT hits, **0 SIGSEGV** — the full
+  toggle+icache+execute cycle works through the real JIT. Score 0/0 garbage on CHRP ROM (expected).
+- jit-test harness: still `pass=0 score=0`, unchanged — every vector fails on the Task 2b
+  `SS_TEST: cannot allocate RAM in low 4GB` blocker BEFORE JIT init runs, so the harness cannot
+  exercise this code (the standalone + rom-harness checks cover it instead). No regression.
+
+**SS_TEST/boot caveat:** `ppc_jit_aarch64_init` runs only from the CPU execute loop, not the SS_TEST
+path. SS_TEST still dies on the RAM blocker (Task 2b). With `SS_USE_JIT=1`, full boot will now
+initialize the JIT cache successfully and start executing compiled blocks — but JIT codegen still
+hardcodes REAL addressing (Task 2c), so executed blocks will compute wrong addresses; GATE3
+(out-of-range PC) / SIGSEGV skip paths hand those back to the interpreter, so boot should still
+proceed (correctness via interpreter fallback) rather than the JIT being correct on its own.

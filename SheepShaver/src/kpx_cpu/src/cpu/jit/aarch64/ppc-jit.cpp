@@ -121,9 +121,13 @@ static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 		if (site->target_pc == pc && site->patch_loc) {
 			int32_t off = (int32_t)((uint8_t *)chain_code - (uint8_t *)site->patch_loc);
 			if (off >= -(1 << 25) && off < (1 << 25)) {
+				/* W^X: make the cache writable for this single back-patch word,
+				 * then flip it back to executable + invalidate icache. No-op on Linux. */
+				jit_cache_begin_write();
 				*site->patch_loc = 0x14000000 | ((off >> 2) & 0x3FFFFFF); /* B offset */
 				/* Flush ARM64 I-cache for the patched word */
 				jit_cache_flush(site->patch_loc, sizeof(uint32_t));
+				jit_cache_end_write(site->patch_loc, sizeof(uint32_t));
 			}
 			site->patch_loc = NULL; /* mark consumed */
 		}
@@ -3534,6 +3538,10 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 	jit_cache_wp = (uint32_t *)jit_cache_base;
 	jit_cache_end = (uint32_t *)(jit_cache_base + jit_cache_size);
 	jit_bc_flush();
+#if defined(__APPLE__) && defined(__aarch64__)
+	fprintf(stderr, "PPC-JIT-A64: code cache allocated (MAP_JIT) %zu KB at %p\n",
+	        cache_size_kb, jit_cache_base);
+#endif
 	fprintf(stderr, "PPC-JIT-A64: code cache %zu KB at %p, block cache %d buckets / %d pool\n",
 	        cache_size_kb, jit_cache_base, JIT_BC_BUCKETS, JIT_BC_POOL);
 	return true;
@@ -3601,6 +3609,12 @@ bool ppc_jit_aarch64_compile(
 	uint32_t *code_start = jit_cache_wp;
 	jit_code_ptr = jit_cache_wp;
 
+	/* W^X: make the JIT code cache writable on this (compile) thread for the
+	 * duration of block emission. jit_cache_end_write() below flips it back to
+	 * executable before this thread can call into the freshly compiled code.
+	 * No-op on Linux. */
+	jit_cache_begin_write();
+
 	/* Prologue: save callee-saved regs, set x20 = regs ptr from x0 */
 	a64_stp_pre(A64_FP, A64_LR, A64_SP, -16);
 	a64_stp_pre(19, RSTATE, A64_SP, -16);  /* save x19, x20 */
@@ -3659,7 +3673,14 @@ bool ppc_jit_aarch64_compile(
 		}
 
 		if (op == 0x00000000) { /* illegal — end of test code / zero-filled memory */
-			if (n_compiled == 0) return false; /* don't compile empty blocks */
+			if (n_compiled == 0) {
+				/* Bail without emitting a usable block. Restore the cache to the
+				 * executable state we entered with (W^X; no-op on Linux). The
+				 * prologue bytes written so far are discarded — jit_cache_wp is
+				 * not advanced, so they will be overwritten by the next compile. */
+				jit_cache_end_write(code_start, (uint8_t *)jit_code_ptr - (uint8_t *)code_start);
+				return false; /* don't compile empty blocks */
+			}
 			lazy_flush_cr0();
 			emit_epilogue_with_pc(cur_pc);
 			n_compiled++;
@@ -3714,6 +3735,9 @@ bool ppc_jit_aarch64_compile(
 
 	size_t code_bytes = (uint8_t *)jit_code_ptr - (uint8_t *)code_start;
 	jit_cache_flush(code_start, code_bytes);
+	/* W^X: flip the region back to executable and invalidate the icache for the
+	 * bytes just written (on Apple). Must happen before any call into code_start. */
+	jit_cache_end_write(code_start, code_bytes);
 	jit_cache_wp = jit_code_ptr;
 
 	out->code = code_start;

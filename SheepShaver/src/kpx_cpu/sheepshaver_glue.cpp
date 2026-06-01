@@ -932,11 +932,21 @@ bool ss_run_opcode_test(void)
 		return true;
 	}
 
-	/* Allocate minimal RAM in low 32-bit address space (required for
-	   REAL_ADDRESSING where Mac address = host address as uint32) */
 	const size_t test_ram_size = 16 * 1024 * 1024;
-	uint8 *test_ram = (uint8 *)mmap(
-		(void *)0x10000000UL, test_ram_size,
+
+	/* Guest (Mac) base address of the test RAM. The interpreter translates
+	   guest -> host via vm_do_get_real_address(); see how the two addressing
+	   models differ below. We use 0x10000000, the same low base the main
+	   boot path uses for RAMBase (RAM_BASE in main_unix.cpp). */
+	const uint32 test_base = 0x10000000UL;
+	uint8 *test_ram = NULL;
+
+#if REAL_ADDRESSING
+	/* REAL_ADDRESSING: guest address == host address (as uint32), so the
+	   backing store MUST live in the low 32-bit host address space. This is
+	   the original Linux/x86 path and is left exactly as it was. */
+	test_ram = (uint8 *)mmap(
+		(void *)(uintptr_t)test_base, test_ram_size,
 		PROT_READ | PROT_WRITE | PROT_EXEC,
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
 		-1, 0);
@@ -952,18 +962,41 @@ bool ss_run_opcode_test(void)
 		if (test_ram != MAP_FAILED) munmap(test_ram, test_ram_size);
 		return true;
 	}
-	memset(test_ram, 0, test_ram_size);
+	/* For REAL_ADDRESSING the host pointer is the guest address itself, so
+	   RAMBase must reflect where the buffer actually landed. */
+	RAMBase = (uint32)(uintptr_t)test_ram;
+#else
+	/* DIRECT_ADDRESSING (macOS arm64): host = NATMEM_OFFSET + guest (see
+	   vm_do_get_real_address in vm.hpp). The guest address stays a small
+	   32-bit value (test_base); the backing store lives at the corresponding
+	   high host address NATMEM_OFFSET + test_base, exactly like the working
+	   main boot path (main_unix.cpp: vm_mac_acquire_fixed(RAM_BASE, ...)).
+	   No PROT_EXEC: the interpreter never executes from guest RAM directly,
+	   and the JIT uses its own MAP_JIT code cache. */
+	uint8 *test_host = Mac2HostAddr(test_base);
+	test_ram = (uint8 *)mmap(
+		(void *)test_host, test_ram_size,
+		PROT_READ | PROT_WRITE,
+		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+		-1, 0);
+	if (test_ram == MAP_FAILED || test_ram != test_host) {
+		fprintf(stderr, "SS_TEST: cannot map test RAM at %p (guest 0x%08x): %s\n",
+			(void *)test_host, test_base, strerror(errno));
+		if (test_ram != MAP_FAILED) munmap(test_ram, test_ram_size);
+		return true;
+	}
+	/* RAMBase is the guest address; RAMBaseHost is the host pointer. */
+	RAMBase = test_base;
+#endif
 
-	/* For REAL_ADDRESSING: Mac address = host address.
-	   RAMBase must equal the host pointer (cast to uint32 may truncate on 64-bit).
-	   We write directly to the buffer instead of using WriteMacInt32. */
+	memset(test_ram, 0, test_ram_size);
 	RAMBaseHost = test_ram;
 	RAMSize = test_ram_size;
 
 	const uint32 code_offset = 0x4000;
 	const uint32 stack_offset = test_ram_size - 0x4000;
 
-	/* Write PPC instructions directly to buffer (big-endian) */
+	/* Write PPC instructions directly to host buffer (big-endian) */
 	for (size_t i = 0; i < n_words; i++) {
 		uint8 *p = test_ram + code_offset + i * 4;
 		p[0] = (words[i] >> 24) & 0xFF;
@@ -976,12 +1009,41 @@ bool ss_run_opcode_test(void)
 		uint8 *p = test_ram + code_offset + n_words * 4;
 		p[0] = 0x4E; p[1] = 0x80; p[2] = 0x00; p[3] = 0x20;
 	}
+	/* Place the POWERPC_EXEC_RETURN sentinel at offset 0x8000 so that when the
+	   appended blr returns to LR the interpreter's execute loop terminates
+	   cleanly. (Big-endian.) */
+	{
+		const uint32 ret_offset = 0x8000;
+		uint8 *p = test_ram + ret_offset;
+		p[0] = (POWERPC_EXEC_RETURN >> 24) & 0xFF;
+		p[1] = (POWERPC_EXEC_RETURN >> 16) & 0xFF;
+		p[2] = (POWERPC_EXEC_RETURN >> 8)  & 0xFF;
+		p[3] =  POWERPC_EXEC_RETURN        & 0xFF;
+	}
 
-	/* Mac addresses = host addresses for REAL_ADDRESSING */
-	uint32 test_addr = (uint32)(uintptr_t)(test_ram + code_offset);
-	uint32 stack_addr = (uint32)(uintptr_t)(test_ram + stack_offset);
-	uint32 blr_addr = (uint32)(uintptr_t)(test_ram + code_offset + (n_words + 1) * 4);
-	RAMBase = (uint32)(uintptr_t)test_ram;
+	/* Guest (Mac) addresses handed to the CPU. In REAL these equal the host
+	   pointers (RAMBase == host base); in DIRECT they are test_base-relative
+	   guest addresses that vm_do_get_real_address() maps back to test_ram. */
+	uint32 test_addr = RAMBase + code_offset;
+	uint32 stack_addr = RAMBase + stack_offset;
+	uint32 blr_addr = RAMBase + code_offset + (n_words + 1) * 4;
+
+	/* Default test execution goes through the interpreter (cpu->execute below).
+	   On aarch64 powerpc_cpu::execute() otherwise re-enters the aarch64 JIT by
+	   default (gated only by SS_USE_JIT), and that JIT still emits REAL-style
+	   memory accesses — it treats the 32-bit guest address as a host pointer,
+	   which faults under DIRECT_ADDRESSING (Task 2c will port the codegen).
+	   So unless the caller explicitly opted into JIT mode via SS_TEST_JIT, pin
+	   the test CPU to the interpreter by forcing SS_USE_JIT=0 before the first
+	   execute() reads it (the gate caches the value in a static). The explicit
+	   SS_TEST_JIT path below is unaffected; it drives the JIT directly. */
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	{
+		const char *want_jit = getenv("SS_TEST_JIT");
+		if (!(want_jit && *want_jit && strcmp(want_jit, "0") != 0) && !getenv("SS_USE_JIT"))
+			setenv("SS_USE_JIT", "0", 1);
+	}
+#endif
 
 	/* Create CPU */
 	sheepshaver_cpu *cpu = new sheepshaver_cpu();
@@ -990,7 +1052,7 @@ bool ss_run_opcode_test(void)
 	for (int i = 0; i < 32; i++)
 		cpu->set_register(powerpc_registers::GPR(i), any_register((uint32)0));
 	cpu->set_register(powerpc_registers::GPR(1), any_register(stack_addr));
-	cpu->set_register(powerpc_registers::LR, any_register((uint32)(uintptr_t)(test_ram + 0x8000)));
+	cpu->set_register(powerpc_registers::LR, any_register(RAMBase + 0x8000));
 	cpu->set_register(powerpc_registers::CTR, any_register((uint32)0));
 	cpu->set_register(powerpc_registers::CR, any_register((uint32)0));
 	cpu->set_register(powerpc_registers::XER, any_register((uint32)0));

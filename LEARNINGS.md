@@ -375,3 +375,76 @@ initialize the JIT cache successfully and start executing compiled blocks — bu
 hardcodes REAL addressing (Task 2c), so executed blocks will compute wrong addresses; GATE3
 (out-of-range PC) / SIGSEGV skip paths hand those back to the interpreter, so boot should still
 proceed (correctness via interpreter fallback) rather than the JIT being correct on its own.
+
+### Task 2b: SS_TEST DIRECT addressing — results
+
+Ported the SS_TEST opcode-test RAM allocation from REAL (low-4GB) to DIRECT (NATMEM_OFFSET) so
+the jit-test harness runs on macOS arm64.
+
+**What the build defines:** this Unix/configure build is **DIRECT_ADDRESSING**. `config.h` already
+has `#define NATMEM_OFFSET 0x400000000000` (configure.ac line ~1320 unconditionally defines it),
+and `sysdeps.h:95` selects `DIRECT_ADDRESSING` when `NATMEM_OFFSET` is set. Nothing in configure.ac
+needed wiring — it was already correct; only the SS_TEST code path still assumed REAL. (Confirmed by
+`grep NATMEM_OFFSET config.h`.)
+
+**Addressing model (vm.hpp ~188-219):** DIRECT translates guest→host as
+`host = vm_wrap_address(guest) + VMBaseDiff`, where `VMBaseDiff = NATMEM_OFFSET` and
+`vm_wrap_address` truncates the guest address to 32-bit. So a guest RAM address is a *small 32-bit
+value* and its backing store lives at the *high* host address `NATMEM_OFFSET + guest`. REAL is the
+degenerate case `VMBaseDiff = 0` (guest addr == host addr as uint32), which is impossible on macOS
+arm64 because __PAGEZERO owns the low 4GB.
+
+**The fix (`sheepshaver_glue.cpp ss_run_opcode_test`):**
+- `#if REAL_ADDRESSING`: original logic unchanged (mmap at 0x10000000, low-4GB check, PROT_EXEC,
+  `RAMBase = (uint32)test_ram`).
+- `#else` (DIRECT): pick guest base `test_base = 0x10000000` (same as main path's `RAM_BASE`), mmap
+  `MAP_FIXED` at `Mac2HostAddr(test_base)` = `NATMEM_OFFSET + test_base` with `PROT_READ|WRITE` only
+  (no EXEC — interpreter never executes guest RAM, JIT uses its own MAP_JIT cache), set
+  `RAMBase = test_base` (guest) and `RAMBaseHost = test_ram` (host). All guest addresses handed to the
+  CPU (`test_addr`, `stack_addr`, LR) are now `RAMBase + offset` (guest values), which
+  `vm_do_get_real_address()` maps back to the host buffer. Opcodes are written into the host buffer.
+- Added a `POWERPC_EXEC_RETURN` sentinel at RAM offset 0x8000 and pointed LR there, so the appended
+  `blr` returns into the emul-op that cleanly stops the interpreter loop (previously LR was a raw host
+  pointer; under DIRECT that would be a bogus guest address).
+
+**The second, non-obvious bug — default execute() re-enters the JIT.** After fixing RAM, pure-ALU
+vectors passed but every load/store vector *crashed* (EXC_BAD_ACCESS at the bare guest address, e.g.
+`0x10ffc100`, in code living in the MAP_JIT cache). Root cause: `powerpc_cpu::execute()` on aarch64
+uses the JIT **by default** (gated only by `SS_USE_JIT`, default-on at `ppc-cpu.cpp:712`), and that
+JIT still emits REAL-style accesses (treats the 32-bit guest address as a host pointer). So the
+"interpreter" fall-through `cpu->execute(test_addr)` wasn't actually the interpreter. Fix: in the test
+path, unless the caller explicitly set `SS_TEST_JIT`, `setenv("SS_USE_JIT","0")` before the first
+`execute()` so the default test run is genuinely interpreter-only (the gate caches the env value in a
+`static`, and each harness vector is a fresh process). The explicit `SS_TEST_JIT` path is untouched.
+**This cleanly splits Task 2b (interpreter, done) from Task 2c (JIT codegen).**
+
+**Harness results (`jit-test/run.sh` — runs every vector TWICE in interpreter mode and checks the two
+REGDUMPs are identical; it does NOT test JIT mode at all — `SS_TEST_JIT` is never set):**
+- BEFORE: `pass=0 fail=0/209 score=0` — every vector died on `SS_TEST: cannot allocate RAM in low 4GB`
+  (empty REGDUMP).
+- AFTER (RAM fix only, JIT still default-on): `pass=167 fail=42 score=79` — the 42 fails were all
+  load/store/FP vectors crashing in the JIT; pure-ALU passed.
+- AFTER (RAM fix + interpreter pin): **`pass=209 fail=0 score=100`**. All 209 interpreter vectors pass
+  deterministically.
+
+**Boot regression:** no regression. My changes are entirely inside `ss_run_opcode_test()` (only runs
+when `SS_TEST_HEX` is set) plus the test-RAM mmap — the boot path never calls it. Verified by building
+the pristine (pre-change) binary and running the identical boot check: pristine and modified binaries
+produce **byte-identical** boot behaviour. Note: default boot (`./SheepShaver`, no SS_USE_JIT) SIGSEGVs
+early in *both* binaries (`ea 0x400004000000`) — that is the pre-existing Task 2c JIT-boot crash, not a
+regression. The `video_open`/`the_buffer` grep target in the suggested boot-check is `D(bug(...))`
+debug-only output and never appears in this `DEBUG 0` / -O2 build; interpreter-mode boot
+(`SS_USE_JIT=0`) runs silently for 15s+ with no crash, matching the documented "interpreter spins in
+the SCSI scan" behaviour.
+
+**For Task 2c (JIT codegen, DIRECT addressing in emitted code):**
+- Set `SS_TEST_JIT=1` to drive the JIT directly in the harness path.
+- JIT **ALU** vectors (e.g. `38600005`): compile fine ("compiled 2 PPC insns", "native execution
+  complete") but currently print **no REGDUMP** — the explicit `SS_TEST_JIT` path's `regs_for_jit()`
+  register-state plumbing needs checking, separate from addressing.
+- JIT **memory** vectors (e.g. `stw`/`lwz`): **crash** (SIGSEGV, no "native execution complete"). The
+  emitted load/store uses the 32-bit guest address as a raw host pointer. Task 2c must make the JIT emit
+  `host = guest + NATMEM_OFFSET` (add the VMBaseDiff base register, or fold the offset) for every memory
+  access — the same translation `vm_do_get_real_address` does. The opcode-*fetch* in
+  `ppc_jit_aarch64_compile` (`p = ram + (cur_pc - (uint32)ram)`) happens to work only because guest
+  base low-32 == host base low-32 for this test; emitted *runtime* accesses do not.

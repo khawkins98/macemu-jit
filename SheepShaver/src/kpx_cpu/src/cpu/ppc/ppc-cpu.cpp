@@ -710,7 +710,17 @@ void powerpc_cpu::execute(uint32 entry)
 			{
 				static bool jit_init_done = false;
 				static const char *jit_env = getenv("SS_USE_JIT");
+#if defined(DIRECT_ADDRESSING) && DIRECT_ADDRESSING
+				/* INTERIM (until Task 2c lands): the aarch64 JIT codegen emits
+				 * REAL-addressing memory accesses (guest address used as host
+				 * pointer), which fault on DIRECT_ADDRESSING builds (macOS arm64,
+				 * guest RAM at NATMEM_OFFSET).  Default the JIT OFF here; opt in
+				 * with SS_USE_JIT=1 for development.  Linux REAL builds keep the
+				 * JIT on by default below. */
+				static bool jit_enabled = (jit_env && jit_env[0] == '1' && jit_env[1] == '\0');
+#else
 				static bool jit_enabled = !(jit_env && jit_env[0] == '0' && jit_env[1] == '\0');
+#endif
 				if (!jit_enabled) goto skip_jit; /* GATE 1: SS_USE_JIT=0 diagnostic override */
 				if (!jit_init_done) { ppc_jit_aarch64_init(4096); jit_init_done = true; }
 				ppc_jit_block jblk;

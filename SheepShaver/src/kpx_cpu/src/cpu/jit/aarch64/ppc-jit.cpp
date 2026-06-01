@@ -70,18 +70,36 @@ static struct jit_bc_entry jit_bc_pool[JIT_BC_POOL];
 static int jit_bc_heads[JIT_BC_BUCKETS];  /* -1=empty; initialised by jit_bc_flush() before first use */
 static int jit_bc_pool_next = 0;          /* next free pool entry */
 
+/* True once the bucket-head arrays have been set to their -1 "empty" sentinel.
+ * These are static (zero-initialised) arrays, but 0 is a VALID pool index — the
+ * empty sentinel is -1. Until jit_bc_flush() runs they contain all-zeros, which
+ * makes jit_bc_lookup() walk idx=0 -> pool[0].next=0 -> idx=0 forever (a self
+ * cycle), hanging the CPU thread. jit_bc_flush() is normally called from
+ * ppc_jit_aarch64_init(), but ONLY after the code cache allocation succeeds; if
+ * that allocation fails the arrays are left zero-filled and the first lookup
+ * hangs. jit_bc_ensure_init() guarantees the sentinel is established before any
+ * bucket walk, independent of code-cache allocation success. */
+static bool jit_bc_ready = false;
+
 static void jit_bc_flush(void) {
 	for (int i = 0; i < JIT_BC_BUCKETS; i++) jit_bc_heads[i] = -1;
 	jit_bc_pool_next = 0;
 	/* Also clear chain patch sites — all recorded epilogues are now invalid */
 	for (int i = 0; i < JIT_BC_BUCKETS; i++) chain_site_heads[i] = -1;
 	chain_site_pool_next = 0;
+	jit_bc_ready = true;
+}
+
+static inline void jit_bc_ensure_init(void) {
+	if (!jit_bc_ready)
+		jit_bc_flush();
 }
 
 /* Record a chain patch site: when the target block at next_pc is compiled,
  * patch_loc (pointing to the first LDP of the standard epilogue) will be
  * overwritten with B <chain_code_of_next_pc>. */
 static void record_chain_site(uint32_t next_pc, uint32_t *patch_loc) {
+	jit_bc_ensure_init();
 	if (chain_site_pool_next >= JIT_CHAIN_SITE_POOL) return; /* pool full, skip */
 	int bucket = (next_pc >> 2) & JIT_BC_MASK;
 	int idx = chain_site_pool_next++;
@@ -95,6 +113,7 @@ static void record_chain_site(uint32_t next_pc, uint32_t *patch_loc) {
  * standard epilogues that were waiting to chain to this PC. */
 static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 	if (!chain_code) return;
+	jit_bc_ensure_init();
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int idx = chain_site_heads[bucket];
 	while (idx >= 0) {
@@ -113,6 +132,7 @@ static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 }
 
 static void jit_bc_invalidate_pc(uint32_t pc) {
+	jit_bc_ensure_init();
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int prev = -1;
 	int idx = jit_bc_heads[bucket];
@@ -132,6 +152,7 @@ static void jit_bc_invalidate_pc(uint32_t pc) {
 }
 
 static const struct jit_bc_entry *jit_bc_lookup(uint32_t pc) {
+	jit_bc_ensure_init();
 	int idx = jit_bc_heads[(pc >> 2) & JIT_BC_MASK];
 	while (idx >= 0) {
 		if (jit_bc_pool[idx].pc == pc && jit_bc_pool[idx].code)
@@ -142,6 +163,7 @@ static const struct jit_bc_entry *jit_bc_lookup(uint32_t pc) {
 }
 
 static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, bool complete, int n_insns = 0) {
+	jit_bc_ensure_init();
 	/* Check if already exists */
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int idx = jit_bc_heads[bucket];
@@ -3501,7 +3523,12 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 	jit_cache_size = cache_size_kb * 1024;
 	jit_cache_base = (uint8_t *)jit_cache_alloc(jit_cache_size);
 	if (!jit_cache_base) {
-		fprintf(stderr, "PPC-JIT-A64: failed to allocate %zu KB code cache\n", cache_size_kb);
+		fprintf(stderr, "PPC-JIT-A64: failed to allocate %zu KB code cache; "
+		        "falling back to interpreter (emulation continues, slower)\n", cache_size_kb);
+		/* Establish the bucket-head sentinels even though the code cache is
+		 * unavailable: jit_bc_lookup()/compile() are still reached from the
+		 * execute loop and MUST NOT walk a zero-initialised (cyclic) bucket. */
+		jit_bc_flush();
 		return false;
 	}
 	jit_cache_wp = (uint32_t *)jit_cache_base;
@@ -3554,6 +3581,13 @@ bool ppc_jit_aarch64_compile(
 		out->complete     = cached->complete;
 		return true;
 	}
+
+	/* Code cache could not be allocated at init — JIT is permanently disabled,
+	 * the interpreter handles everything. Bail out quietly; logging here would
+	 * fire on every block and flood the terminal (the one-time fallback notice
+	 * was already printed in ppc_jit_aarch64_init). */
+	if (!jit_cache_base)
+		return false;
 
 	if (!jit_cache_wp || jit_cache_wp >= jit_cache_end - 256) {
 		/* Code cache full — flush everything and start over.

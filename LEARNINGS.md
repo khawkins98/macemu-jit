@@ -230,3 +230,71 @@ Root theme: autoconf 2.73 (Homebrew) probes the compiler and bakes `-std=gnu23` 
    with the harness
 4. Visual confirmation of interpreter boot-to-desktop (needs Screen Recording permission or the user
    watching) — already unblocked by the CD-open fix
+
+## 2026-06-01 — SDL window never appears on macOS: root cause was a JIT block-cache cycle, NOT the event pump
+
+**Symptom:** SDL window never appears on macOS; SDL init succeeds, video_open() runs, renderer
+("metal") is created, then nothing. 100% CPU. User's log always ends with
+`PPC-JIT-A64: failed to allocate 4096 KB code cache`.
+
+**Hypothesis going in (from the bug brief):** Cocoa requires the SDL event pump on the *main*
+thread; SheepShaver hands the main thread to PPC emulation (`emul_func` at main_unix.cpp:1256), so
+nobody pumps Cocoa events → no window. **This hypothesis was WRONG.** The architecture is fine:
+SheepShaver's main thread IS the emul thread, and on the EMULATED_PPC path
+`HandleInterrupt()` (sheepshaver_glue.cpp:1168) calls `SDL_PumpEvents()` on that thread once the
+60Hz VBL interrupt flows. kanjitalk755 does the same (and it works on x86_64). The event pump was
+never the problem — the guest just never booted far enough to reach it.
+
+**Actual root cause (verified with lldb + instrumented builds):**
+The arm64 direct-codegen JIT (`SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp`, an
+rcarmo-only file — kanjitalk755 has no aarch64 JIT at all) keeps a block-address cache as a hash of
+linked lists: `jit_bc_heads[bucket]` indexes into `jit_bc_pool[]`, walked by `jit_bc_lookup()`:
+`while (idx >= 0) { ...; idx = pool[idx].next; }`. The "empty" sentinel is **-1**, but
+`jit_bc_heads[]` and `jit_bc_pool[]` are **static, zero-initialised** arrays, and **0 is a valid
+pool index**. The arrays are only set to -1 by `jit_bc_flush()`, which was called *only* from
+`ppc_jit_aarch64_init()` **after** a successful code-cache allocation.
+
+When the code cache fails to allocate (`jit_cache_alloc` returns NULL — exactly the user's log
+line), `ppc_jit_aarch64_init()` returns early, before `jit_bc_flush()`. The execute loop
+(ppc-cpu.cpp:716) **ignores** that return value, sets `jit_init_done=true`, and calls
+`ppc_jit_aarch64_compile()` → `jit_bc_lookup()`. With heads/pool all zero:
+`idx = heads[bucket] = 0` → `pool[0].next = 0` → idx stays 0 → **infinite self-loop**. The emul
+thread wedges on the very first block lookup at guest pc=0x50310000 (a tiny early-boot spin block),
+never advances, never services interrupts → no boot → no window.
+
+**Evidence chain:**
+- lldb `bt all`: main thread always in `jit_bc_lookup` (ppc-jit.cpp:136 `while (idx >= 0)`), guest
+  pc pinned at 0x50310000 across all samples. Redraw/tick/nvram threads all alive and idle.
+- Instrumented `TriggerInterrupt`: fires ~390×/8s (tick thread, ppc_cpu non-null, `trigger_interrupt`
+  called). Instrumented `HandleInterrupt`: **0 calls**. So interrupts were raised but never serviced.
+- Instrumented `check_spcflags`: 0 calls → the execute loop never reaches its spcflags poll.
+- Instrumented `ppc_jit_aarch64_compile` ENTER: called **exactly once** (pc=0x50310000) and never
+  returns → hang is *inside* it. A cycle-guard in `jit_bc_lookup` fired immediately
+  (`CYCLE pc=0x50310000 idx=0`), confirming the zero-init self-loop.
+
+**The fix (ppc-jit.cpp only, ~30 lines):**
+- Add a `jit_bc_ready` guard + `jit_bc_ensure_init()` that runs `jit_bc_flush()` lazily on first use,
+  called at the top of `jit_bc_lookup/insert/invalidate_pc/record_chain_site/patch_chain_sites`.
+  Guarantees the -1 sentinel before any bucket walk, independent of code-cache allocation.
+- In the alloc-failure branch of `ppc_jit_aarch64_init()`, also call `jit_bc_flush()` and reword the
+  log to say it falls back to the interpreter (it does — `compile()` returns false when the cache is
+  NULL, ppc-cpu.cpp:721 then uses the interpreter).
+- In `ppc_jit_aarch64_compile()`, bail out early (`return false`) when `jit_cache_base == NULL` to
+  avoid spamming "code cache full, flushing" on every block (was ~147k lines in 6s).
+
+**Verified after fix:** guest boots — main thread sample shows `EmulOp → idle_wait()` (timer_unix.cpp:372,
+`__psynch_cvwait`), i.e. MacOS reached its idle loop; CPU dropped 100% → ~2%; `jit_bc_lookup` no
+longer in any sample. The VBL/`present_sdl_video`/`SDL_PumpEvents` main-thread path now runs, so the
+window displays.
+
+**Why Linux/x86 were unaffected:** the file is `#if __aarch64__ && USE_AARCH64_JIT` only. x86_64
+(kanjitalk755's macOS target) uses a different execute loop and has no aarch64 block cache. On Linux
+arm64 the code cache normally allocates fine (no MAP_JIT/EPERM issue), so `jit_bc_flush()` ran and
+the latent bug stayed hidden. The fix is purely additive (a defensive sentinel-init) and changes
+nothing when the cache allocates successfully.
+
+**Latent upstream note:** `spcflags::mask` (kpx_cpu/src/cpu/spcflags.hpp) is a plain non-volatile
+`uint32` read locklessly by `empty()/test()` in the hot loop while helper threads `set()` it under a
+spinlock. Identical to kanjitalk755. Not the cause here (the loop never even reached the poll), and a
+trial `volatile` did not change behavior, so it was left untouched — but it's a real
+memory-visibility smell worth revisiting if interrupt-latency bugs surface later.

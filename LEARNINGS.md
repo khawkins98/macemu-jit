@@ -44,3 +44,9 @@ Newest entries at the top of each section. Review at the start of each session.
 - Dev machine: arm64, macOS 26.4.1 (Darwin 25). Ken has Mac OS ROM + OS 9 install media.
 - kanjitalk755's x86_64-JIT-under-Rosetta-2 build is the performance bar to beat
   (historically ~271% MacBench vs ~96% for native interpreter; Jagmn's lost JIT hit ~470%).
+
+## 2026-06-01 — Phase 1 baseline
+
+### Build environment
+- macOS 26.4.1 arm64, Apple clang 17.0.0 (Command Line Tools, no full Xcode)
+- Homebrew: autoconf, automake 1.18.1, libtool, pkgconf, sdl2 2.32.10, gmp, mpfr

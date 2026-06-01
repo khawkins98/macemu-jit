@@ -510,3 +510,49 @@ these addresses when booting from ROM.
 **Result:** After fix, JIT boot runs indefinitely without crashing. Log is clean (only 4 lines:
 cache alloc + 2 cache flushes). 100% CPU sustained — actively executing Mac OS boot code.
 JIT desktop boot needs visual confirmation from Ken.
+
+### JIT boot timing anomaly (Phase 3 investigation, 2026-06-02)
+
+**Finding: interpreter boots in ~12 seconds (hot NVRAM), JIT takes 20+ minutes without reaching idle.**
+
+**Setup:**
+- Interpreter mode (`SS_USE_JIT=0`): reaches `idle_wait()` at `EmulOp:OP_IDLE_TIME_2` in ~12s.
+  `sample` shows `powerpc_cpu::execute → sheepshavar_cpu::execute_sheep → EmulOp → idle_wait()`.
+  This is the Finder idle loop — Mac OS 8.6 booted to desktop in 12s because NVRAM from a prior
+  interpreter session cached the boot state.
+- JIT mode (`SS_USE_JIT=1`): 100% CPU for 20+ minutes, never reaches `idle_wait()`. Log stays
+  clean (no GATE3 messages). Code cache fills twice at startup (~80,000 blocks compiled in first
+  6s), then stable (no more flushes → cached blocks being reused repeatedly).
+
+**Root cause hypothesis**: JIT compiled some block(s) incorrectly and wrote wrong values to
+guest memory or registers. The interpreter then ran with corrupted state and entered a loop that
+it normally exits (via EmulOp/idle_wait). The interpreter code at `skip_jit:` runs the SAME logic
+in both modes — if it's stuck in JIT mode, the JIT execution upstream must have corrupted state.
+
+**Key observations:**
+- ALL samples (~1500) from the JIT boot are at the INTERPRETER level (`powerpc_cpu::execute` at
+  ppc-cpu.cpp:779, the `skip_jit:` inner loop). Zero samples in the JIT cache (0x119bXXXXX).
+  This means execution settled into the interpreter inner loop after the initial JIT compilation.
+- The JIT compiled 80,000 blocks (2 × 4MB flushes) in the first 6 seconds. After that,
+  `jit_blocks_attempted` wasn't triggered at the 100,000-block periodic report, meaning the
+  loop ran via cached blocks without recompilation.
+- `regs_for_jit()` is fragile — it scans the sheepshavar_cpu object for a sentinel value. Adding
+  ANY extra code to ppc-jit.cpp or ppc-cpu.cpp (even a `fprintf` guarded by a never-true
+  condition) changes compiler register allocation and causes `regs_for_jit()` to find the sentinel
+  at the WRONG offset → JIT memory tests crash. This severely limits diagnostic instrumentation
+  approaches. A FULL `make clean && make` is required after any source edits to avoid stale objects.
+- The `regs_for_jit()` sentinel-scan approach is a known fragility — the root fix would be to
+  compute the register struct offset at compile time (e.g., `offsetof(powerpc_cpu, regs)`) instead
+  of scanning at runtime.
+
+**Next steps for Phase 3:**
+- Identify which JIT block writes wrong state by comparing interpreter vs JIT execution traces.
+- The `(target >> 26) == 6` check in the `b` instruction handler rejects branches to addresses
+  0x18000000-0x1BFFFFFF as "EMUL_OP trampolines." But under DIRECT_ADDRESSING these are valid
+  RAM addresses! This check is a Linux/REAL_ADDRESSING assumption. Under macOS DIRECT_ADDRESSING,
+  EmulOp stubs are at SheepMem (0x50510000), not 0x18000000. This check incorrectly prevents
+  JIT compilation of blocks that branch into the upper RAM area. FIX CANDIDATE: remove or
+  conditionalize the check on `#ifdef REAL_ADDRESSING`.
+- ROM code (0x50000000-0x504FFFFF) is ALL interpreted under the current JIT (RAM range is
+  [0x10000000, 0x20000000) only). Extending the JIT compile range to include ROM would
+  dramatically speed up the boot. But first fix the correctness issue.

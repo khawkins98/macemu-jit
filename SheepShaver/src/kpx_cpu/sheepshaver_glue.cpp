@@ -1081,10 +1081,37 @@ bool ss_run_opcode_test(void)
 				if (ppc_jit_aarch64_compile(test_addr, test_ram, test_ram_size, &jblk)) {
 					fprintf(stderr, "SS_TEST_JIT: compiled %d PPC insns -> %zu bytes native (complete=%d)\n",
 						jblk.n_insns, jblk.code_size, jblk.complete);
-					ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
-					fn(cpu->regs_for_jit());
+					/* Dispatch loop: a single compiled block ends at a block
+					 * terminator (taken branch / blr / illegal) and writes the
+					 * next guest PC to regs->pc. To match the interpreter, keep
+					 * compiling and running the block at the current PC until we
+					 * reach the return sentinel (LR target RAMBase+0x8000) or hit
+					 * an instruction the JIT cannot compile (then hand off to the
+					 * interpreter for the remainder). A bounded iteration guard
+					 * prevents runaway loops in pathological test vectors. */
+					const uint32 sentinel = RAMBase + 0x8000;
+					cpu->set_register(powerpc_registers::PC, any_register(test_addr));
+					int guard = 0;
+					bool jit_ok = true;
+					for (;;) {
+						uint32 cur = (uint32)cpu->get_register(powerpc_registers::PC).i;
+						if (cur == sentinel) break;
+						if (++guard > 100000) { jit_ok = false; break; }
+						if (!ppc_jit_aarch64_compile(cur, test_ram, test_ram_size, &jblk)
+						    || !jblk.complete) {
+							/* Can't JIT this point — let the interpreter finish. */
+							jit_ok = false;
+							break;
+						}
+						ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
+						fn(cpu->regs_for_jit());
+					}
 					fprintf(stderr, "SS_TEST_JIT: native execution complete\n");
 					ppc_jit_aarch64_exit();
+					if (jit_ok)
+						goto regdump;
+					/* Fall through to interpreter to complete from current PC. */
+					cpu->execute((uint32)cpu->get_register(powerpc_registers::PC).i);
 					goto regdump;
 				}
 				ppc_jit_aarch64_exit();

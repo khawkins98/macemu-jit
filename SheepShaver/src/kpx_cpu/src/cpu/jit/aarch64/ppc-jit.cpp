@@ -994,12 +994,35 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		case 491: /* divw */
+		{
+			/* PPC divw: if rB==0 or (rA==0x80000000 && rB==-1) the result is
+			 * architecturally undefined; the reference interpreter returns
+			 * (int32)rA >> 31 (all sign bits). Otherwise rA / rB. ARM SDIV
+			 * alone gives 0 for div-by-0 and 0x80000000 for MIN/-1, which
+			 * disagree with the interpreter, so both cases are guarded here.
+			 *
+			 * Register use: W0=rA, W1=rB, W2=SDIV result, W3=fallback/scratch. */
 			emit_load_gpr(RTMP0, ra);
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x1AC00C00 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SDIV Wd,Wn,Wm */
-			emit_store_gpr(RTMP0, rd);
-			if (op & 1) lazy_update_cr0(RTMP0);
+			emit32(0x1AC00C00 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP2); /* SDIV W2,W0,W1 */
+			/* fallback = (int32)rA >> 31  → ASR W3, W0, #31 */
+			emit32(0x13000000 | (31 << 16) | (0x1F << 10) | (RTMP0 << 5) | RTMP3);
+			/* special if rB==0:  CMP W1,#0 ; CSEL W2 = (EQ) ? W3 : W2 */
+			emit32(0x7100001F | (RTMP1 << 5));                         /* CMP W1, #0 */
+			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | RTMP2); /* CSEL W2,W3,W2,EQ */
+			/* special if MIN/-1: detect via (rA ^ 0x80000000) | (~rB) == 0.
+			 * W0 = rA ^ 0x80000000; W1 = ~rB; W0 |= W1; CMP W0,#0; CSEL EQ. */
+			emit_load_imm32(RTMP1, (int32_t)0x80000000);
+			emit32(0x4A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* EOR W0,W0,#0x80000000(reg) */
+			emit_load_gpr(RTMP1, rb);
+			emit32(0x2A2103E1);                                        /* MVN W1, W1 (~rB) */
+			emit32(0x2A010000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ORR W0,W0,W1 */
+			emit32(0x7100001F | (RTMP0 << 5));                         /* CMP W0, #0 */
+			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | RTMP2); /* CSEL W2,W3,W2,EQ */
+			emit_store_gpr(RTMP2, rd);
+			if (op & 1) lazy_update_cr0(RTMP2);
 			return true;
+		}
 		case 19: /* mfcr rD */
 			lazy_flush_cr0();
 			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
@@ -1116,8 +1139,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				/* CA = (rS < 0) && ((rS & ((1<<sh)-1)) != 0) */
 				/* Save original for CA computation */
 				a64_mov_reg(RTMP1, RTMP0); /* RTMP1 = original rS */
-				/* ASR Wd, Wn, #sh */
-				emit32(0x13000000 | (sh << 10) | (0x1F << 16) | (RTMP0 << 5) | RTMP0);
+				/* ASR Wd, Wn, #sh = SBFM Wd,Wn,#sh,#31 (immr=sh<<16, imms=31<<10) */
+				emit32(0x13000000 | (sh << 16) | (0x1F << 10) | (RTMP0 << 5) | RTMP0);
 				emit_store_gpr(RTMP0, ra);
 				/* Compute CA: test if source negative AND shifted-out bits nonzero */
 				/* RTMP1 = original rS. Mask = (1<<sh)-1 */
@@ -1143,18 +1166,27 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 24: /* slw rA,rS,rB (shift left word) */
 		{
-			emit_load_gpr(RTMP0, PPC_RS(op));
-			emit_load_gpr(RTMP1, rb);
-			emit32(0x1AC02000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSL Wd,Wn,Wm */
-			emit_store_gpr(RTMP0, ra);
+			/* PPC: shift amount is rB[26:31]; if bit 26 set (count >= 32) the
+			 * result is 0. A 64-bit LSLV of the zero-extended 32-bit rS by
+			 * (rB & 63) gives exactly this: for counts 32..63 the 32-bit value
+			 * shifts out of the low word, so the stored low 32 bits are 0. */
+			emit_load_gpr(RTMP0, PPC_RS(op));   /* X(RTMP0) = zero-extended rS */
+			emit_load_gpr(RTMP1, rb);           /* X(RTMP1) = zero-extended rB */
+			emit32(0x9AC02000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSLV Xd,Xn,Xm */
+			emit_store_gpr(RTMP0, ra);          /* stores low 32 bits */
+			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
 		case 536: /* srw rA,rS,rB (shift right word) */
 		{
-			emit_load_gpr(RTMP0, PPC_RS(op));
-			emit_load_gpr(RTMP1, rb);
-			emit32(0x1AC02400 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSR Wd,Wn,Wm */
+			/* PPC: count rB[26:31]; count >= 32 → 0. 64-bit LSRV of the
+			 * zero-extended 32-bit rS by (rB & 63): for counts 32..63 the only
+			 * set bits are in [31:0], so the result is 0. */
+			emit_load_gpr(RTMP0, PPC_RS(op));   /* X(RTMP0) = zero-extended rS */
+			emit_load_gpr(RTMP1, rb);           /* X(RTMP1) = zero-extended rB */
+			emit32(0x9AC02400 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSRV Xd,Xn,Xm */
 			emit_store_gpr(RTMP0, ra);
+			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
 		case 792: /* sraw rA,rS,rB (arithmetic shift right, set CA) */
@@ -1277,28 +1309,19 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 		case 234: /* addme rD,rA (rD = rA + CA - 1, set CA) */
 		{
-			emit_load_gpr(RTMP0, ra);
-			emit_read_xer_ca(RTMP1); /* RTMP1 = CA (0 or 1) */
-			/* rD = rA + CA + 0xFFFFFFFF. Compute as: ADDS tmp, rA, CA; ADDS tmp, tmp, -1 */
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, rA, CA */
-			emit_load_imm32(RTMP1, -1);
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, Wd, -1 */
-			/* CA = carry out. The second ADDS sets C correctly for the final add. */
-			/* But we need CA = carry out of the FULL operation rA + CA_in + 0xFFFFFFFF.
-			   Since we can't chain carries with two ADDS, compute in 64-bit instead. */
-			/* Actually: use ADDS+ADCS chain. ADDS rA, CA → sets C1. ADCS rD, result, -1 → C = C1|C2 */
-			/* Simpler: just compute directly. rA + CA_in - 1. If rA + CA_in >= 1, no borrow → CA=1.
-			   CA_out = (rA != 0) || (CA_in != 0), except edge case rA=0,CA=0 → result=0xFFFFFFFF, CA=0.
-			   Actually: CA_out = carry of (~0 + rA + CA_in) = carry of (rA + CA_in + 0xFFFFFFFF). */
-			/* Cleanest: reload and use ADDS/ADCS */
-			emit_load_gpr(RTMP0, ra);
-			emit_read_xer_ca(RTMP1);
-			emit_load_imm32(RTMP2, -1); /* 0xFFFFFFFF */
-			emit32(0x2B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, rA, 0xFFFFFFFF */
-			emit32(0x3A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADCS Wd, Wd, CA_in */
-			emit_store_gpr(RTMP0, rd);
-			emit_write_xer_ca_from_carry();
-			if (op & 1) lazy_update_cr0(RTMP0);
+			/* result = rA + CA_in + 0xFFFFFFFF (all 32-bit). Compute the full sum
+			 * in 64-bit so the carry-out is simply bit 32 of the result; this
+			 * avoids the ADDS/ADCS double-counting of CA. */
+			emit_load_gpr(RTMP0, ra);       /* X(RTMP0) = zero-extended rA */
+			emit_read_xer_ca(RTMP1);        /* X(RTMP1) = CA_in (0 or 1) */
+			a64_add_reg(RTMP0, RTMP0, RTMP1); /* X = rA + CA_in (64-bit) */
+			emit_load_imm32(RTMP2, -1);     /* W(RTMP2) = 0xFFFFFFFF, zero-extended */
+			a64_add_reg(RTMP0, RTMP0, RTMP2); /* X = rA + CA_in + 0xFFFFFFFF */
+			/* CA_out = bit 32 of the 64-bit sum */
+			emit_lsr64_imm(RTMP1, RTMP0, 32); /* X(RTMP1) = sum >> 32 (0 or 1) */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
+			emit_store_gpr(RTMP0, rd);      /* store low 32 bits */
+			if (op & 1) { emit_load_gpr(RTMP0, rd); lazy_update_cr0(RTMP0); }
 			return true;
 		}
 		case 202: /* addze rD,rA (rD = rA + CA, set CA) */
@@ -1313,15 +1336,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 232: /* subfme rD,rA (rD = ~rA + CA - 1, set CA) */
 		{
+			/* result = ~rA + CA_in + 0xFFFFFFFF (all 32-bit). 64-bit sum so the
+			 * carry-out is bit 32 (avoids ADDS/ADCS CA double-count). */
 			emit_load_gpr(RTMP0, ra);
-			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* MVN Wd, Wn = ~rA */
-			emit_read_xer_ca(RTMP1);
-			emit_load_imm32(RTMP2, -1);
-			emit32(0x2B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, ~rA, -1 */
-			emit32(0x3A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADCS Wd, Wd, CA_in */
+			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* MVN Wd = ~rA (zero-extends) */
+			emit_read_xer_ca(RTMP1);        /* X(RTMP1) = CA_in (0 or 1) */
+			a64_add_reg(RTMP0, RTMP0, RTMP1); /* X = ~rA + CA_in */
+			emit_load_imm32(RTMP2, -1);     /* 0xFFFFFFFF */
+			a64_add_reg(RTMP0, RTMP0, RTMP2); /* X = ~rA + CA_in + 0xFFFFFFFF */
+			emit_lsr64_imm(RTMP1, RTMP0, 32); /* carry-out = bit 32 */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
 			emit_store_gpr(RTMP0, rd);
-			emit_write_xer_ca_from_carry();
-			if (op & 1) lazy_update_cr0(RTMP0);
+			if (op & 1) { emit_load_gpr(RTMP0, rd); lazy_update_cr0(RTMP0); }
 			return true;
 		}
 		case 200: /* subfze rD,rA (rD = ~rA + CA, set CA) */
@@ -1335,12 +1361,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
-		case 476: /* nand rA,rS,rB */
+		case 476: /* nand rA,rS,rB → rA = ~(rS & rB) */
 			emit_load_gpr(RTMP0, PPC_RS(op));
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x0A200000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* BIC then invert... */
-			/* Actually: AND then MVN */
-			emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* AND */
+			emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* AND Wd,Wn,Wm */
 			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* ORN Wd,WZR,Wm = MVN */
 			emit_store_gpr(RTMP0, ra);
 			if (op & 1) lazy_update_cr0(RTMP0);
@@ -2526,7 +2550,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit32(0x4A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); break;
 			case 33:  /* crnor:  ~(a | b) = NOR */
 				emit32(0x2A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* OR */
-				emit32(0x2A2003E0 | RTMP1); /* MVN Wd, Wn → ORN WZR, Wn */
+				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */
 				emit_load_imm32(RTMP2, 1);
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;
@@ -2534,7 +2558,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit32(0x0A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* BIC */ break;
 			case 289: /* creqv:  ~(a ^ b) = XNOR */
 				emit32(0x4A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* XOR */
-				emit32(0x2A2003E0 | RTMP1); /* MVN */
+				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */
 				emit_load_imm32(RTMP2, 1);
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;
@@ -2542,7 +2566,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit32(0x2A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* ORN */ break;
 			case 225: /* crnand: ~(a & b) */
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND */
-				emit32(0x2A2003E0 | RTMP1); /* MVN */
+				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */
 				emit_load_imm32(RTMP2, 1);
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;

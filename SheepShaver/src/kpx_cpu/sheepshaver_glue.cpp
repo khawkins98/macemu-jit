@@ -52,6 +52,14 @@
 #include <malloc.h>
 #endif
 
+/* MAP_FIXED_NOREPLACE is a Linux-only mmap flag (Linux >= 4.17). macOS and
+   other BSDs lack it. Define it as a no-op (0) so the fixed-address hint is
+   simply ignored; the caller already retries with a kernel-chosen address
+   and validates the result, so behaviour is unchanged. */
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0
+#endif
+
 #ifdef USE_SDL_VIDEO
 #include "my_sdl.h"
 #endif

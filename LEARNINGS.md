@@ -448,3 +448,65 @@ the SCSI scan" behaviour.
   access — the same translation `vm_do_get_real_address` does. The opcode-*fetch* in
   `ppc_jit_aarch64_compile` (`p = ram + (cur_pc - (uint32)ram)`) happens to work only because guest
   base low-32 == host base low-32 for this test; emitted *runtime* accesses do not.
+
+## 2026-06-02 — Phase 3 JIT boot investigation
+
+### Crash diagnosis: GATE3 PC-reset caused double-execution (commit 7cc741da)
+
+**Symptom:** First JIT boot attempt with DIRECT addressing (after Phase 2 complete) crashed with
+SIGSEGV within ~10s of launch: `pc 0xffffffffffffffff ea 0x400000006524 (guest pc 0x6524)`.
+
+**Two diagnostic findings:**
+
+1. **`pc 0xffffffffffffffff` in SIGSEGV dumps = SIGSEGV_INVALID_ADDRESS, not a real crash address.**
+   `sigsegv.h` had no `SIGSEGV_FAULT_INSTRUCTION` for the `__aarch64__` + Mach exceptions path — only
+   PPC, x86, x86_64 were defined. `sigsegv_get_fault_instruction_address` returned `SIP->pc` which was
+   initialized to `SIGSEGV_INVALID_ADDRESS = -1`. The real crash is always a DATA ACCESS fault; the
+   `ea` (= ARM64 FAR from exception state) is the actual bad memory address.
+   Fix: added `#define SIGSEGV_FAULT_INSTRUCTION SIP->thr_state.MACH_FIELD_NAME(pc)` to `sigsegv.h`
+   (`BasiliskII/src/CrossPlatform/sigsegv.h:121`, same file SheepShaver symlinks to).
+
+2. **GATE3 double-execution bug (root cause of crash).**
+   GATE3 handler in `ppc-cpu.cpp:739` was:
+   ```
+   set_register(powerpc_registers::PC, any_register(jblk.ppc_start_pc));  // WRONG
+   ppc_jit_aarch64_invalidate_pc(jblk.ppc_start_pc);
+   goto skip_jit;
+   ```
+   When the JIT block at 0x100518e0 (RAM) branched to 0x5058ffc8 (SheepMem thunk area), GATE3 reset
+   PC back to 0x100518e0 and fell to the interpreter. The interpreter's `bi` pointed to the block for
+   0x100518e0, so the interpreter **re-executed the same block** — all register writes and memory stores
+   happened twice. This caused state divergence: after a few such replays, execution reached guest PC
+   0x6524 (low-memory area, guest addr 0x6524 → host NATMEM_OFFSET+0x6524 = 0x400000006524,
+   unmapped) → SIGSEGV.
+   
+   The GATE3 comment claimed "safe interpreter start" but the JIT had already computed the correct PC.
+   Resetting to block entry was both wrong and unnecessary.
+
+**Fix (commit 7cc741da):**
+- Removed the `set_register(PC, ppc_start_pc)` line from GATE3.
+- After eviction, use `bi = my_block_cache.find(pc()); if (bi) goto pdi_execute; continue;`
+  so the interpreter dispatches from the CORRECT jit_pc (0x5058ffc8), not the stale block entry.
+- Extended GATE3 exclusion range from `ROMBase + 0x500000` to `ROMBase + 0x600000` to cover
+  SheepMem (0x50510000–0x5058FFFF, mapped as ROM_AREA_SIZE + SIG_STACK_SIZE + SheepMem::size).
+  SheepShaver thunk calls (all ~0x5058xxxx) no longer trigger GATE3 and no longer spam the log.
+
+**SheepMem memory layout (macOS arm64, DIRECT addressing):**
+| Guest Range | Contents |
+|---|---|
+| 0x00000000–0x00002FFF | Low Memory (3 pages, explicitly mapped) |
+| 0x10000000–0x1FFFFFFF | RAM (256 MB) |
+| 0x50000000–0x504FFFFF | ROM (4 MB file, 5 MB area) |
+| 0x50500000–0x5050FFFF | SIG_STACK (64 KB) |
+| 0x50510000–0x5058FFFF | SheepMem (512 KB) |
+| 0x68070000–... | DR Emulator |
+| 0x68FFE000–... | Kernel Data |
+| 0x69000000–... | DR Cache |
+
+The gap 0x00003000–0x0FFFFFFF is unmapped. Guest PCs in this range cannot be safely executed by
+either JIT or interpreter (instruction fetch would fault). Normal Mac OS execution never reaches
+these addresses when booting from ROM.
+
+**Result:** After fix, JIT boot runs indefinitely without crashing. Log is clean (only 4 lines:
+cache alloc + 2 cache flushes). 100% CPU sustained — actively executing Mac OS boot code.
+JIT desktop boot needs visual confirmation from Ken.

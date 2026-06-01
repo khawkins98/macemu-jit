@@ -135,6 +135,51 @@ static inline void a64_str_w_imm(int rt, int rn, uint32_t offset) {
     emit32(0xB9000000 | ((offset / 4) << 10) | (rn << 5) | rt);
 }
 
+/* ---- Register-offset loads/stores: <op> Wt/Xt, [Xn, Xm] ----
+ *
+ * These are used for guest memory accesses under DIRECT addressing, where
+ * the host address is formed as base_register (NATMEM_OFFSET) + guest_EA.
+ * Xn is the base (the memory-base register) and Xm the guest effective
+ * address. The option field selects LSL #0 (no scaling): option=0b011 (UXTX),
+ * S=0. Encoding bits: size<<30 | opc | 1<<21 | Rm<<16 | option<<13 | S<<12 |
+ * 0b10<<10 | Rn<<5 | Rt.
+ *
+ * The base opcode constants below already encode (1<<21)|(0b011<<13)|(0b10<<10).
+ */
+
+/* LDR Wt, [Xn, Xm] (32-bit, zero-extend) */
+static inline void a64_ldr_w_reg(int rt, int rn, int rm) {
+    emit32(0xB8606800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STR Wt, [Xn, Xm] (32-bit) */
+static inline void a64_str_w_reg(int rt, int rn, int rm) {
+    emit32(0xB8206800 | (rm << 16) | (rn << 5) | rt);
+}
+/* LDR Xt, [Xn, Xm] (64-bit) */
+static inline void a64_ldr_x_reg(int rt, int rn, int rm) {
+    emit32(0xF8606800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STR Xt, [Xn, Xm] (64-bit) */
+static inline void a64_str_x_reg(int rt, int rn, int rm) {
+    emit32(0xF8206800 | (rm << 16) | (rn << 5) | rt);
+}
+/* LDRB Wt, [Xn, Xm] (8-bit, zero-extend) */
+static inline void a64_ldrb_reg(int rt, int rn, int rm) {
+    emit32(0x38606800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STRB Wt, [Xn, Xm] (8-bit) */
+static inline void a64_strb_reg(int rt, int rn, int rm) {
+    emit32(0x38206800 | (rm << 16) | (rn << 5) | rt);
+}
+/* LDRH Wt, [Xn, Xm] (16-bit, zero-extend) */
+static inline void a64_ldrh_reg(int rt, int rn, int rm) {
+    emit32(0x78606800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STRH Wt, [Xn, Xm] (16-bit) */
+static inline void a64_strh_reg(int rt, int rn, int rm) {
+    emit32(0x78206800 | (rm << 16) | (rn << 5) | rt);
+}
+
 /* B (unconditional branch, PC-relative) */
 static inline void a64_b(int32_t offset) {
     emit32(0x14000000 | ((offset >> 2) & 0x03FFFFFF));

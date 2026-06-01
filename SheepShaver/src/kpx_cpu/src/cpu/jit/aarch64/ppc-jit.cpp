@@ -222,10 +222,45 @@ static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, boo
 
 /* Host register assignments */
 #define RSTATE  20   /* x20 = regs pointer (callee-saved) */
+#define RMEMBASE 19  /* x19 = guest-memory base (VMBaseDiff); callee-saved */
 #define RTMP0    0
 #define RTMP1    1
 #define RTMP2    2
 #define RTMP3    3
+
+/* ---- Guest-memory addressing model ----
+ *
+ * SheepShaver maps Mac RAM/ROM into the host address space via one of two
+ * models (see SheepShaver/src/Unix/sysdeps.h and cpu/vm.hpp):
+ *
+ *   REAL_ADDRESSING   : host pointer == 32-bit guest address (VMBaseDiff = 0).
+ *                       Used on Linux/native builds without NATMEM_OFFSET.
+ *   DIRECT_ADDRESSING : host = NATMEM_OFFSET + (uint32)guest_addr.
+ *                       Used whenever NATMEM_OFFSET is configured (macOS arm64).
+ *
+ * The JIT computes a 32-bit guest effective address in a temp register, then
+ * accesses host memory as [RMEMBASE, EA]. RMEMBASE is loaded once per block in
+ * the prologue with JIT_MEM_BASE:
+ *   - DIRECT : NATMEM_OFFSET (a fixed 64-bit constant).
+ *   - REAL   : 0, so [0, EA] == [EA] and the codegen is identical to before.
+ *
+ * This mirrors sysdeps.h's REAL/DIRECT selection so a single codegen path works
+ * on both Linux and macOS with no behavioral #ifdefs in the emitters. */
+#if defined(REAL_ADDRESSING)
+  #define JIT_MEM_BASE ((uint64_t)0)
+#elif defined(DIRECT_ADDRESSING) && defined(NATMEM_OFFSET)
+  #define JIT_MEM_BASE ((uint64_t)NATMEM_OFFSET)
+#elif defined(NATMEM_OFFSET)
+  #define JIT_MEM_BASE ((uint64_t)NATMEM_OFFSET)
+#else
+  /* No addressing macros visible (standalone harness compile): default to the
+   * REAL model so the JIT keeps treating guest EAs as host pointers. */
+  #define JIT_MEM_BASE ((uint64_t)0)
+#endif
+
+/* emit_load_mem_base() loads JIT_MEM_BASE into RMEMBASE; defined after the
+ * shared emit_load_imm64() helper further below. */
+static void emit_load_mem_base(void);
 
 /* FPR offsets: FPR[n] at offset 128 + n*8 (each is a 64-bit double) */
 #define PPCR_FPR(n) ((uint32_t)(256 + (n) * 8))
@@ -422,6 +457,12 @@ static void emit_load_imm64(int rd, uint64_t imm) {
 	a64_movz(rd, p[first], first);
 	for (int i = 0; i < 4; i++)
 		if (i != first && p[i]) a64_movk(rd, p[i], i);
+}
+
+/* Load the guest-memory base (JIT_MEM_BASE) into RMEMBASE.
+ * For REAL (JIT_MEM_BASE==0) this is a single MOVZ #0 so [RMEMBASE, EA]==[EA]. */
+static void emit_load_mem_base(void) {
+	emit_load_imm64(RMEMBASE, JIT_MEM_BASE);
 }
 
 static void emit_load_imm32(int rd, int32_t imm) {
@@ -3623,10 +3664,16 @@ bool ppc_jit_aarch64_compile(
 	a64_stp_pre(25, 26, A64_SP, -16);      /* save x25, x26 */
 	a64_stp_pre(27, 28, A64_SP, -16);      /* save x27, x28 */
 	a64_mov_reg(RSTATE, A64_X0);
+	/* Load the guest-memory base (VMBaseDiff) into RMEMBASE (x19). All guest
+	 * memory accesses use register-offset addressing [RMEMBASE, EA]. The value
+	 * is a fixed per-build constant (NATMEM_OFFSET on DIRECT, 0 on REAL), so a
+	 * chained block re-using this frame inherits the same correct base. */
+	emit_load_mem_base();
 
 	/* Chain entry: code position after prologue.
-	 * Other blocks chain here via B <chain_code> — RSTATE (x20) must
-	 * already be valid and callee-saved regs remain on the outer frame. */
+	 * Other blocks chain here via B <chain_code> — RSTATE (x20) and RMEMBASE
+	 * (x19) must already be valid and callee-saved regs remain on the outer
+	 * frame. */
 	uint32_t *chain_entry_start = jit_code_ptr;
 
 	jit_blocks_attempted++;

@@ -1,6 +1,19 @@
 # MacEmu AArch64 JIT — Status
 
-## SheepShaver PPC JIT (2026-05-17)
+## SheepShaver PPC JIT (2026-06-02, macOS arm64 port — branch macos-arm64)
+
+**Build:** ✅ macOS 26.4.1 arm64 (Apple clang 17, SDL2, no X11)
+**Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
+**JIT boot (macOS arm64):** ✅ Runs sustained without crash; CPU at 100% through ROM init — desktop not yet visually confirmed (needs Ken at keyboard). See LEARNINGS.md 2026-06-02 section.
+**JIT harness:** ✅ 209/209 opcode vectors pass interpreter mode and JIT mode (score=100 both)
+**ROM harness:** ⚠️ Needs OldWorld raw ROM dump; New World CHRP ROMs are not compatible with the scanner
+**macOS-specific fixes (all on macos-arm64 branch):**
+- MAP_JIT + pthread_jit_write_protect_np + sys_icache_invalidate for JIT code cache
+- DIRECT_ADDRESSING (NATMEM_OFFSET) throughout JIT codegen
+- GATE3 double-execution bug fixed (commit 7cc741da)
+- arm64 Mach exception fault PC reporting fixed (sigsegv.h)
+
+## SheepShaver PPC JIT (2026-05-17, upstream Linux ARM64)
 
 **Build:** ✅
 **Interpreter:** ✅ Boots Mac OS to desktop (VNC port 5999, ~324 MIPS on Orange Pi 6 Plus)

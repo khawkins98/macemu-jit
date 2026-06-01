@@ -536,14 +536,13 @@ in both modes — if it's stuck in JIT mode, the JIT execution upstream must hav
 - The JIT compiled 80,000 blocks (2 × 4MB flushes) in the first 6 seconds. After that,
   `jit_blocks_attempted` wasn't triggered at the 100,000-block periodic report, meaning the
   loop ran via cached blocks without recompilation.
-- `regs_for_jit()` is fragile — it scans the sheepshavar_cpu object for a sentinel value. Adding
-  ANY extra code to ppc-jit.cpp or ppc-cpu.cpp (even a `fprintf` guarded by a never-true
-  condition) changes compiler register allocation and causes `regs_for_jit()` to find the sentinel
-  at the WRONG offset → JIT memory tests crash. This severely limits diagnostic instrumentation
-  approaches. A FULL `make clean && make` is required after any source edits to avoid stale objects.
-- The `regs_for_jit()` sentinel-scan approach is a known fragility — the root fix would be to
-  compute the register struct offset at compile time (e.g., `offsetof(powerpc_cpu, regs)`) instead
-  of scanning at runtime.
+- Harness regression during this session (42 JIT failures) was due to **stale .o files** from
+  incremental make — a probe was added to ppc-jit.cpp, then reverted, but `make` saw same-second
+  timestamps and didn't recompile. `make clean && make` restored 209/209 immediately. The probe
+  code itself did NOT cause any behavioral change. **KEY RULE**: always `make clean && make` when
+  changing JIT source files before running harnesses.
+- `regs_for_jit()` is fragile in principle (runtime sentinel scan could use `offsetof` instead)
+  but it was NOT proven to break from probe code in this session.
 
 **Next steps for Phase 3:**
 - Identify which JIT block writes wrong state by comparing interpreter vs JIT execution traces.

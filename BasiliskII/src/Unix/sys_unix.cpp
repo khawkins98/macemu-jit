@@ -634,19 +634,32 @@ void *Sys_open(const char *name, bool read_only, bool is_cdrom)
 	open_flags |= (is_cdrom ? O_NONBLOCK : 0);
 #endif
 #if defined(__MACOSX__)
-	open_flags |= (is_file ? O_EXLOCK | O_NONBLOCK : 0);
+	// Lock file-backed disk images to guard against concurrent access.
+	// Read-write images take an exclusive lock (no other instance may open
+	// the image), while read-only media (e.g. CD images) only need a shared
+	// lock so several readers can coexist. O_NONBLOCK makes the lock attempt
+	// fail with EAGAIN instead of blocking when the lock is contended.
+	if (is_file)
+		open_flags |= (read_only ? O_SHLOCK : O_EXLOCK) | O_NONBLOCK;
 #endif
 	int fd = open(name, open_flags);
 #if defined(__MACOSX__)
-	if (fd < 0 && (open_flags & O_EXLOCK)) {
+	if (fd < 0 && (open_flags & (O_EXLOCK | O_SHLOCK))) {
 		if (errno == EOPNOTSUPP) {
 			// File system does not support locking. Try again without.
-			open_flags &= ~O_EXLOCK;
+			open_flags &= ~(O_EXLOCK | O_SHLOCK);
 			fd = open(name, open_flags);
 		} else if (errno == EAGAIN) {
-			// File is likely already locked by another process.
-			printf("WARNING: Cannot open %s (%s)\n", name, strerror(errno));
-			return NULL;
+			if (read_only) {
+				// Read-only media cannot be corrupted by concurrent access,
+				// so a contended lock is not fatal: retry without locking.
+				open_flags &= ~(O_EXLOCK | O_SHLOCK);
+				fd = open(name, open_flags);
+			} else {
+				// File is likely already locked by another process.
+				printf("WARNING: Cannot open %s (%s)\n", name, strerror(errno));
+				return NULL;
+			}
 		}
 	}
 #endif

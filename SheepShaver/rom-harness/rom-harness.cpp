@@ -35,6 +35,13 @@
 #include <signal.h>
 #include <setjmp.h>
 
+/* MAP_FIXED_NOREPLACE is Linux-only; on macOS/BSD fall back to 0 so the
+ * fixed-address mmap below degrades to a hint, and the non-fixed fallback
+ * mmap handles relocation. */
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0
+#endif
+
 /* ---------- Forward declarations for the JIT ---------- */
 #include "ppc-jit.h"
 

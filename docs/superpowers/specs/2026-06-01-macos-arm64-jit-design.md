@@ -54,6 +54,14 @@ JIT boot completion.**
 **Exit criteria:** builds reproducibly; harness results recorded; baseline benchmark table
 in LEARNINGS.md.
 
+**Status (2026-06-01): Substantially complete.** Builds reproducibly (3 portability fixes);
+harnesses run (opcode 0/209, ROM harness EPERM — both blocked by the W^X issue, precisely
+diagnosed); interpreter runtime confirmed working (boots into Mac OS SCSI scan; CD-open bug
+found and fixed → boot now proceeds); JIT-mode failure point documented (code cache RWX mmap
+EPERM). Remaining: in-guest benchmark vs Rosetta (needs Ken at the keyboard) and visual
+boot-to-desktop confirmation (needs Screen Recording permission). See LEARNINGS.md
+"Phase 1 baseline" section.
+
 ### Phase 2 — macOS-specific JIT correctness
 
 1. Audit `SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/` + `jit-cache.cpp` code-cache path
@@ -66,6 +74,13 @@ in LEARNINGS.md.
 
 **Exit criteria:** JIT runs under default macOS security posture (no boot-args, no SIP
 changes); harness still 209/209.
+
+**Status (2026-06-01): Designed; implementation plan written** —
+`docs/superpowers/plans/2026-06-01-phase2-wx-and-addressing.md`. Research findings (in
+LEARNINGS.md "Phase 2 design research"): __PAGEZERO cannot be shrunk on arm64, so the plan
+is DIRECT_ADDRESSING (already working for the interpreter) + MAP_JIT for the code cache +
+base-register conversion of the JIT's load/store codegen. Item 2's "macOS-appropriate
+approach" is therefore DIRECT_ADDRESSING, not a low-memory workaround.
 
 ### Phase 3 — JIT boot completion (the centerpiece)
 

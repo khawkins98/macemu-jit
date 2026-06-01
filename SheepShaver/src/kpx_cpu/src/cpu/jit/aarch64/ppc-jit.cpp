@@ -2596,14 +2596,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		bool lk = op & 1;
 		bool aa = op & 2;
 		uint32_t target = aa ? (uint32_t)li : (pc + li);
-		/* Under REAL_ADDRESSING, SheepShavar EmulOp trampolines live at addresses
-		 * whose top 6 bits == 6 (i.e., 0x18000000–0x1BFFFFFF). Branches there must
-		 * fall back to the interpreter so execute_sheep() is invoked correctly.
-		 * Under DIRECT_ADDRESSING (macOS arm64), EmulOp stubs are in SheepMem
-		 * (0x50510000+), so 0x18xxxxxx is ordinary RAM — DO NOT reject these. */
-#if !defined(DIRECT_ADDRESSING)
-		if ((target >> 26) == 6) return false; /* EMUL_OP trampoline range (REAL only) */
-#endif
+		/* Validate target is in compilable range — reject jumps to EMUL_OP trampolines */
+		if ((target >> 26) == 6) return false; /* EMUL_OP opcode range */
 		if (lk) {
 			emit_load_imm32(RTMP0, (int32_t)(pc + 4));
 			a64_str_w_imm(RTMP0, RSTATE, PPCR_LR);

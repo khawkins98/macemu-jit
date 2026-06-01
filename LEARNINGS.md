@@ -533,9 +533,13 @@ in both modes — if it's stuck in JIT mode, the JIT execution upstream must hav
 - ALL samples (~1500) from the JIT boot are at the INTERPRETER level (`powerpc_cpu::execute` at
   ppc-cpu.cpp:779, the `skip_jit:` inner loop). Zero samples in the JIT cache (0x119bXXXXX).
   This means execution settled into the interpreter inner loop after the initial JIT compilation.
-- The JIT compiled 80,000 blocks (2 × 4MB flushes) in the first 6 seconds. After that,
-  `jit_blocks_attempted` wasn't triggered at the 100,000-block periodic report, meaning the
-  loop ran via cached blocks without recompilation.
+- Counter reads (via lldb on a running JIT boot, reading `jit_blocks_attempted` / `jit_blocks_complete`):
+  - T=15s: attempted=66,823, complete=16,916 (25% complete rate). JIT IS running native blocks.
+  - T=30s: attempted=66,836 (+13 in 15s ≈ 1/sec). Counter essentially STOPPED growing.
+  - After the 15s burst, the interpreter inner loop dominates. JIT gate is only re-entered
+    when the interpreter inner loop hits an uncached block (~1/sec). The 16,916 complete
+    JIT-compiled blocks that ran in the first 15 seconds set the guest state that the
+    interpreter then runs with indefinitely.
 - Harness regression during this session (42 JIT failures) was due to **stale .o files** from
   incremental make — a probe was added to ppc-jit.cpp, then reverted, but `make` saw same-second
   timestamps and didn't recompile. `make clean && make` restored 209/209 immediately. The probe

@@ -1587,7 +1587,17 @@ if [[ "x$EMULATED_PPC" = "xyes" ]]; then
 
   dnl Enable JIT compiler, if possible
   if [[ "x$WANT_JIT" = "xyes" ]]; then
-    if [[ "x$host_cpu" = "xaarch64" ]]; then
+    dnl macOS arm64 reports host_cpu as "arm" (arm-apple-darwin*) rather than
+    dnl "aarch64" (as Linux does), so check both names for the aarch64 JIT path.
+    dnl Bare "arm" is gated on Darwin to avoid matching 32-bit ARM Linux hosts.
+    dnl (Newer config.guess versions emit aarch64-apple-darwin* on macOS, which
+    dnl  the aarch64 arm above already handles.)
+    aarch64_host=no
+    case $host_cpu in
+      aarch64) aarch64_host=yes ;;
+      arm) case $host_os in darwin*) aarch64_host=yes ;; esac ;;
+    esac
+    if [[ "x$aarch64_host" = "xyes" ]]; then
       dnl This fork provides a direct AArch64 PPC JIT backend. It does not use
       dnl the classic dyngen path, so wire the backend source and compile-time
       dnl guard directly into normal SheepShaver builds.

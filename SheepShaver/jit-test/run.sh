@@ -111,11 +111,26 @@ else
     }
 fi
 
+# ---- Harness mode ------------------------------------------------------------
+# Default mode ("interp") preserves upstream's Linux behavior exactly: each
+# vector runs twice through the interpreter and the two REGDUMPs are compared
+# for determinism.
+#
+# SS_HARNESS_MODE=jit changes the equivalence test: each vector is run once in
+# interpreter mode and once in JIT mode (SS_TEST_JIT=1), and the JIT REGDUMP is
+# compared against the interpreter REGDUMP. This is the real correctness gate
+# for the aarch64 JIT codegen. It does not affect the default Linux usage.
+SS_HARNESS_MODE="${SS_HARNESS_MODE:-interp}"
+
 # ---- Test runner -------------------------------------------------------------
+# run_ppc_test <name> <hex> <outfile> [jit]
+#   The optional 4th argument, when "jit", sets SS_TEST_JIT=1 so the run drives
+#   the aarch64 JIT instead of the interpreter.
 run_ppc_test() {
     local name="$1"
     local hex="$2"   # space-separated 32-bit PPC hex words
     local outfile="$3"
+    local want_jit="${4:-}"
 
     local td="$RUN_DIR/test-${name}"
     mkdir -p "$td"
@@ -132,10 +147,17 @@ EOF
     # Kill any stale SheepShaver processes
     pkill -f "SheepShaver --config $td/prefs" 2>/dev/null || true
 
-    # Run with test mode env vars
+    local jit_env=""
+    if [ "$want_jit" = "jit" ]; then
+        jit_env="1"
+    fi
+
+    # Run with test mode env vars. SS_TEST_JIT is only set for JIT runs; the
+    # interpreter run leaves it unset so the glue pins SS_USE_JIT=0 itself.
     SDL_VIDEODRIVER=x11 DISPLAY=:99 HOME="$td" \
       SS_TEST_HEX="$hex" \
       SS_TEST_DUMP=1 \
+      SS_TEST_JIT="$jit_env" \
       ss_timeout "$BIN" --config "$td/prefs" \
       > "$td/emu.log" 2>&1 || true
 
@@ -1123,14 +1145,22 @@ PASS=0
 FAIL=0
 TOTAL=${#TEST_ORDER[@]}
 
+echo "HARNESS mode=$SS_HARNESS_MODE" >&2
+
 for name in "${TEST_ORDER[@]}"; do
     eval "hex=\"\${T_${name}}\""
     out1="$RUN_DIR/${name}-run1.txt"
     out2="$RUN_DIR/${name}-run2.txt"
 
-    # Run twice for determinism check (Phase 1)
-    run_ppc_test "$name" "$hex" "$out1"
-    run_ppc_test "${name}_r2" "$hex" "$out2"
+    if [ "$SS_HARNESS_MODE" = "jit" ]; then
+        # Equivalence: interpreter REGDUMP (reference) vs JIT REGDUMP.
+        run_ppc_test "$name" "$hex" "$out1"           # interpreter (reference)
+        run_ppc_test "${name}_jit" "$hex" "$out2" jit # JIT
+    else
+        # Determinism: run twice through the interpreter (upstream behavior).
+        run_ppc_test "$name" "$hex" "$out1"
+        run_ppc_test "${name}_r2" "$hex" "$out2"
+    fi
 
     if [ -s "$out1" ] && [ -s "$out2" ]; then
         if diff -q "$out1" "$out2" >/dev/null 2>&1; then
@@ -1147,8 +1177,12 @@ for name in "${TEST_ORDER[@]}"; do
         FAIL=$((FAIL+1))
         # Show what happened
         if [ ! -s "$out1" ]; then
-            echo "  $name: no REGDUMP from run 1" >&2
+            echo "  $name: no REGDUMP from reference (interpreter) run" >&2
             tail -5 "$RUN_DIR/test-${name}/emu.log" >&2 2>/dev/null || true
+        fi
+        if [ "$SS_HARNESS_MODE" = "jit" ] && [ ! -s "$out2" ]; then
+            echo "  $name: no REGDUMP from JIT run" >&2
+            tail -5 "$RUN_DIR/test-${name}_jit/emu.log" >&2 2>/dev/null || true
         fi
     fi
 done

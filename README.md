@@ -1,3 +1,72 @@
+## macOS Apple Silicon (arm64)
+
+This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit), adding an AArch64 JIT backend that translates PowerPC instructions to native ARM64 at runtime. It runs Mac OS 8.x–9.x under SheepShaver on M-series Macs.
+
+### Prerequisites
+
+Install build dependencies via Homebrew:
+
+```bash
+brew install autoconf automake sdl2
+```
+
+You also need:
+- An **OldWorld PPC Mac ROM** — Mac OS ROM 1.1 (1.8 MB). Not included; you must source this yourself.
+- A **Mac OS 8.6 CD image** or a pre-installed HFS disk image.
+
+### Build
+
+```bash
+cd SheepShaver/src/Unix
+NO_CONFIGURE=1 ./autogen.sh
+./configure --enable-sdl-video --enable-sdl-audio --enable-jit \
+            --without-gtk --without-x --without-esd
+cd ../..
+make build
+```
+
+### Preferences
+
+SheepShaver reads `~/.sheepshaver_prefs` on startup. A minimal working configuration:
+
+```
+rom   /path/to/Mac OS ROM 1.1.rom
+disk  /path/to/your-disk.dsk        # optional: pre-installed HFS disk image
+cdrom /path/to/Mac OS 8.6.iso       # bootable installer CD
+ramsize 268435456
+screen win/800/600
+nosound true
+bootdriver -62
+jit false
+```
+
+`jit false` in prefs is overridden at launch by the `SS_USE_JIT=1` environment variable — set prefs to `false` as a safe default and enable JIT via the env var.
+
+### Run
+
+```bash
+cd SheepShaver/src/Unix
+SS_USE_JIT=1 ./SheepShaver    # JIT enabled (recommended)
+SS_USE_JIT=0 ./SheepShaver    # interpreter only
+```
+
+### Quick test
+
+Verify the JIT opcode harness passes before running the full emulator:
+
+```bash
+cd SheepShaver && ./jit-test/run.sh
+# Expected: pass=233 fail=0 total=233 score=100
+```
+
+### Known limitations
+
+- Mac OS 9.2.1 "Internal Edition" requires a newer ROM (Mac OS ROM 9.0.1+); ROM 1.1 identifies as an older machine model and will not boot 9.2.1.
+- The JIT covers the ROM toolbox only (up to offset 0x460000); the 68k DR emulator range requires a future fix before it can run under JIT.
+- Boot from CD ISO is slow (full SCSI scan on each boot); a pre-installed disk image is recommended for day-to-day use.
+
+---
+
 # macemu-jit - ARM64 JITs for Macintosh Emulators
 
 ![icon](icon-256.png)

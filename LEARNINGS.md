@@ -3,6 +3,61 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-02 (session 2) — Bug #2 investigation: block 504613e0 decoded
+
+### lldb SIGSTOP disrupts 60Hz VBL timer — early-boot spin
+
+Multiple `lldb -p PID -o ... -o detach -o quit` invocations in sequence cause the macOS
+kernel to defer pending signals/timers during SIGSTOP.  After 3-4 lldb sessions, the
+emulator's 60Hz VBL interrupt (delivered via `timer_unix.cpp`) stops firing.  The
+ROM's early-boot spin-wait at 0x5031040c/0x50310414 waits for a VBL tick to exit —
+without ticks it loops forever.  **Mitigation**: attach lldb AT MOST ONCE per run, do
+the minimal dump, and immediately detach.  If the emulator gets stuck in a 2-block loop
+with all-zero a0-a7 registers in the ring, the VBL timer was disrupted — just restart.
+
+### Block 504613e0 PPC instructions (DR emulator dispatch variant)
+
+Decoded from ROM bytes (NATMEM_OFFSET + guest_addr, then BSWAP32 each 4-byte word):
+```
+504613e0: lhau  r27, 2(r24)          ; fetch next 68k opcode, advance PC by 2
+504613e4: addco. r4, r4, r0          ; OE arithmetic for 68k CC (N/Z/V/C)
+504613e8: rlwimi r27,r29, 3, 13, 28  ; merge CC bits into dispatch register
+504613ec: mtlr  r29                  ; load handler address into LR
+504613f0: lhau  r27, 2(r24)          ; fetch next-NEXT opcode, advance PC by 2 more
+504613f4: sthu  r4, -4(r1)           ; push halfword of r4 to [r1-4], r1 -= 4
+504613f8: bclr  5, 8                 ; branch to handler (LR) if CR2.LT=0 (no interrupt)
+504613fc: b     0x5046D0D4           ; fall-through: interrupt handler path
+```
+Two `lhau r27, 2(r24)` instructions in a single block = this dispatch variant processes
+TWO 68k instructions per cycle (common for short-pair sequences like back-to-back pushes).
+
+### 68k instruction at 0x5007aed4 = MOVE.L A3, -(A7)
+
+Bytes 0x2F0B at that ROM address decode as:
+- opcode bits 15:12 = 0010 = MOVE, bits 13:12 = 10 = long
+- dest: mode=100 (predecrement), reg=111 (A7) → -(A7)
+- source: mode=001 (addr reg direct), reg=011 (A3)
+= `MOVE.L A3, -(A7)` (push A3 onto system stack)
+
+Block 504613e0 is the dispatch handler for this 68k instruction.  The sthu at 504613f4
+pushes r4 (= A3 in the DR emulator register mapping) as a HALFWORD.  A3 = 0x103ffffe
+at this point → the garbage ends up on the stack → Device Manager reads it as a
+param-block pointer and triggers a spurious CD-ROM eject.
+
+### sthu and lhau JIT handlers are correct — harness confirms
+
+Verified via: (1) code review showing correct EA computation, byte-swap, and write-back
+sequencing; (2) harness 227/227 both modes after this session.  The bug is NOT in the
+sthu/lhau codegen.  A3 = 0x103ffffe was the wrong value BEFORE the push — the block
+correctly assembles that garbage value and pushes it.
+
+### NATMEM_OFFSET address arithmetic for lldb dumps
+
+NATMEM_OFFSET = 0x400000000000. Guest addr → host = 0x400000000000 + guest_addr.
+Examples: guest 0x5007aed4 → host 0x40005007aed4. Guest 0x504613e0 → host 0x4000504613e0.
+lldb `--size 4 --format x` shows little-endian 4-byte integers; BSWAP32 each value to
+get the big-endian PPC/68k instruction bytes.
+
 ## 2026-06-01 — Project setup & landscape research
 
 ### Fork landscape

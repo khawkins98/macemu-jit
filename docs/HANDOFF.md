@@ -29,6 +29,8 @@ so the JIT stops paying a dispatcher round-trip per 68k instruction.
 
 4. **Committed configuration**: `JIT_BLOCK_CHAINING 0`, ROM range `0x460000` (toolbox only).
    This is the proven-booting configuration plus the fix and instrumentation.
+   **Working tree**: ROM range flipped to `0x500000` (uncommitted — needed for Bug #2 hunt).
+   Harness verified 227/227 both modes with this working-tree state.
 
 ### What is UNCOMMITTED / in progress (the working-tree flips)
 
@@ -123,15 +125,69 @@ but from a different source (crorc is fixed and verified).
    a misaligned or wrongly-ordered address** (e.g. a JIT bug in sthu/sth d(rA) with some
    operand form, or a 68k MOVE.W pair whose handler computes EA+2 vs EA wrongly).
 
-3. NEXT SESSION STARTS HERE: dump and decode the PPC code of block 0x504613e0 and the
-   68k code at ROM 0x5007aed4 (and 0x500297b0, 0x50029688 for the swapped-halfword
-   writers).  Identify the store instruction(s), build an isolated SS_TEST_HEX vector,
-   find the codegen bug, fix, add harness vector.  (The crorc methodology, third time.)
-3. Alternative/parallel accelerant (advisor-recommended): opcode-histogram the
-   0x460000-0x500000 ROM region, cross-reference against harness coverage, and batch-write
-   vectors for every uncovered opcode the region uses.  This finds crorc-class bugs as
-   isolated reproductions instead of boot hunts.  Candidates: mcrxr, lhbrx/lwbrx,
-   lha/lhau update forms, rlwnm, divw/divwu edge cases, mtcrf FXM!=0xFF cases.
+3. DONE (partial) — decoded block 504613e0's PPC instructions (2026-06-02 session 2):
+   ```
+   504613e0: lhau  r27, 2(r24)          ; fetch next 68k opcode, advance PC
+   504613e4: addco. r4, r4, r0          ; OE arithmetic for 68k condition codes
+   504613e8: rlwimi r27,r29, 3, 13, 28  ; merge CC bits
+   504613ec: mtlr  r29                  ; load dispatch handler into LR
+   504613f0: lhau  r27, 2(r24)          ; fetch next-next opcode (2nd advance)
+   504613f4: sthu  r4, -4(r1)           ; push halfword of r4 at [r1-4], r1 -= 4
+   504613f8: bclr  5, 8                 ; dispatch to handler if no interrupt
+   504613fc: b     0x5046D0D4           ; jump to interrupt handler
+   ```
+   The 68k instruction at 0x5007aed4 is `MOVE.L A3, -(A7)` (68k bytes 0x2F0B).
+   So block 504613e0 is a dispatch variant that also PUSHES r4 (= A3) onto the 68k
+   stack as a halfword.  The sthu at 504613f4 writes 16 bits of r4 to [r1-4].
+
+   **Key open question**: A3 = 0x103ffffe (stack_top - 2) is garbage.  HOW did A3
+   get this value?  The sthu/lhau JIT handlers are confirmed correct (harness 227/227
+   both modes after this session's binary rebuild).  The 2-byte-swapped writes at
+   records #24450495 and #24450578 are from 68k code at 0x500297b2 (BSR.W) and
+   0x5002968a — likely an unrelated coincidence; the slot gets reused by different
+   stack frames over many records.  Block 504613e0 writes the correctly-assembled
+   0x103ffffe as the PUSH of A3 — the CORRECT ASSEMBLY of the garbage value.
+   The bug is upstream: something set A3 = 0x103ffffe when it should be a valid
+   param-block pointer.
+
+4. NEXT SESSION STARTS HERE:
+
+   **Goal**: find WHY A3 = 0x103ffffe when block 504613e0 executes MOVE.L A3, -(A7).
+
+   **Step 1 — reproduce cleanly** (use a fresh run, NO lldb, NO heavy diagnostics):
+   The previous session's emulator got stuck in an early-boot loop at 0x5031040c/
+   0x50310414 due to lldb SIGSTOP operations disrupting the 60Hz VBL timer.  This
+   is NOT a new JIT bug — restart cleanly without lldb interference.
+   ```bash
+   pkill -9 -x SheepShaver 2>/dev/null
+   cd /Users/khawkins/Documents/git/macemu-jit/SheepShaver/src/Unix
+   SS_JIT_WATCH_ADDR=103fff0c,100a1cc0 SS_JIT_WATCH_DUMPS=0 \
+     SS_JIT_NO_CHAIN=1 ./SheepShaver > /tmp/ss_diag.log 2>&1 &
+   ```
+   Wait 5-10 min, then dump the watch log (DO NOT ATTACH LLDB UNTIL SCSI PHASE
+   ACTIVITY IS VISIBLE IN THE LOG).
+
+   **Step 2 — once 52+ watch records appear in the log**, the eject is imminent.
+   Then: `lldb -b -p $(pgrep -x SheepShaver) -o "expression -- (void)ppc_jit_dump_trace_ring()" -o detach -o quit`
+   (single attach, single dump, immediately detach — minimize SIGSTOP time).
+
+   **Step 3 — find the A3 writer**.  Add a THIRD watch address: the 68k A3 register.
+   A3 in the emulator = PPC register that maps to 68k A3.  From the DR emulator
+   register mapping, A3 likely lives at offset PPCR_GPR(N) in the state struct.
+   Find N by reading the ROM's 68k emulator setup code, or by watching register
+   writes near the "2-byte-swapped" records.  Alternatively, use:
+   `SS_JIT_WATCH_ADDR=<addr_of_A3_in_state_struct>,103fff0c,100a1cc0`
+   to catch WHEN A3 gets the garbage value.
+
+   **Alternative/parallel approach** (strongly recommended — do in parallel):
+   Opcode-histogram the 0x460000-0x500000 ROM region; find every uncovered opcode;
+   write SS_TEST_HEX vectors for each.  This finds crorc-class bugs as isolated
+   reproductions instead of boot-trace hunts.  Strong candidates not yet covered:
+   mcrxr, lhbrx/lwbrx, rlwnm, divw/divwu edge cases, mtcrf with FXM≠0xFF.
+   Run with `SS_HARNESS_MODE=jit ./jit-test/run.sh` to ensure JIT-mode coverage.
+
+   **Working tree state**: ppc-cpu.cpp has ROM range 0x500000 (needed for Bug #2).
+   JIT_BLOCK_CHAINING is 0.  DO NOT COMMIT until full-ROM boot is verified.
 
 **Diagnostic tools added for this hunt** (all committed):
 - `SS_EMULOP_COUNTS=1` — per-EMUL_OP execution counters dumped to stderr every 5s.

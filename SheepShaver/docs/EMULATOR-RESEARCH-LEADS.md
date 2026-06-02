@@ -1,5 +1,14 @@
 # Research Leads: Borrowing from Dolphin and Other PPC JITs
 
+> **Role of this document: research narrative.** It records *what was investigated and why
+> the verdicts came out the way they did* (2026-06-02). It is not the to-do list.
+> - **Current work items / source of truth:** [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md)
+> - **Instructions for implementing agents:** [`research/RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md)
+> - **Index of all research documents:** [`research/README.md`](research/README.md)
+>
+> Action lists that used to live in this file have been superseded by the backlog; sections
+> below that contain later-refuted conclusions are marked inline.
+
 Leads for improving the SheepShaver PPC→ARM64 JIT (and emulation layer) by studying — and
 where license-compatible, reusing — code from mature emulators, primarily **Dolphin**
 (GameCube/Wii). Compiled 2026-06-02.
@@ -225,13 +234,8 @@ first (T2 counters from commit 7030a441 are the starting point).
 
 ## Suggested investigation order
 
-1. **Lead 2 (W^X nesting counter)** — small, directly continues the work in commit 8f2acc9b.
-2. **Lead 4 (OE-form audit)** — possibly delete code; rom-harness can measure OE frequency.
-3. **Lead 7 (`BRK` tripwire)** — cheap debugging win for chain-patch bugs.
-4. **Lead 3 (lazy carry, within-block only)** — after profiling shows XER CA traffic is hot.
-5. **Lead 1 (CR 64-bit representation)** — the big one; only after the JIT is otherwise stable
-   and profiling justifies it.
-6. **Leads 5–6** — keep as references; revisit for AltiVec/NEON and MMIO-in-JIT respectively.
+*(Superseded — this pre-investigation ordering was revised twice. The current prioritized
+work items live in [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md).)*
 
 ---
 
@@ -265,28 +269,10 @@ and read our code. Full analyses live in `docs/research/lead-*.md`. The investig
 4. **Doc drift**: CLAUDE.md says 8192-bucket block cache; source is 32768 buckets / 65536 pool.
    XER byte offsets in CLAUDE.md (900/902) are also stale — CA is at offset 1030. *(Leads 3, 7)*
 
-### Revised action list
+### Action list
 
-**Now (correctness):**
-1. Fix `adde` carry-out with `ADCS`
-2. Punt `mullwo` to the interpreter
-3. Instrument chain-site pool exhaustion
-4. Update CLAUDE.md (block-cache size, XER offsets)
-
-**Now (cheap wins):**
-5. `emit_update_cr0` cleanup with CSET/BFI (~18→~8 insns)
-6. Port `LogicalImm` encoder; use immediates in `rlwinm`/`rlwimi`
-7. Hoist W^X toggle out of `patch_chain_sites()` loop
-8. Debug-gated BRK tripwire on destroyed blocks
-
-**Next (strategic — the real finding):**
-9. **Investigate JIT-loop residency** — why does execution leave the JIT after ~15 s and stay
-   in the interpreter? This gates *every* throughput optimization in this document.
-
-**Later (gated on residency + profiling):**
-10. Lazy carry / lazy CR0 (after truncation-epilogue root cause is closed)
-11. CR register cache, then possibly the 64-bit CR representation
-12. Inline-asm dispatcher
+*(Superseded — maintained as Tiers A/B/C in
+[`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md).)*
 
 ---
 
@@ -314,15 +300,18 @@ Also notable from the same survey:
   per-block register cache.
 - **Box64** (MIT): deferred-flag state machine — the shippable form of Dolphin's lazy carry.
 
-### 2. Rosetta 2's AOT idea is the likely answer to JIT residency
+### 2. Rosetta 2's AOT idea ~~is the likely answer to JIT residency~~ — REFUTED
 
-Rosetta 2 translates static code ahead-of-time and JITs only the dynamic remainder. Our
-strategic problem (item 9 above) is that execution abandons the JIT after ~15 s. The Mac ROM
-is immutable (`vm_protect`ed READ|EXECUTE after patches) and is the dominant execution
-target — it could be translated *ahead of time, in full*, instead of block-by-block on
-demand. That would change the residency equation entirely: instead of the interpreter
-falling back when it hits an uncompiled block, ROM code would always have a compiled block
-available. **This reframes item 9 from "investigate" to "AOT-compile the ROM as the fix."**
+> **⚠ This conclusion was refuted by the subsequent root-cause analysis**
+> ([`research/c1-residency-root-cause.md`](research/c1-residency-root-cause.md)): the
+> residency problem is a *dual-cache trap* (the interpreter never consults the JIT block
+> cache once its own cache is warm), so AOT-compiled blocks would be ignored just like
+> on-demand ones. The fix is a gate restructure (backlog item C1). AOT-the-ROM survives only
+> as a deferred warm-start optimization inside item C5.
+
+Original reasoning (kept for the record): Rosetta 2 translates static code ahead-of-time and
+JITs only the dynamic remainder. The Mac ROM is immutable and is the dominant execution
+target — it could be translated ahead of time, in full, instead of block-by-block on demand.
 
 ### 3. Video acceleration: extend our `.ndrv`, don't emulate silicon
 
@@ -340,8 +329,9 @@ First wins requiring zero guest-side changes:
 Longer term: extend our existing control/status `.ndrv` protocol with accelerated
 primitives (rect fill, blit, scroll), rendered host-side — MoL's proven design.
 
-### Revised top-3 strategic priorities (superseding the Dolphin-only list)
+### Strategic priorities
 
-1. **AOT-compile the ROM** — attacks JIT residency, the gate on all throughput work
-2. **Study/lift from MAME's PPC DRC** — legally clean code for our exact CPU family
-3. **Video: host cursor + dirty-rect first, paravirtual accel protocol later**
+*(Superseded — see [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md)
+Tiers A-C. Note that priority #1 as originally written here — "AOT-compile the ROM" — was
+refuted by the C1 root-cause analysis; the current strategic chain is C1 gate restructure →
+C4 dual-mapping W^X → C5 background compilation.)*

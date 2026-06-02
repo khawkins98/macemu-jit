@@ -63,6 +63,20 @@ static double jit_elapsed_s() {
 	return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) * 1e-9;
 }
 static FILE *jit_log_file = nullptr;
+/* Open the diagnostic log.  Path is SS_JIT_DIAG_LOG if set, else /tmp/jit_diag.log.
+ *
+ * WHY the env var: the path used to be hardcoded, and ANY concurrent SheepShaver
+ * process (e.g. a jit-test harness vector running while a boot measurement is in
+ * progress) would fopen(..., "w") the same file and truncate the measurement's log
+ * mid-run — this silently corrupted the session-6 interpreter ground-truth run.
+ * Parallel agents must set SS_JIT_DIAG_LOG to distinct paths. */
+static void jit_diag_log_open(void) {
+	if (jit_log_file) return;
+	const char *path = getenv("SS_JIT_DIAG_LOG");
+	if (!path || !*path) path = "/tmp/jit_diag.log";
+	jit_log_file = fopen(path, "w");
+	fprintf(stderr, "[JIT] diagnostic log: %s\n", path);
+}
 /* Notable events (init, interrupts, stuck, flush) → stderr */
 #define JIT_LOG(fmt, ...) fprintf(stderr, "[JIT %.2fs] " fmt "\n", jit_elapsed_s(), ##__VA_ARGS__)
 /* Verbose events (heartbeat, per-interrupt detail) → file only */
@@ -1123,10 +1137,7 @@ void powerpc_cpu::execute(uint32 entry)
 						if ((jit_block_count & 0xFFF) == 0) {
 						double now = jit_elapsed_s();
 						if (now - last_t >= 5.0) {
-							if (!jit_log_file) {
-								jit_log_file = fopen("/tmp/jit_diag.log", "w");
-								fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
-							}
+							jit_diag_log_open();
 							uint32_t cur_pc = (uint32_t)pc();
 							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x | jNK=%llu jDR=%llu jRAM=%llu jOTH=%llu | iNK=%llu iDR=%llu iRAM=%llu iOTH=%llu | j2i=%llu i2j=%llu\n",
 							        now, (unsigned long long)jit_block_count, cur_pc,
@@ -1232,10 +1243,7 @@ void powerpc_cpu::execute(uint32 entry)
 					if ((interp_block_count & 0xFFF) == 0) {
 						double now = jit_elapsed_s();
 						if (now - interp_last_t >= 5.0) {
-							if (!jit_log_file) {
-								jit_log_file = fopen("/tmp/jit_diag.log", "w");
-								fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
-							}
+							jit_diag_log_open();
 							fprintf(jit_log_file, "[INTERP %.1fs] blocks=%llu pc=%08x | iNK=%llu iDR=%llu iRAM=%llu iOTH=%llu | j2i=%llu i2j=%llu\n",
 							        now, (unsigned long long)interp_block_count, (uint32)bi->pc,
 							        (unsigned long long)rgn_interp_blocks[RGN_NK], (unsigned long long)rgn_interp_blocks[RGN_DR],

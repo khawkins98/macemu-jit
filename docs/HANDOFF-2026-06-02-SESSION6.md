@@ -38,6 +38,15 @@ interpreter ALSO takes 3+ minutes (still booting at 190s) with the current confi
 | RAM share | 59% | 33% |
 | j2i transitions/sec | n/a | 2.4M/s |
 
+**Ground truth data point #1 (session 6)**: the interpreter run booted to the Finder desktop
+in **≤16 minutes** (started 20:03, desktop confirmed via screenshot at 20:19). CPU time only
+~3.6 min — the interpreter mostly waits during boot. Exact completion time was lost to the
+log-clobbering bug (now fixed via SS_JIT_DIAG_LOG). The JIT boot time for the same config is
+still unmeasured to completion — Agent A's first job.
+
+**Idle-desktop detection signature** (for boot-completion automation): dense alternating
+interrupt deliveries at DR PCs 0x50466084/0x50466094 at ~60Hz + near-zero block rate.
+
 **The two real anomalies to explain:**
 
 1. **NK:DR ratio**: 1:21 in interpreter mode vs 1:1 in JIT mode. The JIT-mode guest enters
@@ -48,9 +57,11 @@ interpreter ALSO takes 3+ minutes (still booting at 190s) with the current confi
 ## Parallel investigation plan (one agent per worktree)
 
 Use `git worktree add <path> HEAD` to create isolated checkouts. Each agent builds its own
-binary (`cd <worktree>/SheepShaver/src/Unix && make -j8`) and uses its own log paths
-(pass distinct output paths; /tmp/jit_diag.log is hardcoded — either run agents sequentially
-for log access or patch the log path per worktree).
+binary (`cd <worktree>/SheepShaver/src/Unix && make -j8`) and MUST set `SS_JIT_DIAG_LOG`
+to a distinct path (e.g. /tmp/jit_diag_A.log) — the default /tmp/jit_diag.log is shared and
+concurrent processes clobber it (this corrupted a session-6 measurement; see LEARNINGS).
+The jit-test harness should also run with SS_JIT_DIAG_LOG=/dev/null when a measurement is
+in progress.
 
 **IMPORTANT: only one SheepShaver instance can run at a time** (they share ~/.sheepshaver_prefs,
 the disk images, and the SDL window). Worktrees parallelize the BUILD and ANALYSIS, but
@@ -67,7 +78,14 @@ Method:
    of an idle desktop (sustained low block rate + 60Hz interrupt deliveries only).
 3. Run JIT mode (default) to desktop. Same detection.
 4. Record: wall-clock time, total blocks, final region split for each mode.
-5. Deliverable: a table in LEARNINGS.md with the honest numbers. This recalibrates everything.
+5. **Control test**: also boot the OLD configuration once — HD only (.dsk as boot disk,
+   bootdriver 0, nocdrom true, no vncserver). The old "interpreter boots in ~10s" claim
+   (HANDOFF.md:226, dyngen session) was probably measured against that config. This
+   isolates "CD-ROM boot is slow for everyone" from "the JIT is slow", and reconciles
+   the earlier observation with current measurements. Keep a backup of
+   ~/.sheepshaver_prefs before editing; restore after.
+6. Deliverable: a table in LEARNINGS.md with the honest numbers (2 configs × 2 modes).
+   This recalibrates everything.
 
 ### Agent B — The NK:DR ratio anomaly
 
@@ -77,8 +95,9 @@ Method:
 1. Instrument nanokernel ENTRY (not per-block): count entries to the dispatcher
    (0x50312a00-0x50313e00 range entered from a non-NK PC) and classify by what preceded
    them (DR PC / RAM PC / interrupt delivery).
-2. Also count EMUL_OP executions per second in both modes (SS_EMULOP_COUNTS=1 exists
-   already — see HANDOFF.md from the dyngen session).
+2. Also count EMUL_OP executions per second in both modes (SS_EMULOP_COUNTS=1 —
+   VERIFIED to exist at sheepshaver_glue.cpp:297-304, dumps per-op counters to stderr
+   every 5s).
 3. Compare rates between modes. The hypothesis to test: fast JIT-compiled PPC code (RAM,
    CFM/Mixed Mode) makes nanokernel round-trips at JIT speed, while in interpreter mode
    those round trips happen at interpreter speed — i.e., the ratio difference is just
@@ -128,4 +147,6 @@ Method:
 - ROM range: 0x460000 (toolbox only), chaining: 0
 - Prefs: ~/.sheepshaver_prefs (documented inline, boots Mac OS 8.6 ISO via CD)
 - Assets: /Users/Shared/macemu/
-- Harness: must stay 233/233 (`cd SheepShaver && make test-opcodes`)
+- Harness: must stay 233/233 (`cd SheepShaver && ./jit-test/run.sh`)
+- **Harness verified at d0307ad6: 233/233, score=100** (region counters do not regress
+  the dispatch path)

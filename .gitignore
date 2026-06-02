@@ -46,3 +46,4 @@ SheepShaver/rom-harness/*.o
 # AI
 CLAUDE.md
 .gstack/
+.claude/

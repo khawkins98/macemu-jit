@@ -118,6 +118,35 @@ Region counters implemented (commit d0307ad6) and run in both modes:
 added at the interpreter's JIT-handoff break (ppc-cpu.cpp ~line 1295). j2i is a good proxy
 (every j2i is eventually followed by an i2j). Fix when convenient.
 
+### Ground truth data point #1: interpreter boots in ≤16 minutes (CD config)
+
+The SS_USE_JIT=0 run (started 20:03) reached the Finder desktop by 20:19 (Mac clock 8:19 PM
+visible in screenshot) — **interpreter boot ≤ 16 minutes** with the CD-ROM boot config.
+CPU time was only ~3.6 min over 18 min wall → the interpreter spends most of boot
+idle/waiting, not computing. Exact desktop-reached time unknown due to the log clobbering
+below; Agent A should re-run with SS_JIT_DIAG_LOG set for a precise number.
+
+Idle-desktop log signature (useful for boot-completion detection): dense alternating
+interrupt deliveries at two DR-emulator PCs (0x50466084 / 0x50466094) at ~60Hz, with the
+block rate dropping to near zero.
+
+### GOTCHA: diag log was hardcoded — concurrent SheepShavers clobber each other
+
+`/tmp/jit_diag.log` was opened with fopen(...,"w") by every SheepShaver process that runs
+5+ seconds. While the interpreter ground-truth run was in progress, the jit-test harness ran
+(233 vectors × 2 modes = 466 short-lived SheepShaver processes); at least one truncated the
+interpreter's log mid-measurement, interleaving JIT-mode lines into it and destroying the
+boot-progress record.
+
+**Fix (committed)**: `SS_JIT_DIAG_LOG=<path>` env var; default remains /tmp/jit_diag.log.
+Every parallel agent MUST set a distinct path. The harness should also set it (to /dev/null
+or a temp path) to avoid clobbering concurrent measurements.
+
+### Harness verification at d0307ad6
+
+233/233, score=100 — the region counters + heartbeat throttle in the hot dispatch path do
+not regress opcode correctness.
+
 ## 2026-06-02 (session 5, part 1 — SUPERSEDED, see retraction above) — Root cause of 7-minute JIT boot found
 
 ### Root cause: initialization-order deadlock at nanokernel spin-wait 0x50313d34 [WRONG — see retraction]

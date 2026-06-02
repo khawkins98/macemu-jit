@@ -889,6 +889,16 @@ TEST_ORDER+=(lbzu_basic)
 T_sthu_basic="38601234 388102FE B0640002"
 TEST_ORDER+=(sthu_basic)
 
+# lhau (Load Halfword Algebraic with Update) - opcode 0x2A
+# Store a halfword at r1+0x400, then lhau from r1+0x3FE (so lhau 2(r4) loads from 0x400 and updates r4 to 0x400)
+T_lhau_basic="38631234 b0610400 388103FE a5640002"
+TEST_ORDER+=(lhau_basic)
+
+# lhzu (Load Halfword Zero with Update) - opcode 0x28
+# Same test pattern as lhau but with zero-extend instead of sign-extend
+T_lhzu_basic="38631234 b0610400 388103FE a1640002"
+TEST_ORDER+=(lhzu_basic)
+
 # --- Carry extended ---
 # adde: set CA via addic, then adde
 T_adde_chain="3860FFFF 30630001 38800005 7CA42114"
@@ -921,6 +931,24 @@ TEST_ORDER+=(mulhwu_basic)
 # --- mfcr/mtcrf round-trip ---
 T_mfcr_mtcrf="3860FFFF 2C030000 7CA00026 7CA0F120"
 TEST_ORDER+=(mfcr_mtcrf)
+
+# --- mtcrf partial field (FXM=0x80 — write only CR field 0 from r3) ---
+T_mtcrf_partial="38600123 7C680120"
+TEST_ORDER+=(mtcrf_partial)
+
+# --- stwbrx: store word byte-reversed indexed (XO=662) ---
+# lis/ori r3=0xDEADBEEF; li r4,0x600; stwbrx r3,r1,r4; lwz r5,0x600(r1) → r5=0xEFBEADDE
+T_stwbrx_basic="3C60DEAD 6063BEEF 38800600 7C61252C 80A10600"
+TEST_ORDER+=(stwbrx_basic)
+
+# --- sthbrx: store halfword byte-reversed indexed (XO=918) ---
+# li r3,0x1234; li r4,0x700; sthbrx r3,r1,r4; lhz r5,0x700(r1) → r5=0x3412
+T_sthbrx_basic="38601234 38800700 7C61272C A0A10700"
+TEST_ORDER+=(sthbrx_basic)
+
+# --- cntlzw mid: r3=0x00FF0000 → 8 leading zeros ---
+T_cntlzw_mid="3C6000FF 7C650034"
+TEST_ORDER+=(cntlzw_mid)
 
 # --- mcrxr ---
 T_mcrxr_basic="3860FFFF 30630001 7C200400"

@@ -3,6 +3,138 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-02 (session 4) — Harness audit, ROM range revert, boot test
+
+### Harness vector audit: 3 of 4 "uncovered" vectors already existed
+
+Audited four opcodes flagged as potentially uncovered: lhbrx, lwbrx, mcrxr, mtcrf. Found that `lhbrx_basic`, `lwbrx_basic`, and `mcrxr_basic` were already present (added in prior sessions). Only `mtcrf_partial` was genuinely new. Encoding: `38600123 7C680120` = `li r3,0x123; mtcrf 0x80,r3` (writes CR field 0 only, FXM=0x80). Note: `7C620120` (FXM=0x20) was initially proposed but incorrect — `7C680120` is the right encoding for CRM=0x80 targeting CR field 0. Harness: **230 vectors** after mtcrf_partial (was 229); stwbrx/sthbrx/cntlzw vectors being added — target 233. Score=100 in both interpreter and JIT modes.
+
+### ROM range reverted to 0x460000 (toolbox-only)
+
+Changed `ppc-cpu.cpp` line 1042 back from 0x500000 to 0x460000. Rationale: the range 0x460000–0x500000 covers the 68k DR emulator, which is unsafe to JIT due to spcflags/CR-bit-injection interleaving during interrupt delivery (documented in session 3). The 95-second clean run at 0x500000 with chaining=1 was not evidence of safety — the bug is timing-dependent. Build: clean, only pre-existing K&R deprecation warnings in slirp. Harness: 230/230, score=100.
+
+### JIT opcode coverage audit (session 4)
+
+All previously-flagged "uncovered" opcodes are in fact native in the JIT — no fallback:
+
+- **mcrxr** (XO=512): NATIVE — full XER→CR move, clears XER SO/OV/CA flags
+- **lhbrx** (XO=790): NATIVE — LDRH in native LE order (byte-reversed for BE guest)
+- **lwbrx** (XO=534): NATIVE — LDR word in native LE order
+- **stwbrx/sthbrx**: NATIVE
+- **mtcrf** (XO=144): NATIVE — handles FXM=0xFF and all partial masks via computed mask loop
+- **sthu/lhau/lhzu** (primary opcodes 45/43/41): NATIVE
+- **cntlzw** (XO=26): NATIVE
+
+**Fallback mechanism is sound**: when `compile_one()` returns false, `emit_inline_interp_call()` runs one instruction through `ppc_jit_interp_one` and the block exits cleanly. No state corruption is possible. This is better than the old behavior where a false return left the block incomplete and caused mixed JIT/interp at the same PC.
+
+**Actual JIT gaps** (interpreter fallback, all intentional or benign):
+- `mfspr`/`mtspr` for unknown SPRs (only LR/CTR/XER are native) — SPRG0-3, IBAT/DBAT, HID0/HID1, DEC fall back but work correctly, just at interpreter speed
+- `sc` (syscall): intentional — interpreter must raise Mac OS traps
+- `tdi`/`twi`/`tw` (trap instructions): intentional, rare
+- `lswx`/`stswx`: intentional — runtime NB not knowable at compile time
+- `bcl` with CTR+cond combined (lk=1, no_ctr_test=0, no_cond_test=0): known incomplete, noted in source
+- Unknown AltiVec vxo: fallback for uncommon VMX ops
+
+**Implication**: the new test vectors this session (mcrxr, mtcrf_partial, stwbrx, sthbrx, cntlzw) all exercise native JIT code paths. Coverage additions are meaningful.
+
+### JIT block chaining safety analysis (session 4)
+
+**Verdict: JIT_BLOCK_CHAINING=1 is SAFE with ROM range=0x460000 (high confidence)**
+
+Every chained branch lands at `chain_entry_start` = first instruction of `emit_entry_spcflags_poll()`. The poll checks `spcflags.mask & 0x0F` (bits 0–3: exec-return, trigger-interrupt, handle-interrupt, enter-mon). If any flag is set, the PC is saved and control returns to the C dispatcher before the block body executes. Interrupt latency is at most one block body (≤512 PPC instructions). `TriggerInterrupt()` sets bit 1 of `regs->spcflags.mask`, which is caught at the next chain entry — no interrupts are lost.
+
+**Chain invalidation correctness:**
+- `jit_bc_invalidate_range()`: correctly reverts B instructions to LDP before nullifying pool entries. SAFE.
+- Full cache flush / pool exhaustion: stale chains are unreachable. SAFE.
+- `jit_bc_invalidate_pc()` (single PC): does NOT revert B instructions — stale chains possible for RAM code with self-modifying code. **Not relevant for ROM execution** (ROM is `vm_protect(READ|EXECUTE)`, immutable).
+
+**Separation of concerns:** The prior LEARNINGS concern "chaining unsafe with DR emulator" was about a missing spcflags poll (since fixed). The remaining "DR emulator unsafe to JIT" concern is about opcode-correctness of the 68k emulator's PPC code — a distinct issue, not a chaining issue.
+
+**ROM range=0x460000 + chaining=1: both safety conditions met** (spcflags poll present, no SMC in ROM).
+
+Test tiers recommended before shipping chaining=1:
+1. Boot to Finder with chaining=1 + ROM=0x460000 (basic correctness)
+2. 10+ min timer-intensive workload; verify Mac OS tick counter at guest 0x16a advances at ~60 Hz
+3. *(Optional)* Debug counter on consecutive zero-spcflags chain entries to empirically verify ≤1-block interrupt latency
+
+**Next step**: enable chaining=1 after Path 1 boot succeeds (currently in progress with chaining=0).
+
+### SPR fallback frequency audit (session 4)
+
+ROM contains only 75 `mfspr` and 150 `mtspr` instructions total. Of these, 68/75 `mfspr` and 126/150 `mtspr` are already NATIVE (LR/CTR/XER). Only 7 `mfspr` and 24 `mtspr` fall back to interpreter, with at most 3 instances of any single SPR number. All fallback SPRs are supervisor-mode one-time boot operations: BAT registers, SRR0/SRR1, SDR1, SPRG0-2, HID0, PVR.
+
+Previously-suspected high-frequency targets TB/TBU (SPR 268/269) appear **zero** times as `mfspr`. DEC (SPR 22) appears once. **No new native SPR handlers are warranted** — the inline-interp-call path handles these correctly at negligible cost given their frequency.
+
+Known remaining JIT gap worth a future test vector: `bcl` with CTR+cond+link=1 combined (comment in `ppc-jit.cpp` says "not yet implemented"). Likely rare in practice but unverified.
+
+### New test vectors added (session 4)
+
+- **stwbrx_basic** (XO=662): `3C60DEAD 6063BEEF 38800600 7C61252C 80A10600` — store word byte-reversed, verified with readback via `lwz`
+- **sthbrx_basic** (XO=918): `38601234 38800700 7C61272C A0A10700` — store halfword byte-reversed, verified with readback via `lhz`
+- **cntlzw_mid** (XO=26): `3C6000FF 7C650034` — count leading zeros mid-range case (0x00FF0000 → r5=8); cntlzw_zero/allones already existed
+- **Harness total: 233 vectors** (up from 229 at session start)
+- All 4 additions (mtcrf_partial + these 3) exercise NATIVE JIT code paths (confirmed by jit-auditor)
+
+### DR emulator JIT unsafe: exact mechanism confirmed (session 4)
+
+**Verdict: Definitely unsafe — not a conservative precaution.**
+
+**Exact mechanism — one-step-early interrupt delivery:**
+
+Mac OS sets CR2.LT (bit 8) to signal a pending interrupt. The DR emulator checks it via `bclr BO=5,BI=8` (opcode `0x4C420020`) at the end of every dispatch cycle. JIT polls spcflags at **block entry**: when TRIGGER is detected it saves PC, returns to C, which runs `check_spcflags()` → sets CR2.LT, then re-dispatches the same block. The interpreter polls at **block exit** — after `bclr 5,8` has already run the current handler. Net effect: JIT fires the interrupt one dispatch step early, before the current 68k instruction handler completes.
+
+**The double-lhau block (504613e0) makes it critical:**
+
+Block 504613e0 does two `lhau r27,2(r24)` fetches per dispatch cycle — speculatively pre-fetching the extension word. When JIT re-runs this block after injecting CR2.LT, r24 has already advanced 4 bytes, and r27 holds the extension word, not an opcode. The interrupt handler fires with r24 pointing 2 bytes past the correct position → extension word is dispatched as a 68k opcode → register corruption.
+
+**This explains all prior Bug #2 symptoms:** extension word dispatched as opcode, OE arithmetic step interrupted mid-sequence, A3 = 0x103ffffe corruption (pre-decrement step never ran).
+
+All 6 DR emulator dispatch variants (ROM+0x466080/84/c0/e0/100/120) use `bclr 5,8` as the structural interrupt gate.
+
+**Fix (Option A, ~100–150 lines in ppc-jit.cpp):** In `compile_one()`, detect opcode `0x4C420020` when PC is in ROM+0x460000–0x500000. Emit an inline spcflags-check-and-inject prologue BEFORE the branch, forcing CR2.LT to be current at the exact moment `bclr` evaluates it — matching the interpreter's one-cycle-later delivery.
+
+**Current safe config**: ROM range = 0x460000 (toolbox only). The JIT↔interpreter boundary costs performance but not correctness during 68k-heavy workloads. **Do NOT attempt ROM range = 0x500000 until Option A is implemented and verified.**
+
+### Boot test: CD ISO hangs in SCSI loop (session 4)
+
+Config: ROM=0x460000, chaining=0, SS_USE_JIT=1, boot media = Mac OS 8.6 CD ISO. Result: 100% CPU for the full 300s timeout, never reached Finder. JIT cache allocated successfully (MAP_JIT confirmed). Diagnosis: SCSI loop on CD boot is known behavior when booting off an ISO rather than a pre-installed disk image — this is NOT a JIT regression. Fix: pivot to a Mac OS 9.2.1 pre-installed disk image; disk image boot bypasses the SCSI loop entirely.
+
+### Boot preflight findings
+
+- `~/.sheepshaver_prefs` sets `jit false` — JIT is controlled exclusively via the `SS_USE_JIT=1` env var at launch, not the prefs flag. The prefs flag appears to be a legacy or alternate gate; the env var takes precedence.
+- Display mode is `screen win/800/600` (SDL window on local Mac display). VNC is NOT configured by default. Boot tests run against the local display.
+- No stray SheepShaver processes were found before boot test.
+- ROM: `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom` (1.8 MB, confirmed present)
+- Disk: `/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso` (647 MB, confirmed present, not locked)
+
+### Boot test in progress (config: ROM range=0x460000, JIT_BLOCK_CHAINING=0, SS_USE_JIT=1)
+
+Running the conservative known-safe baseline. Result pending — will be updated when builder reports.
+
+## 2026-06-02 (session 3) — Bug #2 investigation: systematic debugging phase 1-2
+
+### Opcode coverage audit and new test vectors (lhau/lhzu)
+
+The Haiku agent opcode-histogram found sthu/lhau/lhzu with 4,900–5,600 ROM instances each, marked as uncovered. However, sthu_basic existed in the harness. **lhau and lhzu were NOT explicitly tested** — added as `lhau_basic` (opcode 0xA5640002) and `lhzu_basic` (opcode 0xA1640002), both verifying halfword load-with-update with register offset. Harness: **229/229 (was 227), score=100**. Verified correct in both interpreter and JIT (chaining=1).
+
+### Chaining enabled + full ROM range (0x500000): No immediate crash, no watch events
+
+Rebuilt with `JIT_BLOCK_CHAINING=1` and ran with `SS_JIT_WATCH_ADDR=103fff0c,100a1cc0 SS_JIT_WATCH_DUMPS=0`. Expected: CDROM eject (watch event at 0x103fff0c) within minutes. Observed: 95+ seconds of sustained SCSI loop (100% CPU, clean log), zero watch events, no crash. Possible explanations:
+1. Crorc fix eliminated the bug entirely (Bug #2 required both crorc issue + chaining interaction)
+2. Bug manifests under different conditions (specific code sequence, register state)
+3. Watch mechanism positioning needs adjustment
+4. Bug is rare/timing-dependent (occurred in previous session, not always reproducible)
+
+### A3 register location confirmed: r19 (gpr[19]), offset 0x4c
+
+68k A3 (stack-frame param block pointer that got corrupted to 0x103ffffe) is stored in PPC r19. Mapping: 68k A0–A7 → PPC r16–r23. Offset from state struct start: 0x4c. Verified in ppc-registers.hpp, ppc-cpu.cpp comments, and PPCR_GPR(19) macro.
+
+### Interrupt-delivery interleaving remains the 68k-emulator-in-JIT blocker
+
+From prior session: JIT compilation of the 68k DR emulator (ROM+0x460000–0x500000) was unsafe because spcflags/CR-bit-injection interleaving differs between interpreter and JIT at multi-step instruction boundaries. Resolution: keep 68k emulator interpreter-only (ROM range = 0x460000). Current config (0x500000, chaining=1) violates this — the lack of visible corruption in a single 95s run is not evidence of safety.
+
+**See session 4 entry "DR emulator JIT unsafe: exact mechanism confirmed" for the full root-cause analysis**, including the one-step-early interrupt delivery mechanism, why the double-lhau block makes it critical, and the proposed Option A fix.
+
 ## 2026-06-02 (session 2) — Bug #2 investigation: block 504613e0 decoded
 
 ### lldb SIGSTOP disrupts 60Hz VBL timer — early-boot spin

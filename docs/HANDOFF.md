@@ -94,12 +94,24 @@ contained 0x103ffffe.  So bug #2 is, like bug #1, **corrupted data on the 68k st
 but from a different source (crorc is fixed and verified).
 
 **Next steps (the corrupted-stack-slot hunt)**:
-1. The ring dump at the watch event (/tmp/ss_jit_ring.txt) contains the full lead-up.
-   Identify the caller's stack frame: at the Control call, sp=103ffec4 and A0 was loaded
-   from [A7+d16]; decode the caller's 68k code (lldb dump of ROM 0x5007ac20-0x5007ac50)
-   to get d16, giving the corrupted slot address.
-2. Re-run with SS_JIT_WATCH_ADDR=<that slot> to catch who writes the garbage value —
-   exactly how the eject call itself was caught.
+1. DONE — the caller is the Device Manager's driver-call glue at ROM 0x5007ac30:
+   ```
+   5007ac30: MOVEM.L D1-D7/A0-A6,-(SP)    ; pushes 56 bytes
+   5007ac34: MOVEA.L $3C(A7),A2           ; A2 = driver entry table
+   5007ac38: MOVE.L  $48(A7),D1           ; D1 = routine offset (Control = ?)
+   5007ac40: MOVEA.L $44(A7),A0           ; A0 = param block ptr  <- loads the GARBAGE
+   5007ac44: MOVEA.L $40(A7),A1           ; A1 = DCE pointer
+   5007ac48: JSR     0(A2,D1.W)           ; -> driver routine
+   ```
+   So the corrupted slot is [A7_after_movem + 0x44] = the param-block ARGUMENT pushed by
+   this glue's caller before JSR'ing here.  In the captured run: sp at the Control call
+   was 0x103ffec4, so the slot was ~0x103fff08-0x103fff0c, containing 0x103ffffe.
+2. Re-run (full ROM range + SS_JIT_TRACE_RING) and at the ADDR-WATCH eject event compute
+   the exact slot from sp; then re-run with SS_JIT_WATCH_ADDR=<slot> to catch who writes
+   0x103ffffe there — exactly how the eject call itself was caught.  Note: the slot value
+   0x103ffffe (top of stack region) smells like an initial-SP value stored where a param
+   block pointer belongs — possibly an off-by-N stack read (the glue's caller pushed
+   arguments at the wrong offsets, or a JIT-compiled push wrote to the wrong address).
 3. Alternative/parallel accelerant (advisor-recommended): opcode-histogram the
    0x460000-0x500000 ROM region, cross-reference against harness coverage, and batch-write
    vectors for every uncovered opcode the region uses.  This finds crorc-class bugs as

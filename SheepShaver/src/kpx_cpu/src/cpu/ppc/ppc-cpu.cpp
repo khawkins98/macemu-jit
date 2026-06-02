@@ -1096,8 +1096,18 @@ void powerpc_cpu::execute(uint32 entry)
 							fflush(jit_log_file);
 							if (cur_pc == last_pc) {
 								stuck_count++;
-								if (stuck_count >= 2)
+								if (stuck_count >= 2) {
 									fprintf(stderr, "[JIT %.1fs] STUCK at pc=%08x for ~%ds\n", now, cur_pc, stuck_count * 5);
+									/* Dump key registers to diagnose spin-wait exit condition */
+									fprintf(stderr, "  r1=%08x r9=%08x r10=%08x r11=%08x r12=%08x\n",
+									        gpr(1), gpr(9), gpr(10), gpr(11), gpr(12));
+									fprintf(stderr, "  Ticks(0x16a)=%08x cr=%08x\n",
+									        ntohl(*(uint32_t*)(RAMBaseHost + 0x16a)), cr().get());
+									/* Dump trace ring once (first STUCK event) so we can see
+									 * the blocks that executed just before entering this loop */
+									if (stuck_count == 2)
+										ppc_jit_dump_trace_ring();
+								}
 							} else {
 								stuck_count = 0;
 								last_pc = cur_pc;

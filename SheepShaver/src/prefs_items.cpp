@@ -105,12 +105,9 @@ void AddPrefsDefaults(void)
 	PrefsAddBool("noclipconversion", false);
 	PrefsAddBool("ignoresegv", true);
 
-#if USE_JIT
-	// JIT compiler specific options
+	// On aarch64 the native JIT (ppc-jit.cpp, USE_AARCH64_JIT) runs unconditionally;
+	// this pref controls the legacy kpx_cpu codegen JIT only. Default true on all builds.
 	PrefsAddBool("jit", true);
-#else
-	PrefsAddBool("jit", false);
-#endif
 	PrefsAddBool("jit68k", false);
 
 	PrefsAddInt32("keyboardtype", 5);

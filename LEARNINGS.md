@@ -3,6 +3,91 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-02 (session 5) — Root cause of 7-minute JIT boot found
+
+### Root cause: initialization-order deadlock at nanokernel spin-wait 0x50313d34
+
+**Symptom**: JIT boot takes 7-22+ minutes; interpreter boots in ~10 seconds.
+
+**The spin-wait**: ROM address 0x50313d34 is a nanokernel condition check — part of the normal
+dispatch loop, not a simple tight spin. Each "iteration" traverses the full nanokernel dispatch
+path (~15 JIT blocks) and checks the condition only when re-entering via 0x50313d20.
+
+**Condition checked**: The block at 0x50313d34 checks r9 for zero. r9 is loaded by preceding
+code at 0x50313d20 from the task structure at `[r11+4]`. With r11=0x2f072, it reads from
+guest address 0x2f076. The nanokernel exits the spin-wait when [0x2f076] = 0.
+
+**In interpreter mode**: [0x2f076] = 0 on first check (task structure not yet initialized).
+Exits immediately. Boot continues fast.
+
+**In JIT mode**: By the time the JIT first executes 0x50313d34, some initialization code has
+already written 0x68fff400 (= KernelDataAddr+0x1400, a pointer into EmulatorData) to 0x2f076.
+The exit condition is never immediately true.
+
+**The deadlock**: The nanokernel spins waiting for [0x2f076] to clear. [0x2f076] is cleared
+when the task finishes its work. But the task's completion depends on a VBL interrupt, and VBL
+is suppressed during this phase because XLM_IRQ_NEST > 0 (interrupt nesting counter is raised).
+Resolution takes ~20 real seconds per occurrence, when XLM_IRQ_NEST eventually drops to 0.
+
+**Ticks frozen during stuck phases**: Ticks at 0x16a does not advance during stuck phases.
+This is correct: the tick_func (60Hz) gates TriggerInterrupt on `XLM_IRQ_NEST == 0`. With
+IRQ_NEST > 0, VBL is suppressed and HandleInterrupt never fires. The large Ticks value seen
+in dumps (0xb5a01066 ≈ 3 billion) is set by the ROM initialization from the emulated RTC —
+it's NOT from our "always tick Ticks" code overflowing.
+
+**How it resolves**: After ~20 seconds, XLM_IRQ_NEST eventually drops to 0, VBL fires, the
+task runs its cleanup, [0x2f076] becomes 0, and the spin-wait exits. The nanokernel then
+processes the next initialization step.
+
+**Occurrence pattern**: The deadlock fires at every initialization transition involving the
+task at 0x2f072. With chaining=0: ~2 occurrences in a 22-minute run (at ~t=150s and ~1315s).
+These are the most expensive initialization milestones.
+
+**Chaining=1 makes it dramatically worse**: With chaining=1, the JIT runs faster, triggering
+MORE initialization transitions per second. Each transition hits the deadlock. Result: 10+
+stuck episodes in ~10 minutes vs 2 in 22 minutes with chaining=0. Total stuck time is
+much higher with chaining=1 because the deadlock is hit more frequently, not less.
+
+**Fix direction**: ROM patch or emulator shim that ensures [0x2f076] = 0 before the nanokernel
+first checks 0x50313d34 for each task activation. The correct approach:
+1. Find what writes 0x68fff400 to 0x2f076 (task activation code)
+2. Either delay that write until after the spin-wait, OR
+3. Add a ROM patch at 0x50313d34 that clears [r11+4] before the check when r1=KernelDataAddr
+   (this matches the emulator's init state)
+
+Alternatively: add a SheepShaver-specific override in HandleInterrupt MODE_68K that, when
+r11=0x2f072 and [r11+4]!=0, temporarily clears it to let the spin-wait pass.
+
+### Diagnostics added (session 5)
+
+- **STUCK detector register dump**: When STUCK fires (same heartbeat PC for 10+ seconds),
+  stderr now prints r1, r9, r10, r11, r12, Ticks, and CR. Dump happens at first and subsequent
+  STUCK events for the same PC.
+- **STUCK → ring dump**: First STUCK event calls `ppc_jit_dump_trace_ring()` automatically
+  (requires `SS_JIT_TRACE_RING=1`), dumping the ring to /tmp/ss_jit_ring.txt without needing
+  lldb or SIGSEGV.
+- **`SheepShaver/tools/jit-analyze.py`**: Log analysis tool. Subcommands:
+  - `diag [log]` — heartbeat progression, hot PC frequency, 10s-window PC activity
+  - `ring [log] [pc]` — show ring around last visit to a PC (context before stuck entry)
+  - `hot [log] [N]` — top-N interrupt-delivery PCs
+
+### `jit false` prefs vs aarch64 JIT (session 5 clarification)
+
+The `jit` pref in `~/.sheepshaver_prefs` controls the LEGACY kpx_cpu codegen JIT only
+(compiled out via ENABLE_DYNGEN=0 in this build). The aarch64 JIT (ppc-jit.cpp) runs
+independently of the pref, gated by `SS_USE_JIT=0` env var only. Running bare `./SheepShaver`
+always uses the aarch64 JIT. The prefs default was changed to `true` (session 5) for
+documentation clarity; it has no functional effect.
+
+### SS_JIT_NO_ROM=1 makes boot slower, not faster
+
+With `SS_JIT_NO_ROM=1`, ROM code runs in the interpreter. The interpreter processes ROM code
+~30x slower per iteration than the JIT. ROM spin-waits that JIT resolves in seconds take
+minutes in the interpreter. The flag is useful for ISOLATION (proving a bug is ROM-JIT-specific)
+but makes overall boot performance worse. It is NOT a workaround for slow boot.
+
+---
+
 ## 2026-06-02 (session 4) — JIT boot hang root cause found and fixed; mouse lag diagnosed
 
 ### Mouse tracking lag — root cause and fix options (session 4)
@@ -86,6 +171,10 @@ if (cr_mask != 0) {
 }
 ```
 This causes the Ticks counter at 0x16a to increment on each interrupt while the kernel isn't set up yet, allowing early-boot spin-waits to exit. Confirmed to let the JIT reach MODE_NATIVE. Under review by vbl-investigator before committing.
+
+**REJECTED — causes "Starting Up..." hang (session 5)**: The else-only approach was tried as an uncommitted change (introduced by a subagent). It boots past VBL spin-waits but freezes at the Mac OS 8.6 extension-loading screen (~3–4 minutes in, never completes). Root cause: once `cr_mask` becomes nonzero (kernel initialized), the Ticks fallback stops, and the 68k interrupt handler does not reliably increment Ticks in JIT mode — so any extension-load timeout loop spins forever. The emulator appears alive (scattered PCs, ~60Hz interrupts in jit_diag.log) but OS-level time is frozen.
+
+**The working approach (commit 3da25938)**: unconditionally tick Ticks on every VBL interrupt, outside the if/else entirely. Double-counting by the 68k interrupt handler is not a problem in practice — early-boot spin-waits exit quickly and the post-handoff 68k handler runs so infrequently that a small drift is harmless. This version boots to Finder.
 
 ### Second spin-wait at 0x50313d34
 

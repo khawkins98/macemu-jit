@@ -97,11 +97,178 @@ int register_info_compare(const void *e1, const void *e2)
  * the regs pointer. */
 static powerpc_cpu *s_active_cpu = NULL;
 
+/* ---- In-memory execution trace ring (SS_JIT_TRACE_RING=1) -----------------
+ *
+ * Zero-I/O execution history for crash diagnosis.  Every JIT block execution,
+ * interpreter block entry, and inline interpreter call is recorded into a
+ * fixed-size ring (~20 stores per record — boot speed is essentially
+ * unaffected, unlike SS_JIT_TRACE's fprintf+fflush per block).  The SIGSEGV
+ * crash handler (sheepshaver_glue.cpp) calls ppc_jit_dump_trace_ring() to
+ * write the ring to /tmp/ss_jit_ring.txt, giving the exact block-execution
+ * history leading up to a deterministic crash.
+ *
+ * Record types:
+ *   'J' — JIT block executed; from_pc/to_pc = block entry/exit, registers AFTER
+ *   'I' — interpreter block entered; from_pc = entry PC, registers BEFORE
+ *   'C' — inline interpreter call; from_pc = instruction PC, registers BEFORE
+ *
+ * Register fields use the ROM 68k (DR) emulator's conventions:
+ *   r24 = 68k PC, r27 = opcode, r29 = handler address,
+ *   a[0..7] = PPC r16..r23 = 68k A0..A7 (a7 = 68k stack pointer). */
+struct jit_ring_rec {
+	uint32 from_pc, to_pc;
+	uint32 r1;  /* 68k A7 (stack pointer) in the DR emulator convention */
+	uint32 r24, r27, r29, lr, ctr, cr;
+	uint32 a[8];
+	uint32 opcode;
+	char   type;
+};
+#define JIT_RING_SIZE 0x40000  /* 256K records; power of 2 */
+static jit_ring_rec *jit_ring = NULL;
+static uint32 jit_ring_idx = 0;
+
+extern "C" void ppc_jit_dump_trace_ring(void); /* defined below; used by the trigger */
+
+static void jit_ring_init_once(void) {
+	static bool done = false;
+	if (done) return;
+	done = true;
+	const char *e = getenv("SS_JIT_TRACE_RING");
+	if (e && *e == '1')
+		jit_ring = (jit_ring_rec *)calloc(JIT_RING_SIZE, sizeof(jit_ring_rec));
+}
+
+static inline void jit_ring_record(powerpc_registers *r, char type,
+                                   uint32 from_pc, uint32 to_pc, uint32 opcode) {
+	if (!jit_ring) return;
+	jit_ring_rec *rec = &jit_ring[jit_ring_idx & (JIT_RING_SIZE - 1)];
+	jit_ring_idx++;
+	rec->type = type; rec->from_pc = from_pc; rec->to_pc = to_pc; rec->opcode = opcode;
+	rec->r1 = r->gpr[1];
+	rec->r24 = r->gpr[24]; rec->r27 = r->gpr[27]; rec->r29 = r->gpr[29];
+	rec->lr = r->lr; rec->ctr = r->ctr; rec->cr = r->cr.get();
+	for (int i = 0; i < 8; i++) rec->a[i] = r->gpr[16 + i];
+
+	/* SS_JIT_WATCH_STUB=1: software watchpoint on the Mixed Mode switch-back
+	 * stub.  ROM block 0x5010bb90 writes 0xFE020000 (the Mixed Mode F-line
+	 * trap) at [r1 - 0x70]; the 68k routine called via Mixed Mode later
+	 * RTSes to that stub.  The deterministic boot crash is that the stub
+	 * reads back as 00000000.  This watchpoint:
+	 *   - arms after every execution of block 0x5010bb90 (stub freshly written),
+	 *   - verifies the write actually landed,
+	 *   - after every subsequent block, checks the stub still holds 0xFE020000,
+	 *   - on the first change, prints the culprit block + disarms.
+	 * In a healthy flow the first change happens only after the 68k has
+	 * consumed the stub (r24 reaches the stub address). */
+	{
+		static int   watch_enabled = -1;
+		static uint32 watch_addr = 0;
+		static uint32 watch_arm_idx = 0;
+		if (watch_enabled < 0) {
+			const char *e = getenv("SS_JIT_WATCH_STUB");
+			watch_enabled = (e && *e == '1') ? 1 : 0;
+		}
+		if (watch_enabled == 1) {
+			if (watch_addr != 0) {
+				uint32 now = vm_read_memory_4(watch_addr);
+				if (now != 0xFE020000) {
+					fprintf(stderr, "STUB-WATCH: [%08x] changed FE020000 -> %08x\n"
+					        "  culprit record #%u: type=%c block %08x -> %08x sp=%08x r24=%08x\n"
+					        "  (armed at record #%u)\n",
+					        watch_addr, now, jit_ring_idx, type, from_pc, to_pc,
+					        rec->r1, rec->r24, watch_arm_idx);
+					fflush(stderr);
+					watch_addr = 0; /* disarm; next 5010bb90 re-arms */
+				}
+			}
+			if (from_pc == 0x5010bb90) {
+				watch_addr = r->gpr[1] - 0x70;
+				watch_arm_idx = jit_ring_idx;
+				uint32 v = vm_read_memory_4(watch_addr);
+				if (v != 0xFE020000) {
+					fprintf(stderr, "STUB-WATCH: ARM FAILED — [%08x] = %08x right after stub-writer block (write itself broken)\n",
+					        watch_addr, v);
+					fflush(stderr);
+					watch_addr = 0;
+				}
+			}
+		}
+	}
+
+	/* SS_JIT_RING_DUMP_TRIGGER=1: dump the ring shortly after the ROM's 68k
+	 * (DR) emulator starts executing 68k code located in the guest STACK
+	 * region (Mixed Mode switch-back stubs live there).  ROM-anchored
+	 * condition: the executing block is in the DR emulator range AND the 68k
+	 * PC (r24) is in the stack region.  A countdown delays the dump so the
+	 * records show what the stub execution actually does.  Used to capture
+	 * what a WORKING (interpreter) run executes at a stack stub, vs the
+	 * zeros a broken JIT run finds there. Fires once. */
+	{
+		static int trigger_state = -1;     /* -1 unread, 0 off, 1 armed, 2 counting, 3 done */
+		static int trigger_countdown = 0;
+		if (trigger_state < 0) {
+			const char *e = getenv("SS_JIT_RING_DUMP_TRIGGER");
+			trigger_state = (e && *e == '1') ? 1 : 0;
+		}
+		if (trigger_state == 1 &&
+		    from_pc >= 0x50460000 && from_pc < 0x50500000 &&
+		    rec->r24 >= 0x103f0000 && rec->r24 < 0x10400000) {
+			trigger_state = 2;
+			trigger_countdown = 100;
+			fprintf(stderr, "RING TRIGGER: DR emulator executing stack code, r24=%08x sp=%08x (dump in 100 records)\n",
+			        rec->r24, rec->r1);
+		}
+		if (trigger_state == 2 && --trigger_countdown <= 0) {
+			trigger_state = 3;
+			ppc_jit_dump_trace_ring();
+			fprintf(stderr, "RING TRIGGER: dump complete\n");
+		}
+	}
+}
+
+/* EMUL_OP entry/return recorder — called from sheepshaver_glue.cpp's
+ * execute_emul_op() in BOTH interpreter and JIT mode.  Record layout reuse:
+ *   from_pc = 68k PC, to_pc = opcode = EMUL_OP number,
+ *   r27 field = 68k D0, r29 field = 68k D1, r1 = sp, a[] = A0-A7.
+ * Type 'E' = before EmulOp (inputs), 'R' = after (results; D0 = result code). */
+extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
+                                           uint32 d0, uint32 d1, uint32 sp, const uint32 *a_regs) {
+	if (!jit_ring) return;
+	jit_ring_rec *rec = &jit_ring[jit_ring_idx & (JIT_RING_SIZE - 1)];
+	jit_ring_idx++;
+	rec->type = type; rec->from_pc = pc68k; rec->to_pc = op; rec->opcode = op;
+	rec->r1 = sp;
+	rec->r24 = pc68k; rec->r27 = d0; rec->r29 = d1;
+	rec->lr = 0; rec->ctr = 0; rec->cr = 0;
+	for (int i = 0; i < 8; i++) rec->a[i] = a_regs[i];
+}
+
+extern "C" void ppc_jit_dump_trace_ring(void) {
+	if (!jit_ring || jit_ring_idx == 0) return;
+	FILE *f = fopen("/tmp/ss_jit_ring.txt", "w");
+	if (!f) return;
+	uint32 n = jit_ring_idx < JIT_RING_SIZE ? jit_ring_idx : JIT_RING_SIZE;
+	uint32 start = jit_ring_idx - n;
+	for (uint32 i = 0; i < n; i++) {
+		const jit_ring_rec *rec = &jit_ring[(start + i) & (JIT_RING_SIZE - 1)];
+		fprintf(f, "%c %08x %08x op=%08x sp=%08x r24=%08x r27=%08x r29=%08x lr=%08x ctr=%08x cr=%08x "
+		           "a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n",
+		        rec->type, rec->from_pc, rec->to_pc, rec->opcode, rec->r1,
+		        rec->r24, rec->r27, rec->r29, rec->lr, rec->ctr, rec->cr,
+		        rec->a[0], rec->a[1], rec->a[2], rec->a[3],
+		        rec->a[4], rec->a[5], rec->a[6], rec->a[7]);
+	}
+	fclose(f);
+	fprintf(stderr, "JIT trace ring: %u records (of %u total) dumped to /tmp/ss_jit_ring.txt\n",
+	        n, jit_ring_idx);
+}
+
 void powerpc_cpu::jit_interp_one(uint32 opcode, uint32 pc_val)
 {
 	/* The bridge owns the guest PC: set it so the handler observes the correct
 	 * PC, then let the handler advance it (increment_pc or branch semantics). */
 	pc() = pc_val;
+	jit_ring_record(regs_ptr(), 'C', pc_val, 0, opcode);
 	const instr_info_t *ii = decode(opcode);
 	ii->execute(this, opcode);
 }
@@ -758,9 +925,11 @@ void powerpc_cpu::execute(uint32 entry)
 				if (jit_trace_fp == (FILE *)(uintptr_t)1) {
 					const char *path = getenv("SS_JIT_TRACE");
 					jit_trace_fp = path ? fopen(path, "w") : NULL;
+					jit_ring_init_once(); /* SS_JIT_TRACE_RING=1: in-memory ring */
 				}
 				if (jit_trace_fp) { fprintf(jit_trace_fp, "I %08x\n", pc()); fflush(jit_trace_fp); }
 				jit_trace_fp_for_cpu = jit_trace_fp; /* share with JIT gate below */
+				jit_ring_record(regs_ptr(), 'I', pc(), 0, 0);
 			}
 #endif
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
@@ -791,21 +960,20 @@ void powerpc_cpu::execute(uint32 entry)
 					ppc_jit_aarch64_init(65536);
 					/* Register the Mac ROM as a JIT-compilable range.  ROM is
 					 * write-protected after patching (main_unix.cpp), so compiled
-					 * ROM blocks are permanently valid.  ROM toolbox code dominates
-					 * boot-time execution — compiling it is the largest speedup.
+					 * ROM blocks are permanently valid.  The range stops at
+					 * +0x460000 to EXCLUDE the ROM's built-in 68k (DR) emulator —
+					 * the region where 94-97%% of boot-time dispatches execute.
 					 *
-					 * The range deliberately STOPS at ROMBase+0x460000.  Above that
-					 * lives the ROM's built-in 68k emulator (dispatch loop at
-					 * +0x466xxx, micro-handler continuations at +0x463xxx/+0x46xxxx,
-					 * opcode handler table at +0x48xxxx..+0x4Fxxxx).  That emulator
-					 * is itself an interpreter whose dispatch protocol polls a CR bit
-					 * injected asynchronously by HandleInterrupt(); JIT-compiling its
-					 * dispatch/handler blocks changes interrupt-delivery interleaving
-					 * in ways that corrupt multi-step 68k instruction emulation
-					 * (observed: skipped immediate-word consumption, guest jumps to
-					 * garbage).  Mac OS 8.x is predominantly native PPC, so excluding
-					 * the 68k emulator costs little.  Revisit only with a designed
-					 * interrupt strategy for JIT-compiled interpreter loops.
+					 * Status of lifting that exclusion (the dyngen-parity work):
+					 * the original blocker (mixed JIT/interpreter execution of the
+					 * same PC) is solved by inline interpreter calls, and the
+					 * deterministic boot crash it exposed was root-caused to a
+					 * crorc miscompilation (fixed — see LEARNINGS.md 2026-06-02).
+					 * What remains: with the full 5 MB range registered, boot
+					 * reaches the SCSI phase and loops forever (68k interrupt
+					 * processing never reaches OP_IRQ).  Until that is fixed and a
+					 * full-range boot is verified, the range stays at +0x460000.
+					 * To test the full range, change the size below to 0x500000.
 					 * SS_JIT_NO_ROM=1: bisect switch — keep ROM interpreter-only. */
 					{
 						const char *no_rom = getenv("SS_JIT_NO_ROM");
@@ -830,14 +998,20 @@ void powerpc_cpu::execute(uint32 entry)
 				if (fn) {
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
+					jit_ring_record(regs_ptr(), 'J', jit_block_start_pc, pc(), 0);
 					/* Log JIT block: from, to, then the 68k-emulator-relevant state
 					 * (r24=68k PC, r27=68k opcode, r29=handler addr, LR, CR, XER).
 					 * fflush so the final entries survive a crash. */
 					if (jit_trace_fp_for_cpu) {
-						fprintf(jit_trace_fp_for_cpu, "J %08x %08x r24=%08x r27=%08x cr=%08x so=%d ov=%d ca=%d r0=%08x r8=%08x r16=%08x r17=%08x\n",
-						        jit_block_start_pc, pc(), gpr(24), gpr(27), cr().get(),
+						/* In the ROM 68k (DR) emulator's register convention:
+						 * r24 = 68k PC, r27 = opcode, r29 = handler address,
+						 * r8-r15 = 68k D0-D7, r16-r23 = 68k A0-A7.
+						 * a7 (r23) is the 68k stack pointer — the register whose
+						 * corruption (a7=0) is the deterministic boot-crash signature. */
+						fprintf(jit_trace_fp_for_cpu, "J %08x %08x r24=%08x r27=%08x r29=%08x cr=%08x so=%d ov=%d ca=%d a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n",
+						        jit_block_start_pc, pc(), gpr(24), gpr(27), gpr(29), cr().get(),
 						        xer().get_so(), xer().get_ov(), xer().get_ca(),
-						        gpr(0), gpr(8), gpr(16), gpr(17));
+						        gpr(16), gpr(17), gpr(18), gpr(19), gpr(20), gpr(21), gpr(22), gpr(23));
 						fflush(jit_trace_fp_for_cpu);
 					}
 					/* GATE 3: PC range diagnostic (log-only, rate-limited).

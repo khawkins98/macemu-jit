@@ -1,100 +1,106 @@
-# SheepShaver ARM64 JIT — Session Handoff (2026-06-02, performance session)
+# SheepShaver ARM64 JIT — Session Handoff (2026-06-02, dyngen-parity session)
 
-## Session summary
+## Where things stand
 
-This session's goal: make the JIT faster. It turned into equal parts performance work
-and deep correctness debugging — the performance changes exposed latent bugs that had
-been masked since the JIT was written.
+The goal of this workstream: JIT-compile the ROM's built-in 68k (DR) emulator region
+(ROMBase+0x460000..+0x500000) — the region where 94-97% of boot-time dispatches execute —
+so the JIT stops paying a dispatcher round-trip per 68k instruction.
 
-### What landed (single commit, see git log)
+### What is COMMITTED and verified
 
-1. **ROM toolbox compilation** — the Mac ROM below ROMBase+0x460000 (PPC toolbox +
-   nanokernel, the bulk of what Mac OS 8.x executes) is now JIT-compiled. Previously
-   100% interpreted. The range stops at +0x460000 to exclude the ROM's built-in 68k
-   emulator (see "The 68k emulator problem" below).
+1. **crorc miscompilation fix** — the root cause of the deterministic 68k-region boot
+   crash. One missing `AND #1` after ARM64 `ORN` made crorc smear 0xFFFFFFFF across the
+   whole CR. Full causal chain documented in LEARNINGS.md (2026-06-02 evening entry).
+   Verified: isolated vector + 227/227 harness both modes.
 
-2. **OE=1 overflow arithmetic** — addco/subfco/addo/subfo/nego. These were 95% of all
-   block-compile failures (they're the hot loops of the 68k emulator and also appear in
-   toolbox code). 9 new harness vectors.
+2. **CR-logical harness coverage** — 9 new vectors (crorc all 4 input combos, plus
+   crand/cror/crxor/crnor/crandc/creqv/crnand/mcrf). This family had ZERO coverage when
+   crorc shipped broken.
 
-3. **64 MB code cache** (was 4 MB) + 4× bigger block cache pools. No more recompile storms.
+3. **Diagnostic infrastructure** (all env-gated, zero cost when off):
+   - `SS_JIT_TRACE_RING=1` — in-memory 256K-record execution trace ring, dumped to
+     /tmp/ss_jit_ring.txt by the SIGSEGV handler. Zero I/O overhead during execution.
+     Records: 'J' JIT block, 'I' interp block, 'C' inline call, 'E'/'R' EMUL_OP entry/return.
+   - `SS_JIT_NO_CHAIN=1` — runtime chaining kill-switch (bisect without rebuild).
+   - `SS_JIT_WATCH_STUB=1` — software watchpoint on Mixed Mode switch-back stubs.
+   - `SS_JIT_RING_DUMP_TRIGGER=1` — dump ring when DR emulator executes stack-region code.
+   - **lldb live-dump trick**: `lldb -p <pid> -o "expression -- (void)ppc_jit_dump_trace_ring()"`
+     dumps the ring from a RUNNING (hung) process — no crash needed.
 
-4. **Chaining post-mortem** — found that block-to-block chaining NEVER worked (a marking
-   bug excluded every chained block from the JIT). Fixing the marking exposed that chaining
-   is architecturally unsafe (chained loops bypass interrupt polling). Chaining is now
-   cleanly disabled (`JIT_BLOCK_CHAINING=0`) with the requirements for re-enabling documented.
+4. **Committed configuration**: `JIT_BLOCK_CHAINING 0`, ROM range `0x460000` (toolbox only).
+   This is the proven-booting configuration plus the fix and instrumentation.
 
-5. **SMC invalidation infrastructure** — `ppc_jit_aarch64_invalidate_range()` exists and
-   `invalidate_cache_range()` calls it, but icbi/isync remain native NOPs: falling them
-   back to the interpreter was measured at 42× boot slowdown (isync is ubiquitous in OS
-   code). The known SMC gap (stale translations if code is rewritten in place) is
-   pre-existing upstream behavior, documented at the icbi case.
+### What is UNCOMMITTED / in progress (the working-tree flips)
 
-6. **JIT↔interpreter handoff** — the interpreter inner loop now exits when the next PC
-   is JIT-compilable (RAM/registered-ROM range check). Without this, interpreter-only
-   regions (the 68k emulator) captured all execution permanently.
+To continue the dyngen-parity work, flip these two values:
+- `ppc-jit.cpp`: `#define JIT_BLOCK_CHAINING 1`
+- `ppc-cpu.cpp`: ROM range `0x460000` → `0x500000`
 
-7. **Debug tooling** — `tools/screenshot.sh` (framebuffer capture via lldb, no Screen
-   Recording permission needed), `SS_JIT_TRACE`, `SS_JIT_DEBUG_PC`, `SS_JIT_NO_OE`,
-   `SS_JIT_NO_ROM`.
+With both flipped + the crorc fix: **no more crash** (previously deterministic SIGSEGV at
+3-16s), harnesses 227/227, but boot hangs in an **infinite SCSI scan loop** (bug #2, below).
 
-### Boot timing results (this build)
+## Bug #2 (open): infinite SCSI scan loop with full-ROM compilation
 
-| Mode | Boot to desktop |
-|---|---|
-| Pure interpreter (warm NVRAM) | ~10 s |
-| JIT (any of today's configurations) | 160 s – 7 min |
+**Symptom**: with the 68k region compiled, boot reaches the SCSI phase and loops forever
+(SCSISelect 0-6 + SCSIGet, 171K+ iterations). No crash. The interpreter and the
+toolbox-only JIT config complete this phase normally and boot to desktop.
 
-**Boot time is the JIT's worst case** (68k-heavy + one-shot compiles + boundary
-thrashing — see LEARNINGS.md). The JIT's value is steady-state performance, which is
-unmeasured. MacBench / app responsiveness is the next session's first task.
+**Evidence so far** (from EMUL_OP entry/return records + execution traces in the ring):
+- Interrupt delivery WORKS: CR bit 8 gets set, the nanokernel runs, and the 68k interrupt
+  handler executes (including Mixed Mode calls) at ~60Hz intervals.  (An earlier "zero
+  OP_IRQ records" observation was an artifact of the ring window being only ~0.1s.)
+- SCSI_DISPATCH and CDROM_PRIME EMUL_OPs execute and return.  SheepShaver uses the DUMMY
+  SCSI driver (scsi_dummy.o), so "no SCSI devices" is the correct answer; the OS should
+  accept it and boot from the CD-ROM driver — the interpreter does exactly that.
+- The endless SCSI rescan is Mac OS's normal "looking for a bootable disk" behavior
+  (blinking-?-floppy state).  **The real failure is therefore upstream: the CD-ROM boot
+  path is failing validation in JIT mode**, so the OS falls back to scanning forever.
 
-### The 68k emulator problem (the session's hardest bug — fully documented in LEARNINGS.md)
+**Working hypothesis**: the 68k code that builds/validates CD-ROM boot reads (Disk Manager
+/ boot-blocks validation, running in the JIT-compiled DR emulator) computes something
+wrong — i.e., another latent codegen bug in a 68k-region instruction, like crorc was.
 
-The Mac ROM contains a built-in 68k emulator (an interpreter written in PPC) at
-ROM+0x460000+. Its dispatch loop polls CR bit 8, which `HandleInterrupt()` sets
-asynchronously to deliver interrupts. JIT-compiling those dispatch/handler blocks changes
-the interrupt-delivery interleaving and corrupts multi-step 68k instruction emulation —
-even though every individual instruction compiles correctly (verified exhaustively).
+**Next steps**:
+1. Extend the 'E'/'R' EMUL_OP records for CDROM_PRIME to also capture the IOParam block
+   contents (guest memory at the param-block pointer): ioPosOffset, ioReqCount, ioBuffer.
+2. Capture CDROM_PRIME sequences from an interpreter boot (working) and the stuck JIT
+   boot; compare request parameters at the same boot phase (anchor on the Nth PRIME call
+   after first CDROM_OPEN, not on addresses).  Diverging request parameters → trace back
+   which 68k computation produced them → isolate that ROM block → harness vector → fix.
+3. Audit candidates with zero harness coverage that the DR emulator + Disk Manager use:
+   remaining case-19 XO ops, mcrxr, lhbrx/lwbrx (byte-reversed loads — used in disk I/O!),
+   lha/lhau update forms, mulhwu/divwu edge cases.
 
-**Do not extend the JIT ROM range past +0x460000** without first designing an interrupt
-strategy for JIT-compiled interpreter loops.
+## How to verify any JIT change (the bar)
 
-## What to do next (priority order)
-
-1. **Register allocation** — the biggest remaining performance multiplier (likely 2-3×).
-   Every PPC register access is currently a memory load/store. The `ra_*` infrastructure
-   exists in ppc-jit.cpp but is disabled (upstream containment). Re-enable behind the
-   harness gate, family by family.
-
-2. **Block chaining with interrupt safety** — second biggest win (~10-30%). Options
-   documented at the JIT_BLOCK_CHAINING define: chain-entry interrupt checks (with
-   correct actionable-flag semantics), forward-only chaining, or periodic unlinking.
-
-3. **MacBench / Speedometer in the guest** — get real benchmark numbers vs the
-   kanjitalk755 x86_64-Rosetta build and the historical Jagmn JIT (~470%).
-
-4. **Boot more OS versions** — Mac OS 9.2.2 ISO is at ~/Downloads/macos-922-uni/.
-
-5. **The 68k emulator JIT design** — only if 68k-heavy workloads matter; needs the
-   interrupt interleaving problem solved by design.
+1. Both harness modes green: `cd SheepShaver && ./jit-test/run.sh` and
+   `SS_HARNESS_MODE=jit ./jit-test/run.sh` (must be 227/227)
+2. **Boot to desktop** in the committed configuration. The harness is a proven-incomplete
+   oracle: block 5010bb90 passes the harness while its in-context execution exposed crorc.
+   Never commit a config flip on harness-green alone.
 
 ## How to run
 
 ```bash
 cd SheepShaver/src/Unix && make -j8        # build
-./SheepShaver                              # JIT on by default
+./SheepShaver                              # JIT on by default (toolbox-only ROM range)
 SS_USE_JIT=0 ./SheepShaver                 # interpreter only
-../../tools/screenshot.sh                  # capture guest display (from repo root: tools/screenshot.sh)
+SS_USE_JIT=1 SS_JIT_TRACE_RING=1 ./SheepShaver   # with crash-diagnosis ring
 
-# Harnesses (both must stay 218/218):
-cd SheepShaver && ./jit-test/run.sh
-SS_HARNESS_MODE=jit ./jit-test/run.sh
+# Dump the ring from a hung process:
+lldb -b -p $(pgrep -x SheepShaver) -o "expression -- (void)ppc_jit_dump_trace_ring()" -o detach -o quit
 ```
 
-## Test assets
+## Test assets (moved out of TCC-protected ~/Downloads — see LEARNINGS.md)
 
-- ROM: `~/Downloads/New_World_Mac_Roms/New World ROM/1998-07-21 - Mac OS ROM 1.1.rom`
-- Mac OS 8.6 ISO: `~/Downloads/Mac OS 8.6 Internal Edition.iso`
-- Mac OS 9.2.2 ISO: `~/Downloads/macos-922-uni/macos-922-uni.iso`
-- Prefs: `~/.sheepshaver_prefs`
+- ROM: `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom`
+- Mac OS 8.6 ISO: `/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso`
+- Prefs: `~/.sheepshaver_prefs` (backup of pre-move prefs: `~/.sheepshaver_prefs.bak`)
+
+## Performance context (unchanged from previous session)
+
+- Pure interpreter boot: ~10 s. JIT boot (toolbox-only): 160 s – 7 min.
+- Boot is the JIT's worst case; the value proposition is steady-state performance
+  (unmeasured — MacBench remains a future task).
+- Future levers: register allocation (2-3×), chaining (~10-30%), 68k-region compilation
+  (the current workstream — removes the dominant dispatcher overhead).

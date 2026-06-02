@@ -111,6 +111,15 @@ extern uintptr SignalStackBase();
 extern "C" void check_load_invoc(uint32 type, int16 id, uint32 h);
 extern "C" void named_check_load_invoc(uint32 type, uint32 name, uint32 h);
 
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+// From ppc-cpu.cpp: dump the SS_JIT_TRACE_RING execution history (crash diagnosis)
+extern "C" void ppc_jit_dump_trace_ring(void);
+// From ppc-cpu.cpp: record an EMUL_OP entry ('E') / return ('R') into the trace ring.
+// a_regs points at gpr[16] (8 consecutive uint32s = 68k A0-A7).
+extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
+                                           uint32 d0, uint32 d1, uint32 sp, const uint32 *a_regs);
+#endif
+
 // PowerPC EmulOp to exit from emulation looop
 const uint32 POWERPC_EXEC_RETURN = POWERPC_EMUL_OP | 1;
 
@@ -279,6 +288,13 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	r68.a[7] = gpr(1);
 	uint32 saved_cr = get_cr() & 0xff9fffff; // mask_operand::compute(11, 8)
 	uint32 saved_xer = get_xer();
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	/* Trace-ring EMUL_OP entry record ('E'): from_pc = 68k PC, to_pc/op = the
+	 * EMUL_OP number, r27/r29 fields carry 68k D0/D1, a[] = A0-A7.  Runs in
+	 * BOTH interpreter and JIT mode — this is the comparison point for
+	 * working-vs-broken boot analysis. */
+	ppc_jit_ring_record_emulop('E', gpr(24), emul_op, gpr(8), gpr(9), gpr(1), &gpr(16));
+#endif
 	EmulOp(&r68, gpr(24), emul_op);
 	set_cr(saved_cr);
 	set_xer(saved_xer);
@@ -287,6 +303,10 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	for (int i = 0; i < 7; i++)
 		gpr(16 + i) = r68.a[i];
 	gpr(1) = r68.a[7];
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	/* EMUL_OP return record ('R'): registers now hold the results (D0 = result code). */
+	ppc_jit_ring_record_emulop('R', gpr(24), emul_op, gpr(8), gpr(9), gpr(1), &gpr(16));
+#endif
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 }
 
@@ -871,6 +891,11 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	dump_registers();
 	dump_log();
 	dump_disassembly(pc, 8, 8);
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	/* Dump the in-memory JIT execution trace ring (SS_JIT_TRACE_RING=1) —
+	 * the block-execution history leading up to this crash. */
+	ppc_jit_dump_trace_ring();
+#endif
 
 	enter_mon();
 	QuitEmulator();

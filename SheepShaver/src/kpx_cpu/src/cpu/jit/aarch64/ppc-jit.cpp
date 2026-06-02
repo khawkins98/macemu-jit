@@ -287,6 +287,16 @@ static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, boo
 #define PPCR_CTR    1048
 #define PPCR_PC     1052
 #define PPCR_SPCFLAGS 1056  /* basic_spcflags.mask — pending interrupt/event flags */
+/* Actionable flag bits for the block-entry poll (dyngen gen_start equivalent).
+ * These are exactly the bits powerpc_cpu::check_spcflags() clears/handles when
+ * the dispatcher regains control at the JIT post-dispatch site (ppc-cpu.cpp
+ * pdi_jit_post): EXEC_RETURN(1) | TRIGGER_INTERRUPT(2) | HANDLE_INTERRUPT(4) |
+ * ENTER_MON(8) = 0x0F.  SPCFLAG_JIT_EXEC_RETURN(16) is DELIBERATELY EXCLUDED:
+ * check_spcflags() does not clear it, and the aarch64 pdi_jit_post path does
+ * not clear it either, so polling it would make the block return, find the bit
+ * still set, re-dispatch, and spin forever.  Polling only actionable bits
+ * guarantees the dispatcher clears every bit that can fire the poll. */
+#define PPCR_SPCFLAGS_POLL_MASK 0x0F
 
 
 
@@ -737,6 +747,50 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	a64_ldp_post(19, RSTATE, A64_SP, 16);
 	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
 	a64_ret();
+}
+
+/* Emit the block-entry spcflags poll (dyngen gen_start equivalent).
+ *
+ * Placed at the chain entry point, immediately after the prologue and before
+ * the block body.  Loads the spcflags mask, masks to the actionable bits
+ * (PPCR_SPCFLAGS_POLL_MASK), and:
+ *   - if zero  -> falls through into the block body (the common, fast case);
+ *   - if nonzero -> stores this block's start PC into regs.pc and returns to
+ *     the C dispatcher via the standard epilogue.  The dispatcher runs
+ *     check_spcflags() (which clears/handles every actionable bit) and
+ *     re-dispatches the same PC, at which point the poll passes.
+ *
+ * With JIT_BLOCK_CHAINING=0 the poll runs on every normal (ABI) block entry —
+ * it never changes correct behaviour (the dispatcher already polled spcflags
+ * before entering), but it proves the guard returns to C whenever a flag is
+ * set, which is the safety valve required before block chaining is enabled.
+ *
+ * Uses RTMP0 only; emitted before any register-allocator state exists for the
+ * block, so no flush is needed. */
+static void emit_entry_spcflags_poll(uint32_t block_start_pc) {
+	/* LDR  Wtmp0, [RSTATE, #PPCR_SPCFLAGS]  — load spcflags.mask */
+	a64_ldr_w_imm(RTMP0, RSTATE, PPCR_SPCFLAGS);
+	/* AND  Wtmp0, Wtmp0, #PPCR_SPCFLAGS_POLL_MASK (0x0F) — actionable bits only */
+	emit32(0x12000C00 | (RTMP0 << 5) | RTMP0);
+	/* CBZ  Wtmp0, <body> — skip the return sequence when no flags pending.
+	 * Patched once the return sequence length is known. */
+	uint32_t *cbz_loc = jit_code_ptr;
+	emit32(0); /* placeholder CBZ */
+	/* Flags pending: store block start PC and return to the dispatcher. */
+	emit_load_imm32(RTMP0, (int32_t)block_start_pc);
+	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+	/* Standard epilogue: restore callee-saved regs and return to dispatch.
+	 * Mirrors emit_epilogue_with_pc()'s non-chaining tail exactly. */
+	a64_ldp_post(27, 28, A64_SP, 16);
+	a64_ldp_post(25, 26, A64_SP, 16);
+	a64_ldp_post(23, 24, A64_SP, 16);
+	a64_ldp_post(21, 22, A64_SP, 16);
+	a64_ldp_post(19, RSTATE, A64_SP, 16);
+	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
+	a64_ret();
+	/* Patch the CBZ to jump here (the block body follows). */
+	int32_t off = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)cbz_loc);
+	*cbz_loc = 0x34000000 | (((off >> 2) & 0x7FFFF) << 5) | RTMP0; /* CBZ RTMP0, body */
 }
 
 /* Emit: if lk=1, save pc+4 to PPCR_LR (bcl / bctrl / blrl semantics) */
@@ -4041,6 +4095,16 @@ bool ppc_jit_aarch64_compile(
 	 * blocks are only entered through the ABI entry (code_start) by the
 	 * dispatcher, which polls spcflags between blocks. */
 	uint32_t *chain_entry_start = jit_code_ptr;
+
+	/* Block-entry spcflags poll (dyngen gen_start equivalent): if any
+	 * actionable interrupt/event flag is pending, return to the C dispatcher
+	 * (which services it) instead of executing the block body.  The chain
+	 * entry deliberately INCLUDES this poll so that, once block chaining is
+	 * enabled, a chained cycle still returns to the dispatcher whenever a
+	 * flag becomes set — closing the "chained loop never services interrupts"
+	 * hole.  With chaining off it runs on every ABI entry and is behaviourally
+	 * transparent (the dispatcher already polled before entering). */
+	emit_entry_spcflags_poll(pc);
 
 	jit_blocks_attempted++;
 	uint32_t cur_pc = pc;

@@ -82,6 +82,42 @@ plus JIT↔interpreter transition count). Run both modes, compare. This tells us
 whether the time goes to (a) transition overhead, (b) more guest work, or (c) slow
 interpretation of DR code under JIT mode.
 
+### Region-counter data (session 5 part 2) — first results
+
+Region counters implemented (commit d0307ad6) and run in both modes:
+
+**JIT mode at t=65s** (still booting):
+- 4.3B JIT blocks: jNK=2.14B (32%), jRAM=2.18B (33%), jDR=0
+- 2.4B interpreted blocks: all in DR region (35% of total)
+- j2i transitions: 158M = **2.4M transitions/sec**
+- Combined throughput: ~103M blocks/sec
+
+**Interpreter mode at t=105s** (still booting):
+- 615M blocks total: iNK=11.2M (2%), iDR=237M (39%), iRAM=366M (59%)
+- Throughput: 8.6M blocks/sec for first 70s, then drops to ~390K blocks/sec
+  (rate drop suggests entering an I/O-bound or idle-wait boot phase)
+
+**Three major findings:**
+
+1. **The "interpreter boots in ~10s" claim (HANDOFF.md:226) is FALSE for the current
+   configuration** (Mac OS 8.6 ISO via CD-ROM boot, bootdriver -62). The interpreter was
+   still booting at 190+ seconds. The old claim was likely measured against a different
+   disk/config. ALL prior speedup/slowdown ratios derived from it are unreliable.
+
+2. **NK:DR block ratio anomaly**: interpreter mode executes 1 nanokernel block per ~21 DR
+   blocks; JIT mode executes ~1 nanokernel block per DR block (1:1). The JIT-mode guest
+   enters the nanokernel exception dispatcher at a proportionally ~20x higher rate. Cause
+   unknown — candidates: EMUL_OP frequency, Mixed Mode switch frequency, sc/trap frequency,
+   or a feedback loop where fast PPC code polls/retries something completed by slow 68k code.
+
+3. **Block counts are not directly comparable across modes** (DR dispatch blocks are 2-4
+   instructions; RAM/toolbox blocks are larger). Wall-clock boot time to desktop is the only
+   honest comparison metric. Neither mode's full boot time has been measured for this config.
+
+**Hardware note**: the i2j (interp→JIT) counter always reads 0 — the increment was never
+added at the interpreter's JIT-handoff break (ppc-cpu.cpp ~line 1295). j2i is a good proxy
+(every j2i is eventually followed by an i2j). Fix when convenient.
+
 ## 2026-06-02 (session 5, part 1 — SUPERSEDED, see retraction above) — Root cause of 7-minute JIT boot found
 
 ### Root cause: initialization-order deadlock at nanokernel spin-wait 0x50313d34 [WRONG — see retraction]

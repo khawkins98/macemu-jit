@@ -49,9 +49,31 @@ static uint32_t *jit_cache_end  = NULL;
  *   Mac OS invalidates any region of PPC code (icbi/isync) or when
  *   the JIT code-cache write-pointer is reset (ppc_jit_aarch64_flush).
  */
-#define JIT_BC_BUCKETS  8192                /* must be power of 2 */
+#define JIT_BC_BUCKETS  32768               /* must be power of 2 */
 #define JIT_BC_MASK     (JIT_BC_BUCKETS - 1)
-#define JIT_BC_POOL     16384               /* max total entries across all chains */
+#define JIT_BC_POOL     65536               /* max total entries across all chains */
+
+/* ---- Block-to-block chaining (DISABLED) -----------------------------------
+ *
+ * JIT_BLOCK_CHAINING = 0: every block returns to the dispatcher via the
+ * standard LDP+RET epilogue.  The dispatcher polls spcflags between blocks,
+ * so pending interrupts (60 Hz VBL, I/O completion) are always serviced.
+ *
+ * Why disabled: direct block→block branches (B <chain_code>) bypass the
+ * dispatcher's spcflags poll.  A chained cycle — e.g. a guest polling loop
+ * whose blocks all chain — spins in native code forever and interrupts are
+ * never serviced, hanging all Mac OS I/O.  Historically this was masked by a
+ * separate bug that marked every chained block incomplete (so chained code
+ * never actually ran); fixing that bug exposed the interrupt problem.
+ *
+ * Re-enabling requires a designed-in interrupt strategy, e.g.:
+ *   (a) a cheap pending-flags test at every chain entry that exits to the
+ *       dispatcher when flags are set (must test only actionable flag bits), or
+ *   (b) forward-only chaining (no cycles possible; every loop iteration
+ *       crosses the dispatcher), or
+ *   (c) periodic forced unlinking from the interrupt trigger path.
+ * Until then: simple by default, complexity by proof. */
+#define JIT_BLOCK_CHAINING 0
 
 /* ---- Chain patch-site pool -----------------------------------------------
  * When emit_epilogue_with_pc() cannot chain at compile time (target not yet
@@ -65,7 +87,7 @@ static uint32_t *jit_cache_end  = NULL;
  * reverting chain-patches during range-based JIT cache invalidation. */
 #define JIT_EPILOGUE_FIRST_LDP 0xA8C17BFBU
 
-#define JIT_CHAIN_SITE_POOL 4096
+#define JIT_CHAIN_SITE_POOL 16384
 struct jit_chain_site {
 	uint32_t  target_pc; /* PPC PC this site wants to chain to */
 	uint32_t *patch_loc; /* ARM64 addr where B<chain_code> was (or will be) written */
@@ -114,6 +136,31 @@ static inline void jit_bc_ensure_init(void) {
 		jit_bc_flush();
 }
 
+/* ---- Secondary executable range (Mac ROM) ----
+ * The Mac ROM is vm_protect()ed READ|EXECUTE after rom_patches are applied
+ * (main_unix.cpp), so it is immutable during emulation: ROM blocks compiled by
+ * the JIT can never go stale and never need SMC invalidation.  ROM toolbox code
+ * is the dominant execution target during boot — compiling it is the single
+ * largest JIT speedup available.
+ * Registered once at init via ppc_jit_aarch64_set_rom_range(); zero size means
+ * "not registered" (standalone harnesses never register it). */
+static uint32_t      jit_rom_base = 0;
+static uint32_t      jit_rom_size = 0;
+static const uint8_t *jit_rom_host = NULL;
+
+/* Resolve a guest PC to a host fetch pointer for instruction reads.
+ * Returns NULL if the PC is not inside a JIT-compilable executable range. */
+static inline const uint8_t *jit_fetch_ptr(uint32_t guest_pc, const uint8_t *ram, size_t ramsize)
+{
+	const uint32_t ram_base = (uint32_t)(uintptr_t)ram;
+	if (guest_pc >= ram_base && guest_pc < ram_base + ramsize)
+		return ram + (guest_pc - ram_base);
+	if (jit_rom_size != 0 && guest_pc >= jit_rom_base &&
+	    guest_pc < jit_rom_base + jit_rom_size)
+		return jit_rom_host + (guest_pc - jit_rom_base);
+	return NULL;
+}
+
 /* Record a chain patch site: when the target block at next_pc is compiled,
  * patch_loc (pointing to the first LDP of the standard epilogue) will be
  * overwritten with B <chain_code_of_next_pc>. */
@@ -132,6 +179,12 @@ static void record_chain_site(uint32_t next_pc, uint32_t *patch_loc) {
  * standard epilogues that were waiting to chain to this PC. */
 static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 	if (!chain_code) return;
+#if !JIT_BLOCK_CHAINING
+	/* Chaining disabled: no sites are ever recorded, nothing to patch.
+	 * (record_chain_site is only called from the chaining paths.) */
+	(void)pc;
+	return;
+#endif
 	jit_bc_ensure_init();
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int idx = chain_site_heads[bucket];
@@ -233,6 +286,7 @@ static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, boo
 #define PPCR_LR     1044
 #define PPCR_CTR    1048
 #define PPCR_PC     1052
+#define PPCR_SPCFLAGS 1056  /* basic_spcflags.mask — pending interrupt/event flags */
 
 
 
@@ -564,6 +618,23 @@ static void emit_set_xer_ca(int val) {
 	emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP0); /* STRB */
 }
 
+/* Write ARM64 overflow flag (from the last ADDS/SUBS) into XER.OV and
+ * accumulate it into the sticky XER.SO byte.  Used by OE=1 arithmetic
+ * (addco/subfco/addo...) — the 68k emulator inside the Mac ROM leans on
+ * these to compute 68k condition codes, so they are extremely hot.
+ * Must run while NZCV still holds the arithmetic flags (i.e. before any
+ * CMP / flag-setting instruction such as emit_update_cr0).
+ * Clobbers RTMP1 and RTMP2; preserves RTMP0 (the result) and NZCV. */
+static void emit_write_xer_ov_so_from_overflow(void) {
+	/* CSET Wd, VS — Wd = 1 if V=1 (signed overflow) */
+	emit32(0x1A9F77E0 | RTMP2); /* CSET W(RTMP2), VS = CSINC WZR,WZR,VC */
+	emit32(0x39000000 | (PPCR_XER_OV << 10) | (RSTATE << 5) | RTMP2); /* STRB → OV */
+	/* SO is sticky: SO |= OV */
+	emit32(0x39400000 | (PPCR_XER_SO << 10) | (RSTATE << 5) | RTMP1); /* LDRB ← SO */
+	emit32(0x2A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1);        /* ORR */
+	emit32(0x39000000 | (PPCR_XER_SO << 10) | (RSTATE << 5) | RTMP1); /* STRB → SO */
+}
+
 /* Sync PPC FPSCR rounding mode (bits 30-31) to ARM64 FPCR (bits 22-23).
    PPC RN: 0=nearest, 1=toward zero, 2=+inf, 3=-inf
    ARM64 RMode: 0=nearest, 3=toward zero, 1=+inf, 2=-inf
@@ -635,6 +706,7 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	ra_flush_all();
 	emit_load_imm32(RTMP0, (int32_t)next_pc);
 	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+#if JIT_BLOCK_CHAINING
 	/* Compile-time chaining: if the target PC is already in the JIT block
 	 * cache and has a chain entry, branch directly to it instead of
 	 * restoring callee-saved registers and returning to the dispatch loop.
@@ -644,9 +716,8 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	if (chain_target && chain_target->chain_code) {
 		int32_t off = (int32_t)((uint8_t *)chain_target->chain_code - (uint8_t *)jit_code_ptr);
 		if (off >= -(1 << 25) && off < (1 << 25)) {
-			/* Compile-time chaining: record the site BEFORE emitting B so that
-			 * range-based invalidation can find and revert this patch if the
-			 * target block is later invalidated. */
+			/* Record the site BEFORE emitting B so that range-based invalidation
+			 * can find and revert this patch if the target block is invalidated. */
 			record_chain_site(next_pc, jit_code_ptr);
 			chain_site_pool[chain_site_pool_next - 1].patched = true;
 			emit32(0x14000000 | ((off >> 2) & 0x3FFFFFF)); /* B <offset> */
@@ -657,6 +728,7 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	 * next_pc is compiled later, the first LDP can be patched to B chain_code.
 	 * patch_loc = address of the first LDP instruction we are about to emit. */
 	record_chain_site(next_pc, jit_code_ptr);
+#endif /* JIT_BLOCK_CHAINING */
 	/* Standard epilogue: restore callee-saved regs and return to dispatch */
 	a64_ldp_post(27, 28, A64_SP, 16);
 	a64_ldp_post(25, 26, A64_SP, 16);
@@ -1302,6 +1374,71 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
+
+		/* ---- OE=1 (overflow-enabled) arithmetic ----
+		 * 10-bit XO = 512 (OE bit) + base XO.  These set XER.OV from signed
+		 * overflow and accumulate XER.SO, in addition to the base semantics.
+		 * The Mac ROM's built-in 68k emulator uses addco/subfco in its hottest
+		 * loops to derive 68k condition codes — without these, the blocks
+		 * containing them (76%+19% of all compile failures) stay interpreted.
+		 * SS_JIT_NO_OE=1: bisect switch — fall back to the interpreter for all
+		 * OE variants (diagnostic only). */
+		case 522: case 520: case 778: case 552: case 616:
+		{
+			static int no_oe = -1;
+			if (no_oe < 0) { const char *e = getenv("SS_JIT_NO_OE"); no_oe = (e && *e == '1') ? 1 : 0; }
+			if (no_oe) return false;
+		}
+		switch (xo) {
+		case 522: /* addco rD,rA,rB (set CA, OV, SO) */
+			emit_load_gpr(RTMP0, ra);
+			emit_load_gpr(RTMP1, rb);
+			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ca_from_carry();
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 520: /* subfco rD,rA,rB (rD = rB - rA; set CA, OV, SO) */
+			emit_load_gpr(RTMP0, rb);
+			emit_load_gpr(RTMP1, ra);
+			emit32(0x6B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SUBS */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ca_from_carry();
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 778: /* addo rD,rA,rB (set OV, SO; CA unchanged) */
+			emit_load_gpr(RTMP0, ra);
+			emit_load_gpr(RTMP1, rb);
+			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS (for V flag) */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 552: /* subfo rD,rA,rB (rD = rB - rA; set OV, SO; CA unchanged) */
+			emit_load_gpr(RTMP0, rb);
+			emit_load_gpr(RTMP1, ra);
+			emit32(0x6B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SUBS (for V flag) */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 616: /* nego rD,rA (rD = -rA; set OV, SO; overflow iff rA == 0x80000000) */
+			emit_load_gpr(RTMP1, ra);
+			a64_movz(RTMP0, 0, 0);
+			emit32(0x6B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SUBS 0 - rA */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+		}
+		return false; /* nested OE switch fell through (unreachable) */
+
 		case 138: /* adde rD,rA,rB (rD = rA + rB + CA) */
 			emit_load_gpr(RTMP0, ra);
 			emit_load_gpr(RTMP1, rb);
@@ -1649,7 +1786,16 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 86:   /* dcbf  — data cache block flush */
 		case 246:  /* dcbt  — data cache block touch (prefetch hint) */
 		case 278:  /* dcbtst — data cache block touch for store */
-		case 982:  /* icbi  — instruction cache block invalidate */
+		case 982:  /* icbi  — instruction cache block invalidate.
+		            * Compiled as a NOP (upstream behavior).  KNOWN GAP: this leaves
+		            * stale JIT translations live if guest code is rewritten in place
+		            * (same address, different code).  In practice extensions load into
+		            * fresh RAM (no prior translation exists), so this rarely bites.
+		            * The correct fix is bucket-based invalidation called from the
+		            * interpreter's execute_icbi — NOT falling icbi/isync back to the
+		            * interpreter: isync appears after every mtmsr/mtspr in OS code, so
+		            * isync-falls-back marks most toolbox blocks incomplete and was
+		            * measured to make JIT boot 42x slower than interpreter boot. */
 			return true;
 
 		/* Memory barriers — NOPs (single-threaded emulator) */
@@ -2496,7 +2642,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				return true;
 			}
 		}
-		case 150: /* isync */
+		case 150: /* isync — NOP (no emulated pipeline).  See icbi (case 982) for why
+		           * this must stay native: isync is ubiquitous in OS code. */
 			return true;
 
 		case 0: /* mcrf crfD,crfS — copy CR field */
@@ -3666,6 +3813,40 @@ void ppc_jit_aarch64_invalidate_pc(uint32_t pc)
 	jit_bc_invalidate_pc(pc);
 }
 
+bool ppc_jit_aarch64_has_block(uint32_t pc)
+{
+	/* One hash-bucket walk; called from the interpreter inner loop after every
+	 * interpreted block, so it must stay allocation-free and cheap. */
+	const struct jit_bc_entry *e = jit_bc_lookup(pc);
+	return e != NULL && e->complete;
+}
+
+/* Guest RAM range, cached from the compile() parameters so that
+ * ppc_jit_aarch64_is_compilable() can answer without them. */
+static uint32_t jit_ram_base_cached = 0;
+static uint32_t jit_ram_size_cached = 0;
+
+bool ppc_jit_aarch64_is_compilable(uint32_t pc)
+{
+	/* Range check only (2-4 compares).  Called from the interpreter inner loop
+	 * after every interpreted block: returns true if this PC belongs to the
+	 * JIT's domain (guest RAM or the registered ROM range), regardless of
+	 * whether a block has been compiled yet.  The dispatcher will compile it.
+	 *
+	 * This intentionally does NOT require an existing compiled block: code
+	 * first reached from inside an interpreter session (e.g. toolbox routines
+	 * called by the interpreter-only 68k emulator) would otherwise never meet
+	 * the compiler at all. */
+	if (!jit_cache_base)
+		return false; /* JIT disabled/unavailable — keep everything interpreted */
+	if (jit_ram_size_cached != 0 &&
+	    pc >= jit_ram_base_cached && pc < jit_ram_base_cached + jit_ram_size_cached)
+		return true;
+	if (jit_rom_size != 0 && pc >= jit_rom_base && pc < jit_rom_base + jit_rom_size)
+		return true;
+	return false;
+}
+
 void ppc_jit_aarch64_invalidate_range(uint32_t start, uint32_t end)
 {
 	/* Range-based JIT block invalidation for icbi/isync handling.
@@ -3710,16 +3891,39 @@ void ppc_jit_aarch64_invalidate_range(uint32_t start, uint32_t end)
 	}
 }
 
+void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uint8_t *host_base)
+{
+	/* Register the Mac ROM as a second JIT-compilable range.  The ROM is
+	 * write-protected (READ|EXECUTE) after rom_patches are applied, so blocks
+	 * compiled from it are permanently valid — no SMC invalidation needed. */
+	jit_rom_base = guest_base;
+	jit_rom_size = size;
+	jit_rom_host = host_base;
+}
+
+/* SS_JIT_DEBUG_PC=<hex>: trace every compile decision for one PC (diagnostic) */
+static uint32_t jit_debug_pc(void) {
+	static uint32_t v = 1; /* 1 = uninitialized (PC values are word-aligned, never 1) */
+	if (v == 1) {
+		const char *s = getenv("SS_JIT_DEBUG_PC");
+		v = s ? (uint32_t)strtoul(s, NULL, 16) : 0;
+	}
+	return v;
+}
+
 bool ppc_jit_aarch64_compile(
 	uint32_t pc,
 	const uint8_t *ram,
 	size_t ramsize,
 	ppc_jit_block *out)
 {
+	const bool dbg = (jit_debug_pc() != 0 && pc == jit_debug_pc());
 	/* Block address cache lookup — return cached block without recompiling.
 	 * Contract: see AARCH64_JIT_RUNTIME_CONTRACT.md — block lifecycle. */
 	const struct jit_bc_entry *cached = jit_bc_lookup(pc);
 	if (cached) {
+		if (dbg) fprintf(stderr, "JIT-DBG %08x: cache HIT complete=%d code=%p\n",
+		                 pc, cached->complete, (void *)cached->code);
 		out->code       = cached->code;
 		out->chain_code = cached->chain_code;
 		out->code_size    = 0; /* not tracked for cached entries */
@@ -3737,12 +3941,20 @@ bool ppc_jit_aarch64_compile(
 	if (!jit_cache_base)
 		return false;
 
-	/* Fast out-of-range check: ROM, SheepMem, and other non-RAM PCs cannot be
-	 * JIT-compiled.  Bail BEFORE the W^X toggle + prologue — on macOS the
+	/* Cache the RAM range for ppc_jit_aarch64_is_compilable() (the interpreter
+	 * handoff check, which has no access to the compile parameters). */
+	jit_ram_base_cached = (uint32_t)(uintptr_t)ram;
+	jit_ram_size_cached = (uint32_t)ramsize;
+
+	/* Fast out-of-range check: SheepMem, kernel data, and other non-compilable
+	 * PCs bail BEFORE the W^X toggle + prologue — on macOS the
 	 * pthread_jit_write_protect_np() pair is ~microseconds per call; paying it
-	 * for every ROM block visit (which is most of early boot) makes the JIT mode
-	 * ~37× slower than interpreter-only mode. */
-	if (pc < (uint32_t)(uintptr_t)ram || pc >= (uint32_t)(uintptr_t)ram + ramsize) {
+	 * for every non-compilable block visit makes JIT mode dramatically slower
+	 * than interpreter-only mode.  Compilable ranges: guest RAM and (when
+	 * registered) the immutable Mac ROM. */
+	if (jit_fetch_ptr(pc, ram, ramsize) == NULL) {
+		if (dbg) fprintf(stderr, "JIT-DBG %08x: fetch_ptr NULL (out of range; rom_base=%08x rom_size=%08x)\n",
+		                 pc, jit_rom_base, jit_rom_size);
 		out->complete  = false;
 		out->code      = NULL;
 		out->chain_code = NULL;
@@ -3750,7 +3962,11 @@ bool ppc_jit_aarch64_compile(
 		return false;
 	}
 
-	if (!jit_cache_wp || jit_cache_wp >= jit_cache_end - 256) {
+	/* Cache-full margin must exceed the worst-case single-block emission:
+	 * 512 PPC insns × ~50 ARM64 insns each (pathological mfspr/mtspr packing)
+	 * ≈ 100 KB.  256 KB gives comfortable headroom and is negligible against
+	 * the full cache size. */
+	if (!jit_cache_wp || jit_cache_wp >= jit_cache_end - (256 * 1024 / 4)) {
 		/* Code cache full — flush everything and start over.
 		 * This invalidates all cached blocks, which is safe because
 		 * the code they point to is about to be overwritten. */
@@ -3783,9 +3999,9 @@ bool ppc_jit_aarch64_compile(
 	emit_load_mem_base();
 
 	/* Chain entry: code position after prologue.
-	 * Other blocks chain here via B <chain_code> — RSTATE (x20) and RMEMBASE
-	 * (x19) must already be valid and callee-saved regs remain on the outer
-	 * frame. */
+	 * With JIT_BLOCK_CHAINING=0 this is recorded but never branched to —
+	 * blocks are only entered through the ABI entry (code_start) by the
+	 * dispatcher, which polls spcflags between blocks. */
 	uint32_t *chain_entry_start = jit_code_ptr;
 
 	jit_blocks_attempted++;
@@ -3798,11 +4014,10 @@ bool ppc_jit_aarch64_compile(
 	ra_reset();
 
 	for (int i = 0; i < 512; i++) {
-		if (cur_pc < (uint32_t)(uintptr_t)ram ||
-		    cur_pc >= (uint32_t)(uintptr_t)ram + ramsize)
+		const uint8_t *p = jit_fetch_ptr(cur_pc, ram, ramsize);
+		if (!p)
 			break;
 
-		const uint8_t *p = ram + (cur_pc - (uint32_t)(uintptr_t)ram);
 		uint32_t op = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
 		              ((uint32_t)p[2] << 8) | p[3];
 
@@ -3832,6 +4047,8 @@ bool ppc_jit_aarch64_compile(
 		}
 
 		if (op == 0x00000000) { /* illegal — end of test code / zero-filled memory */
+			if (dbg) fprintf(stderr, "JIT-DBG %08x: zero opcode at +%#x (n_compiled=%d)\n",
+			                 pc, (unsigned)(cur_pc - pc), n_compiled);
 			if (n_compiled == 0) {
 				/* Bail without emitting a usable block. Restore the cache to the
 				 * executable state we entered with (W^X; no-op on Linux). The
@@ -3855,6 +4072,8 @@ bool ppc_jit_aarch64_compile(
 		}
 
 		if (!compile_one(op, cur_pc)) {
+			if (dbg) fprintf(stderr, "JIT-DBG %08x: compile_one FAILED at +%#x op=%08x (opc=%u xo=%u)\n",
+			                 pc, (unsigned)(cur_pc - pc), op, op >> 26, (op >> 1) & 0x3FF);
 			jit_total_miss++;
 			jit_miss_count[op >> 26]++;
 			jit_cum_fail_opc[op >> 26]++;
@@ -3882,10 +4101,20 @@ bool ppc_jit_aarch64_compile(
 	if ((jit_blocks_attempted) % 100000 == 0 && jit_blocks_attempted > 0)
 		jit_report_misses();
 
-	/* If we didn't emit a ret yet, do it now */
+	/* If the block didn't end with a control-flow exit, emit a fallback epilogue.
+	 * Valid endings are RET (standard epilogue) or an unconditional B (compile-time
+	 * chain to another block's code — emitted by emit_epilogue_with_pc when the
+	 * branch target is already cached).  Treating chained endings as "no exit"
+	 * was a critical bug: it marked every chained block incomplete, so GATE2
+	 * permanently excluded exactly the hottest blocks (hot targets are compiled
+	 * first, so hot blocks are the most likely to chain). */
 	if (n_compiled > 0 && jit_code_ptr > code_start) {
 		uint32_t last = *(jit_code_ptr - 1);
-		if (last != 0xD65F03C0) { /* not a RET */
+		bool ends_with_ret    = (last == 0xD65F03C0);
+		bool ends_with_branch = ((last & 0xFC000000) == 0x14000000); /* B <imm26> */
+		if (!ends_with_ret && !ends_with_branch) {
+			/* Ran off the end (e.g. 512-insn limit) without a terminator:
+			 * emit an epilogue resuming at cur_pc and mark partial. */
 			lazy_flush_cr0();
 			emit_epilogue_with_pc(cur_pc);
 			complete = false;
@@ -3914,8 +4143,8 @@ bool ppc_jit_aarch64_compile(
 		
 		if (!complete) {
 			/* Record the opcode that caused the failure */
-			if (cur_pc >= (uint32_t)(uintptr_t)ram && cur_pc < (uint32_t)(uintptr_t)ram + ramsize) {
-				const uint8_t *fail_p = ram + (cur_pc - (uint32_t)(uintptr_t)ram);
+			const uint8_t *fail_p = jit_fetch_ptr(cur_pc, ram, ramsize);
+			if (fail_p) {
 				uint32_t fail_op = ((uint32_t)fail_p[0] << 24) | ((uint32_t)fail_p[1] << 16) |
 				                   ((uint32_t)fail_p[2] << 8) | fail_p[3];
 				uint32_t fail_opc = fail_op >> 26;
@@ -3949,6 +4178,7 @@ bool ppc_jit_aarch64_compile(
 		}
 	}
 
+	if (dbg) fprintf(stderr, "JIT-DBG %08x: compiled n=%d complete=%d\n", pc, n_compiled, complete);
 	out->complete = complete;
 	if (complete && n_compiled > 0) jit_blocks_complete++;
 

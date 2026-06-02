@@ -44,6 +44,7 @@
 extern uint8 *RAMBaseHost;
 extern uint32 RAMSize;
 extern uint32 ROMBase;
+extern uint8 *ROMBaseHost;
 #include "cpu/jit/aarch64/ppc-jit.h"
 #endif
 
@@ -704,7 +705,7 @@ void powerpc_cpu::execute(uint32 entry)
 					const char *path = getenv("SS_JIT_TRACE");
 					jit_trace_fp = path ? fopen(path, "w") : NULL;
 				}
-				if (jit_trace_fp) fprintf(jit_trace_fp, "I %08x\n", pc());
+				if (jit_trace_fp) { fprintf(jit_trace_fp, "I %08x\n", pc()); fflush(jit_trace_fp); }
 				jit_trace_fp_for_cpu = jit_trace_fp; /* share with JIT gate below */
 			}
 #endif
@@ -729,7 +730,36 @@ void powerpc_cpu::execute(uint32 entry)
 				static const char *jit_env = getenv("SS_USE_JIT");
 				static bool jit_enabled = !(jit_env && jit_env[0] == '0' && jit_env[1] == '\0');
 				if (!jit_enabled) goto skip_jit; /* GATE 1: SS_USE_JIT=0 diagnostic override */
-				if (!jit_init_done) { ppc_jit_aarch64_init(4096); jit_init_done = true; }
+				if (!jit_init_done) {
+					/* 64 MB code cache: large enough to hold translations of both
+					 * the hot RAM working set and the ROM toolbox without recurring
+					 * full flushes (each flush forces recompilation of everything). */
+					ppc_jit_aarch64_init(65536);
+					/* Register the Mac ROM as a JIT-compilable range.  ROM is
+					 * write-protected after patching (main_unix.cpp), so compiled
+					 * ROM blocks are permanently valid.  ROM toolbox code dominates
+					 * boot-time execution — compiling it is the largest speedup.
+					 *
+					 * The range deliberately STOPS at ROMBase+0x460000.  Above that
+					 * lives the ROM's built-in 68k emulator (dispatch loop at
+					 * +0x466xxx, micro-handler continuations at +0x463xxx/+0x46xxxx,
+					 * opcode handler table at +0x48xxxx..+0x4Fxxxx).  That emulator
+					 * is itself an interpreter whose dispatch protocol polls a CR bit
+					 * injected asynchronously by HandleInterrupt(); JIT-compiling its
+					 * dispatch/handler blocks changes interrupt-delivery interleaving
+					 * in ways that corrupt multi-step 68k instruction emulation
+					 * (observed: skipped immediate-word consumption, guest jumps to
+					 * garbage).  Mac OS 8.x is predominantly native PPC, so excluding
+					 * the 68k emulator costs little.  Revisit only with a designed
+					 * interrupt strategy for JIT-compiled interpreter loops.
+					 * SS_JIT_NO_ROM=1: bisect switch — keep ROM interpreter-only. */
+					{
+						const char *no_rom = getenv("SS_JIT_NO_ROM");
+						if (!(no_rom && *no_rom == '1'))
+							ppc_jit_aarch64_set_rom_range(ROMBase, 0x460000, ROMBaseHost);
+					}
+					jit_init_done = true;
+				}
 				ppc_jit_block jblk;
 				/* GATE 2: execute only complete native blocks. Incomplete blocks are
 				 * compile-time probes only; skip_jit lets the interpreter execute the
@@ -739,35 +769,36 @@ void powerpc_cpu::execute(uint32 entry)
 					ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void*)jblk.code;
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
-					/* Log JIT block: "J <from> <to> <r1> <r3>" */
-					if (jit_trace_fp_for_cpu)
-						fprintf(jit_trace_fp_for_cpu, "J %08x %08x %08x %08x\n",
-						        jit_block_start_pc, pc(), gpr(1), gpr(3));
-					/* GATE 3: PC range check.
-					 * If the JIT produced a PC outside the JIT's compile range, the
-					 * block branched into ROM, SheepMem, or other valid Mac OS space
-					 * that the JIT can't compile but the interpreter handles natively.
-					 * The JIT computed the correct next PC — do NOT reset it. Just
-					 * evict the block from the JIT cache (so it stays interpreter-only)
-					 * and dispatch the interpreter for the correct jit_pc.
-					 * Former "Reset to block entry" was wrong: it caused non-idempotent
-					 * side effects (register writes, memory stores) to be replayed,
-					 * corrupting state and leading to spurious crashes.
-					 * Contract: see AARCH64_JIT_RUNTIME_CONTRACT.md */
+					/* Log JIT block: from, to, then the 68k-emulator-relevant state
+					 * (r24=68k PC, r27=68k opcode, r29=handler addr, LR, CR, XER).
+					 * fflush so the final entries survive a crash. */
+					if (jit_trace_fp_for_cpu) {
+						fprintf(jit_trace_fp_for_cpu, "J %08x %08x r24=%08x r27=%08x cr=%08x so=%d ov=%d ca=%d r0=%08x r8=%08x r16=%08x r17=%08x\n",
+						        jit_block_start_pc, pc(), gpr(24), gpr(27), cr().get(),
+						        xer().get_so(), xer().get_ov(), xer().get_ca(),
+						        gpr(0), gpr(8), gpr(16), gpr(17));
+						fflush(jit_trace_fp_for_cpu);
+					}
+					/* GATE 3: PC range diagnostic (log-only, rate-limited).
+					 * A result PC outside RAM/ROM/SheepMem is either a legitimate
+					 * branch into other Mac OS space (kernel data, DR emulator —
+					 * the interpreter handles those natively) or a JIT bug.  Either
+					 * way the fast-dispatch fallback below routes it correctly:
+					 * compile() refuses non-compilable PCs, so execution falls back
+					 * to the interpreter block cache for that PC.
+					 * Do NOT evict the source block: legitimate out-of-range
+					 * branches are normal control flow, and evicting forces a
+					 * pointless recompile on the block's next visit. */
 					uint32 jit_pc = pc();
-					/* Exclude ROM (0x50000000-0x504FFFFF), SIG_STACK, and SheepMem
-					 * (0x50510000-0x5058FFFF) which are valid Mac OS execution targets.
-					 * 0x600000 covers ROM_AREA_SIZE + SIG_STACK_SIZE + SheepMem::size. */
 					if (jit_pc >= (uint32)(uintptr_t)RAMBaseHost + RAMSize &&
 					    !(jit_pc >= (uint32)ROMBase && jit_pc < (uint32)ROMBase + 0x600000)) {
-						fprintf(stderr, "PPC-JIT-A64: GATE3: out-of-range PC 0x%08x after block at 0x%08x — interpreter dispatch\n",
-						        jit_pc, jblk.ppc_start_pc);
-						/* Evict so future visits use interpreter, not JIT */
-						ppc_jit_aarch64_invalidate_pc(jblk.ppc_start_pc);
-						/* Find or compile interpreter block for the correct jit_pc */
-						bi = my_block_cache.find(pc());
-						if (bi) goto pdi_execute;
-						continue; /* outer for(;;): compile interpreter block for pc() */
+						static int gate3_log_budget = 10;
+						if (gate3_log_budget > 0) {
+							gate3_log_budget--;
+							fprintf(stderr, "PPC-JIT-A64: GATE3: out-of-range PC 0x%08x after block at 0x%08x — interpreter dispatch%s\n",
+							        jit_pc, jblk.ppc_start_pc,
+							        gate3_log_budget == 0 ? " (further messages suppressed)" : "");
+						}
 					}
 					if (!spcflags().empty()) {
 						if (!check_spcflags()) goto return_site;
@@ -813,6 +844,20 @@ void powerpc_cpu::execute(uint32 entry)
 						break;
 					}
 				}
+
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+				/* JIT handoff: exit the interpreter loop when the next PC is in the
+				 * JIT's compilable domain (RAM / registered ROM), so the outer
+				 * dispatch compiles and runs it natively.  This must test
+				 * compilABILITY, not "already compiled": code first reached from
+				 * inside an interpreter session (e.g. toolbox routines called by the
+				 * interpreter-only 68k emulator) has no block yet and would otherwise
+				 * never meet the compiler — leaving most of the OS interpreted and
+				 * JIT mode slower than pure interpreter mode.
+				 * Cost: 2-4 compares per interpreted block. */
+				if (bi->pc != pc() && ppc_jit_aarch64_is_compilable(pc()))
+					break;
+#endif
 
 				if ((bi->pc != pc()) && ((bi = my_block_cache.find(pc())) == NULL))
 					break;
@@ -939,5 +984,14 @@ void powerpc_cpu::invalidate_cache_range(uintptr start, uintptr end)
 #endif
 	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
 	my_block_cache.clear_range(start, end);
+#endif
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	/* Evict aarch64 JIT blocks whose start PC falls in the invalidated range.
+	 * Mac OS signals code modification via icbi/isync (the interpreter's
+	 * execute_icbi/execute_isync funnel here); without this, blocks compiled
+	 * from pre-write memory would keep executing stale translations forever.
+	 * Relevant when guest code is written at runtime (extension loading,
+	 * relocated stubs, self-modifying application code). */
+	ppc_jit_aarch64_invalidate_range((uint32_t)start, (uint32_t)end);
 #endif
 }

@@ -336,6 +336,46 @@ TEST_ORDER+=(addc_basic)
 T_subfc_basic="3860000a 38800003 7CA41810"
 TEST_ORDER+=(subfc_basic)
 
+# --- OE=1 (overflow-enabled) arithmetic ---
+# These drive XER.OV + sticky XER.SO in addition to base semantics.
+# The Mac ROM's built-in 68k emulator uses addco/subfco heavily.
+
+# addco r5,r3,r4 = addc | OE(0x400): li r3,-1; li r4,2 → r5=1, CA=1, OV=0
+T_addco_basic="3860ffff 38800002 7CA32414"
+TEST_ORDER+=(addco_basic)
+
+# addco overflow: r3=INT_MAX (lis+ori), r4=1 → r5=0x80000000, CA=0, OV=1, SO=1
+T_addco_overflow="3C607FFF 6063FFFF 38800001 7CA32414"
+TEST_ORDER+=(addco_overflow)
+
+# addco. (Rc=1) overflow: CR0 should be LT|SO (result negative, SO set)
+T_addco_rc_overflow="3C607FFF 6063FFFF 38800001 7CA32415"
+TEST_ORDER+=(addco_rc_overflow)
+
+# subfco r5,r4,r3 = subfc | OE: li r3,10; li r4,3 → r5=7, CA=1, OV=0
+T_subfco_basic="3860000a 38800003 7CA41C10"
+TEST_ORDER+=(subfco_basic)
+
+# subfco overflow: r4=INT_MIN (lis), r3=1 → r5 = 1-INT_MIN overflows, OV=1, SO=1
+T_subfco_overflow="3C808000 38600001 7CA41C10"
+TEST_ORDER+=(subfco_overflow)
+
+# addo r5,r3,r4 = add | OE: INT_MAX + 1 → OV=1, SO=1, CA untouched (0)
+T_addo_overflow="3C607FFF 6063FFFF 38800001 7CA32614"
+TEST_ORDER+=(addo_overflow)
+
+# subfo r5,r4,r3 = subf | OE: li r3,10; li r4,3 → r5=7, OV=0
+T_subfo_basic="3860000a 38800003 7CA41C50"
+TEST_ORDER+=(subfo_basic)
+
+# nego r5,r3 = neg | OE: li r3,5 → r5=-5, OV=0
+T_nego_basic="38600005 7CA304D0"
+TEST_ORDER+=(nego_basic)
+
+# nego overflow: r3=INT_MIN → r5=INT_MIN (unchanged), OV=1, SO=1
+T_nego_overflow="3C808000 7CA304D0"
+TEST_ORDER+=(nego_overflow)
+
 # subfic r5,r3,100: li r3,30; subfic r5,r3,100 → r5=70
 # subfic = 0x20000000 | (5<<21)|(3<<16)|100
 T_subfic_basic="3860001e 20A30064"

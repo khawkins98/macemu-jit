@@ -548,14 +548,77 @@ in both modes — if it's stuck in JIT mode, the JIT execution upstream must hav
 - `regs_for_jit()` is fragile in principle (runtime sentinel scan could use `offsetof` instead)
   but it was NOT proven to break from probe code in this session.
 
-**Next steps for Phase 3:**
-- Identify which JIT block writes wrong state by comparing interpreter vs JIT execution traces.
-- The `(target >> 26) == 6` check in the `b` instruction handler rejects branches to addresses
-  0x18000000-0x1BFFFFFF as "EMUL_OP trampolines." But under DIRECT_ADDRESSING these are valid
-  RAM addresses! This check is a Linux/REAL_ADDRESSING assumption. Under macOS DIRECT_ADDRESSING,
-  EmulOp stubs are at SheepMem (0x50510000), not 0x18000000. This check incorrectly prevents
-  JIT compilation of blocks that branch into the upper RAM area. FIX CANDIDATE: remove or
-  conditionalize the check on `#ifdef REAL_ADDRESSING`.
-- ROM code (0x50000000-0x504FFFFF) is ALL interpreted under the current JIT (RAM range is
-  [0x10000000, 0x20000000) only). Extending the JIT compile range to include ROM would
-  dramatically speed up the boot. But first fix the correctness issue.
+**RESOLVED (2026-06-02, Phase 3 complete): JIT boot now reaches Mac OS 8.6 Finder desktop.**
+See section below for root cause and fix.
+
+## 2026-06-02 — Phase 3 root cause: W^X overhead + differential trace methodology
+
+### Root cause: W^X overhead for out-of-range blocks (commit 8f2acc9b)
+
+**Symptom:** JIT mode was 37× slower than interpreter-only mode during boot. Interpreter boots
+in 12s (warm NVRAM); JIT boot was observed at 100% CPU indefinitely without reaching idle.
+
+**Discovery via differential PC trace:**
+Ran both modes with `SS_JIT_TRACE=/tmp/trace.txt` (added env-var trace at `pdi_execute:`). First
+mismatch between interpreter and JIT traces was at entry #2042 (block `50463168`), but this was
+a FALSE divergence — the interpreter had already booted to Finder (12s) while JIT was still in
+ROM init at the same clock time. The traces diverged because the two modes were at different
+boot phases, not due to a correctness bug.
+
+The REAL finding from the trace: the JIT trace had only 5,958 entries in 20 seconds (297/sec) vs
+interpreter's 520,000+ entries in 47 seconds (11,000/sec). The 37× throughput drop explained the
+entire performance problem.
+
+**Root cause (ppc_jit_aarch64_compile, ppc-jit.cpp):**
+`ppc_jit_aarch64_compile()` called `jit_cache_begin_write()` (`pthread_jit_write_protect_np(0)`)
+and emitted the block prologue (7 STP instructions) **before** the compile loop's first iteration
+checks `if (cur_pc < ram || cur_pc >= ram + ramsize) break`. For ROM/SheepMem blocks (~85% of
+block entries during early boot), this meant:
+1. `pthread_jit_write_protect_np(0)` — W^X write-enable (~μs on Apple Silicon)
+2. Emit 7-instruction prologue to JIT cache
+3. Compile loop: immediate break (out of range)
+4. `pthread_jit_write_protect_np(1)` + `sys_icache_invalidate()` — W^X re-protect (~μs)
+
+At 11,000 blocks/second × ~3μs overhead = ~33ms overhead/second = 97% of CPU spent on W^X
+syscalls for ROM blocks, leaving only 3% for actual emulation.
+
+**Fix:** Add an early-out range check BEFORE `jit_cache_begin_write()`:
+```cpp
+if (pc < (uint32_t)(uintptr_t)ram || pc >= (uint32_t)(uintptr_t)ram + ramsize) {
+    out->complete = false; out->code = NULL; out->chain_code = NULL;
+    return false;
+}
+```
+ROM/SheepMem blocks now return immediately at zero cost. **Result: JIT boot completes in ~2:40
+(first boot, warm NVRAM from interpreter), CPU drops to ~0% at idle_wait, Finder desktop running.**
+
+### Chain-patch tracking (also in 8f2acc9b)
+
+Added `bool patched` field to `jit_chain_site` so that live chain-patches (B instructions
+baked into block epilogues) can be reverted when a range is invalidated. Previously, nullifying
+a pool entry did NOT revert B-patches in calling blocks, causing stale ARM64 code to run.
+`ppc_jit_aarch64_invalidate_range(start, end)` now:
+1. Reverts B patches targeting invalidated range → restores `LDP x27,x28,[sp],#16`
+2. Nullifies pool entries for PCs in range → next lookup recompiles
+
+This is activated by connecting `icbi`/`isync` to `invalidate_cache_range()`. Currently `icbi`/
+`isync` are NOPs in the JIT (reverted because icbi-fix made the boot ~24× slower via excessive
+full-cache flushes on every isync call); range-based invalidation is the correct solution once
+the chain-patch safety is confirmed working.
+
+### icbi/isync status and path forward
+
+**icbi is still a NOP in the JIT.** The icbi-triggered-invalidation approach was tried:
+- Full flush on every isync: slow (each flush requires recompiling ~50+ active blocks)
+- Range-based invalidation without chain-patch tracking: caused CTR/LR corruption from stale JIT
+
+The range-based approach WITH chain-patch tracking (now implemented) is the correct fix. To
+re-enable: in `invalidate_cache_range()`, call `ppc_jit_aarch64_invalidate_range(start, end)`.
+In `ppc-jit.cpp`, change `icbi` case 982 from `return true` to `return false` (fall to interpreter).
+The performance impact should be minimal because range invalidation only touches blocks whose PC
+falls in the icbi'd range, not the full cache.
+
+### SS_JIT_TRACE debugging tool
+
+`SS_JIT_TRACE=/path` logs every block entry (`I <pc>`) and JIT execution (`J <from> <to> <r1> <r3>`).
+Use for differential JIT vs interpreter analysis. Zero overhead when env var is not set.

@@ -824,7 +824,7 @@ bool powerpc_cpu::check_spcflags()
 			powerpc_registers::interrupt_copy(regs(), r);
 			processing_interrupt = false;
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
-			JIT_LOG("interrupt delivered, pc=%08x", (uint32_t)pc());
+			/* File only — interrupts arrive at 60Hz during VBL spinwait, too noisy for stderr */
 			JIT_FLOG("interrupt delivered, pc=%08x", (uint32_t)pc());
 #endif
 		}
@@ -1060,10 +1060,6 @@ void powerpc_cpu::execute(uint32 entry)
 							ppc_jit_aarch64_set_rom_range(ROMBase, 0x460000, ROMBaseHost);
 					}
 					jit_init_done = true;
-					if (!jit_log_file) {
-						jit_log_file = fopen("/tmp/jit_diag.log", "w");
-						fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
-					}
 					JIT_LOG("JIT initialized, ROM range [%08x..%08x]", ROMBase, ROMBase + 0x460000);
 				}
 				ppc_jit_block jblk;
@@ -1082,26 +1078,31 @@ void powerpc_cpu::execute(uint32 entry)
 				if (fn) {
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
+					/* Time-based heartbeat — file only, no stderr spam */
 					{
 						static uint64_t jit_block_count = 0;
-						static double last_log_t = 0;
-						static uint32_t last_pc_hb = 0;
+						static double last_t = 0;
+						static uint32_t last_pc = 0;
 						static int stuck_count = 0;
 						jit_block_count++;
 						double now = jit_elapsed_s();
-						if (now - last_log_t >= 5.0) {
+						if (now - last_t >= 5.0) {
+							if (!jit_log_file) {
+								jit_log_file = fopen("/tmp/jit_diag.log", "w");
+								fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
+							}
 							uint32_t cur_pc = (uint32_t)pc();
-							JIT_FLOG("heartbeat pc=%08x blocks=%llu", cur_pc, (unsigned long long)jit_block_count);
-							if (jit_log_file) fflush(jit_log_file);
-							if (cur_pc == last_pc_hb) {
+							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x\n", now, (unsigned long long)jit_block_count, cur_pc);
+							fflush(jit_log_file);
+							if (cur_pc == last_pc) {
 								stuck_count++;
 								if (stuck_count >= 2)
-									fprintf(stderr, "[JIT %.1fs] STUCK at pc=%08x for %ds\n", now, cur_pc, stuck_count * 5);
+									fprintf(stderr, "[JIT %.1fs] STUCK at pc=%08x for ~%ds\n", now, cur_pc, stuck_count * 5);
 							} else {
 								stuck_count = 0;
-								last_pc_hb = cur_pc;
+								last_pc = cur_pc;
 							}
-							last_log_t = now;
+							last_t = now;
 						}
 					}
 					jit_ring_record(regs_ptr(), 'J', jit_block_start_pc, pc(), 0);

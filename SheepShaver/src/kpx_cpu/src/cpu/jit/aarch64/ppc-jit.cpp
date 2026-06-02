@@ -934,7 +934,14 @@ static void lazy_flush_cr0(void) {
 /* Get ARM64 reg for writing PPC GPR n (marks dirty, allocates if needed) */
 
 /* Find the ARM64 code offset for a PPC PC within the current block */
-static uint32_t *find_code_for_pc(uint32_t target_pc) {
+/* Find the ARM64 code pointer for a FORWARD intra-block branch target.
+ *
+ * MUST only be called with forward targets (target_pc > current instruction pc).
+ * Backward targets must NOT be passed: insn_code_offset[] covers only the block
+ * body (after the spcflags poll at chain_entry_start). Branching to an address in
+ * this table for a backward target would skip the poll, creating a closed ARM64
+ * loop that starves interrupt delivery. The name encodes this contract. */
+static uint32_t *find_forward_code_for_pc(uint32_t target_pc) {
 	for (int i = 0; i < insn_count; i++) {
 		if (insn_ppc_pc[i] == target_pc)
 			return insn_code_offset[i];
@@ -2480,6 +2487,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		return true;
 	}
 
+	/* bc (Branch Conditional) — intra-block forward-branch optimization
+	 *
+	 * INVARIANT: find_forward_code_for_pc() is called ONLY with forward targets
+	 * (target_pc > pc). Backward branches MUST use emit_epilogue_with_pc() instead.
+	 *
+	 * Rationale: the spcflags poll (emit_entry_spcflags_poll) sits at chain_entry_start,
+	 * BEFORE insn_code_offset[0]. insn_code_offset[] tracks only the block body — i.e.,
+	 * addresses AFTER the poll. A direct native branch to insn_code_offset[i] bypasses
+	 * the poll entirely. For forward branches this is safe (they only run once per block
+	 * entry). For backward branches it creates a closed ARM64 loop that never returns to
+	 * the C dispatcher, starving interrupt delivery (VBL, spcflags) indefinitely.
+	 */
 	case 16: /* bc/bdnz/bdz/beq/bne family */
 	{
 		uint32_t bo = (op >> 21) & 0x1F;
@@ -2513,7 +2532,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				/* bdnz: branch if CTR != 0 */
 				/* Forward-only: backward intra-block branches must return to the dispatcher
 				 * so the spcflags poll at block entry runs each iteration (VBL hang fix). */
-				uint32_t *target_code = (target_pc > pc) ? find_code_for_pc(target_pc) : NULL;
+				uint32_t *target_code = (target_pc > pc) ? find_forward_code_for_pc(target_pc) : NULL;
 				if (target_code) {
 					int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 					if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2533,7 +2552,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			} else {
 				/* bdz: branch if CTR == 0 */
 				/* Forward-only: same spcflags poll reason as bdnz above. */
-				uint32_t *target_code = (target_pc > pc) ? find_code_for_pc(target_pc) : NULL;
+				uint32_t *target_code = (target_pc > pc) ? find_forward_code_for_pc(target_pc) : NULL;
 				if (target_code) {
 					int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 					if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2566,9 +2585,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			/* BO[3] (bit 1 of BO): 1=branch if set, 0=branch if clear */
 			bool branch_if_set = cond_bit_val;
 			/* Forward-only: backward intra-block branches bypass the spcflags poll
-			 * (poll is before insn_code_offset[0], not in find_code_for_pc range).
+			 * (poll is before insn_code_offset[0], not in find_forward_code_for_pc range).
 			 * A backward branch must return to the dispatcher so the poll runs. */
-			uint32_t *target_code = (target_pc > pc) ? find_code_for_pc(target_pc) : NULL;
+			uint32_t *target_code = (target_pc > pc) ? find_forward_code_for_pc(target_pc) : NULL;
 			if (target_code) {
 				int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 				if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */

@@ -3,6 +3,40 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-02 (session 4) — JIT boot hang root cause found and fixed
+
+### Backward branch spcflags bypass — root cause of JIT boot hang (FIXED, commit 647a58d1)
+
+The JIT's `bc` handler (case 16, ppc-jit.cpp) used `find_code_for_pc(target_pc)` to emit direct native ARM64 branches to `insn_code_offset[i]` for BOTH forward and backward branch targets. `insn_code_offset[i]` is located AFTER the spcflags poll (`emit_entry_spcflags_poll` at `chain_entry_start`). For backward branches (spin-loops), this created closed ARM64 inner loops that bypassed the spcflags poll entirely — the VBL interrupt flag was set but never checked, so the emulator hung permanently at the ROM's early-boot VBL spin-wait (0x5031040c).
+
+**Fix**: Guard all three `find_code_for_pc` call sites with `target_pc > pc`. Backward branches fall through to `emit_epilogue_with_pc(target_pc)`, which returns to the C dispatcher → spcflags poll on every loop iteration.
+
+Three sites changed in case 16: `bdnz` path, `bdz` path, pure conditional (`beq`/`bne`/etc.) path.
+
+**Correctness confirmed**: CTR is NOT double-decremented (one decrement per `bdnz` execution regardless of re-entry). LR is written unconditionally before branch logic in `bcl` variants. State (lazy CR0, register allocator) is fully flushed before every epilogue path.
+
+### Forward intra-block fast-path is dead code (pre-existing)
+
+`insn_code_offset[i]` / `insn_ppc_pc[i]` are recorded BEFORE `compile_one` is called for each instruction. This means forward branch targets are never in the table when the branch is being compiled. The `(target_pc > pc) ? find_code_for_pc(...) : NULL` guard excludes backward branches but the remaining forward-branch path ALSO always returns NULL — the optimization never fires in either direction. Two-pass compilation would be required to enable forward intra-block branches: first pass builds the PC→offset map, second pass emits branch code.
+
+### VBL spin-wait still hangs after backward-branch fix — VBL handler miscompilation suspected
+
+After the backward-branch fix, interrupts ARE delivered at ~60Hz to 0x5031040c (verified via diagnostic log). But the spin-wait never exits — its exit condition never becomes true. `SS_JIT_NO_ROM=1` (keep ROM interpreter-only, JIT-compile only RAM) bypasses the hang entirely: boot progresses past 0x5031040c and crashes later at a different address (pc=04000000, post-VBL). This proves: the VBL interrupt *handler* (itself ROM code, also JIT-compiled) is the problem — it runs but doesn't correctly update the condition the spin-wait polls. Under investigation.
+
+### SS_JIT_NO_ROM=1 — diagnostic flag for ROM vs RAM isolation
+
+Keeps the ROM range interpreter-only while still JIT-compiling RAM code. Useful for isolating whether a bug is in ROM JIT codegen vs RAM JIT codegen. With this flag the VBL hang is bypassed; without it the VBL handler ROM block is JIT-compiled and produces incorrect results.
+
+### Diagnostic logging added to ppc-cpu.cpp (session 4)
+
+JIT now emits structured boot-time diagnostics:
+- **stderr**: JIT init message (one-time), `STUCK` alert if same PC for 10+ seconds
+- **`/tmp/jit_diag.log`**: 5-second heartbeat (`blocks=N pc=XXXX`) + every interrupt delivery
+- Absent heartbeats (despite process alive) = JIT dispatch froze or tight native loop (new backward-branch regression if chaining=0)
+- Dense interrupts at one PC = spin-wait (normal early-boot behavior)
+
+---
+
 ## 2026-06-02 (session 4) — Harness audit, ROM range revert, boot test
 
 ### Harness vector audit: 3 of 4 "uncovered" vectors already existed

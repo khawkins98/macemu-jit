@@ -234,26 +234,35 @@ inventing a protocol:
 
 ### C5. Background / asynchronous JIT compilation (use a second host core)
 
-**Status: under research (2026-06-02)** — see `c5-background-compilation-*.md` when complete.
+**Status: research COMPLETE (2026-06-02)** — `c5-background-compilation-survey.md` (how
+Cemu/Ryujinx/RPCS3/Dolphin/QEMU do it) + `c5-background-compilation-feasibility.md`
+(thread-safety audit of our code, smallest viable design).
 
-- **The idea:** the emulated PPC is inherently single-stream (classic Mac OS is a
-  single-CPU OS), so extra host cores can't run guest code — but they CAN compile it.
-  Today block compilation happens inline on the CPU thread: the guest stalls while we
-  compile. Move compilation to a worker thread: the CPU thread keeps
-  interpreting/executing, the worker compiles pending blocks, completed blocks get
-  swapped into the block cache.
-- **Gated on C1:** pointless while the dual-cache trap means compiled blocks are ignored.
-- **Key technical questions (research in progress):**
-  - Thread-safety of `jit_bc_heads[]`/`jit_bc_pool[]` insertion vs. lookup
-  - W^X: `pthread_jit_write_protect_np` is **per-thread** — a compile worker needs its own
-    toggle state, OR the C4 dual-mapping result makes this moot (write alias is always
-    writable, process-wide)
-  - Chain patching: `patch_chain_sites()` mutates already-executable code — coordination
-    with the executing thread
-  - What other emulators do: RPCS3 (parallel LLVM PPU compilation), Cemu (multi-threaded
-    recompiler), Ryujinx (background translation + PTC), V8/HotSpot tiered compilation
-- **Synergy:** C4 (dual mapping) + C5 (background compile) together are the natural
-  end-state: worker writes via RW alias, CPU thread executes via RX alias, no toggling.
+- **Why it matters more than first thought:** the JIT agent's measurements
+  (LEARNINGS.md, commit 88aad1eb) show **boot takes >180 s with JIT vs ~10 s interpreter** —
+  boot is the JIT's worst case, and inline compile stalls are a major component. Background
+  compilation directly attacks exactly that.
+- **Recommended design (from the survey — the Cemu model, our closest analogue):**
+  **compile-on-miss queue.** The CPU thread never compiles: on a JIT miss it enqueues the PC
+  (SPSC queue, "pending" sentinel for dedup) and keeps interpreting; one worker thread
+  compiles and publishes blocks with a release-store on `entry->code` after
+  `sys_icache_invalidate`; the CPU thread acquire-loads + `ISB` before branching.
+  Bolt on Ryujinx's call-counter (compile only after N executions) in the same PR to skip
+  one-shot init code. Defer the AOT-ROM-sweep variant (RPCS3 model) to a warm-start follow-up.
+- **Key design rules (from the feasibility audit):**
+  - Worker is the **sole writer** of `jit_bc_*`; CPU thread is read-only via `jit_bc_lookup`
+  - Cache flush only at CPU-thread safepoints (never on the worker)
+  - Counters become relaxed atomics
+  - **No live chain patching by the worker** — worker compiles bodies only; any chaining
+    happens on the CPU thread at its own block boundaries. (Currently moot:
+    `JIT_BLOCK_CHAINING=0`, and the JIT agent's post-mortem confirms chaining never worked.)
+- **Prerequisites (hard ordering):**
+  1. **C1** (gate restructure) — else compiled blocks are ignored; C1 also builds the
+     CPU-thread consumer half of this design
+  2. **C4** (dual-mapping W^X) — the worker writes the RW alias, CPU executes the RX alias;
+     avoids the fragile cross-thread `pthread_jit_write_protect_np` model
+- **Effort:** ~2-4 days after C1+C4 land. **Verify:** boot time with JIT approaches
+  interpreter boot time; harness 100; T2-style residency check.
 
 ### C4. oaknut W^X spike (`DualCodeBlock`)
 

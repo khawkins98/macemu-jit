@@ -95,6 +95,7 @@ This was the strategic finding of the whole research effort. Read
 | # | Item | Decision needed |
 |---|------|-----------------|
 | C4 | Dual-mapping W^X (replaces all toggling, ~27% faster emission) | Spike proved it works (`c4-wx-dual-mapping-spike.md`, runnable test in `spikes/wx-dual-mapping/`). But adoption touches every emit site — ask the user whether to do it now or after residency work stabilizes. If yes, it **supersedes B3**. |
+| C5 | Background compilation on a worker thread (fixes JIT boot-time stalls — boot is >180s with JIT vs ~10s interpreter) | Full design ready: `c5-background-compilation-survey.md` (Cemu compile-on-miss model + Ryujinx call counter) + `c5-background-compilation-feasibility.md` (race inventory, ARM64 publication rules). **Hard prerequisites: C1 then C4.** ~2-4 days after those land. |
 | C2 | MAME DRC code lifting (FP, flag-liveness design) | Only after A+B+C1 are done. Study: `c2-mame-ppc-drc-study.md`. |
 | C3 | Widen QuickDraw accel (more transfer modes, ScrollRect) | Independent of JIT; needs gfxaccel testing infrastructure first. Plan: `b5-c3-video-implementation-prep.md`. |
 

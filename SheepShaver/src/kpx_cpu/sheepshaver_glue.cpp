@@ -1338,6 +1338,18 @@ void HandleInterrupt(powerpc_registers *r)
 			// increments Ticks, but only after the nanokernel hands off — these
 			// early-boot spin-waits never reach that handoff, so no double-count.
 			WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
+
+			// Fix JIT initialization-order deadlock at nanokernel 0x50313d34.
+			// The spin-wait checks [r11+4] (guest 0x2f076) for zero; it's zero
+			// in interpreter mode (uninitialized on first entry) but the JIT
+			// nanokernel writes 0x68fff400 there before the check runs.
+			// On each VBL, if we're in nanokernel context and the field still
+			// holds the initialization value, clear it so the spin-wait can exit.
+			if (r->gpr[1] == KernelDataAddr) {
+				uint32 task_field = ReadMacInt32(0x2f076);
+				if (task_field == KernelDataAddr + 0x1400)
+					WriteMacInt32(0x2f076, 0);
+			}
 		}
 		break;
     

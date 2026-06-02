@@ -3,9 +3,88 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
-## 2026-06-02 (session 5) — Root cause of 7-minute JIT boot found
+## 2026-06-02 (session 5, part 2) — RETRACTION: the "deadlock" theory was wrong
 
-### Root cause: initialization-order deadlock at nanokernel spin-wait 0x50313d34
+### What we got wrong (read this before the section below)
+
+The session 5 "spin-wait deadlock" theory (next section) was based on register-state inference
+without ever disassembling the actual instructions at 0x50313d34. When we finally dumped the
+live ROM memory (single lldb attach) and ran it through capstone, every pillar of the theory
+collapsed:
+
+1. **0x50313d34 is NOT a spin-wait.** It is the nanokernel's exception/interrupt dispatcher —
+   a comparison chain that matches a masked PC (r3) against a table of handler addresses stored
+   at KernelData+0x340/0x344/0x348/0x350/0x358, then dispatches. It is the hottest code path
+   in the entire system, which is exactly why the 5-second heartbeat keeps sampling it.
+
+2. **"STUCK at pc=50313d34" is a sampling artifact**, not a hang. The STUCK detector fires when
+   two consecutive 5-second heartbeats land on the same PC. For the hottest dispatch PC, that
+   happens by chance. The system was never stuck there.
+
+3. **r11 = 0x0002f072 is the MSR value, not a pointer.** The ROM patch at rom_patches.cpp:1155
+   even says so: `ori r11,r11,0xf072 (MSR)`. Our entire "[r11+4] task field at 0x2f076" theory
+   was built on misreading an MSR value as a pointer.
+
+4. **r9 = 0x68fff400 is loaded from KernelData+0x344** (`lwz r9, 0x344(r1)`), a legitimate
+   kernel handler-table entry — not from guest address 0x2f076.
+
+5. **The a46cda99 "fix" was wrong and potentially harmful.** It wrote 0 to guest 0x2f076
+   whenever that address contained 0x68fff400 — corrupting whatever Mac OS data structure
+   happens to live there. It was reverted (commit 9f9e617e). The apparent improvement
+   (0 STUCK events) was the sampling artifact described in #2, not a real fix.
+
+**Disassembly of the actual code at 0x50313d20-0x50313d58** (from live memory dump):
+```
+50313d20:  and. r8, r4, r13          ; CR0 test
+50313d24:  lwz r9, 0x340(r1)         ; r9 = [KernelData+0x340]
+50313d28:  rlwinm r8, r3, 0, 0, 0x19 ; r8 = r3 & 0xFFFFFFC0
+50313d2c:  cmpw cr1, r8, r9
+50313d30:  bne 0x50312cf0            ; back to dispatcher
+50313d34:  lwz r9, 0x344(r1)         ; <<< the "STUCK" PC — just a table load
+50313d38:  bne cr1, 0x50313d5c
+50313d3c:  li r8, 1
+50313d40:  stw r8, 0x2810(0)         ; XLM global write
+50313d44:  lwz r8, 0x648(r1)
+50313d48:  mtcrf 0x3f, r7
+50313d4c:  clrlwi r7, r7, 8
+50313d50:  stw r8, 0x5c(r9)
+50313d54:  stw r9, 0x65c(r1)
+50313d58:  b 0x50312b54              ; back to dispatcher
+```
+
+### Methodology lessons
+
+- **Never infer code behavior from register state alone.** Disassemble the actual instructions
+  first. A single lldb attach (dump + immediate detach) is safe and takes 30 seconds.
+- **The STUCK detector needs to be smarter**: it should verify the PC is in a tight loop
+  (e.g., check that block-count delta between heartbeats is small, or track PC variety),
+  not just "same PC sampled twice."
+- **Verify-before-commit**: a46cda99 was committed without meeting the project bar
+  (boot-to-desktop verification). The follow-up data that contradicted it arrived within
+  the hour. Fixes based on unverified theories should stay uncommitted experiments.
+
+### The REAL question (still open): where does JIT boot time actually go?
+
+Interpreter boots in ~10s. JIT takes 10-22+ minutes. The JIT executes ~25M blocks/sec
+(measured), which at ~5 instructions/block is ~125 MIPS — faster per-instruction than the
+interpreter. Yet boot takes 60-130x longer. **This means the guest executes vastly more
+instructions in JIT mode, OR the per-block overhead dominates.**
+
+Leading hypothesis (UNVERIFIED — needs the region-counter diagnostic below): the DR emulator
+(68k emulation, ROM 0x460000-0x500000) is NOT in the JIT range, so it runs in SheepShaver's
+PPC interpreter. During boot, 94-97% of dispatches are 68k emulation. In JIT mode, execution
+ping-pongs between JIT-compiled nanokernel code and interpreted DR-emulator code at high
+frequency, paying dispatch/transition overhead every time. In pure interpreter mode there
+are no transitions — everything stays in the interpreter's optimized block-link loop.
+
+**Next diagnostic**: per-region block counters in the heartbeat (nanokernel/DR/RAM split,
+plus JIT↔interpreter transition count). Run both modes, compare. This tells us definitively
+whether the time goes to (a) transition overhead, (b) more guest work, or (c) slow
+interpretation of DR code under JIT mode.
+
+## 2026-06-02 (session 5, part 1 — SUPERSEDED, see retraction above) — Root cause of 7-minute JIT boot found
+
+### Root cause: initialization-order deadlock at nanokernel spin-wait 0x50313d34 [WRONG — see retraction]
 
 **Symptom**: JIT boot takes 7-22+ minutes; interpreter boots in ~10 seconds.
 
@@ -55,8 +134,26 @@ first checks 0x50313d34 for each task activation. The correct approach:
 3. Add a ROM patch at 0x50313d34 that clears [r11+4] before the check when r1=KernelDataAddr
    (this matches the emulator's init state)
 
-Alternatively: add a SheepShaver-specific override in HandleInterrupt MODE_68K that, when
-r11=0x2f072 and [r11+4]!=0, temporarily clears it to let the spin-wait pass.
+### Partial fix implemented (session 5, commit a46cda99) — and why it's still slow
+
+A HandleInterrupt shim was added in `sheepshaver_glue.cpp` `case MODE_68K`: when
+`r->gpr[1] == KernelDataAddr` and guest 0x2f076 == KernelDataAddr+0x1400, clear it to 0.
+
+**Result**: Eliminates the 20-second hard deadlocks (0 STUCK events at 695s vs 2 STUCKs
+at 150s/1315s without the fix). But boot is still ~10+ minutes instead of 10 seconds.
+
+**Why still slow**: The nanokernel dispatch loop RE-WRITES 0x68fff400 to 0x2f076 on every
+dispatch cycle (millions of times/sec). HandleInterrupt only fires at 60Hz. Pattern:
+- VBL fires (every 16ms): fix clears 0x2f076 → spin-wait at 0x50313d34 passes ONCE
+- Next dispatch cycle (microseconds later): nanokernel re-writes 0x68fff400
+- Wait 16ms for next VBL → repeat
+
+This gives 60 spin-wait passes/second instead of millions. With ~32,000 initialization
+steps each taking 16ms: 32K × 16ms ≈ 512 seconds. Matches observed 535-695s boot time.
+
+**What's needed**: Identify and patch the specific nanokernel instruction that writes
+0x68fff400 to 0x2f076. A JIT write-probe was added that logs any change to 0x2f076 in
+the first 500K block executions (~20ms of boot) along with the responsible block's PC.
 
 ### Diagnostics added (session 5)
 

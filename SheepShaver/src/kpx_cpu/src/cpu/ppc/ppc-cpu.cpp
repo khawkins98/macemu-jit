@@ -143,6 +143,36 @@ static uint32 jit_ring_idx = 0;
 
 extern "C" void ppc_jit_dump_trace_ring(void); /* defined below; used by the trigger */
 
+/* ---- Boot-time region profiling (session 5 part 2) ----
+ *
+ * WHY: JIT boot takes 10-22+ min vs ~10s for the interpreter, yet the JIT executes
+ * blocks faster per-block.  That means either (a) the guest executes far more
+ * instructions under JIT, or (b) per-block/transition overhead dominates.  The DR
+ * (68k) emulator at ROM+0x460000..+0x500000 is NOT JIT-compilable, so JIT-mode boot
+ * ping-pongs between JIT code (nanokernel/RAM) and interpreted code (DR emulator).
+ * These counters measure the work split and the transition rate in BOTH modes so
+ * the two can be compared directly.
+ *
+ * Logged by the heartbeat every ~5s as:
+ *   [JIT ...]    jNK=n jDR=n jRAM=n | iNK=n iDR=n iRAM=n | j2i=n i2j=n
+ *   [INTERP ...] iNK=n iDR=n iRAM=n        (pure interpreter mode, SS_USE_JIT=0)
+ *
+ * Region key: NK = nanokernel+toolbox ROM (JIT-compilable), DR = 68k DR emulator
+ * (interpreter-only), RAM = guest RAM (JIT-compilable), OTH = everything else. */
+enum { RGN_NK = 0, RGN_DR = 1, RGN_RAM = 2, RGN_OTH = 3 };
+static uint64 rgn_jit_blocks[4];     /* JIT-executed blocks, by block entry PC */
+static uint64 rgn_interp_blocks[4];  /* interpreter-executed blocks, by block entry PC */
+static uint64 rgn_jit_to_interp;     /* JIT dispatch fell through to interpreter */
+static uint64 rgn_interp_to_jit;     /* interpreter loop handed off to JIT */
+
+static inline int rgn_classify(uint32 pc) {
+	/* ROMBase is 0x50000000 on this port; DR emulator at ROM+0x460000..+0x500000 */
+	if (pc < 0x50000000) return RGN_RAM;
+	if (pc < 0x50460000) return RGN_NK;
+	if (pc < 0x50500000) return RGN_DR;
+	return RGN_OTH;
+}
+
 static void jit_ring_init_once(void) {
 	static bool done = false;
 	if (done) return;
@@ -1085,6 +1115,12 @@ void powerpc_cpu::execute(uint32 entry)
 						static uint32_t last_pc = 0;
 						static int stuck_count = 0;
 						jit_block_count++;
+						/* Region profiling: classify by block ENTRY pc (jit_block_start_pc),
+						 * since the exit pc may be in a different region. */
+						rgn_jit_blocks[rgn_classify(jit_block_start_pc)]++;
+						/* Heartbeat: check the clock only every 4096 blocks — clock_gettime
+						 * per block (~25M/s) would itself cost ~0.5s/s of wall time. */
+						if ((jit_block_count & 0xFFF) == 0) {
 						double now = jit_elapsed_s();
 						if (now - last_t >= 5.0) {
 							if (!jit_log_file) {
@@ -1092,27 +1128,32 @@ void powerpc_cpu::execute(uint32 entry)
 								fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
 							}
 							uint32_t cur_pc = (uint32_t)pc();
-							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x\n", now, (unsigned long long)jit_block_count, cur_pc);
+							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x | jNK=%llu jDR=%llu jRAM=%llu jOTH=%llu | iNK=%llu iDR=%llu iRAM=%llu iOTH=%llu | j2i=%llu i2j=%llu\n",
+							        now, (unsigned long long)jit_block_count, cur_pc,
+							        (unsigned long long)rgn_jit_blocks[RGN_NK], (unsigned long long)rgn_jit_blocks[RGN_DR],
+							        (unsigned long long)rgn_jit_blocks[RGN_RAM], (unsigned long long)rgn_jit_blocks[RGN_OTH],
+							        (unsigned long long)rgn_interp_blocks[RGN_NK], (unsigned long long)rgn_interp_blocks[RGN_DR],
+							        (unsigned long long)rgn_interp_blocks[RGN_RAM], (unsigned long long)rgn_interp_blocks[RGN_OTH],
+							        (unsigned long long)rgn_jit_to_interp, (unsigned long long)rgn_interp_to_jit);
 							fflush(jit_log_file);
+							/* NOTE: "same PC at consecutive heartbeats" is a SAMPLING HINT, not
+							 * proof of a hang — hot dispatch PCs (e.g. the nanokernel exception
+							 * dispatcher at 0x50313d34) recur by chance.  See LEARNINGS.md
+							 * session 5 part 2 retraction before acting on these. */
 							if (cur_pc == last_pc) {
 								stuck_count++;
 								if (stuck_count >= 2) {
-									fprintf(stderr, "[JIT %.1fs] STUCK at pc=%08x for ~%ds\n", now, cur_pc, stuck_count * 5);
-									/* Dump key registers to diagnose spin-wait exit condition */
-									fprintf(stderr, "  r1=%08x r9=%08x r10=%08x r11=%08x r12=%08x\n",
-									        gpr(1), gpr(9), gpr(10), gpr(11), gpr(12));
-									fprintf(stderr, "  Ticks(0x16a)=%08x cr=%08x\n",
-									        ntohl(*(uint32_t*)(RAMBaseHost + 0x16a)), cr().get());
-									/* Dump trace ring once (first STUCK event) so we can see
-									 * the blocks that executed just before entering this loop */
-									if (stuck_count == 2)
-										ppc_jit_dump_trace_ring();
+									fprintf(stderr, "[JIT %.1fs] HOT-PC pc=%08x sampled %d consecutive heartbeats (may be sampling artifact)\n",
+									        now, cur_pc, stuck_count + 1);
+									fprintf(stderr, "  r1=%08x r9=%08x r10=%08x r11=%08x r12=%08x cr=%08x\n",
+									        gpr(1), gpr(9), gpr(10), gpr(11), gpr(12), cr().get());
 								}
 							} else {
 								stuck_count = 0;
 								last_pc = cur_pc;
 							}
 							last_t = now;
+						}
 						}
 					}
 					jit_ring_record(regs_ptr(), 'J', jit_block_start_pc, pc(), 0);
@@ -1167,6 +1208,9 @@ void powerpc_cpu::execute(uint32 entry)
 						fn((void*)regs_ptr());
 						goto pdi_jit_post;
 					}
+					/* Region profiling: JIT dispatch could not handle this PC (typically
+					 * the DR emulator range) — falling through to the interpreter. */
+					rgn_jit_to_interp++;
 					bi = my_block_cache.find(pc());
 					if (bi) goto pdi_execute;
 					continue;
@@ -1175,6 +1219,34 @@ void powerpc_cpu::execute(uint32 entry)
 #endif
 		  skip_jit:
 			for (;;) {
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+				/* Region profiling: count interpreted blocks by entry PC, and emit a
+				 * heartbeat in pure-interpreter mode (SS_USE_JIT=0) where the JIT-side
+				 * heartbeat never runs.  Clock checked every 4096 blocks to keep the
+				 * per-block cost to one increment + one branch. */
+				{
+					static uint64 interp_block_count = 0;
+					static double interp_last_t = 0;
+					rgn_interp_blocks[rgn_classify(bi->pc)]++;
+					interp_block_count++;
+					if ((interp_block_count & 0xFFF) == 0) {
+						double now = jit_elapsed_s();
+						if (now - interp_last_t >= 5.0) {
+							if (!jit_log_file) {
+								jit_log_file = fopen("/tmp/jit_diag.log", "w");
+								fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
+							}
+							fprintf(jit_log_file, "[INTERP %.1fs] blocks=%llu pc=%08x | iNK=%llu iDR=%llu iRAM=%llu iOTH=%llu | j2i=%llu i2j=%llu\n",
+							        now, (unsigned long long)interp_block_count, (uint32)bi->pc,
+							        (unsigned long long)rgn_interp_blocks[RGN_NK], (unsigned long long)rgn_interp_blocks[RGN_DR],
+							        (unsigned long long)rgn_interp_blocks[RGN_RAM], (unsigned long long)rgn_interp_blocks[RGN_OTH],
+							        (unsigned long long)rgn_jit_to_interp, (unsigned long long)rgn_interp_to_jit);
+							fflush(jit_log_file);
+							interp_last_t = now;
+						}
+					}
+				}
+#endif
 				const int r = bi->size % 4;
 				di = bi->di + r;
 				int n = (bi->size + 3) / 4;

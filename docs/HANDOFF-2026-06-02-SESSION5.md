@@ -1,8 +1,25 @@
 # SheepShaver ARM64 JIT — Session Handoff (2026-06-02, session 5)
 
+> ## ⚠️ RETRACTED — DO NOT IMPLEMENT THE FIX DESCRIBED BELOW
+>
+> **The "deadlock at 0x50313d34" theory in this document is WRONG.** Disassembly of the live
+> ROM memory (capstone, session 5 part 2) showed that 0x50313d34 is the nanokernel's exception
+> dispatcher — the hottest PC in the system — not a spin-wait. The r11 register holds the MSR
+> value (0x0002f072), not a pointer; guest address 0x2f076 was never being read by this code.
+> "STUCK" detections at this PC are sampling artifacts.
+>
+> The HandleInterrupt fix described below (commit a46cda99) was implemented, found to be
+> based on this wrong theory (and potentially corrupting guest memory), and **reverted**
+> (commit 9f9e617e).
+>
+> **Read `LEARNINGS.md` "session 5 part 2 — RETRACTION" for the corrected analysis and the
+> current open question** (where does JIT boot time actually go — leading hypothesis is
+> JIT↔interpreter transition overhead around the non-JIT-compilable DR emulator region).
+> See `docs/HANDOFF-2026-06-02-SESSION6.md` for the current investigation plan.
+
 ## TL;DR for next agent
 
-**The core bug causing slow JIT boot is an initialization-order deadlock at nanokernel address 0x50313d34.** The fix is ~5-10 lines in sheepshaver_glue.cpp. Everything else in this document is supporting evidence and context.
+~~**The core bug causing slow JIT boot is an initialization-order deadlock at nanokernel address 0x50313d34.** The fix is ~5-10 lines in sheepshaver_glue.cpp. Everything else in this document is supporting evidence and context.~~ **[RETRACTED — see banner above]**
 
 ---
 

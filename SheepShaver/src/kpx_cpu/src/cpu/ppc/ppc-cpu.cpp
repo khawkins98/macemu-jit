@@ -46,6 +46,13 @@ extern uint32 RAMSize;
 extern uint32 ROMBase;
 extern uint8 *ROMBaseHost;
 #include "cpu/jit/aarch64/ppc-jit.h"
+#include <cstddef>
+/* Compile-time verification of the spcflags mask offset used by the JIT's
+ * block-entry interrupt poll.  PPCR_SPCFLAGS in ppc-jit.cpp must match.
+ * basic_spcflags has `uint32 mask` as its FIRST member, so
+ * &spcflags == &spcflags.mask; the poll reads a W-word at this offset. */
+static_assert(offsetof(powerpc_registers, spcflags) == 1056,
+              "spcflags offset changed — update PPCR_SPCFLAGS in ppc-jit.cpp");
 #endif
 
 #if PPC_PROFILE_GENERIC_CALLS

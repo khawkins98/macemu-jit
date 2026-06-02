@@ -153,14 +153,20 @@ working tree on 2026-06-02 and will drift.
 
 ### B5. Host hardware cursor (video, zero guest changes)
 
-- **Files:** `SheepShaver/src/Unix/video_x.cpp` / SDL video path
-- **What:** render the mouse cursor host-side (SDL cursor or overlay) instead of relying on
-  the guest drawing it into the framebuffer, decoupling pointer latency from VOSF refresh.
-- **Why:** the single most noticeable interactivity improvement available; it was QEMU's
-  first acceleration step too.
-- **Verify:** boot, move mouse — pointer is smooth even when the guest is busy; no double
-  cursor (guest cursor must be hidden via the existing video driver control calls if possible).
-- **Detail:** `landscape-3-classic-mac-video-accel.md` §"first wins"
+**UPDATED 2026-06-02 after implementation prep** (`b5-c3-video-implementation-prep.md`):
+**this is already implemented in our tree** — guest protocol (`cscSetHardwareCursor`/
+`cscDrawHardwareCursor`, video.cpp:470-588) AND host SDL2 rendering (`MagCursor`,
+video_sdl2.cpp:1231). The real work is enabling it:
+
+- **B5(a) — native SDL window: one-line change.** The `hardcursor` pref defaults to false
+  (prefs_items.cpp:64). Flip the default (or set it in the prefs file) and verify.
+- **B5(b) — VNC path: ~60-100 lines.** `video_set_cursor` hard-returns under `vncserver`
+  (video_sdl2.cpp:2398) and vnc_server.cpp has no cursor-shape support. Add
+  `VNCServerSetCursor` via libvncserver's RFB Cursor pseudo-encoding. This is the one that
+  matters for the dev workflow — `make run-jit` runs over VNC.
+- **Optional:** color cursor support (video.cpp:487 rejects non-1-bit cursors today).
+- **Verify:** boot, move mouse over VNC — pointer smooth while guest is busy; no double cursor.
+- **Detail:** `b5-c3-video-implementation-prep.md` (file:line map, libvncserver API)
 
 ---
 
@@ -208,15 +214,23 @@ known structurally.
   comparison doc.
 - **Detail:** `landscape-2-arm64-dynarec-projects.md` §MAME
 
-### C3. Paravirtual video acceleration protocol (`.ndrv` extension)
+### C3. Widen Native QuickDraw acceleration coverage
 
-- **What:** extend SheepShaver's existing virtual display driver (`src/video.cpp` control/
-  status protocol) with accelerated primitives — rect fill, copy/blit, scroll — executed
-  host-side. MoL proved this design works for Mac OS 9; QEMU's `qemu_vga.ndrv` (GPL-2.0) is
-  the living reference for the guest-side driver structure.
-- **Sequence:** B5 (host cursor) first → VOSF dirty-rect tightening → then this.
+**UPDATED 2026-06-02 after implementation prep** (`b5-c3-video-implementation-prep.md`):
+**the protocol already exists and is on by default** — `src/gfxaccel.cpp` implements NQD
+acceleration (rect fill, invert, srcCopy blit) via the `NQDMisc(6,…)` accelerator hook,
+enabled by `gfxaccel=true` (prefs_items.cpp:96). The work is *widening coverage*, not
+inventing a protocol:
+
+- **What:** only 3 of 18 QuickDraw transfer modes are offloaded today. Add: more blit
+  raster-op modes (Or/Xor/Bic), ScrollRect acceleration.
+- **The ceiling (be honest about it):** Mac OS only routes bulk fill/blit/invert/scroll
+  through driver hooks. Text, vector, region, and odd-mode drawing render directly to the
+  framebuffer on the emulated CPU and can never be accelerated at the driver level.
+- **Sequence:** B5 first → VOSF dirty-rect tightening → then this.
 - **Do NOT:** emulate real ATI silicon (DingusPPC path) — unproven everywhere and GPL-3.0.
-- **Detail:** `landscape-3-classic-mac-video-accel.md` (architecture comparison table)
+  Note: QEMU's qemu_vga.ndrv is *behind* us (stubs hardware cursor, no 2D accel).
+- **Detail:** `b5-c3-video-implementation-prep.md` + `landscape-3` (architecture table)
 
 ### C4. oaknut W^X spike (`DualCodeBlock`)
 

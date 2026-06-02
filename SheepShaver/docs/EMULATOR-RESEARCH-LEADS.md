@@ -287,3 +287,61 @@ and read our code. Full analyses live in `docs/research/lead-*.md`. The investig
 10. Lazy carry / lazy CR0 (after truncation-epilogue root cause is closed)
 11. CR register cache, then possibly the 64-bit CR representation
 12. Inline-asm dispatcher
+
+---
+
+## Landscape findings (2026-06-02, second survey round)
+
+Two follow-up surveys looked beyond Dolphin: ARM64 dynarec projects of any guest ISA
+(`docs/research/landscape-2-arm64-dynarec-projects.md`) and the classic Mac OS video
+acceleration scene (`docs/research/landscape-3-classic-mac-video-accel.md`). Three findings
+rise above everything in the Dolphin lead list:
+
+### 1. MAME's PPC DRC — BSD-licensed, vendorable, closer guest match than Dolphin
+
+MAME's PowerPC dynamic recompiler (`src/devices/cpu/powerpc/ppcdrc.cpp`) and its ARM64
+backend (`src/devices/cpu/drcbearm64.cpp`) are **BSD-3-Clause** (verified at the file/SPDX
+level — repo-level metadata misleadingly says GPL). That means the code is legally
+*vendorable* into our GPLv2 tree, not just readable. And MAME targets PPC603/604/750 — the
+actual CPUs SheepShaver emulates, a closer match than Dolphin's Gekko. This is the single
+best source of liftable PPC→ARM64 translation code found in the entire research effort.
+
+Also notable from the same survey:
+- **oaknut** (MIT, header-only ARM64 emitter): its `DualCodeBlock` keeps a writable and an
+  executable mapping of the same code cache simultaneously — a candidate to eliminate
+  W^X toggling entirely. Worth a MAP_JIT compatibility spike.
+- **dynarmic** (0BSD): compact register allocator + fastmem, the reference for adding a
+  per-block register cache.
+- **Box64** (MIT): deferred-flag state machine — the shippable form of Dolphin's lazy carry.
+
+### 2. Rosetta 2's AOT idea is the likely answer to JIT residency
+
+Rosetta 2 translates static code ahead-of-time and JITs only the dynamic remainder. Our
+strategic problem (item 9 above) is that execution abandons the JIT after ~15 s. The Mac ROM
+is immutable (`vm_protect`ed READ|EXECUTE after patches) and is the dominant execution
+target — it could be translated *ahead of time, in full*, instead of block-by-block on
+demand. That would change the residency equation entirely: instead of the interpreter
+falling back when it hits an uncompiled block, ROM code would always have a compiled block
+available. **This reframes item 9 from "investigate" to "AOT-compile the ROM as the fix."**
+
+### 3. Video acceleration: extend our `.ndrv`, don't emulate silicon
+
+SheepShaver's `src/video.cpp` is already a paravirtual display driver — the same
+architecture (guest driver + host rendering) that Mac-on-Linux used to ship real
+accelerated video for Mac OS 9, and that the QEMU community's `qemu_vga.ndrv`
+(GPL-2.0, link-compatible) uses today. The alternative — emulating real ATI silicon so
+native drivers work — is unproven everywhere (DingusPPC boots with acceleration disabled)
+and license-encumbered (GPL-3.0).
+
+First wins requiring zero guest-side changes:
+- **Host hardware cursor** — decouple the mouse pointer from framebuffer redraw
+- **Tighter VOSF dirty-rect blitting** — narrower rectangles per update
+
+Longer term: extend our existing control/status `.ndrv` protocol with accelerated
+primitives (rect fill, blit, scroll), rendered host-side — MoL's proven design.
+
+### Revised top-3 strategic priorities (superseding the Dolphin-only list)
+
+1. **AOT-compile the ROM** — attacks JIT residency, the gate on all throughput work
+2. **Study/lift from MAME's PPC DRC** — legally clean code for our exact CPU family
+3. **Video: host cursor + dirty-rect first, paravirtual accel protocol later**

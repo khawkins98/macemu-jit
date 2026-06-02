@@ -184,9 +184,13 @@ Operationally:
 
 ## Open questions / prerequisites
 
-- Can the original G4-recorded `ppc-testresults.dat.bz2` be recovered from web.archive.org
-  (original URL was on gwenole.beauchesne.info / perso.magic.fr, circa 2006)? Real-hardware
-  ground truth would be the strongest possible oracle for Tier 1.4.
+- ~~Can the original G4-recorded `ppc-testresults.dat.bz2` be recovered?~~ **RESOLVED
+  (2026-06-02): recovered from the Wayback Machine and verified bit-for-bit** (decompressed
+  md5 `3e29432abb6e21e625a2eef8cf2f0840` matches both `test-powerpc.cpp:21` and the wiki doc).
+  Now preserved in-tree:
+  [`src/kpx_cpu/src/test/ppc-testresults.dat.bz2`](../src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
+  with [provenance](../src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md). Tier 1.4 has
+  real-hardware ground truth available from day one.
 - Does `test-powerpc.cpp` still compile against the current kpx_cpu core (it predates years
   of changes)? Budget for bit-rot fixes.
 - Does upstream x86 SheepShaver build cleanly on current macOS under Rosetta? (configure

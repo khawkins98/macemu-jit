@@ -106,12 +106,27 @@ but from a different source (crorc is fixed and verified).
    So the corrupted slot is [A7_after_movem + 0x44] = the param-block ARGUMENT pushed by
    this glue's caller before JSR'ing here.  In the captured run: sp at the Control call
    was 0x103ffec4, so the slot was ~0x103fff08-0x103fff0c, containing 0x103ffffe.
-2. Re-run (full ROM range + SS_JIT_TRACE_RING) and at the ADDR-WATCH eject event compute
-   the exact slot from sp; then re-run with SS_JIT_WATCH_ADDR=<slot> to catch who writes
-   0x103ffffe there — exactly how the eject call itself was caught.  Note: the slot value
-   0x103ffffe (top of stack region) smells like an initial-SP value stored where a param
-   block pointer belongs — possibly an off-by-N stack read (the glue's caller pushed
-   arguments at the wrong offsets, or a JIT-compiled push wrote to the wrong address).
+2. DONE — the dual watch (SS_JIT_WATCH_ADDR=103fff0c,100a1cc0 SS_JIT_WATCH_DUMPS=0) caught
+   the writer.  52 records before the eject:
+   ```
+   [103fff0c] fffe103f -> 103ffffe   record #24519184   block 504613e0   r24=5007aed6
+   ```
+   **Block 0x504613e0 (executing 68k code at ROM 0x5007aed4) wrote the garbage value.**
+   Even more diagnostic, the preceding events show the halfwords of 0x103ffffe being
+   written at SWAPPED positions over thousands of records:
+   ```
+   #24450495: -> fffe....   (wrote halfword "fffe" at slot+0)    r24=500297b4
+   #24450578: -> fffe103f   (wrote halfword "103f" at slot+2)    r24=5002968c
+   #24519184: -> 103ffffe   (the correctly-ordered value)        r24=5007aed6
+   ```
+   This 2-byte-swapped pattern is a strong signature of a **halfword store/load pair with
+   a misaligned or wrongly-ordered address** (e.g. a JIT bug in sthu/sth d(rA) with some
+   operand form, or a 68k MOVE.W pair whose handler computes EA+2 vs EA wrongly).
+
+3. NEXT SESSION STARTS HERE: dump and decode the PPC code of block 0x504613e0 and the
+   68k code at ROM 0x5007aed4 (and 0x500297b0, 0x50029688 for the swapped-halfword
+   writers).  Identify the store instruction(s), build an isolated SS_TEST_HEX vector,
+   find the codegen bug, fix, add harness vector.  (The crorc methodology, third time.)
 3. Alternative/parallel accelerant (advisor-recommended): opcode-histogram the
    0x460000-0x500000 ROM region, cross-reference against harness coverage, and batch-write
    vectors for every uncovered opcode the region uses.  This finds crorc-class bugs as

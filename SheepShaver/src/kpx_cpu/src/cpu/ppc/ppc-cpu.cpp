@@ -149,35 +149,45 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 	rec->lr = r->lr; rec->ctr = r->ctr; rec->cr = r->cr.get();
 	for (int i = 0; i < 8; i++) rec->a[i] = r->gpr[16 + i];
 
-	/* SS_JIT_WATCH_ADDR=<hex>: generic software watchpoint on a guest word.
-	 * After every recorded event, read the 4-byte guest word at the given
-	 * (4-aligned) address and report every change, identifying the block /
-	 * event that made it.  On the first change to a value whose second byte
-	 * (dsDiskInPlace when watching a DrvSts+8) becomes 0, dump the ring.
-	 * Used for the bug-#2 hunt: watch the CD-ROM DrvSts flags word. */
+	/* SS_JIT_WATCH_ADDR=<hex>[,<hex>...]: generic software watchpoints on up to
+	 * 4 guest words.  After every recorded event, read each (4-aligned) word
+	 * and report every change, identifying the block/event that made it.
+	 * SS_JIT_WATCH_DUMPS=<n> (default 3): how many of the first changes also
+	 * dump the trace ring (set 0 when watching busy locations like stack slots).
+	 * Used for the bug-#2 hunt: watch the CD-ROM DrvSts flags word and the
+	 * Device Manager argument slot simultaneously. */
 	{
-		static int      awatch_state = -1;   /* -1 unread, 0 off, 1 on */
-		static uint32   awatch_addr = 0;
-		static uint32   awatch_last = 0;
-		static bool     awatch_have_last = false;
+		static int      awatch_state = -1;   /* -1 unread, 0 off, N = count */
+		static uint32   awatch_addr[4];
+		static uint32   awatch_last[4];
+		static bool     awatch_have_last[4];
 		static int      awatch_dumps = 0;
+		static int      awatch_dump_budget = 3;
 		if (awatch_state < 0) {
 			const char *e = getenv("SS_JIT_WATCH_ADDR");
-			if (e && *e) { awatch_addr = (uint32)strtoul(e, NULL, 16) & ~3u; awatch_state = 1; }
-			else awatch_state = 0;
+			awatch_state = 0;
+			if (e && *e) {
+				char buf[128]; strncpy(buf, e, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
+				char *save = NULL;
+				for (char *tok = strtok_r(buf, ",", &save); tok && awatch_state < 4;
+				     tok = strtok_r(NULL, ",", &save))
+					awatch_addr[awatch_state++] = (uint32)strtoul(tok, NULL, 16) & ~3u;
+			}
+			const char *d = getenv("SS_JIT_WATCH_DUMPS");
+			if (d) awatch_dump_budget = atoi(d);
 		}
-		if (awatch_state == 1 && awatch_addr) {
-			uint32 now = vm_read_memory_4(awatch_addr);
-			if (awatch_have_last && now != awatch_last) {
+		for (int w = 0; w < awatch_state; w++) {
+			uint32 now = vm_read_memory_4(awatch_addr[w]);
+			if (awatch_have_last[w] && now != awatch_last[w]) {
 				fprintf(stderr, "ADDR-WATCH: [%08x] %08x -> %08x  record #%u type=%c block %08x->%08x sp=%08x r24=%08x\n",
-				        awatch_addr, awatch_last, now, jit_ring_idx, type, from_pc, to_pc,
+				        awatch_addr[w], awatch_last[w], now, jit_ring_idx, type, from_pc, to_pc,
 				        rec->r1, rec->r24);
 				fflush(stderr);
 				/* Dump the ring on the first few changes so the lead-up is captured. */
-				if (awatch_dumps < 3) { awatch_dumps++; ppc_jit_dump_trace_ring(); }
+				if (awatch_dumps < awatch_dump_budget) { awatch_dumps++; ppc_jit_dump_trace_ring(); }
 			}
-			awatch_last = now;
-			awatch_have_last = true;
+			awatch_last[w] = now;
+			awatch_have_last[w] = true;
 		}
 	}
 

@@ -8,12 +8,15 @@ Drafted 2026-06-02.
 
 | Existing asset | Role in this plan |
 |---|---|
-| `docs/AARCH64_JIT_GOLDEN_WORKLOADS.md` (7 workloads) | The canonical gate. New tiers below feed into it. |
-| `jit-test/run.sh` (209 vectors, interp-vs-JIT diff) | Tier 1 foundation |
-| `rom-harness/` (random ROM block exerciser) | Tier 2 foundation |
-| `BasiliskII/qa/` (matrix scaffold, Gherkin features, VNC runner) | The automation pattern to mirror for SheepShaver app testing |
-| `JIT-STATUS.md` | Where summary results land |
-| `JIT-FPU-PLAN.md` | Tier 3 (FP) integrates with this |
+| [`AARCH64_JIT_GOLDEN_WORKLOADS.md`](AARCH64_JIT_GOLDEN_WORKLOADS.md) (7 workloads) | The canonical gate. New tiers below feed into it. |
+| [`jit-test/run.sh`](../jit-test/run.sh) ([README](../jit-test/README.md)) (209 vectors, interp-vs-JIT diff) | Tier 1 foundation |
+| [`rom-harness/`](../rom-harness/README.md) (random ROM block exerciser) | Tier 2 foundation |
+| [`qa/tests/vnc/`](../../qa/tests/vnc/README.md) (shared repo-level VNC/Gherkin runner, stories, [SheepShaver profile](../../qa/tests/vnc/profiles/sheepshaver.json)) | **The automation layer to use** — per [Golden Workloads §"Shared QA/reporting layer"](AARCH64_JIT_GOLDEN_WORKLOADS.md), do NOT grow a separate story tree |
+| [`BasiliskII/qa/`](../../BasiliskII/qa/README.md) ([matrix](../../BasiliskII/qa/matrix.md)) | The matrix-document format to mirror for the OS boot matrix (Tier 2) |
+| [`JIT-STATUS.md`](../../JIT-STATUS.md) | Where summary results land |
+| [`JIT-FPU-PLAN.md`](../../JIT-FPU-PLAN.md) | Tier 3 (FP) integrates with this |
+| [`docs/research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) | C1 gates Phase 2 of this plan; see also [`RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md) |
+| [`AARCH64_JIT_PLAN.md`](../AARCH64_JIT_PLAN.md) / [`JIT-NEXT-PHASE.md`](../JIT-NEXT-PHASE.md) | Overall JIT plan this testing supports |
 
 ---
 
@@ -115,9 +118,10 @@ The community-established measure (E-Maculation forum lists) made systematic:
 2. **Per-app record:** launches? / basic use OK? / known crash signature? Compare columns:
    interpreter, ARM64 JIT, x86 JIT (Rosetta). **An app that works under interpreter + x86 JIT
    but not ours = our bug, by definition.** That column comparison is the whole point.
-3. **Automation:** mirror `BasiliskII/qa/` — Gherkin feature per app, VNC runner for input
-   scripting, screenshot-based pass/fail. The infrastructure exists; it needs SheepShaver
-   cases and assets.
+3. **Automation:** use the shared repo-level `qa/tests/vnc/` tooling (stories, the
+   `sheepshaver.json` profile, screenshot assertions, PDF reports) — per the Golden Workloads
+   doc, SheepShaver-specific details belong in the profile/Makefile/matrix wrapper, NOT in a
+   duplicated Gherkin story tree.
 4. **Crash triage protocol:** app crashes under JIT → capture guest PC → `rom-harness
    --entry=<PC>` the failing block → extract the instruction sequence into a Tier 1 vector →
    now it's a regression test forever.

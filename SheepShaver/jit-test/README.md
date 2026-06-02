@@ -1,5 +1,9 @@
 # SheepShaver PPC Opcode Equivalence Harness
 
+> This harness is Tier 1 of the broader
+> [Compatibility Testing Plan](../docs/COMPATIBILITY-TESTING-PLAN.md) (planned extensions:
+> x86-JIT third oracle, coverage audit, TestFloat FP vectors).
+
 ## Status
 
 **209 deterministic test vectors** (functional plus fuzz/regression-style cases), all passing (`METRIC pass=209 fail=0 score=100`).

@@ -188,3 +188,13 @@ Do not report performance numbers until the workload's maturity level is declare
 | 3 (JIT boot) | Remaining full-desktop JIT boot stability beyond Welcome splash |
 | 6 (Speedometer) | Stable JIT boot-to-desktop plus repeatable benchmark run |
 | 7 (PoP) | PatchNativeResourceManager crash in ROM path |
+
+---
+
+## Related plans
+
+- [`COMPATIBILITY-TESTING-PLAN.md`](COMPATIBILITY-TESTING-PLAN.md) — how these workloads grow
+  into full compatibility measurement (x86-JIT oracle, OS boot matrix, TestFloat FP vectors,
+  app compatibility rings)
+- [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) — JIT work items
+  from the 2026-06 research effort (C1 residency fix gates several workloads above)

@@ -166,25 +166,32 @@ working tree on 2026-06-02 and will drift.
 
 ## Tier C — Strategic projects (larger, sequence after A+B)
 
-### C1. AOT-compile the Mac ROM (attacks JIT residency — highest expected impact)
+### C1. Fix JIT residency: gate restructure at the interpreter-cache transition
 
-- **The problem it solves:** T2 counter data (LEARNINGS.md, commit 7030a441) shows execution
-  abandons the JIT loop after ~15 s and stays in the interpreter; the JIT gate is re-entered
-  only ~1/sec. This gates every other throughput optimization.
-- **The idea (from Rosetta 2's playbook):** the Mac ROM is immutable
-  (`vm_protect`ed READ|EXECUTE after patches, see ppc-jit.cpp ROM-range comments) and is the
-  dominant execution target. Instead of compiling ROM blocks on demand — and falling back to
-  the interpreter whenever an uncompiled block is hit — scan and compile all reachable ROM
-  code ahead of time (at startup, or as a background pass), so ROM execution always has a
-  compiled block available.
-- **Concrete first step:** instrument *why* the interpreter loop doesn't re-enter the JIT
-  (ppc-cpu.cpp:~712-786, the `SS_USE_JIT` gate and `skip_jit:` loop) — is it because blocks
-  are missing, or because the gate is only checked on certain events? The answer determines
-  whether AOT compilation or a gate restructure is the right fix. **Do this before writing
-  any AOT machinery.**
-- **Verify:** T2-style counter read (lldb on a running boot) shows sustained JIT-cache
-  residency; wall-clock boot time / Finder responsiveness improves.
-- **Detail:** `lead-7-dispatch-linking.md` (residency data) + `landscape-2` §Rosetta 2
+**UPDATED 2026-06-02 after root-cause analysis** (`c1-residency-root-cause.md`) — the
+original "AOT-compile the ROM" framing was the **wrong fix shape**; the root cause is now
+known structurally.
+
+- **Root cause (the dual-cache trap):** two independent block caches exist —
+  `my_block_cache` (interpreter) and `jit_bc_heads[]` (JIT). The interpreter inner loop
+  (`skip_jit:`, ppc-cpu.cpp:822-850) only consults its own cache; the JIT gate is checked
+  ONLY at `pdi_execute:` (ppc-cpu.cpp:712), never inside the inner loop. Once the working
+  set is interpreter-cached, line 848's `find()` succeeds forever and the JIT gate becomes
+  unreachable except via interrupts (~1/sec, matching the T2 observation).
+- **Step 1 — confirming probe (R1):** at the line-848 continue path, call the *read-only*
+  `jit_bc_lookup` (NOT `ppc_jit_aarch64_compile`, which mutates) and count transitions where
+  a complete JIT block existed but was ignored. High count = trap confirmed. Probes R2/R3
+  designed in the doc. Re-measure T2 numbers first (they predate commit 8f2acc9b).
+- **Step 2 — the fix:** at the interpreter-cache-hit transition, add a read-only
+  JIT-complete check and `break` back to `pdi_execute:` when a complete native block exists
+  ("prefer a compiled block at every transition"). Small, local change; no extra W^X traffic.
+- **AOT-the-ROM is deferred, not dead:** it attacks the compile *complete rate* (25%) and
+  warm start, not the re-entry trap — even fully AOT'd blocks are ignored while line 848
+  wins. Revisit after the gate restructure lands.
+- **Verify:** T2-style counter read shows sustained JIT-cache residency; R1 counter drops to
+  ~zero; boot time / responsiveness improves; harness stays 100.
+- **Detail:** `c1-residency-root-cause.md` (control-flow pseudocode, hypothesis table,
+  ready-to-implement instrumentation, file:line appendix)
 
 ### C2. Study/lift from MAME's PPC DRC
 

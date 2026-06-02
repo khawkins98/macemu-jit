@@ -232,6 +232,29 @@ inventing a protocol:
   Note: QEMU's qemu_vga.ndrv is *behind* us (stubs hardware cursor, no 2D accel).
 - **Detail:** `b5-c3-video-implementation-prep.md` + `landscape-3` (architecture table)
 
+### C5. Background / asynchronous JIT compilation (use a second host core)
+
+**Status: under research (2026-06-02)** — see `c5-background-compilation-*.md` when complete.
+
+- **The idea:** the emulated PPC is inherently single-stream (classic Mac OS is a
+  single-CPU OS), so extra host cores can't run guest code — but they CAN compile it.
+  Today block compilation happens inline on the CPU thread: the guest stalls while we
+  compile. Move compilation to a worker thread: the CPU thread keeps
+  interpreting/executing, the worker compiles pending blocks, completed blocks get
+  swapped into the block cache.
+- **Gated on C1:** pointless while the dual-cache trap means compiled blocks are ignored.
+- **Key technical questions (research in progress):**
+  - Thread-safety of `jit_bc_heads[]`/`jit_bc_pool[]` insertion vs. lookup
+  - W^X: `pthread_jit_write_protect_np` is **per-thread** — a compile worker needs its own
+    toggle state, OR the C4 dual-mapping result makes this moot (write alias is always
+    writable, process-wide)
+  - Chain patching: `patch_chain_sites()` mutates already-executable code — coordination
+    with the executing thread
+  - What other emulators do: RPCS3 (parallel LLVM PPU compilation), Cemu (multi-threaded
+    recompiler), Ryujinx (background translation + PTC), V8/HotSpot tiered compilation
+- **Synergy:** C4 (dual mapping) + C5 (background compile) together are the natural
+  end-state: worker writes via RW alias, CPU thread executes via RX alias, no toggling.
+
 ### C4. oaknut W^X spike (`DualCodeBlock`)
 
 - **What:** oaknut (MIT, header-only) keeps separate RW and RX mappings of the same physical

@@ -56,20 +56,61 @@ toolbox-only JIT config complete this phase normally and boot to desktop.
   (blinking-?-floppy state).  **The real failure is therefore upstream: the CD-ROM boot
   path is failing validation in JIT mode**, so the OS falls back to scanning forever.
 
-**Working hypothesis**: the 68k code that builds/validates CD-ROM boot reads (Disk Manager
-/ boot-blocks validation, running in the JIT-compiled DR emulator) computes something
-wrong — i.e., another latent codegen bug in a 68k-region instruction, like crorc was.
+**ROOT CAUSE LOCALIZED (2026-06-02, end of session)** — IOParam comparison between
+interpreter and JIT boots (E/R records now capture ioBuffer/ioReqCount/ioPosOffset/ioResult):
 
-**Next steps**:
-1. Extend the 'E'/'R' EMUL_OP records for CDROM_PRIME to also capture the IOParam block
-   contents (guest memory at the param-block pointer): ioPosOffset, ioReqCount, ioBuffer.
-2. Capture CDROM_PRIME sequences from an interpreter boot (working) and the stuck JIT
-   boot; compare request parameters at the same boot phase (anchor on the Nth PRIME call
-   after first CDROM_OPEN, not on addresses).  Diverging request parameters → trace back
-   which 68k computation produced them → isolate that ROM block → harness vector → fix.
-3. Audit candidates with zero harness coverage that the DR emulator + Disk Manager use:
-   remaining case-19 XO ops, mcrxr, lhbrx/lwbrx (byte-reversed loads — used in disk I/O!),
-   lha/lhau update forms, mulhwu/divwu edge cases.
+| | Interpreter (working) | JIT (stuck) |
+|---|---|---|
+| CDROM_PRIME requests | varied (System file loading) | identical forever: 1 KB at offset 0 (boot blocks) |
+| Result | d0=0 (noErr) | **d0 = -65 (offLinErr, "drive offline")** |
+| OP_IRQ / Time Mgr / CDROM_CONTROL EMUL_OPs | present at 60 Hz | **completely absent** |
+
+Chain: the CD-ROM "disk inserted" state is set by the driver's accRun periodic action →
+called from the 68k interrupt handler's work → which requires reaching the **OP_IRQ**
+EMUL_OP.  In JIT mode interrupts ARE delivered (CR bit 8 set, nanokernel runs, the 68k
+interrupt handler starts at ~60 Hz), but the handler **never reaches OP_IRQ** → the CD
+never mounts → all boot-block reads return offLinErr → infinite boot-device rescan.
+
+**SUPERSEDED — the hypothesis above was killed by the EMUL_OP counter test**
+(SS_EMULOP_COUNTS=1): OP_IRQ fires at 60 Hz in BOTH modes.  Interrupts work fully.
+
+**THE ACTUAL MECHANISM (found via CDROM-DBG prints + SS_JIT_WATCH_ADDR watchpoint)**:
+
+1. CDROMOpen runs correctly: DrvSts at guest 0x100a1cc0 (deterministic address),
+   dsDiskInPlace (offset +3) set to 1.  ✓
+2. The CD is read successfully for a while — many 512-byte CDROM_PRIME calls return
+   noErr with full ioActCount.  ✓
+3. Then a **spurious CDROM_CONTROL call with a GARBAGE param block** arrives:
+   A0 = 0x103ffffe (2 bytes below the top of the stack region!), param block contents
+   are junk (ioBuffer=c889b35c etc.).  The garbage csCode lands in the EJECT path
+   (cdrom.cpp case 7) → native code clears dsDiskInPlace.  Watch event:
+   `[100a1cc0] 00008001 -> 00008000  block 504ff2b8 (CDROM_CONTROL EMUL_OP) r24=500e1586`
+4. After the eject every Prime returns offLinErr → Mac OS rescans for boot devices
+   forever (the SCSI loop).
+
+**Where the garbage came from**: the 68k caller (Device Manager code at ROM 0x5007ac36-
+0x5007ac4c) loaded A0 from a stack slot (`MOVE.L d16(A7),A0`, opcode 0x206f) — the slot
+contained 0x103ffffe.  So bug #2 is, like bug #1, **corrupted data on the 68k stack** —
+but from a different source (crorc is fixed and verified).
+
+**Next steps (the corrupted-stack-slot hunt)**:
+1. The ring dump at the watch event (/tmp/ss_jit_ring.txt) contains the full lead-up.
+   Identify the caller's stack frame: at the Control call, sp=103ffec4 and A0 was loaded
+   from [A7+d16]; decode the caller's 68k code (lldb dump of ROM 0x5007ac20-0x5007ac50)
+   to get d16, giving the corrupted slot address.
+2. Re-run with SS_JIT_WATCH_ADDR=<that slot> to catch who writes the garbage value —
+   exactly how the eject call itself was caught.
+3. Alternative/parallel accelerant (advisor-recommended): opcode-histogram the
+   0x460000-0x500000 ROM region, cross-reference against harness coverage, and batch-write
+   vectors for every uncovered opcode the region uses.  This finds crorc-class bugs as
+   isolated reproductions instead of boot hunts.  Candidates: mcrxr, lhbrx/lwbrx,
+   lha/lhau update forms, rlwnm, divw/divwu edge cases, mtcrf FXM!=0xFF cases.
+
+**Diagnostic tools added for this hunt** (all committed):
+- `SS_EMULOP_COUNTS=1` — per-EMUL_OP execution counters dumped to stderr every 5s.
+- `SS_JIT_WATCH_ADDR=<hex>` — software watchpoint on any guest word; reports every change
+  with the responsible block and dumps the ring on the first changes.
+- CDROM-DBG prints in cdrom.cpp were TEMPORARY and have been reverted; re-add as needed.
 
 ## How to verify any JIT change (the bar)
 

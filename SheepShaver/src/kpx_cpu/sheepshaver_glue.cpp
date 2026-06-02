@@ -294,6 +294,29 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	 * BOTH interpreter and JIT mode — this is the comparison point for
 	 * working-vs-broken boot analysis. */
 	ppc_jit_ring_record_emulop('E', gpr(24), emul_op, gpr(8), gpr(9), gpr(1), &gpr(16));
+	/* SS_EMULOP_COUNTS=1: per-op execution counters dumped to stderr every 5s.
+	 * Settles "does OP_IRQ (op 40) ever fire" decisively — the bug-#2 premise. */
+	{
+		static int counts_enabled = -1;
+		static uint32 op_counts[64];
+		static time_t last_dump = 0;
+		if (counts_enabled < 0) {
+			const char *e = getenv("SS_EMULOP_COUNTS");
+			counts_enabled = (e && *e == '1') ? 1 : 0;
+		}
+		if (counts_enabled) {
+			if (emul_op < 64) op_counts[emul_op]++;
+			time_t now = time(NULL);
+			if (now - last_dump >= 5) {
+				last_dump = now;
+				fprintf(stderr, "EMULOP-COUNTS:");
+				for (int i = 0; i < 64; i++)
+					if (op_counts[i]) fprintf(stderr, " %d=%u", i, op_counts[i]);
+				fprintf(stderr, "\n");
+				fflush(stderr);
+			}
+		}
+	}
 #endif
 	EmulOp(&r68, gpr(24), emul_op);
 	set_cr(saved_cr);

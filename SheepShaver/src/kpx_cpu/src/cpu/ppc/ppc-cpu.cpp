@@ -149,6 +149,38 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 	rec->lr = r->lr; rec->ctr = r->ctr; rec->cr = r->cr.get();
 	for (int i = 0; i < 8; i++) rec->a[i] = r->gpr[16 + i];
 
+	/* SS_JIT_WATCH_ADDR=<hex>: generic software watchpoint on a guest word.
+	 * After every recorded event, read the 4-byte guest word at the given
+	 * (4-aligned) address and report every change, identifying the block /
+	 * event that made it.  On the first change to a value whose second byte
+	 * (dsDiskInPlace when watching a DrvSts+8) becomes 0, dump the ring.
+	 * Used for the bug-#2 hunt: watch the CD-ROM DrvSts flags word. */
+	{
+		static int      awatch_state = -1;   /* -1 unread, 0 off, 1 on */
+		static uint32   awatch_addr = 0;
+		static uint32   awatch_last = 0;
+		static bool     awatch_have_last = false;
+		static int      awatch_dumps = 0;
+		if (awatch_state < 0) {
+			const char *e = getenv("SS_JIT_WATCH_ADDR");
+			if (e && *e) { awatch_addr = (uint32)strtoul(e, NULL, 16) & ~3u; awatch_state = 1; }
+			else awatch_state = 0;
+		}
+		if (awatch_state == 1 && awatch_addr) {
+			uint32 now = vm_read_memory_4(awatch_addr);
+			if (awatch_have_last && now != awatch_last) {
+				fprintf(stderr, "ADDR-WATCH: [%08x] %08x -> %08x  record #%u type=%c block %08x->%08x sp=%08x r24=%08x\n",
+				        awatch_addr, awatch_last, now, jit_ring_idx, type, from_pc, to_pc,
+				        rec->r1, rec->r24);
+				fflush(stderr);
+				/* Dump the ring on the first few changes so the lead-up is captured. */
+				if (awatch_dumps < 3) { awatch_dumps++; ppc_jit_dump_trace_ring(); }
+			}
+			awatch_last = now;
+			awatch_have_last = true;
+		}
+	}
+
 	/* SS_JIT_WATCH_STUB=1: software watchpoint on the Mixed Mode switch-back
 	 * stub.  ROM block 0x5010bb90 writes 0xFE020000 (the Mixed Mode F-line
 	 * trap) at [r1 - 0x70]; the 68k routine called via Mixed Mode later
@@ -241,6 +273,25 @@ extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
 	rec->r24 = pc68k; rec->r27 = d0; rec->r29 = d1;
 	rec->lr = 0; rec->ctr = 0; rec->cr = 0;
 	for (int i = 0; i < 8; i++) rec->a[i] = a_regs[i];
+	/* Driver EMUL_OPs (SONY/DISK/CDROM OPEN/PRIME/CONTROL/STATUS, ops 10-21):
+	 * A0 = IOParam pointer.  Capture the request so working-vs-broken boots can
+	 * be compared at the I/O-request level (the bug-#2 hunt — see HANDOFF.md):
+	 *   lr field  = ioBuffer   [a0+0x20]
+	 *   ctr field = ioReqCount [a0+0x24]   ('R' records: ioActCount [a0+0x28])
+	 *   cr field  = ioPosOffset[a0+0x2e]   ('R' records: ioResult   [a0+0x10])
+	 * Only for driver ops — a0 is not a pointer for other EMUL_OPs. */
+	if (op >= 10 && op <= 21) {
+		uint32 a0 = a_regs[0];
+		if (type == 'E') {
+			rec->lr  = vm_read_memory_4(a0 + 0x20);
+			rec->ctr = vm_read_memory_4(a0 + 0x24);
+			rec->cr  = vm_read_memory_4(a0 + 0x2e);
+		} else {
+			rec->lr  = vm_read_memory_4(a0 + 0x28);
+			rec->ctr = vm_read_memory_4(a0 + 0x10);
+			rec->cr  = vm_read_memory_4(a0 + 0x2e);
+		}
+	}
 }
 
 extern "C" void ppc_jit_dump_trace_ring(void) {

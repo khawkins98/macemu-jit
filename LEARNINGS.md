@@ -620,5 +620,163 @@ falls in the icbi'd range, not the full cache.
 
 ### SS_JIT_TRACE debugging tool
 
-`SS_JIT_TRACE=/path` logs every block entry (`I <pc>`) and JIT execution (`J <from> <to> <r1> <r3>`).
+`SS_JIT_TRACE=/path` logs every block entry (`I <pc>`) and JIT execution (`J <from> <to> ...regs...`).
 Use for differential JIT vs interpreter analysis. Zero overhead when env var is not set.
+The J lines include r24/r27/r29/LR/CR/XER — chosen because they are the Mac ROM 68k emulator's
+working registers (r24=68k PC, r27=68k opcode, r29=handler address).
+
+## 2026-06-02 (later) — JIT performance work: ROM compilation, OE arithmetic, chaining post-mortem
+
+### Performance changes (all behind this session's commits)
+
+1. **64 MB code cache** (was 4 MB), block pool 65536 (was 16384), buckets 32768 (was 8192).
+   Eliminates the recurring full-cache flushes that forced recompilation of everything.
+   Also: cache-full margin raised from 256 bytes to 256 KB (a single block can emit up to
+   ~100 KB; the old margin was a latent buffer overflow).
+
+2. **ROM block compilation** (`ppc_jit_aarch64_set_rom_range`). The Mac ROM
+   (`vm_protect`ed READ|EXECUTE after patching — immutable) is registered as a second
+   JIT-compilable range. ROM toolbox code is ~85% of boot-time block dispatches and was
+   100% interpreted before. `jit_fetch_ptr()` resolves guest PCs in either RAM or ROM.
+   Bisect switch: `SS_JIT_NO_ROM=1` keeps ROM interpreter-only.
+
+3. **OE=1 (overflow) arithmetic**: addco/subfco/addo/subfo/nego (10-bit XO = 512+base).
+   Discovered via the failure histogram: XO=522 (addco) + XO=520 (subfco) were 95% of all
+   block-compile failures. These are the hot loops of the **68k emulator inside the Mac ROM**
+   (it uses PPC overflow arithmetic to derive 68k condition codes).
+   Bisect switch: `SS_JIT_NO_OE=1` falls back to the interpreter for OE variants.
+
+### The chaining post-mortem (critical findings)
+
+**Finding 1: block chaining never worked.** The post-compile check required the last emitted
+instruction to be RET; blocks ending with a chain branch (B <chain_code>) were marked
+incomplete → GATE2 excluded them → they always ran interpreted. Since hot blocks' targets
+are compiled first, *the hottest blocks were systematically the ones excluded.* Chaining was
+self-defeating from the day it was written.
+
+**Finding 2: chaining is architecturally unsafe as-is.** Once the marking bug was fixed and
+chained blocks actually ran, boots hung: chained cycles (guest polling loops) spin in native
+code without ever returning to the dispatcher, so spcflags are never polled and interrupts
+(60 Hz VBL → all Mac OS I/O completion) are never serviced.
+
+**Resolution: `JIT_BLOCK_CHAINING=0`** — chaining is disabled entirely. Every block returns to
+the dispatcher (which polls spcflags) after execution. Re-enabling requires a designed-in
+interrupt strategy (options documented at the #define site in ppc-jit.cpp).
+
+**Corollary discovered by enabling/disabling chaining:** blocks ending in `b`/`bl` to
+already-compiled targets had *never* executed natively before this session (they were the
+chained ones). The bug class "compiles fine, executes wrong, but only visible in whole-system
+boot" lives in exactly this population — the opcode harness cannot cover them because branch
+targets fall outside single-vector test environments.
+
+### Diagnostic tooling added this session
+
+- `SS_JIT_DEBUG_PC=<hex>`: per-PC compile decision trace (cache hit/miss, fetch failure,
+  which instruction failed, complete/incomplete).
+- `SS_JIT_NO_OE=1` / `SS_JIT_NO_ROM=1`: bisect switches.
+- `tools/screenshot.sh`: captures the guest framebuffer to PNG via lldb memory dump
+  (no Screen Recording permission needed). Note: SheepShaver's built-in VNC server is a
+  no-op stub unless built with libvncserver.
+- Trace fflush: SS_JIT_TRACE lines are flushed per-line so the final entries survive a crash.
+
+### CLAUDE.md correction needed
+
+CLAUDE.md says XER byte offsets are "so=900, ca=902" — stale. The current powerpc_registers
+layout (with gpr_hi[32] for 64-bit G5 mode) puts them at so=1028, ov=1029, ca=1030.
+The code (PPCR_XER_*) is correct; only the doc note is outdated.
+
+### The 68k-emulator-in-JIT problem (why ROM JIT range stops at +0x460000)
+
+**The hardest bug of the session.** Once OE arithmetic made the Mac ROM's built-in 68k
+emulator blocks compile, boots crashed non-deterministically (5s–60s, sometimes not at all)
+with the guest jumping to garbage addresses.
+
+**What the ROM's 68k emulator is:** an interpreter written in PPC, living at ROM+0x460000
+onward. Dispatch loop at +0x466080/84/c0/e0/100/120 (six variants differing in flag
+handling), micro-handler continuations at +0x463xxx/+0x46xxxx, and an opcode-indexed
+handler table at +0x48xxxx..+0x4Fxxxx (8 bytes per 68k opcode: one PPC instruction + a
+branch back to a dispatch variant). Multi-step 68k instructions chain through multiple
+dispatch round-trips, carrying intermediate state in r0/r8 and the prefetch pipeline
+(r24=68k PC, r27=prefetched word, r29=handler address).
+
+**The dispatch protocol's interrupt mechanism:** every dispatch variant ends with
+`bclr BO=5,BI=8` — branch to the computed handler if CR[8] (CR2.LT) is clear, else fall
+through to the interrupt path at +0x46d0d4. `HandleInterrupt()` (MODE_68K case) injects
+the interrupt by OR-ing a mask into the guest CR — i.e., **the interrupt is delivered by
+asynchronously flipping a CR bit that the dispatch loop polls.**
+
+**Why JIT-compiling this breaks:** every individual instruction (rlwimi, mtlr, lhau,
+addco., bclr) and every complete dispatch block tests bit-identical between interpreter
+and JIT in the opcode harness — the codegen is *correct*. What differs is the
+*interrupt-delivery interleaving*: with the dispatch/handler blocks JIT-compiled, the
+spcflags poll (and hence the CR-bit injection) lands at different points in the 68k
+instruction emulation pipeline than it does under the interpreter, and the DR emulator's
+multi-step sequences (e.g. `bset #imm,d0` = clear-scratch → read-immediate → compute-mask
+→ test-and-set, or `cmp.l -(a0),d0` = copy-A0 → pre-decrement-load → subtract) get cut
+mid-sequence: an interrupt-path excursion at the wrong step loses the in-flight state
+(observed: D0 ends up 0 instead of 0x80000000; the immediate word 0x001f gets dispatched
+as a 68k opcode; A0 misses its pre-decrement).
+
+**Resolution:** the JIT ROM range stops at ROMBase+0x460000. The PPC toolbox/nanokernel
+code below (the bulk of what Mac OS 8.x executes — it is a native PPC OS) is JIT-compiled;
+the 68k emulator runs interpreted, where the interrupt interleaving matches the original
+semantics. The 9 OE-arithmetic instructions remain enabled (they are correct and also
+appear in toolbox code).
+
+**Diagnostic methodology that found this** (recorded for reuse): trace J-lines at handler-
+entry granularity (execution entering 0x5048xxxx-0x504Fxxxx = exactly one entry per 68k
+instruction in both modes — block-level and r24-level comparisons produce pipeline-position
+artifacts and false divergences). First real divergence: 4th 68k instruction ever
+dispatched, `bset #31,d0`.
+
+### isync must compile as a NOP (the 42× slowdown)
+
+An attempt to wire icbi/isync SMC invalidation by making both fall back to the interpreter
+(`return false` in compile_one) made JIT boot **42× slower than interpreter boot**
+(426s vs 10s, warm NVRAM). Root cause: **isync appears after every mtmsr/mtspr sequence in
+OS code** — making isync-containing blocks incomplete marks most of the ROM toolbox
+interpreter-only, negating the ROM compilation win entirely.
+
+Resolution: icbi and isync stay native NOPs (upstream behavior). The SMC gap this leaves
+(stale JIT translations if guest code is rewritten in place at the same address) is
+pre-existing, rarely triggered (extensions load into fresh RAM), and documented at the
+icbi case in ppc-jit.cpp. The correct future fix is bucket-based invalidation called from
+the interpreter's execute_icbi — never isync-falls-back.
+
+### JIT↔interpreter handoff (required once any region is interpreter-only)
+
+The interpreter inner loop only exits on a block-cache miss. Once execution enters an
+interpreter-only region (the 68k emulator), the interpreter captures ALL subsequent
+execution — including JIT-compiled toolbox/RAM code — because those blocks are also in
+its cache. Fix: the inner loop now also exits when `ppc_jit_aarch64_is_compilable(pc())`
+(2-4 compares per interpreted block), handing compilable code back to the dispatcher.
+Note: the check must test compilABILITY, not "already compiled" — code first reached from
+inside an interpreter session would otherwise never meet the compiler at all.
+
+### Boot time is the JIT's worst case — and the honest performance picture
+
+Measured on this machine (warm NVRAM, Mac OS 8.6, all of today's work):
+
+| Configuration | Boot to desktop |
+|---|---|
+| Pure interpreter (SS_USE_JIT=0) | ~10 s |
+| JIT, any of today's configurations | 160 s – 7 min |
+
+**The JIT has never beaten the interpreter for BOOT TIME in any configuration**, and the
+boot is structurally hostile to it:
+1. Extension loading is 68k-heavy → runs in the (correctly) interpreter-only 68k emulator
+2. Every JIT/interpreter boundary crossing costs a dispatcher round-trip (~3 compile()
+   calls + hash lookups).  During 68k phases these crossings happen per 68k instruction —
+   profiling shows compile() call overhead + SDL_PumpEvents-per-interrupt dominating.
+3. Every block is compiled exactly once and many run only once during boot — pure overhead.
+
+The JIT's value proposition is steady-state execution (desktop, applications, benchmarks)
+— NOT boot. That measurement (MacBench / app responsiveness) is the next session's first
+task, and the boot-time gap should not be read as "the JIT is pointless."
+
+Structural fix directions for the boundary thrashing (next session):
+- Make dispatcher transitions cheaper (slim compile()'s early path: the 4 KB report
+  arrays in its stack frame force __chkstk probing on every call)
+- Reduce interrupt cost (SDL_PumpEvents per 60 Hz interrupt walks the whole Cocoa event
+  machinery — batch or throttle it)
+- Ultimately: solve the 68k-emulator-in-JIT problem so there is no boundary at all.

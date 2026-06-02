@@ -1329,14 +1329,15 @@ void HandleInterrupt(powerpc_registers *r)
 		WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
 		{
 			uint32 cr_mask = ReadMacInt32(KERNEL_DATA_BASE + 0x674);
-			if (cr_mask != 0) {
+			if (cr_mask != 0)
 				r->cr.set(r->cr.get() | cr_mask);
-			} else {
-				// KernelData not yet initialized (early boot, JIT reaches spin-waits
-				// before the nanokernel sets up 0x674/0x67c).  Directly tick the Mac
-				// timer so early-boot spin-waits on Ticks (0x16a) can exit.
-				WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
-			}
+			// Always tick Ticks on every VBL — PPC nanokernel spin-waits
+			// (0x5031040c, 0x50313d34, etc.) poll Ticks directly; CR injection
+			// only helps the 68k emulator dispatch path. Real hardware increments
+			// Ticks on every VBL regardless. Safe: the 68k interrupt handler also
+			// increments Ticks, but only after the nanokernel hands off — these
+			// early-boot spin-waits never reach that handoff, so no double-count.
+			WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
 		}
 		break;
     

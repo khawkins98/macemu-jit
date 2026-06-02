@@ -92,7 +92,7 @@ void AddPrefsDefaults(void)
 	PrefsAddInt32("bootdriver", 0);
 	PrefsAddInt32("bootdrive", 0);
 	PrefsAddInt32("ramsize", 16 * 1024 * 1024);
-	PrefsAddInt32("frameskip", 8);
+	PrefsAddInt32("frameskip", 1);
 	PrefsAddBool("gfxaccel", true);
 	PrefsAddBool("nocdrom", false);
 	PrefsAddBool("nonet", false);

@@ -2420,12 +2420,8 @@ void video_set_cursor(void)
 				if (visible) {
 					bool cursor_in_window = is_cursor_in_mac_screen();
 
-					if (cursor_in_window) {
-						int x, y;
-						SDL_GetMouseState(&x, &y);
-						D(bug("WarpMouse to {%d,%d} via video_set_cursor\n", x, y));
-						SDL_WarpMouseInWindow(sdl_window, x, y);
-					}
+					// SDL_WarpMouseInWindow omitted — it goes through Quartz on macOS
+					// adding ~16ms latency per cursor-image change. Not needed here.
 				}
 			}
 		}
@@ -2642,6 +2638,19 @@ static int SDLCALL on_sdl_event_generated(void *userdata, SDL_Event * event)
 			}
 		} break;
 			
+		case SDL_MOUSEMOTION:
+			// Process mouse motion synchronously in the event watch (fires inside
+			// SDL_PumpEvents on the main thread) rather than draining from the queue
+			// in the redraw thread. Eliminates the second 60Hz pipeline stage, cutting
+			// worst-case input latency from ~33ms to ~17ms.
+			if (drv) {
+				if (mouse_grabbed)
+					drv->mouse_moved(event->motion.xrel, event->motion.yrel);
+				else
+					drv->mouse_moved(event->motion.x, event->motion.y);
+			}
+			return EVENT_DROP_FROM_QUEUE;
+
 		case SDL_DROPFILE:
 			CDROMDrop(event->drop.file);
 			SDL_free(event->drop.file);

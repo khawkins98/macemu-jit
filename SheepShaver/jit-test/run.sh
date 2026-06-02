@@ -376,6 +376,49 @@ TEST_ORDER+=(nego_basic)
 T_nego_overflow="3C808000 7CA304D0"
 TEST_ORDER+=(nego_overflow)
 
+# --- CR logical operations (crand/cror/crxor/crnor/crandc/creqv/crorc/crnand + mcrf) ---
+# These had ZERO coverage when crorc shipped broken (missing AND #1 after ORN turned
+# CR into 0xffffffff — the root cause of the deterministic 68k-region boot crash,
+# see LEARNINGS.md 2026-06-02). Setup for all: li r3,5; li r4,5; cmpw cr1,r3,r4
+# → CR bit 4 (CR1.LT) = 0, CR bit 6 (CR1.EQ) = 1. Result read back via mfcr r6.
+
+# crorc all four input combos: crorc 0,6,6 (1|~1=1); crorc 1,6,4 (1|~0=1);
+# crorc 2,4,6 (0|~1=0); crorc 3,4,4 (0|~0=1) → CR0 = 1101 = 0xD
+T_crorc_all_combos="38600005 38800005 7C832000 4C063342 4C262342 4C443342 4C642342 7CC00026"
+TEST_ORDER+=(crorc_all_combos)
+
+# crand 0,6,6 → 1&1=1 (bit 0 set)
+T_crand_basic="38600005 38800005 7C832000 4C063202 7CC00026"
+TEST_ORDER+=(crand_basic)
+
+# cror 1,4,4 → 0|0=0 (bit 1 clear)
+T_cror_basic="38600005 38800005 7C832000 4C242382 7CC00026"
+TEST_ORDER+=(cror_basic)
+
+# crxor 2,6,4 → 1^0=1 (bit 2 set)
+T_crxor_basic="38600005 38800005 7C832000 4C462182 7CC00026"
+TEST_ORDER+=(crxor_basic)
+
+# crnor 3,6,4 → ~(1|0)=0 (bit 3 clear)
+T_crnor_basic="38600005 38800005 7C832000 4C662042 7CC00026"
+TEST_ORDER+=(crnor_basic)
+
+# crandc 7,6,4 → 1&~0=1 (bit 7 set)
+T_crandc_basic="38600005 38800005 7C832000 4CE62102 7CC00026"
+TEST_ORDER+=(crandc_basic)
+
+# creqv 8,6,6 → ~(1^1)=1 (bit 8 set)
+T_creqv_basic="38600005 38800005 7C832000 4D063242 7CC00026"
+TEST_ORDER+=(creqv_basic)
+
+# crnand 9,6,6 → ~(1&1)=0 (bit 9 clear)
+T_crnand_basic="38600005 38800005 7C832000 4D2631C2 7CC00026"
+TEST_ORDER+=(crnand_basic)
+
+# mcrf 5,1: copy CR field 1 (=0010 from equal compare) into CR field 5
+T_mcrf_basic="38600005 38800005 7C832000 4E840000 7CC00026"
+TEST_ORDER+=(mcrf_basic)
+
 # subfic r5,r3,100: li r3,30; subfic r5,r3,100 → r5=70
 # subfic = 0x20000000 | (5<<21)|(3<<16)|100
 T_subfic_basic="3860001e 20A30064"

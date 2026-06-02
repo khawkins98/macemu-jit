@@ -53,27 +53,44 @@ static uint32_t *jit_cache_end  = NULL;
 #define JIT_BC_MASK     (JIT_BC_BUCKETS - 1)
 #define JIT_BC_POOL     65536               /* max total entries across all chains */
 
-/* ---- Block-to-block chaining (DISABLED) -----------------------------------
+/* ---- Block-to-block chaining (mechanism complete; default OFF) -------------
  *
- * JIT_BLOCK_CHAINING = 0: every block returns to the dispatcher via the
- * standard LDP+RET epilogue.  The dispatcher polls spcflags between blocks,
- * so pending interrupts (60 Hz VBL, I/O completion) are always serviced.
+ * JIT_BLOCK_CHAINING = 1: block exits whose target is already compiled branch
+ * directly to the target's chain entry (B <chain_code>), bypassing the C
+ * dispatcher.  Targets not yet compiled fall back to the standard LDP+RET
+ * epilogue and are back-patched (patch_chain_sites) once the target exists.
  *
- * Why disabled: direct block→block branches (B <chain_code>) bypass the
- * dispatcher's spcflags poll.  A chained cycle — e.g. a guest polling loop
- * whose blocks all chain — spins in native code forever and interrupts are
- * never serviced, hanging all Mac OS I/O.  Historically this was masked by a
- * separate bug that marked every chained block incomplete (so chained code
- * never actually ran); fixing that bug exposed the interrupt problem.
+ * Interrupt safety: every block's chain entry begins with a spcflags poll
+ * (emit_entry_spcflags_poll — the dyngen gen_start equivalent).  A chained
+ * cycle therefore polls pending interrupts at every block boundary; when a
+ * flag is set, the block returns to the dispatcher, which services it via
+ * check_spcflags() and re-dispatches.  The poll masks to actionable bits only
+ * (PPCR_SPCFLAGS_POLL_MASK = 0x0F) — SPCFLAG_JIT_EXEC_RETURN (bit 16) is not
+ * cleared at the dispatch site and must not be polled (it would loop forever).
  *
- * Re-enabling requires a designed-in interrupt strategy, e.g.:
- *   (a) a cheap pending-flags test at every chain entry that exits to the
- *       dispatcher when flags are set (must test only actionable flag bits), or
- *   (b) forward-only chaining (no cycles possible; every loop iteration
- *       crosses the dispatcher), or
- *   (c) periodic forced unlinking from the interrupt trigger path.
- * Until then: simple by default, complexity by proof. */
+ * With chaining ON both harness modes pass (227/227); what remains unproven is
+ * a full boot in that configuration (boot verification is gated on the
+ * 68k-region work — see LEARNINGS.md 2026-06-02).  Until a chained boot is
+ * verified, the define stays 0; flip to 1 to test.
+ *
+ * History: chaining was originally written but never functional (a marking bug
+ * excluded every chained block from execution).  Enabling it without the entry
+ * poll hangs Mac OS I/O — see LEARNINGS.md 2026-06-02 for the full post-mortem. */
 #define JIT_BLOCK_CHAINING 0
+
+/* SS_JIT_NO_CHAIN=1: runtime kill-switch for block chaining (bisect aid).
+ * Read once on first use; gates both compile-time chain emission
+ * (emit_epilogue_with_pc) and runtime back-patching (patch_chain_sites).
+ * Lets a single build answer "is chaining the variable that breaks boot?"
+ * without recompiling. */
+static inline bool jit_chain_runtime_disabled(void) {
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("SS_JIT_NO_CHAIN");
+		cached = (e && *e == '1') ? 1 : 0;
+	}
+	return cached == 1;
+}
 
 /* ---- Chain patch-site pool -----------------------------------------------
  * When emit_epilogue_with_pc() cannot chain at compile time (target not yet
@@ -185,6 +202,7 @@ static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 	(void)pc;
 	return;
 #endif
+	if (jit_chain_runtime_disabled()) return; /* SS_JIT_NO_CHAIN=1 */
 	jit_bc_ensure_init();
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int idx = chain_site_heads[bucket];
@@ -717,27 +735,29 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	emit_load_imm32(RTMP0, (int32_t)next_pc);
 	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
 #if JIT_BLOCK_CHAINING
-	/* Compile-time chaining: if the target PC is already in the JIT block
-	 * cache and has a chain entry, branch directly to it instead of
-	 * restoring callee-saved registers and returning to the dispatch loop.
-	 * The callee-saved registers (x19–x28) remain valid on the stack from
-	 * the current block's prologue — the chained block re-uses that frame. */
-	const struct jit_bc_entry *chain_target = jit_bc_lookup(next_pc);
-	if (chain_target && chain_target->chain_code) {
-		int32_t off = (int32_t)((uint8_t *)chain_target->chain_code - (uint8_t *)jit_code_ptr);
-		if (off >= -(1 << 25) && off < (1 << 25)) {
-			/* Record the site BEFORE emitting B so that range-based invalidation
-			 * can find and revert this patch if the target block is invalidated. */
-			record_chain_site(next_pc, jit_code_ptr);
-			chain_site_pool[chain_site_pool_next - 1].patched = true;
-			emit32(0x14000000 | ((off >> 2) & 0x3FFFFFF)); /* B <offset> */
-			return; /* no LDP+RET: caller re-uses current stack frame */
+	if (!jit_chain_runtime_disabled()) {
+		/* Compile-time chaining: if the target PC is already in the JIT block
+		 * cache and has a chain entry, branch directly to it instead of
+		 * restoring callee-saved registers and returning to the dispatch loop.
+		 * The callee-saved registers (x19–x28) remain valid on the stack from
+		 * the current block's prologue — the chained block re-uses that frame. */
+		const struct jit_bc_entry *chain_target = jit_bc_lookup(next_pc);
+		if (chain_target && chain_target->chain_code) {
+			int32_t off = (int32_t)((uint8_t *)chain_target->chain_code - (uint8_t *)jit_code_ptr);
+			if (off >= -(1 << 25) && off < (1 << 25)) {
+				/* Record the site BEFORE emitting B so that range-based invalidation
+				 * can find and revert this patch if the target block is invalidated. */
+				record_chain_site(next_pc, jit_code_ptr);
+				chain_site_pool[chain_site_pool_next - 1].patched = true;
+				emit32(0x14000000 | ((off >> 2) & 0x3FFFFFF)); /* B <offset> */
+				return; /* no LDP+RET: caller re-uses current stack frame */
+			}
 		}
+		/* Runtime back-patching: record this epilogue location so that when
+		 * next_pc is compiled later, the first LDP can be patched to B chain_code.
+		 * patch_loc = address of the first LDP instruction we are about to emit. */
+		record_chain_site(next_pc, jit_code_ptr);
 	}
-	/* Runtime back-patching: record this epilogue location so that when
-	 * next_pc is compiled later, the first LDP can be patched to B chain_code.
-	 * patch_loc = address of the first LDP instruction we are about to emit. */
-	record_chain_site(next_pc, jit_code_ptr);
 #endif /* JIT_BLOCK_CHAINING */
 	/* Standard epilogue: restore callee-saved regs and return to dispatch */
 	a64_ldp_post(27, 28, A64_SP, 16);
@@ -2814,7 +2834,16 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;
 			case 417: /* crorc:  a | ~b */
-				emit32(0x2A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* ORN */ break;
+				/* ORN gives a | ~b over the FULL 32-bit register: with 1-bit inputs the
+				 * result is 0xFFFFFFFE/0xFFFFFFFF, and the merge below ORs that whole
+				 * value into CR (CR becomes ~0) — this was the root cause of the
+				 * deterministic 68k-region boot crash (see LEARNINGS.md 2026-06-02).
+				 * It is also wrong on truth value: crorc(0,1) must be 0.
+				 * Mask back to bit 0, same as the MVN-based ops above. */
+				emit32(0x2A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* ORN */
+				emit_load_imm32(RTMP2, 1);
+				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
+				break;
 			case 225: /* crnand: ~(a & b) */
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND */
 				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */

@@ -780,3 +780,98 @@ Structural fix directions for the boundary thrashing (next session):
 - Reduce interrupt cost (SDL_PumpEvents per 60 Hz interrupt walks the whole Cocoa event
   machinery — batch or throttle it)
 - Ultimately: solve the 68k-emulator-in-JIT problem so there is no boundary at all.
+
+## 2026-06-02 (evening) — Test environment: macOS TCC dialogs were silently disrupting boot tests
+
+### Symptom and root cause
+
+The user reported macOS permission dialogs ("SheepShaver would like to access files in
+your Downloads folder") appearing and sitting unanswered for 5-10 minutes. Root cause:
+the ROM and the boot ISO lived in `~/Downloads`, which is TCC-protected (same protection
+class as Desktop/Documents). Two factors made this recur:
+
+1. **Every rebuild creates a "new" app** in TCC's eyes (ad-hoc signature, new CDHash) —
+   consent does not persist across rebuilds.
+2. Background boot tests launch SheepShaver dozens of times unattended — the prompt can
+   appear when nobody is watching, and a pending TCC prompt **blocks the file open()**,
+   which presents as a stalled or oddly-timed boot test.
+
+This may explain earlier timing anomalies (e.g. boot tests that "stalled" with no other
+explanation, or crashes whose wall-clock time varied while guest state was identical).
+
+### Fix (applied)
+
+Test assets moved to `/Users/Shared/macemu/` (not TCC-protected; world-readable):
+- `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom`
+- `/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso`
+
+`~/.sheepshaver_prefs` updated to point there (old prefs backed up to
+`~/.sheepshaver_prefs.bak`). Originals remain in `~/Downloads`.
+
+**Rule for future test assets: never reference files in Desktop/Documents/Downloads from
+an emulator under test.** Use `/Users/Shared/` or a path inside the repo working tree.
+
+## 2026-06-02 (evening) — ROOT CAUSE of the deterministic 68k-region boot crash: crorc miscompilation
+
+### The bug (one missing AND #1 in ppc-jit.cpp case 417)
+
+`crorc crbD,crbA,crbB` (CR logical OR-with-complement) was compiled as a bare ARM64 `ORN`:
+result = bitA | ~bitB. With bitA/bitB ∈ {0,1}, ~bitB is the FULL 32-bit complement, so the
+"result bit" is 0xFFFFFFFE or 0xFFFFFFFF — not 0/1. The merge step then ORs this entire
+value (shifted) into the CR word: **CR becomes 0xffffffff**. It is also wrong on truth
+value: crorc(0,1) must be 0 but produced a truthy garbage value.
+
+The asymmetry that hid it: crand/cror/crxor are naturally bounded; crnor/creqv/crnand do
+MVN then AND #1 (masked); crandc uses BIC which is bounded *by accident* (a & anything ≤ a).
+Only crorc (ORN) both needs the mask and lacks it.
+
+### Why it only appeared when the 68k emulator region was JIT-compiled
+
+`crorc` lives in the DR (68k) emulator's interrupt/context-switch code (ROM block
+0x5046e100: `crorc 30,30,18`). That region was interpreter-only until today's dyngen-parity
+work compiled it. The toolbox/RAM code the JIT had been running for weeks doesn't execute
+crorc in any path boot exercises — which is also why the 218-vector harness (no CR-logical
+coverage) and every prior boot stayed green.
+
+### The full causal chain (every crash-signature element explained)
+
+1. JIT-compiled block 0x5046e100 executes broken crorc → **CR = 0xffffffff** (trace shows
+   cr=fffffffe → ffffffff exactly there)
+2. Corrupted CR propagates through the DR emulator's 68k context save/restore
+   (mfcr/mtcrf blocks at 0x5046e004/0x5046e084)
+3. Later, inside a re-entrant `execute_68k()` (EMUL_OP → Execute68k — which sets r23=0
+   BY DESIGN), the 68k dispatch variant `mtctr r23; …; bcctr 12,5; bclr 5,8` runs.
+   CR bit 5 (garbage from step 1) is SET → `bcctr` fires → **branch to CTR = r23 = 0**
+4. Guest executes low-memory garbage at PC 0/0x60/0x104/…/0x134 → wild store → SIGSEGV
+   (the recurring signature: pc≈0x134, lr=504a1fc0 [the handler it SHOULD have gone to],
+   ctr=0, ea=0x4000ffffxxxx, CR1=f)
+
+### Diagnostic methodology that found it (reusable)
+
+1. **In-memory trace ring** (SS_JIT_TRACE_RING=1): 256K-record execution history with zero
+   I/O overhead, dumped by the SIGSEGV handler → /tmp/ss_jit_ring.txt. fprintf-per-block
+   tracing distorts timing and produces multi-GB files; the ring does neither.
+2. **Runtime env-var bisect** (SS_JIT_NO_CHAIN=1): deconfounded chaining from 68k-region
+   compilation in one run without rebuilds — chaining was exonerated immediately.
+3. **lldb attach + guest memory dump**: byte-swap lldb's little-endian display to read
+   big-endian PPC opcodes; decode ROM blocks at deterministic addresses.
+4. **Isolated block reproduction**: extract a suspect ROM block's exact instructions into
+   an SS_TEST_HEX vector with memory read-backs → proves codegen correct/broken in
+   isolation, free of all boot noise. (Block 5010bb90 passed → redirected the hunt from
+   stores to CR state.)
+5. **Software watchpoint in the dispatcher** (SS_JIT_WATCH_STUB=1): ROM-anchored arm +
+   per-block memory check. Caveat learned: executing a stub doesn't modify it, so
+   "changed" events can't distinguish consumed from unconsumed stubs — correlate with the
+   ring's r24 history instead.
+6. **Key trap to avoid**: cross-run comparisons anchored on RAM/stack addresses are noise
+   (run-specific layout). Anchor on ROM PCs, which are deterministic.
+
+### Status
+
+- Fix: mask crorc's ORN result back to 1 bit (matches the crnor/creqv/crnand pattern).
+- Harness gap: CR-logical family (crand/cror/crxor/crnor/crandc/creqv/crorc/crnand) had
+  zero coverage — vectors added for all 8, crorc with all four input combinations.
+- The harness alone is NOT the gate for this work: block 5010bb90 passes the harness while
+  the boot failed. Boot-to-desktop with the ring live is the verification bar.
+- Expect more latent bugs in the newly-compiled 68k region to surface after this fix
+  (it has only ever executed a few hundred ms before dying). Same methodology applies.

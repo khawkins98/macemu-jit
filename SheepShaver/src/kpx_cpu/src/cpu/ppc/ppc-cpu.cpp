@@ -583,6 +583,9 @@ void powerpc_cpu::execute(uint32 entry)
 {
 	bool invalidated_cache = false;
 	pc() = entry;
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	FILE *jit_trace_fp_for_cpu = NULL; /* set by trace block at pdi_execute, read by JIT gate */
+#endif
 #if PPC_EXECUTE_DUMP_STATE
 	const bool dump_state = true;
 #endif
@@ -692,6 +695,20 @@ void powerpc_cpu::execute(uint32 entry)
 			// Execute all cached blocks
 		  pdi_execute:
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+			/* PC trace: log block-start PCs for differential JIT vs interpreter debugging.
+			 * SS_JIT_TRACE=/path → each line is: "I <pc>" (interpreter block entry)
+			 * or "J <from_pc> <to_pc> <r1> <r3>" (JIT block execution, logged post-run). */
+			{
+				static FILE *jit_trace_fp = (FILE *)(uintptr_t)1;
+				if (jit_trace_fp == (FILE *)(uintptr_t)1) {
+					const char *path = getenv("SS_JIT_TRACE");
+					jit_trace_fp = path ? fopen(path, "w") : NULL;
+				}
+				if (jit_trace_fp) fprintf(jit_trace_fp, "I %08x\n", pc());
+				jit_trace_fp_for_cpu = jit_trace_fp; /* share with JIT gate below */
+			}
+#endif
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 			/* AArch64 direct-codegen JIT: try to execute block natively.
 			 *
 			 * Gates in this block — see SheepShaver/docs/AARCH64_JIT_RUNTIME_CONTRACT.md:
@@ -718,9 +735,14 @@ void powerpc_cpu::execute(uint32 entry)
 				 * compile-time probes only; skip_jit lets the interpreter execute the
 				 * first uncompiled/fallback-only instruction at the original PC. */
 				if (ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete) {
+					uint32 jit_block_start_pc = pc(); /* save for trace */
 					ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void*)jblk.code;
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
+					/* Log JIT block: "J <from> <to> <r1> <r3>" */
+					if (jit_trace_fp_for_cpu)
+						fprintf(jit_trace_fp_for_cpu, "J %08x %08x %08x %08x\n",
+						        jit_block_start_pc, pc(), gpr(1), gpr(3));
 					/* GATE 3: PC range check.
 					 * If the JIT produced a PC outside the JIT's compile range, the
 					 * block branched into ROM, SheepMem, or other valid Mac OS space

@@ -60,10 +60,16 @@ static uint32_t *jit_cache_end  = NULL;
  * sites are back-patched: the LDP is overwritten with a direct B <chain_code>.
  * The remaining LDP+RET instructions become unreachable dead code.
  * On full cache flush, all sites are discarded (blocks are recompiled). */
+/* ARM64 encoding of the first instruction in the standard block epilogue:
+ * LDP x27, x28, [sp], #16  — used to restore the original epilogue when
+ * reverting chain-patches during range-based JIT cache invalidation. */
+#define JIT_EPILOGUE_FIRST_LDP 0xA8C17BFBU
+
 #define JIT_CHAIN_SITE_POOL 4096
 struct jit_chain_site {
 	uint32_t  target_pc; /* PPC PC this site wants to chain to */
-	uint32_t *patch_loc; /* ARM64 addr of first LDP in std epilogue; NULL=consumed */
+	uint32_t *patch_loc; /* ARM64 addr where B<chain_code> was (or will be) written */
+	bool      patched;   /* true = B<chain_code> is live at patch_loc */
 	int       next;      /* next site in same bucket, -1=end */
 };
 static struct jit_chain_site chain_site_pool[JIT_CHAIN_SITE_POOL];
@@ -131,18 +137,15 @@ static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 	int idx = chain_site_heads[bucket];
 	while (idx >= 0) {
 		struct jit_chain_site *site = &chain_site_pool[idx];
-		if (site->target_pc == pc && site->patch_loc) {
+		if (site->target_pc == pc && site->patch_loc && !site->patched) {
 			int32_t off = (int32_t)((uint8_t *)chain_code - (uint8_t *)site->patch_loc);
 			if (off >= -(1 << 25) && off < (1 << 25)) {
-				/* W^X: make the cache writable for this single back-patch word,
-				 * then flip it back to executable + invalidate icache. No-op on Linux. */
 				jit_cache_begin_write();
 				*site->patch_loc = 0x14000000 | ((off >> 2) & 0x3FFFFFF); /* B offset */
-				/* Flush ARM64 I-cache for the patched word */
 				jit_cache_flush(site->patch_loc, sizeof(uint32_t));
 				jit_cache_end_write(site->patch_loc, sizeof(uint32_t));
+				site->patched = true; /* live — kept for range-invalidation reversal */
 			}
-			site->patch_loc = NULL; /* mark consumed */
 		}
 		idx = site->next;
 	}
@@ -641,6 +644,11 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	if (chain_target && chain_target->chain_code) {
 		int32_t off = (int32_t)((uint8_t *)chain_target->chain_code - (uint8_t *)jit_code_ptr);
 		if (off >= -(1 << 25) && off < (1 << 25)) {
+			/* Compile-time chaining: record the site BEFORE emitting B so that
+			 * range-based invalidation can find and revert this patch if the
+			 * target block is later invalidated. */
+			record_chain_site(next_pc, jit_code_ptr);
+			chain_site_pool[chain_site_pool_next - 1].patched = true;
 			emit32(0x14000000 | ((off >> 2) & 0x3FFFFFF)); /* B <offset> */
 			return; /* no LDP+RET: caller re-uses current stack frame */
 		}
@@ -3647,7 +3655,7 @@ void ppc_jit_aarch64_exit(void)
 void ppc_jit_aarch64_flush(void)
 {
 	/* Reset code cache write pointer and invalidate block address cache.
-	 * Called on Mac OS icbi/isync events or when the JIT must start fresh.
+	 * Called when the JIT must start completely fresh (cache full, explicit reset).
 	 * Contract: see SheepShaver/docs/AARCH64_JIT_RUNTIME_CONTRACT.md — flush discipline. */
 	jit_cache_wp = (uint32_t *)jit_cache_base;
 	jit_bc_flush();
@@ -3656,6 +3664,50 @@ void ppc_jit_aarch64_flush(void)
 void ppc_jit_aarch64_invalidate_pc(uint32_t pc)
 {
 	jit_bc_invalidate_pc(pc);
+}
+
+void ppc_jit_aarch64_invalidate_range(uint32_t start, uint32_t end)
+{
+	/* Range-based JIT block invalidation for icbi/isync handling.
+	 *
+	 * Step 1: Revert any live chain-patches (B instructions) whose target PC
+	 * falls in [start, end).  If we only nullify the pool entry without reverting
+	 * the B, calling blocks would still jump directly to the now-invalid ARM64
+	 * code, bypassing the JIT gate and running stale translations.  Reverting
+	 * restores the original LDP+RET epilogue so the JIT gate is re-entered on
+	 * the next visit and the block is recompiled from fresh guest code.
+	 *
+	 * Step 2: Nullify pool entries for PCs in range.  jit_bc_lookup skips
+	 * entries with code==NULL, causing a recompile on the next lookup. */
+	jit_bc_ensure_init();
+	/* Step 1 — revert live chain-patches targeting the invalidated range.
+	 * jit_cache_begin_write makes the JIT region writable (Apple W^X).
+	 * We collect the first/last patched addresses for the icache flush range. */
+	uint32_t *flush_lo = NULL, *flush_hi = NULL;
+	jit_cache_begin_write();
+	for (int i = 0; i < chain_site_pool_next; i++) {
+		struct jit_chain_site *s = &chain_site_pool[i];
+		if (s->patched && s->patch_loc &&
+		    s->target_pc >= start && s->target_pc < end) {
+			*s->patch_loc = JIT_EPILOGUE_FIRST_LDP; /* restore LDP x27,x28,[sp],#16 */
+			if (!flush_lo || s->patch_loc < flush_lo) flush_lo = s->patch_loc;
+			if (!flush_hi || s->patch_loc > flush_hi) flush_hi = s->patch_loc;
+			s->patched = false;
+		}
+	}
+	/* jit_cache_end_write re-protects (W→X) and flushes the icache range.
+	 * Must always be called to pair with jit_cache_begin_write above. */
+	{
+		void *fw_addr = flush_lo ? (void *)flush_lo : (void *)jit_cache_base;
+		size_t fw_len = flush_lo ? (size_t)((uint8_t *)(flush_hi + 1) - (uint8_t *)flush_lo) : 0;
+		jit_cache_end_write(fw_addr, fw_len);
+	}
+	/* Step 2 — nullify block pool entries for invalidated PCs */
+	for (int i = 0; i < jit_bc_pool_next; i++) {
+		if (jit_bc_pool[i].code &&
+		    jit_bc_pool[i].pc >= start && jit_bc_pool[i].pc < end)
+			jit_bc_pool[i].code = NULL;
+	}
 }
 
 bool ppc_jit_aarch64_compile(
@@ -3684,6 +3736,19 @@ bool ppc_jit_aarch64_compile(
 	 * was already printed in ppc_jit_aarch64_init). */
 	if (!jit_cache_base)
 		return false;
+
+	/* Fast out-of-range check: ROM, SheepMem, and other non-RAM PCs cannot be
+	 * JIT-compiled.  Bail BEFORE the W^X toggle + prologue — on macOS the
+	 * pthread_jit_write_protect_np() pair is ~microseconds per call; paying it
+	 * for every ROM block visit (which is most of early boot) makes the JIT mode
+	 * ~37× slower than interpreter-only mode. */
+	if (pc < (uint32_t)(uintptr_t)ram || pc >= (uint32_t)(uintptr_t)ram + ramsize) {
+		out->complete  = false;
+		out->code      = NULL;
+		out->chain_code = NULL;
+		out->n_insns   = 0;
+		return false;
+	}
 
 	if (!jit_cache_wp || jit_cache_wp >= jit_cache_end - 256) {
 		/* Code cache full — flush everything and start over.

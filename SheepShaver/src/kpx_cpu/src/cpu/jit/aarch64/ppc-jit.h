@@ -26,6 +26,7 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb);
 void ppc_jit_aarch64_exit(void);
 void ppc_jit_aarch64_flush(void);
 void ppc_jit_aarch64_invalidate_pc(uint32_t pc);
+void ppc_jit_aarch64_invalidate_range(uint32_t start, uint32_t end);
 
 bool ppc_jit_aarch64_compile(
 	uint32_t pc,

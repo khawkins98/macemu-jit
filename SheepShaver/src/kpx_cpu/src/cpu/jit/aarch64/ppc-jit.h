@@ -32,6 +32,12 @@ bool ppc_jit_aarch64_has_block(uint32_t pc);
 /* Cheap query: is this PC in the JIT's compilable domain (RAM or registered ROM)?
  * Used by the interpreter inner loop to hand execution back to the dispatcher. */
 bool ppc_jit_aarch64_is_compilable(uint32_t pc);
+
+typedef void (*ppc_jit_entry_fn)(void *regs);
+
+/* Dispatch fast path: return the native entry point for an already-compiled
+ * complete block, or NULL.  Hash lookup only — never compiles. */
+ppc_jit_entry_fn ppc_jit_aarch64_lookup_fast(uint32_t pc);
 /* Register the (immutable) Mac ROM as a second JIT-compilable range. */
 void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uint8_t *host_base);
 
@@ -41,8 +47,6 @@ bool ppc_jit_aarch64_compile(
 	size_t ramsize,
 	ppc_jit_block *out
 );
-
-typedef void (*ppc_jit_entry_fn)(void *regs);
 
 #endif /* __aarch64__ */
 #endif /* PPC_JIT_H */

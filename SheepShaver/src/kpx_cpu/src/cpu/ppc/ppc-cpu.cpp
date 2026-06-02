@@ -763,10 +763,17 @@ void powerpc_cpu::execute(uint32 entry)
 				ppc_jit_block jblk;
 				/* GATE 2: execute only complete native blocks. Incomplete blocks are
 				 * compile-time probes only; skip_jit lets the interpreter execute the
-				 * first uncompiled/fallback-only instruction at the original PC. */
-				if (ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete) {
-					uint32 jit_block_start_pc = pc(); /* save for trace */
-					ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void*)jblk.code;
+				 * first uncompiled/fallback-only instruction at the original PC.
+				 *
+				 * Two-tier dispatch: ppc_jit_aarch64_lookup_fast() is a hash-lookup-only
+				 * fast path (tiny stack frame, no compile machinery) covering the
+				 * overwhelmingly common already-compiled case; the full compile() runs
+				 * only on lookup miss. */
+				uint32 jit_block_start_pc = pc(); /* block entry PC, for trace + GATE3 */
+				ppc_jit_entry_fn fn = ppc_jit_aarch64_lookup_fast(pc());
+				if (!fn && ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete)
+					fn = (ppc_jit_entry_fn)(void*)jblk.code;
+				if (fn) {
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
 					/* Log JIT block: from, to, then the 68k-emulator-relevant state
@@ -796,7 +803,7 @@ void powerpc_cpu::execute(uint32 entry)
 						if (gate3_log_budget > 0) {
 							gate3_log_budget--;
 							fprintf(stderr, "PPC-JIT-A64: GATE3: out-of-range PC 0x%08x after block at 0x%08x — interpreter dispatch%s\n",
-							        jit_pc, jblk.ppc_start_pc,
+							        jit_pc, jit_block_start_pc,
 							        gate3_log_budget == 0 ? " (further messages suppressed)" : "");
 						}
 					}
@@ -807,8 +814,11 @@ void powerpc_cpu::execute(uint32 entry)
 					 * JIT loop without touching the interpreter block cache.
 					 * This eliminates my_block_cache.find() + pdi_execute overhead for
 					 * hot block-to-block transitions where both blocks are JIT-compiled. */
-					if (ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete) {
+					jit_block_start_pc = pc();
+					fn = ppc_jit_aarch64_lookup_fast(pc());
+					if (!fn && ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete)
 						fn = (ppc_jit_entry_fn)(void*)jblk.code;
+					if (fn) {
 						fn((void*)regs_ptr());
 						goto pdi_jit_post;
 					}

@@ -3821,6 +3821,16 @@ bool ppc_jit_aarch64_has_block(uint32_t pc)
 	return e != NULL && e->complete;
 }
 
+ppc_jit_entry_fn ppc_jit_aarch64_lookup_fast(uint32_t pc)
+{
+	/* Dispatch fast path: hash lookup only, no compile, tiny stack frame.
+	 * The dispatcher calls this before the full ppc_jit_aarch64_compile() —
+	 * for already-compiled blocks (the overwhelmingly common case) this avoids
+	 * compile()'s function-call and stack-frame overhead per block execution. */
+	const struct jit_bc_entry *e = jit_bc_lookup(pc);
+	return (e != NULL && e->complete) ? (ppc_jit_entry_fn)(void *)e->code : (ppc_jit_entry_fn)0;
+}
+
 /* Guest RAM range, cached from the compile() parameters so that
  * ppc_jit_aarch64_is_compilable() can answer without them. */
 static uint32_t jit_ram_base_cached = 0;
@@ -3899,6 +3909,34 @@ void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uin
 	jit_rom_base = guest_base;
 	jit_rom_size = size;
 	jit_rom_host = host_base;
+}
+
+/* Periodic cumulative-blocker report.  Kept OUT of ppc_jit_aarch64_compile():
+ * its 4 KB of local sort arrays would otherwise live in compile()'s stack frame,
+ * forcing __chkstk probing on every call — and compile() is called per block
+ * dispatch, making that measurable (profiled during boot). */
+__attribute__((noinline))
+static void jit_report_cum_blockers(void) {
+	fprintf(stderr, "PPC-JIT-A64-CUM: %u fail opcodes in %u blocks (%u attempted), top blockers:\n",
+	        jit_cum_fail_total, jit_blocks_attempted - jit_blocks_complete, jit_blocks_attempted);
+	/* Copy arrays for sorted output without destroying data */
+	uint32_t tmp_opc[64]; memcpy(tmp_opc, jit_cum_fail_opc, sizeof(tmp_opc));
+	for (int pass = 0; pass < 15; pass++) {
+		uint32_t max_v = 0; int max_i = -1;
+		for (int i = 0; i < 64; i++) if (tmp_opc[i] > max_v) { max_v = tmp_opc[i]; max_i = i; }
+		if (max_i < 0 || max_v == 0) break;
+		fprintf(stderr, "  opc=%d: %u blocks\n", max_i, max_v);
+		tmp_opc[max_i] = 0;
+	}
+	uint32_t tmp_xo[1024]; memcpy(tmp_xo, jit_cum_fail_xo31, sizeof(tmp_xo));
+	fprintf(stderr, "PPC-JIT-A64-CUM: top XO31 blockers:\n");
+	for (int pass = 0; pass < 10; pass++) {
+		uint32_t max_v = 0; int max_i = -1;
+		for (int i = 0; i < 1024; i++) if (tmp_xo[i] > max_v) { max_v = tmp_xo[i]; max_i = i; }
+		if (max_i < 0 || max_v == 0) break;
+		fprintf(stderr, "  XO=%d: %u blocks\n", max_i, max_v);
+		tmp_xo[max_i] = 0;
+	}
 }
 
 /* SS_JIT_DEBUG_PC=<hex>: trace every compile decision for one PC (diagnostic) */
@@ -4156,25 +4194,7 @@ bool ppc_jit_aarch64_compile(
 		
 		if (jit_blocks_attempted >= cum_report_at) {
 			cum_report_at += 100000;
-			fprintf(stderr, "PPC-JIT-A64-CUM: %u fail opcodes in %u blocks (%u attempted), top blockers:\n", jit_cum_fail_total, jit_blocks_attempted - jit_blocks_complete, jit_blocks_attempted);
-			/* Copy arrays for sorted output without destroying data */
-			uint32_t tmp_opc[64]; memcpy(tmp_opc, jit_cum_fail_opc, sizeof(tmp_opc));
-			for (int pass = 0; pass < 15; pass++) {
-				uint32_t max_v = 0; int max_i = -1;
-				for (int i = 0; i < 64; i++) if (tmp_opc[i] > max_v) { max_v = tmp_opc[i]; max_i = i; }
-				if (max_i < 0 || max_v == 0) break;
-				fprintf(stderr, "  opc=%d: %u blocks\n", max_i, max_v);
-				tmp_opc[max_i] = 0;
-			}
-			uint32_t tmp_xo[1024]; memcpy(tmp_xo, jit_cum_fail_xo31, sizeof(tmp_xo));
-			fprintf(stderr, "PPC-JIT-A64-CUM: top XO31 blockers:\n");
-			for (int pass = 0; pass < 10; pass++) {
-				uint32_t max_v = 0; int max_i = -1;
-				for (int i = 0; i < 1024; i++) if (tmp_xo[i] > max_v) { max_v = tmp_xo[i]; max_i = i; }
-				if (max_i < 0 || max_v == 0) break;
-				fprintf(stderr, "  XO=%d: %u blocks\n", max_i, max_v);
-				tmp_xo[max_i] = 0;
-			}
+			jit_report_cum_blockers();
 		}
 	}
 

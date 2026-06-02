@@ -30,3 +30,19 @@ bunzip2 -k ppc-testresults.dat.bz2     # produces ppc-testresults.dat (36 MB)
 ```
 
 License: the results file is GPL like the tester that produced it.
+
+## Why we store it compressed
+
+The file is kept as `.bz2` in the repository deliberately:
+
+- **It is immutable** — a historical recording from real hardware. It will never be edited,
+  so there is no version-control benefit to storing it uncompressed (git would store the
+  36 MB blob whole either way; bzip2 beats git's internal zlib on this data).
+- **7.5× smaller**: 4.8 MB in the repo vs 37.7 MB decompressed.
+- **Decompression doubles as integrity verification**: `bunzip2 -k` + md5 check of the
+  output against `3e29432abb6e21e625a2eef8cf2f0840` proves the file is intact — this should
+  be the first step of any build wiring that uses it (see
+  `../../../../docs/COMPATIBILITY-TESTING-PLAN.md` Tier 1.4).
+
+Do not commit the decompressed `ppc-testresults.dat` — add it to `.gitignore` if build
+wiring produces it in-tree.

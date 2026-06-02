@@ -739,6 +739,55 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	a64_ret();
 }
 
+/* Inline interpreter-call bridge (defined in ppc-cpu.cpp). Decodes and executes
+ * ONE PPC instruction through the interpreter handler, advancing regs->pc.
+ * This is the dyngen do_generic / gen_invoke equivalent — see
+ * docs/superpowers/research/2026-06-02-dyngen-mechanisms.md GAP 3. */
+extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val);
+
+/* Emit a bare epilogue (LDP x6 + RET) WITHOUT storing a PC.
+ * Used after an inline interpreter call: the bridge already advanced regs->pc,
+ * and we must not chain off it (the executed instruction may have branched).
+ * This is emit_epilogue_with_pc minus the PC store and the chaining logic. */
+static void emit_bare_epilogue(void) {
+	a64_ldp_post(27, 28, A64_SP, 16);
+	a64_ldp_post(25, 26, A64_SP, 16);
+	a64_ldp_post(23, 24, A64_SP, 16);
+	a64_ldp_post(21, 22, A64_SP, 16);
+	a64_ldp_post(19, RSTATE, A64_SP, 16);
+	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
+	a64_ret();
+}
+
+/* Emit an inline call to the interpreter handler for one opcode at cur_pc,
+ * then a bare epilogue. ABI: the BLR clobbers x0-x17 and NZCV but preserves
+ * x19-x28, so RSTATE (x20) and RMEMBASE (x19) survive. All guest state is in
+ * memory (the register allocator is disabled), so nothing live is lost.
+ *
+ * Caller MUST have flushed lazy CR0 and the register allocator first, because
+ * lazy CR0 lives in NZCV which the call clobbers.
+ *
+ * Stack alignment: the block prologue pushes 6 STP pairs = 96 bytes (a multiple
+ * of 16) from a 16-aligned SP, so SP is 16-aligned at the BLR. No extra
+ * adjustment needed. */
+static void emit_inline_interp_call(uint32_t op, uint32_t cur_pc) {
+	/* Sync guest PC into regs->pc before the call. The bridge also sets it,
+	 * but emitting it here keeps the contract explicit and matches the plan.
+	 * Order matters: do this first (uses RTMP0 as scratch) before loading the
+	 * argument registers, since w0 must end holding the opcode. */
+	emit_load_imm32(RTMP0, (int32_t)cur_pc);
+	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+	/* Arguments: w0 = opcode, w1 = cur_pc.  RTMP0==x0, RTMP1==x1. */
+	emit_load_imm32(RTMP0, (int32_t)op);   /* w0 = opcode */
+	emit_load_imm32(RTMP1, (int32_t)cur_pc); /* w1 = cur_pc */
+	/* Load the bridge address into x16 (intra-procedure-call scratch, safe to
+	 * clobber across the call) and call it. */
+	emit_load_imm64(16, (uint64_t)(uintptr_t)&ppc_jit_interp_one);
+	a64_blr(16);
+	/* The bridge advanced regs->pc; do not store a new PC, do not chain. */
+	emit_bare_epilogue();
+}
+
 /* Emit: if lk=1, save pc+4 to PPCR_LR (bcl / bctrl / blrl semantics) */
 static void emit_save_lr_if_link(uint32_t cur_pc, bool lk) {
 	if (!lk) return;
@@ -4110,16 +4159,34 @@ bool ppc_jit_aarch64_compile(
 		}
 
 		if (!compile_one(op, cur_pc)) {
-			if (dbg) fprintf(stderr, "JIT-DBG %08x: compile_one FAILED at +%#x op=%08x (opc=%u xo=%u)\n",
+			if (dbg) fprintf(stderr, "JIT-DBG %08x: compile_one FALLBACK->inline-interp at +%#x op=%08x (opc=%u xo=%u)\n",
 			                 pc, (unsigned)(cur_pc - pc), op, op >> 26, (op >> 1) & 0x3FF);
 			jit_total_miss++;
 			jit_miss_count[op >> 26]++;
 			jit_cum_fail_opc[op >> 26]++;
 			if ((op >> 26) == 31) jit_cum_fail_xo31[(op >> 1) & 0x3FF]++;
 			jit_cum_fail_total++;
+			/* Dyngen do_generic equivalent: instead of ending the block as
+			 * incomplete (which forces mixed JIT/interpreter execution of the
+			 * same PC and corrupts the ROM's 68k emulator), emit an inline call
+			 * to the interpreter handler for this one instruction. The block
+			 * stays COMPLETE — every instruction is accounted for, either by
+			 * native codegen or by an inline handler call.
+			 *
+			 * Flush lazy CR0 + register allocator first: the BLR clobbers NZCV
+			 * (where lazy CR0 lives) and x0-x17, and all guest state must be in
+			 * the regs struct before the handler reads it. The handler may have
+			 * been a branch, so we end the block here (bare epilogue, no PC
+			 * store, no chaining) and break. This differs from dyngen, which
+			 * continues compiling after an inline call (multiple inline calls per
+			 * block); breaking after one costs one extra dispatch round-trip per
+			 * fallback op but keeps the change minimal and correct. */
 			lazy_flush_cr0();
-			emit_epilogue_with_pc(cur_pc);
-			complete = false;
+			ra_flush_all();
+			emit_inline_interp_call(op, cur_pc);
+			n_compiled++;
+			cur_pc += 4;
+			/* complete stays true */
 			break;
 		}
 

@@ -17,6 +17,7 @@ Drafted 2026-06-02.
 | [`JIT-FPU-PLAN.md`](../../JIT-FPU-PLAN.md) | Tier 3 (FP) integrates with this |
 | [`docs/research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) | C1 gates Phase 2 of this plan; see also [`RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md) |
 | [`AARCH64_JIT_PLAN.md`](../AARCH64_JIT_PLAN.md) / [`JIT-NEXT-PHASE.md`](../JIT-NEXT-PHASE.md) | Overall JIT plan this testing supports |
+| [`src/kpx_cpu/src/test/test-powerpc.cpp`](../src/kpx_cpu/src/test/test-powerpc.cpp) ([original docs](../doc/PowerPC-Testsuite.txt)) | **The original maintainer's PowerPC Emulator Tester** — dormant in-tree, see Tier 1.4 |
 
 ---
 
@@ -70,6 +71,29 @@ REGDUMPs diffed. Gate: score=100.
    to implemented opcodes, no memory ops or with a scratch page) and diff interp vs JIT for
    N=100k sequences nightly. QEMU's `risu` tool is the established reference for this
    methodology but targets ppc64/Linux — we replicate the idea, not the tool.
+
+4. **Revive the original maintainer's PowerPC Emulator Tester.** Gwenolé Beauchesne's
+   self-contained test suite is dormant in our tree at
+   [`src/kpx_cpu/src/test/test-powerpc.cpp`](../src/kpx_cpu/src/test/test-powerpc.cpp)
+   (2,242 lines; documented in [`doc/PowerPC-Testsuite.txt`](../doc/PowerPC-Testsuite.txt)).
+   It is the closest thing to an *established* SheepShaver compatibility tool in existence:
+   - Generates **2M+ tests** with operand values specifically chosen to exercise condition
+     code changes — per-instruction-form generators for add/sub/mul/div, shifts, rotates
+     (rlwinm/rlwimi!), logical ops, compares, CR-logical ops, and AltiVec
+   - Two modes: **record** a golden results file on real PPC hardware, or **verify** an
+     emulator against that file. The maintainer's reference file was recorded on a real
+     PowerPC 7410 (PowerBook G4) — including architecturally *unspecified* result behavior
+   - Terminates blocks with EMUL_OP `0x18000000`, which our CPU core already supports
+   - **Work to revive:** (a) add build wiring (it has none in our Unix Makefile); (b) run it
+     interpreter-only first to re-baseline; (c) make it drive the JIT path (same
+     `SS_TEST_JIT`-style gate the harness uses, or directly via `ppc_jit_aarch64_compile`);
+     (d) try to recover the original G4-recorded results file
+     (`ppc-testresults.dat.bz2`, md5 `3e29432abb6e21e625a2eef8cf2f0840`) from
+     web.archive.org — if found, we get *real-hardware* ground truth, the strongest oracle
+     possible; if not, record mode under the interpreter still gives us 2M+ interp-vs-JIT
+     differential vectors, dwarfing our current 209
+   - This likely **supersedes item 1.3** (synthetic fuzzing) — it is exactly that, already
+     written by the person who knew the CPU core best
 
 ## Tier 2 — System-level parity (exists, formalize)
 
@@ -153,13 +177,18 @@ Operationally:
 
 | Phase | When | Items |
 |---|---|---|
-| 1 | Now (cheap, high value) | Tier 1.2 coverage audit; Tier 4 crash-triage protocol (document it); Tier 2.2 boot-time canary |
-| 2 | After C1 lands (JIT residency fixed — JIT actually executes enough to test) | Tier 1.1 x86 build + 3-way harness; Tier 2.1 OS boot matrix |
+| 1 | Now (cheap, high value) | **Tier 1.4 revive test-powerpc.cpp** (build wiring + interp baseline); Tier 1.2 coverage audit; Tier 4 crash-triage protocol (document it); Tier 2.2 boot-time canary |
+| 2 | After C1 lands (JIT residency fixed — JIT actually executes enough to test) | Tier 1.4 JIT mode + 2M-test differential run; Tier 1.1 x86 build + 3-way harness; Tier 2.1 OS boot matrix |
 | 3 | After JIT-FPU work begins | Tier 3 TestFloat vectors + harness FPR seeding |
 | 4 | Stabilization / pre-release | Tier 4 Rings 1-2 automation; Tier 5 MacBench |
 
 ## Open questions / prerequisites
 
+- Can the original G4-recorded `ppc-testresults.dat.bz2` be recovered from web.archive.org
+  (original URL was on gwenole.beauchesne.info / perso.magic.fr, circa 2006)? Real-hardware
+  ground truth would be the strongest possible oracle for Tier 1.4.
+- Does `test-powerpc.cpp` still compile against the current kpx_cpu core (it predates years
+  of changes)? Budget for bit-rot fixes.
 - Does upstream x86 SheepShaver build cleanly on current macOS under Rosetta? (configure
   age, SDL versions). If not, an x86 Linux VM/container is the fallback host for the x86 lane.
 - Harness FPR seeding (`SS_TEST_INIT` covers GPRs only) — needed for Tier 3.

@@ -27,6 +27,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
+
+static double pjit_elapsed_s() {
+	static struct timespec t0 = {0,0};
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	if (t0.tv_sec == 0) t0 = t;
+	return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) * 1e-9;
+}
+#define JIT_LOG(fmt, ...) fprintf(stderr, "[JIT %.2fs] " fmt "\n", pjit_elapsed_s(), ##__VA_ARGS__)
 #include "ppc-jit.h"
 #include "ppc-codegen-aarch64.h"
 #include "jit-target-cache.hpp"
@@ -2501,7 +2511,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 			if (!ctr_eq_zero) {
 				/* bdnz: branch if CTR != 0 */
-				uint32_t *target_code = find_code_for_pc(target_pc);
+				/* Forward-only: backward intra-block branches must return to the dispatcher
+				 * so the spcflags poll at block entry runs each iteration (VBL hang fix). */
+				uint32_t *target_code = (target_pc > pc) ? find_code_for_pc(target_pc) : NULL;
 				if (target_code) {
 					int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 					if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2520,7 +2532,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				return true;
 			} else {
 				/* bdz: branch if CTR == 0 */
-				uint32_t *target_code = find_code_for_pc(target_pc);
+				/* Forward-only: same spcflags poll reason as bdnz above. */
+				uint32_t *target_code = (target_pc > pc) ? find_code_for_pc(target_pc) : NULL;
 				if (target_code) {
 					int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 					if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2552,7 +2565,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x12000000 | (RTMP0 << 5) | RTMP0); /* AND #1 */
 			/* BO[3] (bit 1 of BO): 1=branch if set, 0=branch if clear */
 			bool branch_if_set = cond_bit_val;
-			uint32_t *target_code = find_code_for_pc(target_pc);
+			/* Forward-only: backward intra-block branches bypass the spcflags poll
+			 * (poll is before insn_code_offset[0], not in find_code_for_pc range).
+			 * A backward branch must return to the dispatcher so the poll runs. */
+			uint32_t *target_code = (target_pc > pc) ? find_code_for_pc(target_pc) : NULL;
 			if (target_code) {
 				int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 				if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -3929,6 +3945,7 @@ void ppc_jit_aarch64_flush(void)
 	/* Reset code cache write pointer and invalidate block address cache.
 	 * Called when the JIT must start completely fresh (cache full, explicit reset).
 	 * Contract: see SheepShaver/docs/AARCH64_JIT_RUNTIME_CONTRACT.md — flush discipline. */
+	JIT_LOG("JIT cache flush, blocks compiled so far: %d", jit_bc_pool_next);
 	jit_cache_wp = (uint32_t *)jit_cache_base;
 	jit_bc_flush();
 }
@@ -4108,6 +4125,17 @@ bool ppc_jit_aarch64_compile(
 	 * handoff check, which has no access to the compile parameters). */
 	jit_ram_base_cached = (uint32_t)(uintptr_t)ram;
 	jit_ram_size_cached = (uint32_t)ramsize;
+
+	/* Log first compile of each 64KB region (rate-limited — one line per 64K chunk).
+	 * 65536 entries × 1 byte = 64KB static array covers all 32-bit guest space. */
+	{
+		static uint8_t seen_64k[65536] = {0};
+		uint32_t chunk = pc >> 16;
+		if (!seen_64k[chunk]) {
+			seen_64k[chunk] = 1;
+			JIT_LOG("first compile in 64KB region %08x (pc=%08x)", chunk << 16, pc);
+		}
+	}
 
 	/* Fast out-of-range check: SheepMem, kernel data, and other non-compilable
 	 * PCs bail BEFORE the W^X toggle + prologue — on macOS the

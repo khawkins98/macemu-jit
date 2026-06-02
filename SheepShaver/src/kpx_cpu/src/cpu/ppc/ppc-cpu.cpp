@@ -53,6 +53,20 @@ extern uint8 *ROMBaseHost;
  * &spcflags == &spcflags.mask; the poll reads a W-word at this offset. */
 static_assert(offsetof(powerpc_registers, spcflags) == 1056,
               "spcflags offset changed — update PPCR_SPCFLAGS in ppc-jit.cpp");
+
+#include <time.h>
+static double jit_elapsed_s() {
+	static struct timespec t0 = {0,0};
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	if (t0.tv_sec == 0) t0 = t;
+	return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) * 1e-9;
+}
+static FILE *jit_log_file = nullptr;
+/* Notable events (init, interrupts, stuck, flush) → stderr */
+#define JIT_LOG(fmt, ...) fprintf(stderr, "[JIT %.2fs] " fmt "\n", jit_elapsed_s(), ##__VA_ARGS__)
+/* Verbose events (heartbeat, per-interrupt detail) → file only */
+#define JIT_FLOG(fmt, ...) do { if (jit_log_file) { fprintf(jit_log_file, "[JIT %.2fs] " fmt "\n", jit_elapsed_s(), ##__VA_ARGS__); } } while(0)
 #endif
 
 #if PPC_PROFILE_GENERIC_CALLS
@@ -809,6 +823,10 @@ bool powerpc_cpu::check_spcflags()
 			HandleInterrupt(&r);
 			powerpc_registers::interrupt_copy(regs(), r);
 			processing_interrupt = false;
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+			JIT_LOG("interrupt delivered, pc=%08x", (uint32_t)pc());
+			JIT_FLOG("interrupt delivered, pc=%08x", (uint32_t)pc());
+#endif
 		}
 	}
 	if (spcflags().test(SPCFLAG_CPU_TRIGGER_INTERRUPT)) {
@@ -1042,6 +1060,11 @@ void powerpc_cpu::execute(uint32 entry)
 							ppc_jit_aarch64_set_rom_range(ROMBase, 0x460000, ROMBaseHost);
 					}
 					jit_init_done = true;
+					if (!jit_log_file) {
+						jit_log_file = fopen("/tmp/jit_diag.log", "w");
+						fprintf(stderr, "[JIT] diagnostic log: /tmp/jit_diag.log\n");
+					}
+					JIT_LOG("JIT initialized, ROM range [%08x..%08x]", ROMBase, ROMBase + 0x460000);
 				}
 				ppc_jit_block jblk;
 				/* GATE 2: execute only complete native blocks. Incomplete blocks are
@@ -1059,6 +1082,28 @@ void powerpc_cpu::execute(uint32 entry)
 				if (fn) {
 					fn((void*)regs_ptr());
 				  pdi_jit_post:
+					{
+						static uint64_t jit_block_count = 0;
+						static double last_log_t = 0;
+						static uint32_t last_pc_hb = 0;
+						static int stuck_count = 0;
+						jit_block_count++;
+						double now = jit_elapsed_s();
+						if (now - last_log_t >= 5.0) {
+							uint32_t cur_pc = (uint32_t)pc();
+							JIT_FLOG("heartbeat pc=%08x blocks=%llu", cur_pc, (unsigned long long)jit_block_count);
+							if (jit_log_file) fflush(jit_log_file);
+							if (cur_pc == last_pc_hb) {
+								stuck_count++;
+								if (stuck_count >= 2)
+									fprintf(stderr, "[JIT %.1fs] STUCK at pc=%08x for %ds\n", now, cur_pc, stuck_count * 5);
+							} else {
+								stuck_count = 0;
+								last_pc_hb = cur_pc;
+							}
+							last_log_t = now;
+						}
+					}
 					jit_ring_record(regs_ptr(), 'J', jit_block_start_pc, pc(), 0);
 					/* Log JIT block: from, to, then the 68k-emulator-relevant state
 					 * (r24=68k PC, r27=68k opcode, r29=handler addr, LR, CR, XER).

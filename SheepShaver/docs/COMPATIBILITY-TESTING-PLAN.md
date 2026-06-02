@@ -84,14 +84,29 @@ REGDUMPs diffed. Gate: score=100.
      emulator against that file. The maintainer's reference file was recorded on a real
      PowerPC 7410 (PowerBook G4) — including architecturally *unspecified* result behavior
    - Terminates blocks with EMUL_OP `0x18000000`, which our CPU core already supports
-   - **Work to revive:** (a) add build wiring (it has none in our Unix Makefile); (b) run it
-     interpreter-only first to re-baseline; (c) make it drive the JIT path (same
-     `SS_TEST_JIT`-style gate the harness uses, or directly via `ppc_jit_aarch64_compile`);
-     (d) try to recover the original G4-recorded results file
-     (`ppc-testresults.dat.bz2`, md5 `3e29432abb6e21e625a2eef8cf2f0840`) from
-     web.archive.org — if found, we get *real-hardware* ground truth, the strongest oracle
-     possible; if not, record mode under the interpreter still gives us 2M+ interp-vs-JIT
-     differential vectors, dwarfing our current 209
+   - **The golden results file is recovered and in-tree**:
+     [`ppc-testresults.dat.bz2`](../src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
+     ([provenance](../src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md)) — recorded on a real
+     PowerBook G4 (PPC 7410), verified bit-for-bit against the md5 in `test-powerpc.cpp:21`.
+   - **Usage plan — three validation stages, in order:**
+
+     | Stage | Run | Oracle | What it proves | When |
+     |---|---|---|---|---|
+     | **A. Interpreter vs real G4** | `test-powerpc --verify ppc-testresults.dat` with the **interpreter** core | Real silicon | Our interpreter matches real hardware — including unspecified-behavior cases. Any failure here is an interpreter bug that the JIT inherits as "correct" today. | First — establishes the trusted baseline |
+     | **B. JIT vs real G4** | Same, with the **JIT** path enabled | Real silicon | The JIT matches real hardware directly — bypasses the interpreter entirely as an oracle | After stage A is clean (or its failures are triaged) |
+     | **C. New-CPU record mode** | `test-powerpc --record our-results.dat` under the interpreter, then verify the JIT against it | Our interpreter | Covers instructions/operands added to the tester after 2006 (if we extend it); regenerable any time | Ongoing, for tester extensions |
+
+   - **Caveats for stages A/B:** (1) the 7410 recording includes AltiVec results — our JIT
+     doesn't implement AltiVec, so those tests verify the interpreter only (or are skipped
+     for the JIT run); (2) unspecified-behavior cases where our interpreter intentionally
+     differs from a 7410 (e.g. it may model a 750) need a triage list, not blind failure —
+     expect a small known-diffs file as a stage-A output; (3) the tester predates years of
+     core changes — budget bit-rot fixes before stage A runs at all.
+   - **Work to revive:** (a) add build wiring (it has none in our Unix Makefile — likely a
+     standalone `make test-powerpc` target linking the kpx_cpu core); (b) bunzip the results
+     file as a build step or document the manual step; (c) stage A run + known-diffs triage;
+     (d) add a JIT execution mode (same `SS_TEST_JIT`-style gate the opcode harness uses) for
+     stage B; (e) wire `make test-ppc-golden` into the golden workloads as a new workload.
    - This likely **supersedes item 1.3** (synthetic fuzzing) — it is exactly that, already
      written by the person who knew the CPU core best
 

@@ -275,6 +275,29 @@ Cemu/Ryujinx/RPCS3/Dolphin/QEMU do it) + `c5-background-compilation-feasibility.
 
 ---
 
+## Tier T — Testing infrastructure
+
+### T1. Revive the original PowerPC Emulator Tester with the recovered G4 golden file
+
+- **What exists:** `src/kpx_cpu/src/test/test-powerpc.cpp` (the original maintainer's
+  2M+-case test generator, dormant — no build wiring) and
+  `src/kpx_cpu/src/test/ppc-testresults.dat.bz2` (his golden results recorded on a real
+  PowerBook G4 / PPC 7410).
+- **Provenance of the results file:** recovered 2026-06-02 from the Internet Archive's sole
+  surviving snapshot of the maintainer's wiki (crawled 2006-12-12):
+  `https://web.archive.org/web/20061212220526id_/http://gwenole.beauchesne.info:80/projects/ppctester/files/ppc-testresults.dat.bz2`
+  — verified bit-for-bit: decompressed md5 `3e29432abb6e21e625a2eef8cf2f0840` matches both
+  `test-powerpc.cpp:21` and `doc/PowerPC-Testsuite.txt`. Full details:
+  `src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md`.
+- **The work:** build wiring → stage A (interpreter vs G4 file, triage known diffs) →
+  stage B (JIT vs G4 file) → `make test-ppc-golden` golden workload.
+  Full usage plan with stages/caveats: `../COMPATIBILITY-TESTING-PLAN.md` Tier 1.4.
+- **Why it matters:** real-silicon oracle — catches bugs the interpreter and JIT *share*,
+  which no interp-vs-JIT differential test can ever find.
+- **Effort:** wiring+stage A ~1 day (plus unknown bit-rot); stage B small once A is clean.
+- **Sequencing:** independent of the JIT work — can run any time. Stage B is most valuable
+  after C1 lands (JIT executes more code).
+
 ## Rejected / closed leads (do not implement)
 
 | Lead | Why rejected |

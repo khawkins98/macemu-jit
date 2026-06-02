@@ -286,6 +286,17 @@ public:
 	void execute(uint32 entry);
 	void execute();
 
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	// Inline interpreter-call bridge for the AArch64 JIT: decode+execute one
+	// PPC instruction via the interpreter handler (dyngen do_generic analogue).
+	// Public so the extern "C" shim in ppc-cpu.cpp can reach private decode().
+	void jit_interp_one(uint32 opcode, uint32 pc_val);
+	// Register this cpu as the target of the inline-interpreter-call bridge.
+	// execute() does this automatically; the SS_TEST_JIT harness drives the JIT
+	// without going through execute() and must call this first.
+	void jit_set_active();
+#endif
+
 	// Interrupts handling
 	void trigger_interrupt();
 	

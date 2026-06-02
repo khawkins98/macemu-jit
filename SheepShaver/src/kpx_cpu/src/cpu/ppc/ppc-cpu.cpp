@@ -77,6 +77,49 @@ int register_info_compare(const void *e1, const void *e2)
 }
 #endif
 
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+/* Inline interpreter-call bridge for the AArch64 JIT (dyngen do_generic
+ * equivalent).
+ *
+ * When the JIT hits an opcode it cannot compile natively (compile_one returns
+ * false), instead of marking the block incomplete it emits an inline call to
+ * this function for that one instruction.  The bridge decodes and executes the
+ * single PPC instruction through the *same* interpreter handler the interpreter
+ * loop uses (decode()->execute()), keeping the block "complete" and avoiding the
+ * mixed JIT/interpreter execution of the same PC that corrupts the ROM's 68k
+ * emulator.  See docs/superpowers/research/2026-06-02-dyngen-mechanisms.md GAP 3.
+ *
+ * s_active_cpu is set at the top of powerpc_cpu::execute(): the JIT only ever
+ * runs from inside execute(), single-threaded, on one cpu object across nested
+ * execute_depth calls, so it is always valid when the bridge fires.  The JIT
+ * passes the regs pointer (RSTATE/x20), not the cpu object, and regs_ptr() has
+ * no back-pointer to the cpu, so we recover the cpu this way rather than from
+ * the regs pointer. */
+static powerpc_cpu *s_active_cpu = NULL;
+
+void powerpc_cpu::jit_interp_one(uint32 opcode, uint32 pc_val)
+{
+	/* The bridge owns the guest PC: set it so the handler observes the correct
+	 * PC, then let the handler advance it (increment_pc or branch semantics). */
+	pc() = pc_val;
+	const instr_info_t *ii = decode(opcode);
+	ii->execute(this, opcode);
+}
+
+void powerpc_cpu::jit_set_active()
+{
+	s_active_cpu = this;
+}
+
+extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val)
+{
+	/* s_active_cpu is set by execute() and by jit_set_active() (test harness).
+	 * A NULL here means the JIT was driven without registering a cpu — a bug. */
+	assert(s_active_cpu != NULL);
+	s_active_cpu->jit_interp_one(opcode, pc_val);
+}
+#endif
+
 static int ppc_refcount = 0;
 
 #ifdef DO_CONVENTION_CALL_STATICS
@@ -592,6 +635,10 @@ void powerpc_cpu::execute(uint32 entry)
 	bool invalidated_cache = false;
 	pc() = entry;
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	/* Make this cpu reachable from the JIT inline-interpreter-call bridge
+	 * (ppc_jit_interp_one).  Single-threaded; nested execute() calls share the
+	 * same cpu object, so re-assigning here is harmless. */
+	s_active_cpu = this;
 	FILE *jit_trace_fp_for_cpu = NULL; /* set by trace block at pdi_execute, read by JIT gate */
 #endif
 #if PPC_EXECUTE_DUMP_STATE

@@ -1090,6 +1090,10 @@ bool ss_run_opcode_test(void)
 					 * interpreter for the remainder). A bounded iteration guard
 					 * prevents runaway loops in pathological test vectors. */
 					const uint32 sentinel = RAMBase + 0x8000;
+					/* Register this cpu for the inline-interpreter-call bridge:
+					 * the JIT is driven below without going through execute(),
+					 * so the bridge's s_active_cpu would otherwise be NULL. */
+					cpu->jit_set_active();
 					cpu->set_register(powerpc_registers::PC, any_register(test_addr));
 					int guard = 0;
 					bool jit_ok = true;

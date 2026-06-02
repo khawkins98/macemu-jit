@@ -3,7 +3,28 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
-## 2026-06-02 (session 4) — JIT boot hang root cause found and fixed
+## 2026-06-02 (session 4) — JIT boot hang root cause found and fixed; mouse lag diagnosed
+
+### Mouse tracking lag — root cause and fix options (session 4)
+
+Mouse input flows through a **two-stage 60 Hz pipeline**:
+1. `HandleInterrupt()` calls `SDL_PumpEvents()` at ~60Hz (VBL-tied) → moves OS events into SDL queue (~16.7ms)
+2. Redraw thread calls `SDL_PeepEvents()` at its own ~60Hz timer → ADB mouse moved (~16.7ms more)
+
+Worst-case latency: **~33ms**. Typical: **~16ms**. Both are perceptible as sluggish.
+
+**Additional issues**:
+- `SDL_PumpEventsFromMainThread()` is implemented but **never called** — the intended 2-stage design is broken; the fallback path always runs
+- `SDL_WarpMouseInWindow` in `video_set_cursor()` adds ~16ms per cursor-image change in grabbed mode (goes through Quartz)
+- `frame_skip` defaults to **8** → display refreshes at only ~7.5 Hz, making the cursor appear to stutter even if input latency were improved. Should be 1 or 2.
+
+**Fix options (video_sdl2.cpp)**:
+1. **Option 1 (best)**: Move mouse motion handling into the `on_sdl_event_generated()` event watch callback (already registered via `SDL_AddEventWatch`). Fires synchronously inside `SDL_PumpEvents()`, eliminating Stage 2. Cuts max latency from ~33ms to ~16.7ms. ~30 min.
+2. **Option 2**: Wire up `SDL_PumpEventsFromMainThread()` in `HandleInterrupt()` — correctness fix for the broken design.
+3. **Option 3**: Replace `SDL_WarpMouseInWindow` in `video_set_cursor()` with `SDL_HINT_MOUSE_RELATIVE_MODE_CENTER=0` — fixes per-cursor-change stutter in grabbed mode.
+4. Lower `frame_skip` default from 8 to 1 in `prefs_items.cpp` — independent of latency but makes cursor rendering smooth.
+
+Options 1+2+3+frame_skip would bring typical latency from ~33ms to ~8-10ms.
 
 ### Backward branch spcflags bypass — root cause of JIT boot hang (FIXED, commit 647a58d1)
 
@@ -34,6 +55,45 @@ JIT now emits structured boot-time diagnostics:
 - **`/tmp/jit_diag.log`**: 5-second heartbeat (`blocks=N pc=XXXX`) + every interrupt delivery
 - Absent heartbeats (despite process alive) = JIT dispatch froze or tight native loop (new backward-branch regression if chaining=0)
 - Dense interrupts at one PC = spin-wait (normal early-boot behavior)
+
+### Spin-wait at 0x5031040c is a memory scan, not a Ticks check
+
+The loop at ROM guest address 0x5031040c is NOT a VBL/Ticks counter wait. Decoded PPC:
+```
+5031040c: or. r9, r9, r9       ; test r9 for zero
+50310410: beq 50310424          ; EXIT if r9 == 0 (sentinel found)
+50310414: lwzu r4, 4(r11)       ; load from [r11+4], r11 += 4
+50310418: [operation on r4]
+5031041c: lwzu r9, 4(r11)       ; load r9 from [r11+4], r11 += 4
+50310420: b 5031040c            ; loop back
+```
+Scans memory advancing r11 by 8 per iteration until r9 (loaded from guest memory) is zero. In interpreter mode, r9 is already 0 on first entry → beq taken → exits immediately (never appears in interrupt logs). In JIT mode, r9 may not be 0 on entry — either a JIT miscompilation of preceding code or a timing race where the JIT reaches this point before initialization completes.
+
+### JIT DOES reach MODE_NATIVE and execute RAM code
+
+With the HandleInterrupt early-boot guard (see below), the JIT progresses past 0x5031040c, through a second spin-wait at 0x50313d34 (~20s, self-resolves), and into MODE_NATIVE executing RAM code at 0x10xxxxxx addresses. The boot continues further than previously observed.
+
+### HandleInterrupt guard for uninitialized kernel data (working fix candidate)
+
+In `sheepshaver_glue.cpp` `HandleInterrupt`, during `MODE_68K`: `cr_mask = ReadMacInt32(KERNEL_DATA_BASE + 0x674)`. In early boot (before the nanokernel initializes this address), cr_mask is 0. The original code applied the zero mask to CR unchanged. The proposed fix:
+```cpp
+if (cr_mask != 0) {
+    r->cr.set(r->cr.get() | cr_mask);
+} else {
+    // KernelData not yet initialized — directly tick Ticks so early-boot
+    // spin-waits can exit.
+    WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
+}
+```
+This causes the Ticks counter at 0x16a to increment on each interrupt while the kernel isn't set up yet, allowing early-boot spin-waits to exit. Confirmed to let the JIT reach MODE_NATIVE. Under review by vbl-investigator before committing.
+
+### Second spin-wait at 0x50313d34
+
+A second spin-wait at ROM address 0x50313d34 appears ~20–25 seconds into JIT boot and self-resolves after ~20 more seconds. No action needed — it exits on its own. Probably a similar sentinel scan that eventually finds its zero value.
+
+### XLM_RUN_MODE = 0 (MODE_68K) during early boot spin-waits
+
+During the 0x5031040c hang, `XLM_RUN_MODE` is 0 (`MODE_68K`). In this mode, SheepShaver's HandleInterrupt only sets a CR bit in the kernel data — it does NOT run the nanokernel or execute the VBL handler. The fix above adds a Ticks increment as a fallback for the uninitialized-kernel window.
 
 ---
 

@@ -1327,7 +1327,17 @@ void HandleInterrupt(powerpc_registers *r)
 	case MODE_68K:
 		// 68k emulator active, trigger 68k interrupt level 1
 		WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
-		r->cr.set(r->cr.get() | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
+		{
+			uint32 cr_mask = ReadMacInt32(KERNEL_DATA_BASE + 0x674);
+			if (cr_mask != 0) {
+				r->cr.set(r->cr.get() | cr_mask);
+			} else {
+				// KernelData not yet initialized (early boot, JIT reaches spin-waits
+				// before the nanokernel sets up 0x674/0x67c).  Directly tick the Mac
+				// timer so early-boot spin-waits on Ticks (0x16a) can exit.
+				WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
+			}
+		}
 		break;
     
 #if INTERRUPTS_IN_NATIVE_MODE

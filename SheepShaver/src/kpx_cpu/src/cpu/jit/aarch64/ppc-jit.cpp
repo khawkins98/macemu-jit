@@ -1049,10 +1049,6 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		if (skip_xo[xo]) return false;
 	}
 
-	/* Tested and ruled out (session 7):
-	 * - lazy_flush_cr0() before every instruction: still hangs
-	 * - zeroing RTMP0-3 before every instruction: still hangs
-	 * The extension-loading hang is NOT lazy CR0 or RTMP leakage. */
 
 	switch (opc) {
 

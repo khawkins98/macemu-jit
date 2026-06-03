@@ -135,49 +135,49 @@ static inline void a64_str_w_imm(int rt, int rn, uint32_t offset) {
     emit32(0xB9000000 | ((offset / 4) << 10) | (rn << 5) | rt);
 }
 
-/* ---- Register-offset loads/stores: <op> Wt/Xt, [Xn, Xm] ----
+/* ---- Register-offset loads/stores: <op> Wt/Xt, [Xn, Wm, UXTW] ----
  *
- * These are used for guest memory accesses under DIRECT addressing, where
- * the host address is formed as base_register (NATMEM_OFFSET) + guest_EA.
- * Xn is the base (the memory-base register) and Xm the guest effective
- * address. The option field selects LSL #0 (no scaling): option=0b011 (UXTX),
- * S=0. Encoding bits: size<<30 | opc | 1<<21 | Rm<<16 | option<<13 | S<<12 |
- * 0b10<<10 | Rn<<5 | Rt.
+ * Guest memory accesses under DIRECT addressing: host = base + guest_EA.
+ * Xn is the base (NATMEM_OFFSET), Wm is the 32-bit guest effective address.
  *
- * The base opcode constants below already encode (1<<21)|(0b011<<13)|(0b10<<10).
- */
+ * CRITICAL: option=010 (UXTW) zero-extends the 32-bit Wm offset to 64 bits.
+ * The previous option=011 (LSL/UXTX) used the full 64-bit Xm, which reads
+ * garbage from the upper 32 bits if any prior instruction operated on the
+ * X-register form (e.g., 64-bit arithmetic in subfe/adde, mftb, or
+ * emit_load_imm64). This caused stores to write to wrong addresses,
+ * corrupting guest memory and hanging the boot. */
 
-/* LDR Wt, [Xn, Xm] (32-bit, zero-extend) */
+/* LDR Wt, [Xn, Wm, UXTW] (32-bit load, 32-bit offset zero-extended) */
 static inline void a64_ldr_w_reg(int rt, int rn, int rm) {
-    emit32(0xB8606800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0xB8604800 | (rm << 16) | (rn << 5) | rt);
 }
-/* STR Wt, [Xn, Xm] (32-bit) */
+/* STR Wt, [Xn, Wm, UXTW] (32-bit store) */
 static inline void a64_str_w_reg(int rt, int rn, int rm) {
-    emit32(0xB8206800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0xB8204800 | (rm << 16) | (rn << 5) | rt);
 }
-/* LDR Xt, [Xn, Xm] (64-bit) */
+/* LDR Xt, [Xn, Wm, UXTW] (64-bit load) */
 static inline void a64_ldr_x_reg(int rt, int rn, int rm) {
-    emit32(0xF8606800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0xF8604800 | (rm << 16) | (rn << 5) | rt);
 }
-/* STR Xt, [Xn, Xm] (64-bit) */
+/* STR Xt, [Xn, Wm, UXTW] (64-bit store) */
 static inline void a64_str_x_reg(int rt, int rn, int rm) {
-    emit32(0xF8206800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0xF8204800 | (rm << 16) | (rn << 5) | rt);
 }
-/* LDRB Wt, [Xn, Xm] (8-bit, zero-extend) */
+/* LDRB Wt, [Xn, Wm, UXTW] (8-bit load, zero-extend) */
 static inline void a64_ldrb_reg(int rt, int rn, int rm) {
-    emit32(0x38606800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0x38604800 | (rm << 16) | (rn << 5) | rt);
 }
-/* STRB Wt, [Xn, Xm] (8-bit) */
+/* STRB Wt, [Xn, Wm, UXTW] (8-bit store) */
 static inline void a64_strb_reg(int rt, int rn, int rm) {
-    emit32(0x38206800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0x38204800 | (rm << 16) | (rn << 5) | rt);
 }
-/* LDRH Wt, [Xn, Xm] (16-bit, zero-extend) */
+/* LDRH Wt, [Xn, Wm, UXTW] (16-bit load, zero-extend) */
 static inline void a64_ldrh_reg(int rt, int rn, int rm) {
-    emit32(0x78606800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0x78604800 | (rm << 16) | (rn << 5) | rt);
 }
-/* STRH Wt, [Xn, Xm] (16-bit) */
+/* STRH Wt, [Xn, Wm, UXTW] (16-bit store) */
 static inline void a64_strh_reg(int rt, int rn, int rm) {
-    emit32(0x78206800 | (rm << 16) | (rn << 5) | rt);
+    emit32(0x78204800 | (rm << 16) | (rn << 5) | rt);
 }
 
 /* B (unconditional branch, PC-relative) */

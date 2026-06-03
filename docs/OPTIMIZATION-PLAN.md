@@ -144,3 +144,48 @@ Track results in `docs/BENCHMARKS.md` with before/after for each change.
 | Equivalent real Mac | G4 700MHz–1GHz |
 | Bugs fixed | 12 |
 | Harness | 235/235 |
+
+## Priority 0: Optimize Existing Fixes (Quick Wins)
+
+These are performance regressions introduced by our correctness fixes that can
+be tightened without changing behavior.
+
+### 0a. bclr Mixed Mode guard: AND+CBZ → TBZ (HIGHEST IMPACT)
+
+Every `bclr` (function return) currently pays 4 extra ARM64 instructions:
+```
+AND  W0, W(LR), #1     ; isolate bit 0
+CBZ  W0, skip           ; branch if clear
+; ... bail path ...
+```
+
+Replace with single `TBZ` (test bit and branch):
+```
+TBZ  W(LR), #0, skip   ; 1 instruction, zero-cycle on taken path
+```
+
+Saves 1 instruction on the hottest code path in the system. ~5-10 billion
+bclr executions during a boot — even 1 cycle each adds up.
+
+### 0b. subfe/adde: 64-bit sum → ADDS+ADCS (3-4 insns instead of 8)
+
+Current: UXTW + UXTW + ADD X + ADD X + LSR + STRB (8 instructions)
+Better: ADDS (A+B, sets C) + ADCS (result+CA, reads C and produces final C)
+
+ARM64 ADCS reads the carry flag from ADDS and produces the correct carry-out
+for the full three-operand sum. This is 3 instructions total:
+```
+MVN   W0, Wa            ; ~rA
+ADDS  W0, W0, Wb        ; ~rA + rB, sets C
+ADCS  W0, W0, Wca       ; + CA + C_from_ADDS, sets C = final carry
+CSET  Wca, CS           ; extract carry
+```
+
+### 0c. isync: inline BLR instead of block break
+
+Current: `return false` → block terminates, full prologue/epilogue overhead.
+Better: emit inline `BLR` to `execute_invalidate_cache_range()` stub, continue block.
+
+isync appears after every mtspr/mtmsr in the ROM toolbox. Each block break costs
+~12 instructions of prologue/epilogue overhead. An inline BLR costs ~4 instructions
+(save/restore caller-saved regs around the call).

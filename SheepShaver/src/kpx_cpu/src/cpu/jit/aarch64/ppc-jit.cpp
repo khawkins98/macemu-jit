@@ -2860,9 +2860,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				return true;
 			}
 		}
-		case 150: /* isync — NOP (no emulated pipeline).  See icbi (case 982) for why
-		           * this must stay native: isync is ubiquitous in OS code. */
-			return true;
+		case 150: /* isync — fall through to interpreter so execute_isync() runs
+		           * execute_invalidate_cache_range(), flushing any deferred icbi.
+		           * Without this, icbi sets cache_range but isync-as-NOP never
+		           * flushes it, leaving stale JIT blocks for overwritten code. */
+			return false;
 
 		case 0: /* mcrf crfD,crfS — copy CR field */
 		{

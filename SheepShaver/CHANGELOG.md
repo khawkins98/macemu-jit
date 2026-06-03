@@ -40,6 +40,10 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 - **TBZ bclr optimization**: Mixed Mode guard on function returns uses single
   `TBZ` instruction instead of `AND` + `CBZ` (1 instruction saved per `bclr`).
 
+- **Atomic spcflags (P0d)**: Replaced spinlock-based spcflags with
+  `std::atomic`, eliminating lock contention between the 60 Hz VBL timer
+  and the JIT dispatch loop. CPU score 65.2 (new high).
+
 - **Trailing MOV elimination (P0f)**: Carry, overflow, and immediate-carry ops
   (subfc, addc, addco, subfco, addo, subfo, nego, addze, subfze, addic, addic.,
   subfic) now compute ADDS/SUBS directly into the RA destination register,

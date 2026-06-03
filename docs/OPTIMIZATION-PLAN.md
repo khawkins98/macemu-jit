@@ -119,15 +119,12 @@ Current: `return false` → block terminates, full prologue/epilogue overhead.
 Better: emit inline `BLR` to `execute_invalidate_cache_range()` stub, continue
 block.  Each block break costs ~12 instructions of overhead.
 
-### 0d. Verify Atomic spcflags (from upstream PERFORMANCE_AUDIT)
+### 0d. Atomic spcflags — DONE (2026-06-03)
 
-**Expected impact**: Potentially significant if currently mutex-based
-**Effort**: Low (check and change if needed)
-
-The upstream audit found that mutex-based spcflags synchronization was a
-bottleneck on RPi.  Verify SheepShaver uses atomic operations for spcflags
-(the VBL timer thread sets TRIGGER_INTERRUPT from a signal handler — if
-this goes through a mutex, every 60Hz tick takes a lock).
+**Result**: CPU 65.2 (new high).  Replaced spinlock-based `basic_spcflags`
+with `std::atomic<uint32>` using `fetch_or`/`fetch_and` + relaxed/release
+ordering.  Eliminates lock contention between the 60 Hz VBL timer thread
+and the JIT dispatch loop's per-block spcflags poll.
 
 ### 0e. Computed-goto Interpreter Dispatch (from upstream PERFORMANCE_AUDIT)
 

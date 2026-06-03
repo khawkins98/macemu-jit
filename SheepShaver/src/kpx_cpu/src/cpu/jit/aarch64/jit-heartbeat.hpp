@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/resource.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -36,6 +37,15 @@ struct hb_state {
 	uint64_t prev_blocks;  /* block count at last emission (for rate) */
 	double   prev_t;       /* wall time at last emission (for rate) */
 	double   prev_cpu_s;   /* process CPU seconds at last emission (for cpu%) */
+	/* Anomaly-rule baselines (see "Warning matrix" below) */
+	int      emissions;        /* HB lines emitted so far (rules need a baseline) */
+	double   avg_rate_m;       /* running average block rate, M/s (EMA) */
+	uint32_t prev_compiled;    /* compiled count at last emission */
+	int      comp_frozen_hbs;  /* consecutive HBs with compiled unchanged at high rate */
+	uint64_t prev_trans;       /* transition count at last emission */
+	uint64_t prev_oth;         /* OTH-region block count at last emission */
+	double   first_rss_mb;     /* RSS at first emission (runaway baseline) */
+	double   prev_rss_mb;      /* RSS at last emission */
 };
 
 /* Current resident set size in MB, or -1 if unavailable. */
@@ -121,6 +131,77 @@ static inline void hb_tick(hb_state *st, FILE *log_file, bool jit_mode, double n
 
 	double rss = hb_rss_mb();
 
+	/* ---- Warning matrix (canonical copy: SheepShaver/docs/DIAGNOSTICS.md) ----
+	 *
+	 *  Signal                  SUSPECT (yellow)              WARN (red)
+	 *  ----------------------  ----------------------------  ---------------------------
+	 *  Execution rate          < 50% of running average      < 0.5M blk/s after 30s
+	 *  Compile freeze (JIT)    comp unchanged 2 HBs @ >1M/s  unchanged 5+ HBs
+	 *  JIT<->interp trans      > 100K/s                      > 1M/s
+	 *  Wild PC (OTH region)    any growth                    > 1% of all blocks
+	 *  Memory (RSS)            +10% between HBs after 60s    2x initial or > 2GB
+	 *  CPU utilization         < 80% after 30s               < 50%
+	 *
+	 *  Deliberately NOT a rule: "same PC across heartbeats" — that is a sampling
+	 *  artifact, not a hang signal (LEARNINGS.md, session 5 retraction).  Do not
+	 *  add it back.
+	 *
+	 *  Guards: no rules on the first emission (no baseline); rules whose inputs
+	 *  are unavailable (rss/cpu < 0) silently skip. */
+	const char *findings[6];
+	int n_findings = 0;
+	int severity = 0;  /* 0 = ok, 1 = suspect, 2 = warn */
+#define HB_FLAG(sev, msg) do { \
+		if (n_findings < 6) findings[n_findings++] = (msg); \
+		if ((sev) > severity) severity = (sev); \
+	} while (0)
+	if (st->emissions >= 1) {
+		/* Execution rate */
+		if (now > 30.0 && rate_m < 0.5)
+			HB_FLAG(2, "rate collapsed");
+		else if (st->avg_rate_m > 0 && rate_m < 0.5 * st->avg_rate_m)
+			HB_FLAG(1, "rate dropped >50%");
+		/* Compile freeze (JIT mode only): same compiled blocks repeating at speed */
+		if (jit_mode && rate_m > 1.0) {
+			if (compiled == st->prev_compiled) {
+				st->comp_frozen_hbs++;
+				if (st->comp_frozen_hbs >= 5)
+					HB_FLAG(2, "comp frozen 5+ HBs (repeat-loop hang?)");
+				else if (st->comp_frozen_hbs >= 2)
+					HB_FLAG(1, "comp frozen");
+			} else
+				st->comp_frozen_hbs = 0;
+		}
+		/* JIT<->interpreter transition thrash */
+		if (dt > 0) {
+			double trans_per_s = (trans - st->prev_trans) / dt;
+			if (trans_per_s > 1e6)
+				HB_FLAG(2, "transition thrash >1M/s");
+			else if (trans_per_s > 1e5)
+				HB_FLAG(1, "transitions >100K/s");
+		}
+		/* Wild PC: execution outside RAM/ROM (OTH region) */
+		if (rgn[3] * 100 > blocks && blocks > 0)
+			HB_FLAG(2, "OTH-region >1% of blocks");
+		else if (rgn[3] > st->prev_oth)
+			HB_FLAG(1, "OTH-region execution");
+		/* Memory */
+		if (rss >= 0) {
+			if ((st->first_rss_mb > 0 && rss > 2.0 * st->first_rss_mb) || rss > 2048.0)
+				HB_FLAG(2, "RSS runaway");
+			else if (now > 60.0 && st->prev_rss_mb > 0 && rss > 1.10 * st->prev_rss_mb)
+				HB_FLAG(1, "RSS +10%");
+		}
+		/* CPU starvation */
+		if (now > 30.0 && cpu_pct >= 0) {
+			if (cpu_pct < 50.0)
+				HB_FLAG(2, "cpu starved");
+			else if (cpu_pct < 80.0)
+				HB_FLAG(1, "cpu low");
+		}
+	}
+#undef HB_FLAG
+
 	char tbuf[24], bbuf[24], r0[24], r1[24], r2[24], trbuf[24];
 	hb_fmt_time(now, tbuf, sizeof tbuf);
 	hb_fmt_count(blocks, bbuf, sizeof bbuf);
@@ -135,17 +216,34 @@ static inline void hb_tick(hb_state *st, FILE *log_file, bool jit_mode, double n
 	if (cpu_pct >= 0) snprintf(cpubuf, sizeof cpubuf, "%.0f%%", cpu_pct);
 	else              snprintf(cpubuf, sizeof cpubuf, "?");
 
-	char line[256];
+	char line[512];
+	int len;
 	if (jit_mode)
-		snprintf(line, sizeof line,
+		len = snprintf(line, sizeof line,
 		         "[HB %s] blocks=%s (%.1fM/s) comp=%u | jNK=%s jDR=%s jRAM=%s j2i=%s | rss=%s cpu=%s",
 		         tbuf, bbuf, rate_m, compiled, r0, r1, r2, trbuf, rssbuf, cpubuf);
 	else
-		snprintf(line, sizeof line,
+		len = snprintf(line, sizeof line,
 		         "[HB %s] blocks=%s (%.1fM/s) interp | iNK=%s iDR=%s iRAM=%s i2j=%s | rss=%s cpu=%s",
 		         tbuf, bbuf, rate_m, r0, r1, r2, trbuf, rssbuf, cpubuf);
 
-	fprintf(stderr, "%s\n", line);
+	/* Append findings: "[WARN: a; b]" / "[SUSPECT: a]".  Plain text — color is
+	 * applied only around the stderr copy, never stored in the line itself. */
+	if (severity > 0 && len > 0 && (size_t)len < sizeof line) {
+		len += snprintf(line + len, sizeof line - len, "  [%s: ",
+		                severity == 2 ? "WARN" : "SUSPECT");
+		for (int i = 0; i < n_findings && len > 0 && (size_t)len < sizeof line; i++)
+			len += snprintf(line + len, sizeof line - len, "%s%s",
+			                i ? "; " : "", findings[i]);
+		if (len > 0 && (size_t)len < sizeof line)
+			len += snprintf(line + len, sizeof line - len, "]");
+	}
+
+	/* stderr: ANSI color (yellow=suspect, red=warn) only when it's a real terminal */
+	if (severity > 0 && isatty(fileno(stderr)))
+		fprintf(stderr, "%s%s\033[0m\n", severity == 2 ? "\033[31m" : "\033[33m", line);
+	else
+		fprintf(stderr, "%s\n", line);
 	if (log_file) {
 		fprintf(log_file, "%s\n", line);
 		fflush(log_file);
@@ -157,9 +255,20 @@ static inline void hb_tick(hb_state *st, FILE *log_file, bool jit_mode, double n
 	while (st->next_due <= now)
 		st->next_due += 60.0;
 
+	/* Update baselines for the next emission's rules. */
 	st->prev_blocks = blocks;
 	st->prev_t = now;
 	st->prev_cpu_s = cpu_s;
+	st->avg_rate_m = (st->emissions == 0) ? rate_m
+	                 : 0.7 * st->avg_rate_m + 0.3 * rate_m;
+	st->prev_compiled = compiled;
+	st->prev_trans = trans;
+	st->prev_oth = rgn[3];
+	if (st->emissions == 0 && rss >= 0)
+		st->first_rss_mb = rss;
+	if (rss >= 0)
+		st->prev_rss_mb = rss;
+	st->emissions++;
 }
 
 #endif /* JIT_HEARTBEAT_HPP */

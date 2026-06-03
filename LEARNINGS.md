@@ -33,6 +33,31 @@ Same binary-search methodology applies but needs RAM-region exclusion support.
 See `docs/PPC-ARM64-JIT-LESSONS.md` for the architectural narrative — why these
 bugs aren't Apple-specific and what they teach about PPC→ARM64 JIT in general.
 
+### Extension-loading hang investigation (continued)
+
+**icbi (instruction cache block invalidate) was NOP'd** — fixed by falling through
+to the interpreter's execute_icbi, and wiring invalidate_cache_range to call the JIT's
+ppc_jit_aarch64_invalidate_range. This is a correctness fix but did NOT resolve the
+hang: comp=32079 stays frozen (no new blocks compiled), proving stale-code execution
+is not the active cause.
+
+**RAM addresses shift between boots** — Mac OS loads extensions at different base
+addresses each run. Hot PCs: 10695358 in run 1 vs 106953b8 in run 2. This is why
+address-based binary search (SS_JIT_INTERP_RANGE) can't isolate the bug with sub-
+ranges — the code moves. Only interpreting ALL RAM (10000000-20000000) works.
+
+**Opcode-based search needed** — added SS_JIT_SKIP_OPC and SS_JIT_SKIP_XO env vars
+to force specific instruction types to the interpreter. This enables testing "which
+PPC instruction type, when JIT-compiled, causes the hang" regardless of address.
+
+**What we know about the hang**:
+- 32K unique blocks compiled during boot, then the same set loops forever
+- jNK frozen (nanokernel never re-entered after initial boot)
+- Block chaining is NOT the cause (SS_JIT_NO_CHAIN=1 still hangs)
+- ROM JIT is NOT the cause (SS_JIT_NO_ROM=1 + RAM JIT still hangs)
+- icbi/SMC is NOT the cause (no new blocks compiled during hang)
+- The interpreter boots the same 8.6 ISO to Finder desktop in ~2 min
+
 ### Previous entry (partially superseded)
 
 Final state after session 7:

@@ -1000,6 +1000,55 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 	int16_t simm;
 	uint16_t uimm;
 
+	/* SS_JIT_SKIP_OPC: force interpreter for specific primary opcodes */
+	{
+		static uint8_t skip_opc[64] = {0};
+		static int checked = 0;
+		if (!checked) {
+			checked = 1;
+			const char *env = getenv("SS_JIT_SKIP_OPC");
+			if (env) {
+				char buf[256];
+				strncpy(buf, env, sizeof(buf)-1); buf[sizeof(buf)-1] = 0;
+				char *tok = strtok(buf, ",");
+				while (tok) {
+					int n = atoi(tok);
+					if (n >= 0 && n < 64) skip_opc[n] = 1;
+					tok = strtok(NULL, ",");
+				}
+				fprintf(stderr, "[JIT] SS_JIT_SKIP_OPC: opcodes");
+				for (int i = 0; i < 64; i++) if (skip_opc[i]) fprintf(stderr, " %d", i);
+				fprintf(stderr, " forced to interpreter\n");
+			}
+		}
+		if (skip_opc[opc]) return false;
+	}
+
+	/* SS_JIT_SKIP_XO: force interpreter for specific XO31 sub-opcodes */
+	if (opc == 31) {
+		static uint16_t skip_xo[1024] = {0};
+		static int xo_checked = 0;
+		if (!xo_checked) {
+			xo_checked = 1;
+			const char *env = getenv("SS_JIT_SKIP_XO");
+			if (env) {
+				char buf[256];
+				strncpy(buf, env, sizeof(buf)-1); buf[sizeof(buf)-1] = 0;
+				char *tok = strtok(buf, ",");
+				while (tok) {
+					int n = atoi(tok);
+					if (n >= 0 && n < 1024) skip_xo[n] = 1;
+					tok = strtok(NULL, ",");
+				}
+				fprintf(stderr, "[JIT] SS_JIT_SKIP_XO: XO31 sub-opcodes");
+				for (int i = 0; i < 1024; i++) if (skip_xo[i]) fprintf(stderr, " %d", i);
+				fprintf(stderr, " forced to interpreter\n");
+			}
+		}
+		uint32_t xo = (op >> 1) & 0x3FF;
+		if (skip_xo[xo]) return false;
+	}
+
 	switch (opc) {
 
 	case 14: /* addi / li */

@@ -3,9 +3,37 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
-## 2026-06-03 (session 7 continued) — subfe carry bug found and fixed; DR emulator JIT boots
+## 2026-06-03 (session 7 continued) — three JIT bugs fixed, boot reaches extension loading
 
-### SESSION 7 COMPLETE: Mac OS 8.6 boots to Finder desktop with full JIT
+### CORRECTION: "desktop" was Disk First Aid dialog, not Finder
+
+The VNC screenshot showing the Mac OS desktop pattern was actually the Disk First Aid
+dialog (triggered by kill -9 leaving the disk dirty). After dismissing it, boot continues
+to "Starting Up..." and hangs at ~10% progress. This hang is a **pre-existing JIT bug**
+confirmed at commit 77d47baa (before all session 7 changes). The interpreter boots the
+same 8.6 ISO to Finder desktop in ~2 minutes.
+
+### Three JIT bugs fixed this session
+
+1. **subfe/adde carry-out** (the DR emulator unlocker): three-operand CA computation
+   was reading carry from partial ADDS, not the full sum. Fix: 64-bit arithmetic.
+2. **mftb TBU/TBL**: CNTVCT_EL0 was stored as-is for both TBL and TBU, giving
+   identical values. Fix: LSR #32 for TBU.
+3. **DR emulator entry-poll suppression**: block-entry spcflags poll removed for
+   DR emulator blocks to prevent premature CR2.LT injection.
+
+### Pre-existing extension-loading hang (NOT caused by our changes)
+
+Traced to a tight loop: ROM epilogue at 0x50132ec8 (function return stub with
+`addic r1,r1,64` + `mtspr LR` + `blr`) returns to RAM at 0x10662304 repeatedly.
+The epilogue itself is correct — the bug is in the RAM-resident Mac OS code that
+calls it. Affects both ROM=0x460000 and ROM=0x500000, both HD and ISO boot.
+Same binary-search methodology applies but needs RAM-region exclusion support.
+
+See `docs/PPC-ARM64-JIT-LESSONS.md` for the architectural narrative — why these
+bugs aren't Apple-specific and what they teach about PPC→ARM64 JIT in general.
+
+### Previous entry (partially superseded)
 
 Final state after session 7:
 - **subfe/adde carry bug** found and fixed (64-bit carry computation)

@@ -98,3 +98,121 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 - [ ] Application launch timing (SimpleText, TeachText)
 - [ ] Compare with upstream Linux ARM64 (rcarmo/macemu-jit)
 - [ ] HD boot timing (after clean install)
+
+## Speedometer 4.02 Results
+
+### Configuration
+- **Host**: macOS arm64 (Apple Silicon)
+- **ROM**: OldWorld 1998-07-21 Mac OS ROM 1.1 (ROM Version $077D, 3072K)
+- **Guest OS**: Mac OS 8.6 (fresh HD install, 4GB disk)
+- **RAM**: 256MB
+- **JIT**: Full native (ROM=0x500000, chaining=1, no skip list)
+- **Reported CPU**: Power Macintosh, MC68020 (native/nominal), PowerPC Math FPU
+
+### JIT Results (PR: 40.424, relative to Quadra 605 = 1.0)
+
+| Category | Score | Rating |
+|----------|-------|--------|
+| **CPU** | 62.732 | 1 |
+| **Graphics** | 42.120 | 1 |
+| **Disk** | 17.811 | 1 |
+| **Math** | 10310.327 | 1 |
+| **PR (overall)** | **40.424** | |
+
+### Benchmark Mix (vs Quadra 605 = 1.0)
+
+| Test | Absolute | Rating |
+|------|----------|--------|
+| KWhetstones/sec | 1,340,482.573 | 4558.131 |
+| Dhrystones/sec | 1,310,650.344 | 75.884 |
+| Towers | 0.006s | 107.187 |
+| Quick Sort | 0.007s | 106.627 |
+| Bubble Sort | 0.007s | 101.390 |
+| Queens | 0.006s | 65.613 |
+| Puzzle | 0.008s | 139.761 |
+| Permutations | 0.007s | 123.411 |
+| Int. Matrix | 0.003s | 240.032 |
+| Sieve | 0.020s | 66.974 |
+| **Mix Average** | | **558.501** |
+
+### Color Benchmarks (vs Quadra 605 = 1.0)
+
+| Test | Time | Rating |
+|------|------|--------|
+| Monochrome | 0.181s | 38.095 |
+| Two Bit | 0.203s | 37.622 |
+| Four Bit | 0.215s | 40.529 |
+| Eight Bit | 0.221s | 48.026 |
+| Sixteen Bit | 0.184s | 73.852 |
+| **Average** | | **47.625** |
+
+### FP Benchmarks (vs Quadra 650 = 1.0)
+
+| Test | Absolute | Rating |
+|------|----------|--------|
+| KWhetstones/sec | 1,290,322.580 | 247.807 |
+| Matrix Mult. | 0.004s | 177.216 |
+| Fast Fourier | 0.001s | 249.974 |
+| **Average** | | **224.999** |
+
+### Interpreter Results (PR: 21.485)
+
+| Category | JIT | Interpreter | JIT/Interp Ratio |
+|----------|-----|-------------|------------------|
+| **CPU** | 62.732 | 35.651 | **1.76x** |
+| **Graphics** | 42.120 | 21.441 | **1.96x** |
+| **Disk** | 17.811 | 9.380 | **1.90x** |
+| **Math** | 10310.327 | 7974.433 | **1.29x** |
+| **PR (overall)** | **40.424** | **21.485** | **1.88x** |
+
+### Benchmark Mix Comparison (vs Quadra 605 = 1.0)
+
+| Test | JIT | Interpreter | Speedup |
+|------|-----|-------------|---------|
+| KWhetstones/sec | 4558.131 | 2009.672 | 2.27x |
+| Dhrystones/sec | 75.884 | 33.423 | 2.27x |
+| Towers | 107.187 | 57.658 | 1.86x |
+| Quick Sort | 106.627 | 69.467 | 1.53x |
+| Bubble Sort | 101.390 | 44.822 | 2.26x |
+| Queens | 65.613 | 36.445 | 1.80x |
+| Puzzle | 139.761 | 59.336 | 2.36x |
+| Permutations | 123.411 | 57.327 | 2.15x |
+| Int. Matrix | 240.032 | 114.296 | 2.10x |
+| Sieve | 66.974 | 40.414 | 1.66x |
+| **Mix Average** | **558.501** | **252.286** | **2.21x** |
+
+### Color Benchmarks Comparison
+
+| Test | JIT Rating | Interp Rating | Speedup |
+|------|-----------|---------------|---------|
+| Monochrome | 38.095 | 21.333 | 1.79x |
+| Two Bit | 37.622 | 21.209 | 1.77x |
+| Four Bit | 40.529 | 22.753 | 1.78x |
+| Eight Bit | 48.026 | 28.911 | 1.66x |
+| Sixteen Bit | 73.852 | 47.867 | 1.54x |
+| **Average** | **47.625** | **28.415** | **1.68x** |
+
+### FP Benchmarks Comparison (vs Quadra 650 = 1.0)
+
+| Test | JIT Rating | Interp Rating | Speedup |
+|------|-----------|---------------|---------|
+| KWhetstones/sec | 247.807 | 114.588 | 2.16x |
+| Matrix Mult. | 177.216 | 105.436 | 1.68x |
+| Fast Fourier | 249.974 | 83.721 | 2.99x |
+| **Average** | **224.999** | **101.248** | **2.22x** |
+
+### Summary
+
+The PPC→ARM64 JIT delivers a **1.88x overall speedup** (PR score) over the interpreter.
+
+| Category | Speedup | Notes |
+|----------|---------|-------|
+| Integer (Whetstone/Dhrystone) | 2.27x | Pure compute, biggest JIT win |
+| Sorting/algorithms | 1.5-2.4x | Varies by memory access pattern |
+| Graphics | 1.7-2.0x | Limited by SDL rendering overhead |
+| Disk | 1.90x | Surprising — File Manager PPC overhead |
+| FP | 2.2x avg, up to 3.0x | Fast Fourier shows best FP speedup |
+| **Overall PR** | **1.88x** | |
+
+Screenshots: [JIT](speedometer-jit.jpg) | [Interpreter](speedometer-interpreter.jpg)
+

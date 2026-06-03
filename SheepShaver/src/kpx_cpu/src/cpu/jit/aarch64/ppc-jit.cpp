@@ -1745,11 +1745,19 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x13003C00 | (RTMP1 << 5) | RTMP1); /* SXTH */
 			emit_store_gpr(RTMP1, rd);
 			return true;
-		case 371: /* mftb rD (move from time base) */
-			/* Read ARM64 CNTVCT_EL0 as a substitute for PPC TB */
-			emit32(0xD53BE040 | RTMP0); /* MRS Xt, CNTVCT_EL0 */
+		case 371: /* mftb rD,TBR — move from time base */
+		{
+			/* TBR field: spr_hi (bits 15-11) << 5 | spr_lo (bits 20-16) */
+			uint32_t tbr = (rb << 5) | ra;
+			emit32(0xD53BE040 | RTMP0); /* MRS Xt, CNTVCT_EL0 (64-bit) */
+			if (tbr == 269) {
+				/* TBU: upper 32 bits of 64-bit counter */
+				emit32(0xD360FC00 | (RTMP0 << 5) | RTMP0); /* LSR Xd, Xn, #32 */
+			}
+			/* TBL (268) or unknown: lower 32 bits (implicit W-reg truncation) */
 			emit_store_gpr(RTMP0, rd);
 			return true;
+		}
 
 		case 119: /* lbzux rD,rA,rB */
 			/* ra==0: use 0 as base; ra==rd: update gets overwritten by load (PPC undefined but harmless) */

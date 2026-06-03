@@ -93,21 +93,55 @@ on it.
 
 ## Open — Quick Wins (Priority 0)
 
-### 0b. subfe/adde: 64-bit sum → ADDS+ADCS (3-4 insns instead of 8)
+### 0b. subfe/adde: 64-bit sum → ADDS+ADCS — CORRECTNESS + PERF
 
-**Expected impact**: Minor (carry ops are ~2% of dynamic instruction mix)
+**Expected impact**: Minor perf (carry ops ~2% of dynamic mix), but **fixes
+two verified correctness bugs** (backlog A1/A2).
 **Effort**: Low
-**Risk**: Low (carry semantics already verified by harness)
+**Risk**: Low — fix is designed and ready to apply (see backlog)
 
-Current: UXTW + UXTW + ADD X + ADD X + LSR + STRB (8 instructions).
-Better: ADDS (A+B, sets C) + ADCS (result+CA, reads C and produces final C).
+**Bugs (from IMPLEMENTATION-BACKLOG.md A1/A2):**
+The current 64-bit sum approach in adde (case 138) and subfe (case 136) drops
+the carry when CA wraps: `ADDS ~rA+rB` then non-flag `ADD` of CA loses the
+second carry contribution.  Example: `rA+rB=0xFFFFFFFF, CA=1 → result 0`,
+recorded CA=0 but correct CA=1.
 
+**Fix:** materialize CA into the host C flag with `CMP W(CA), #1`, then use
+`ADCS` which reads C and produces the correct carry-out in one instruction:
 ```
-MVN   W0, Wa            ; ~rA
-ADDS  W0, W0, Wb        ; ~rA + rB, sets C
-ADCS  W0, W0, Wca       ; + CA + C_from_ADDS, sets C = final carry
-CSET  Wca, CS           ; extract carry
+emit_read_xer_ca(RTMP2);
+CMP   W(RTMP2), #1      ; C = CA_in
+MVN   W0, Wa             ; ~rA  (subfe only)
+ADCS  Wd, Wn, Wm         ; result + C, sets C = carry-out
+CSET  Wca, CS            ; extract carry
 ```
+8 instructions → 4.  Test vectors in backlog (adde_carry_wrap, subfe_carry_wrap).
+
+### 0b-extra. Fix mullwo silent mis-execution (backlog A3)
+
+**Bug:** `case 715` (mullwo, OE=1 multiply) aliases onto `case 235` (mullw)
+and never sets XER OV/SO.  Silent wrong results for overflow detection.
+**Fix:** split the cases; add overflow check via `SMULL` + compare high word.
+**Effort:** Low.
+
+### 0b-extra2. `emit_update_cr0` cleanup (backlog B1, ~18 → ~8 instructions)
+
+Instead of deferring CR0 (lazy CR0 — blocked by NZCV clobber issues), make
+the *eager* path cheaper.  The current `emit_update_cr0` uses 3 `emit_load_imm32`
++ 3 CSEL + XER.SO merge + shift + CR load/mask/OR/store (~18 ARM64 insns).
+Dolphin's approach encodes LT/GT/EQ as conditional constants without needing
+separate load-immediate instructions — roughly halves the instruction count.
+**Effort:** Low-medium.  **Risk:** Low.
+
+### 0b-extra3. LogicalImm encoder for rlwinm/rlwimi (backlog B2)
+
+ARM64 AND/ORR/EOR have a powerful bitmask-immediate encoding that can express
+most PPC rotate-and-mask patterns in a single instruction.  Currently we
+`emit_load_imm32(mask)` + `AND Wd,Wn,Wm` (2-3 insns for the mask load).
+Porting a `LogicalImm` encoder (from Dolphin or VIXL) would collapse this to
+`AND Wd,Wn,#mask` (1 insn) for encodable masks.  Saves 1-2 instructions per
+rlwinm/rlwimi/andi./andis.
+**Effort:** Medium (encoder is ~100 lines).  **Risk:** Low.
 
 ### 0c. isync: inline BLR instead of block break
 

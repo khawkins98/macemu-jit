@@ -1049,6 +1049,33 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		if (skip_xo[xo]) return false;
 	}
 
+	/* SS_JIT_SKIP_XO63: same as SKIP_XO but for opcode-63 (FP double) sub-opcodes.
+	 * Uses both the 10-bit (X-form) and 5-bit (A-form) XO fields. */
+	if (opc == 63) {
+		static uint16_t skip_xo63[1024] = {0};
+		static int xo63_checked = 0;
+		if (!xo63_checked) {
+			xo63_checked = 1;
+			const char *env = getenv("SS_JIT_SKIP_XO63");
+			if (env) {
+				char buf[256];
+				strncpy(buf, env, sizeof(buf)-1); buf[sizeof(buf)-1] = 0;
+				char *tok = strtok(buf, ",");
+				while (tok) {
+					int n = atoi(tok);
+					if (n >= 0 && n < 1024) skip_xo63[n] = 1;
+					tok = strtok(NULL, ",");
+				}
+				fprintf(stderr, "[JIT] SS_JIT_SKIP_XO63: XO63 sub-opcodes");
+				for (int i = 0; i < 1024; i++) if (skip_xo63[i]) fprintf(stderr, " %d", i);
+				fprintf(stderr, " forced to interpreter\n");
+			}
+		}
+		uint32_t xo10 = (op >> 1) & 0x3FF;
+		uint32_t xo5 = (op >> 1) & 0x1F;
+		if (skip_xo63[xo10] || skip_xo63[xo5]) return false;
+	}
+
 
 	switch (opc) {
 
@@ -3661,7 +3688,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			emit_load_fpr(0, fra);
 			emit_load_fpr(1, frc);
 			emit_load_fpr(2, frb);
-			emit32(0x1F408000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FMSUB */
+			emit32(0x1F608000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FNMSUB: Dn*Dm - Da */
 			emit_store_fpr(0, frd);
 			return true;
 
@@ -3673,11 +3700,11 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			emit_store_fpr(0, frd);
 			return true;
 
-		case 30: /* fnmsub frD,frA,frC,frB = -(frA*frC-frB) */
+		case 30: /* fnmsub frD,frA,frC,frB = -(frA*frC-frB) = frB - frA*frC */
 			emit_load_fpr(0, fra);
 			emit_load_fpr(1, frc);
 			emit_load_fpr(2, frb);
-			emit32(0x1F608000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FNMSUB */
+			emit32(0x1F408000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FMSUB: Da - Dn*Dm */
 			emit_store_fpr(0, frd);
 			return true;
 
@@ -3949,9 +3976,9 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			emit32(0x1F400000 | (1 << 16) | (2 << 10) | (0 << 5) | 0);
 			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
 			emit_store_fpr(0, frd); return true;
-		case 28: /* fmsubs */
+		case 28: /* fmsubs = frA*frC - frB (single-precision) */
 			emit_load_fpr(0, fra); emit_load_fpr(1, frc); emit_load_fpr(2, frb);
-			emit32(0x1F408000 | (1 << 16) | (2 << 10) | (0 << 5) | 0);
+			emit32(0x1F608000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FNMSUB */
 			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
 			emit_store_fpr(0, frd); return true;
 		case 31: /* fnmadds */
@@ -3959,9 +3986,9 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			emit32(0x1F600000 | (1 << 16) | (2 << 10) | (0 << 5) | 0);
 			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
 			emit_store_fpr(0, frd); return true;
-		case 30: /* fnmsubs */
+		case 30: /* fnmsubs = -(frA*frC - frB) = frB - frA*frC (single-precision) */
 			emit_load_fpr(0, fra); emit_load_fpr(1, frc); emit_load_fpr(2, frb);
-			emit32(0x1F608000 | (1 << 16) | (2 << 10) | (0 << 5) | 0);
+			emit32(0x1F408000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FMSUB */
 			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
 			emit_store_fpr(0, frd); return true;
 		case 24: /* fres frD,frB — reciprocal estimate */

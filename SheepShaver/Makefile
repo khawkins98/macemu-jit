@@ -18,7 +18,7 @@ JIT_CXX     := g++
 JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
-.PHONY: all build build-ss build-rom-harness \
+.PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
         test test-opcodes test-rom \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
@@ -73,6 +73,15 @@ endif
 build-rom-harness:
 	@echo "=== Building ROM harness ==="
 	@cd rom-harness && $(MAKE)
+
+build-rom-inspect:
+	@echo "=== Building ROM inspector ==="
+	@cd rom-inspect && $(MAKE)
+
+# Inspect a ROM file: does DecodeROM()/PatchROM() type-detection accept it?
+#   make inspect-rom ROM="/path/to/Mac OS ROM"
+inspect-rom: build-rom-inspect
+	@./rom-inspect/rom-inspect "$(ROM)"
 
 test: test-opcodes test-rom
 	@echo ""

@@ -109,21 +109,28 @@ measuring perf):** an env-gated quiet mode (`SS_JIT_NO_HEARTBEAT=1`).
 
 ---
 
-## P3.5 — New World ROM support in rom-harness (deferred 2026-06-03)
+## P3.5 — New World ROM support in rom-harness (PARTIALLY ADDRESSED 2026-06-03)
 
-☐ **Deferred — revisit if Mac OS 9 / New World becomes a focus.** `rom-harness` loads the
-ROM as raw bytes and scans for PPC blocks, so it can't ingest New World CHRP ROMs
-(`<CHRP-BOOT>` header + LZSS/parcels-compressed payload) — only OldWorld raw 4MB dumps
-"scan cleanly." The emulator proper already decodes New World ROMs via `DecodeROM()` in
-`rom_patches.cpp`; only the standalone harness lacks it.
+☑ **Reusable decoder built.** The decode logic (LZSS, parcels, CHRP container) is now in
+`src/include/rom_decode.hpp` — a self-contained, header-only decoder shared by the
+emulator (`rom_patches.cpp` `DecodeROM`) and the new `rom-inspect` tool. `rom_patches.cpp`
+was refactored to call it (behavior-preserving). See
+`docs/superpowers/specs/2026-06-03-rom-inspector-design.md`.
 
-**Why deferred:** the gap only matters if we commit to exercising 9.x / New World ROM code
-paths in the harness. OldWorld raw dumps already cover the JIT block exerciser's needs.
-Decision after we see whether a 9.0.4 boot is viable on this fork.
+☐ **Remaining: rom-harness *scanning* of New World ROMs.** `rom-harness` still loads raw
+bytes and scans for PPC blocks. To exercise New World ROM code it would call
+`decode_rom_image()` (now available) into a 4MB buffer first, then scan the decoded image.
+The decoder dependency is done; only the scan-loop wiring remains. Revisit if New World
+ROM JIT coverage becomes a focus.
 
-**Action when ready:** make `rom-harness` call `DecodeROM()` (or port the CHRP/LZSS/parcels
-decode) before scanning, instead of `fread`-ing raw bytes. Moderate effort; brainstorm
-first. Then it could scan the decompressed image of a New World `Mac OS ROM` file.
+☐ **Bonus finding worth a follow-up: model the full PatchROM gauntlet.** `rom-inspect`
+models decode + type-detection only. The parcels `Mac OS ROM 9.0.1` *passes* both yet the
+emulator rejects it downstream (a `patch_*` byte-pattern search or patch-space check
+fails). The emulator's "Unsupported ROM type" alert (`main.cpp:162`) fires for ANY
+`PatchROM()` failure, which is misleading. Two possible improvements: (1) extend
+`rom-inspect` to run the patch-space checks + report which `patch_*` stage fails; (2) make
+the emulator's error message distinguish type-detection failure from patch failure. Either
+would have saved real debugging time here.
 
 ## P4 — Flag for the other agent (their files — NOT touched by this review)
 

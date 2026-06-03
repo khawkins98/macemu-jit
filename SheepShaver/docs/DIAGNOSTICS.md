@@ -69,6 +69,32 @@ LEARNINGS.md "session 5 part 2 — RETRACTION".
   shows color, tune the thresholds in `jit-heartbeat.hpp` and update this table — both
   copies of the matrix (this file + the header comment) must stay in sync.
 
+## ROM inspection (rom-inspect)
+
+Standalone tool to check whether a ROM file would be accepted, without launching the
+emulator. Shares the decode + type-detection code with the emulator via
+`src/include/rom_decode.hpp`.
+
+```bash
+cd SheepShaver
+make inspect-rom ROM="/path/to/Mac OS ROM"      # build + inspect
+# or directly:
+./rom-inspect/rom-inspect "/path/to/Mac OS ROM"
+```
+
+Reports the on-disk format (raw / CHRP-LZSS / CHRP-parcels), decode success, the
+nanokernel ID bytes at decoded `0x30d064`, and the detected ROM type. Exit code `0` if
+decode + type-detection pass, `1` if rejected, `2` on IO error.
+
+**Scope — important.** The tool models `DecodeROM()` and `PatchROM()`'s **type detection**
+only. `PatchROM()` then runs patch-space checks and byte-pattern searches
+(`patch_nanokernel_boot`/`_68k_emul`/`_nanokernel`/`_68k`) that this tool does NOT model.
+A ROM can pass type-detection here and still be rejected downstream — and the emulator
+shows the **same** "Unsupported ROM type" alert for *any* `PatchROM()` failure
+(`main.cpp:162`), which is misleading. Example: the parcels-format `Mac OS ROM 9.0.1`
+decodes and type-detects as NewWorld, yet the emulator rejects it downstream. So
+"type-detection OK" means "not rejected for format/type," not "guaranteed to boot."
+
 ## Other live diagnostics (pre-existing, ppc-cpu.cpp)
 
 | Output | Trigger | Notes |

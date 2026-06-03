@@ -411,7 +411,14 @@ void LoadPrefsFromStream(FILE *f)
 		while (*p && isspace(*p)) p++;
 		char *keyword = line;
 		char *value = p;
-		int32 i = atol(value);
+		char *endptr;
+		int32 i = strtol(value, &endptr, 0);
+		if (*endptr == 'k' || *endptr == 'K')
+			i *= 1024;
+		else if (*endptr == 'm' || *endptr == 'M')
+			i *= 1024 * 1024;
+		else if (*endptr == 'g' || *endptr == 'G')
+			i *= 1024 * 1024 * 1024;
 
 		// Look for keyword first in prefs item list
 		const prefs_desc *desc = find_prefs_desc(keyword);

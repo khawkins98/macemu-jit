@@ -4328,6 +4328,19 @@ bool ppc_jit_aarch64_compile(
 	lazy_cr0_reg = -1;
 	ra_reset();
 
+	/* SS_JIT_MAX_INSNS=<n>: cap the number of PPC instructions compiled per block.
+	 * Diagnostic knob for isolating cross-instruction state leaks within a block
+	 * (e.g., lazy CR0 / RA / temp register clobbers).  n<=0 means unlimited. */
+	static int s_max_insns_checked = 0;
+	static int s_max_insns = 0;
+	if (!s_max_insns_checked) {
+		s_max_insns_checked = 1;
+		const char *e = getenv("SS_JIT_MAX_INSNS");
+		s_max_insns = (e && *e) ? atoi(e) : 0;
+		if (s_max_insns > 0)
+			fprintf(stderr, "[JIT] SS_JIT_MAX_INSNS=%d (diagnostic block-length cap)\n", s_max_insns);
+	}
+
 	for (int i = 0; i < 512; i++) {
 		const uint8_t *p = jit_fetch_ptr(cur_pc, ram, ramsize);
 		if (!p)
@@ -4421,6 +4434,14 @@ bool ppc_jit_aarch64_compile(
 		jit_total_hit++;
 		n_compiled++;
 		cur_pc += 4;
+
+		/* Optional block-length cap (diagnostic): force an early boundary even if
+		 * the guest code would naturally continue. */
+		if (s_max_insns > 0 && n_compiled >= s_max_insns) {
+			lazy_flush_cr0();
+			emit_epilogue_with_pc(cur_pc);
+			break;
+		}
 
 		/* Block-terminating opcodes: break after compiling them */
 		if (is_terminator) break;

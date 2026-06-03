@@ -115,7 +115,7 @@ block is looping via something other than the chain mechanism.
 
 Root cause confirmed (session 4, dr-emulator-analyzer): JIT polls spcflags at BLOCK ENTRY;
 the DR emulator's dispatch variants (6 sites, ROM+0x466080/84/c0/e0/100/120) check for
-interrupts via `bclr BO=5,BI=8` (opcode 0x4C420020) at cycle END. The JIT fires the
+interrupts via `bclr BO=5,BI=8` (opcode 0x4CA80020) at cycle END. The JIT fires the
 interrupt one full dispatch step early — before the current 68k handler completes.
 
 This corrupts multi-step instructions (block 504613e0 advances r24 by 4 bytes in two lhau
@@ -124,7 +124,7 @@ This is the exact mechanism behind Bug #2 / A3 = 0x103ffffe corruption.
 
 **The fix (Option A)**:
 In `compile_one()` in ppc-jit.cpp, when the current PC is in ROM+0x460000–0x500000:
-- Detect opcode `0x4C420020` (`bclr BO=5,BI=8`, bits: primary=19, BO=5, BI=8, XO=16)
+- Detect opcode `0x4CA80020` (`bclr BO=5,BI=8`, bits: primary=19, BO=5, BI=8, XO=16)
 - Before emitting the ARM64 for the branch, emit an inline spcflags-check-and-inject:
   load spcflags; if TRIGGER set → call check_spcflags bridge (sets CR2.LT); then fall through
 - Then emit the `bclr 5,8` normally — CR2.LT is now correct at evaluation time

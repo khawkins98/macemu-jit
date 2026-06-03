@@ -80,12 +80,12 @@ static uint32_t *jit_cache_end  = NULL;
  *
  * With chaining ON both harness modes pass (227/227); what remains unproven is
  * a full boot in that configuration (boot verification is gated on the
- * 68k-region work — see LEARNINGS.md 2026-06-02).  Until a chained boot is
+ * 68k-region interrupt-timing work — see LEARNINGS.md).  Until a chained boot is
  * verified, the define stays 0; flip to 1 to test.
  *
  * History: chaining was originally written but never functional (a marking bug
  * excluded every chained block from execution).  Enabling it without the entry
- * poll hangs Mac OS I/O — see LEARNINGS.md 2026-06-02 for the full post-mortem. */
+ * poll hangs Mac OS I/O — see LEARNINGS.md chaining post-mortem for details. */
 #define JIT_BLOCK_CHAINING 0
 
 /* SS_JIT_NO_CHAIN=1: runtime kill-switch for block chaining (bisect aid).
@@ -2872,7 +2872,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				/* ORN gives a | ~b over the FULL 32-bit register: with 1-bit inputs the
 				 * result is 0xFFFFFFFE/0xFFFFFFFF, and the merge below ORs that whole
 				 * value into CR (CR becomes ~0) — this was the root cause of the
-				 * deterministic 68k-region boot crash (see LEARNINGS.md 2026-06-02).
+				 * deterministic 68k-region boot crash (crorc miscompilation).
 				 * It is also wrong on truth value: crorc(0,1) must be 0.
 				 * Mask back to bit 0, same as the MVN-based ops above. */
 				emit32(0x2A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* ORN */
@@ -4221,8 +4221,20 @@ bool ppc_jit_aarch64_compile(
 	 * enabled, a chained cycle still returns to the dispatcher whenever a
 	 * flag becomes set — closing the "chained loop never services interrupts"
 	 * hole.  With chaining off it runs on every ABI entry and is behaviourally
-	 * transparent (the dispatcher already polled before entering). */
-	emit_entry_spcflags_poll(pc);
+	 * transparent (the dispatcher already polled before entering).
+	 *
+	 * EXCEPTION: DR emulator blocks (ROM+0x460000..+0x500000).  These form
+	 * the 68k instruction dispatch loop; their bclr 5,8 interrupt gate
+	 * expects CR2.LT to be updated only between dispatch cycles.  A block-
+	 * entry poll would trigger check_spcflags → HandleInterrupt → CR2.LT=1
+	 * BEFORE the handler for the current 68k instruction runs, causing the
+	 * bclr to skip the handler and enter the interrupt path prematurely.
+	 * The C dispatcher's between-block spcflags check is sufficient here. */
+	bool in_dr_emulator = (jit_rom_size > 0 &&
+	                       pc >= jit_rom_base + 0x460000 &&
+	                       pc <  jit_rom_base + 0x500000);
+	if (!in_dr_emulator)
+		emit_entry_spcflags_poll(pc);
 
 	jit_blocks_attempted++;
 	uint32_t cur_pc = pc;

@@ -68,7 +68,7 @@ static FILE *jit_log_file = nullptr;
  * WHY the env var: the path used to be hardcoded, and ANY concurrent SheepShaver
  * process (e.g. a jit-test harness vector running while a boot measurement is in
  * progress) would fopen(..., "w") the same file and truncate the measurement's log
- * mid-run — this silently corrupted the session-6 interpreter ground-truth run.
+ * mid-run — this silently corrupted a concurrent boot-time measurement.
  * Parallel agents must set SS_JIT_DIAG_LOG to distinct paths. */
 static void jit_diag_log_open(void) {
 	if (jit_log_file) return;
@@ -157,7 +157,7 @@ static uint32 jit_ring_idx = 0;
 
 extern "C" void ppc_jit_dump_trace_ring(void); /* defined below; used by the trigger */
 
-/* ---- Boot-time region profiling (session 5 part 2) ----
+/* ---- Boot-time region profiling ----
  *
  * WHY: JIT boot takes 10-22+ min vs ~10s for the interpreter, yet the JIT executes
  * blocks faster per-block.  That means either (a) the guest executes far more
@@ -343,7 +343,7 @@ extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
 	for (int i = 0; i < 8; i++) rec->a[i] = a_regs[i];
 	/* Driver EMUL_OPs (SONY/DISK/CDROM OPEN/PRIME/CONTROL/STATUS, ops 10-21):
 	 * A0 = IOParam pointer.  Capture the request so working-vs-broken boots can
-	 * be compared at the I/O-request level (the bug-#2 hunt — see HANDOFF.md):
+	 * be compared at the I/O-request level (A3-corruption / spurious CD-eject):
 	 *   lr field  = ioBuffer   [a0+0x20]
 	 *   ctr field = ioReqCount [a0+0x24]   ('R' records: ioActCount [a0+0x28])
 	 *   cr field  = ioPosOffset[a0+0x2e]   ('R' records: ioResult   [a0+0x10])
@@ -1084,19 +1084,14 @@ void powerpc_cpu::execute(uint32 entry)
 					/* Register the Mac ROM as a JIT-compilable range.  ROM is
 					 * write-protected after patching (main_unix.cpp), so compiled
 					 * ROM blocks are permanently valid.  The range stops at
-					 * +0x460000 to EXCLUDE the ROM's built-in 68k (DR) emulator —
-					 * the region where 94-97%% of boot-time dispatches execute.
-					 *
-					 * Status of lifting that exclusion (the dyngen-parity work):
-					 * the original blocker (mixed JIT/interpreter execution of the
-					 * same PC) is solved by inline interpreter calls, and the
-					 * deterministic boot crash it exposed was root-caused to a
-					 * crorc miscompilation (fixed — see LEARNINGS.md 2026-06-02).
-					 * What remains: with the full 5 MB range registered, boot
-					 * reaches the SCSI phase and loops forever (68k interrupt
-					 * processing never reaches OP_IRQ).  Until that is fixed and a
-					 * full-range boot is verified, the range stays at +0x460000.
-					 * To test the full range, change the size below to 0x500000.
+					 * +0x460000 to EXCLUDE the ROM's built-in 68k (DR) emulator.
+					 * Session 7 proved entry-poll suppression alone is insufficient:
+					 * the C dispatcher's between-block spcflags check also fires
+					 * mid-dispatch-cycle (between DR dispatch and toolbox handler),
+					 * setting CR2.LT before bclr 5,8 can evaluate it. Fully deferring
+					 * spcflags starves interrupts (jNK goes flat). The fix needs
+					 * per-instruction spcflags delivery that matches interpreter
+					 * timing — see session 7 LEARNINGS entry and HANDOFF.
 					 * SS_JIT_NO_ROM=1: bisect switch — keep ROM interpreter-only. */
 					{
 						const char *no_rom = getenv("SS_JIT_NO_ROM");
@@ -1149,8 +1144,8 @@ void powerpc_cpu::execute(uint32 entry)
 							fflush(jit_log_file);
 							/* NOTE: "same PC at consecutive heartbeats" is a SAMPLING HINT, not
 							 * proof of a hang — hot dispatch PCs (e.g. the nanokernel exception
-							 * dispatcher at 0x50313d34) recur by chance.  See LEARNINGS.md
-							 * session 5 part 2 retraction before acting on these. */
+							 * dispatcher at 0x50313d34) recur by chance.  Do not treat
+							 * repeated sampling as proof of a hang without corroboration. */
 							if (cur_pc == last_pc) {
 								stuck_count++;
 								if (stuck_count >= 2) {

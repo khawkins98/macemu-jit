@@ -3,6 +3,108 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-02 (session 7) — Boot time measurements and the core JIT imbalance
+
+Summary: Measured HD and CD boot times in both modes. The JIT accelerates the PPC nanokernel
+82x but the DR (68k) emulator stays interpreted and actually runs 1.8x *slower* under JIT
+due to transition overhead. Net effect: JIT makes the CPU do 7x more total blocks/s but
+boot progress (driven by 68k work) is slower. Fix: JIT-compile the DR region.
+
+### Boot time measurements (HD boot, OldWorld ROM + macos921.dsk)
+
+- **Interpreter HD boot to desktop: ~12 seconds.** 535M blocks at t=5s, rate crashes to
+  3.8M/s by t=15s (desktop idle signature).
+- **JIT HD boot: 100+ seconds at steady 96M blocks/s.** No phase transition detected —
+  the idle loop runs at JIT speed so the block-rate drop that signals "desktop reached"
+  never appears.
+- **Open question**: Was the JIT actually at the desktop at 100s with detection failing?
+  Or genuinely stuck? Visual confirmation needed.
+
+### Boot time measurements (CD boot, Mac OS 8.6 ISO)
+
+- **Interpreter CD boot to desktop: ~318 seconds (5 min 18s), 6.7B total blocks.**
+- **JIT CD boot: partial measurement only, steady 96M blocks/s.**
+
+### The core imbalance (the key insight)
+
+The PPC JIT accelerates the nanokernel 82x (0.4M → 33M blocks/s) but the DR (68k)
+emulator stays interpreted. Worse, the DR emulator runs 1.8x SLOWER under JIT mode
+(46M → 26M blocks/s) due to transition overhead:
+
+- **2.4M JIT↔interpreter transitions per second** during JIT-mode boot.
+- **NK:DR ratio flips from 1:21 (interpreter) to 1:1 (JIT)** — the JIT-speed PPC hits
+  exception dispatch ~20x more frequently relative to the 68k work being done.
+- **Net effect**: JIT mode does 7x more total blocks/s but boot progress (driven by
+  DR/68k work) is slower because the 68k emulator is both unaccelerated and burdened
+  with transition overhead.
+- **Fix direction**: JIT-compile the DR region. This requires solving the interrupt-timing
+  issue where spcflags poll lands at the wrong point in multi-step 68k instruction
+  emulation (the "Option A" fix documented in session 4).
+
+### Reconciliation: the "10s interpreter boot" discrepancy
+
+Session 5 part 2 declared the "interpreter boots in ~10s" claim FALSE (lines 102-105
+below). **That verdict was wrong — it tested only CD boot (~318s) and concluded the
+claim was unreliable.** The ~10s figure was always HD boot (pre-installed disk image
+with warm NVRAM). Both numbers are correct for their respective configurations:
+
+- HD boot (macos921.dsk): interpreter ~12s, consistent with prior claims.
+- CD boot (Mac OS 8.6 ISO): interpreter ~318s, consistent with session 5 part 2 data.
+
+The speedup/slowdown ratios derived from comparing HD interpreter (12s) to CD JIT
+measurements remain unreliable — they were comparing different boot media.
+
+### Opcode encoding error corrected: bclr 5,8 = 0x4CA80020, not 0x4C420020
+
+All prior sessions (4, 5, 6) carried the wrong hex constant for the DR emulator interrupt
+gate instruction. `bclr BO=5, BI=8` encodes as `0x4CA80020` (primary=19, BO=5, BI=8, XO=16).
+The previous constant `0x4C420020` decodes as `bclr 2,2` (BO=2, BI=2 — decrement CTR, branch
+if CTR==0 AND CR0.EQ==0), which is a completely different instruction. Caught by adversarial
+validator review during the Option A implementation. Fixed in the code, LEARNINGS, and
+CHAINING-VERIFICATION-PLAN.
+
+### ROM=0x500000 investigation: three approaches tried, root cause narrowed
+
+**Experiment 1: Option A alone (inline spcflags check before bclr 5,8)**
+Result: SCSI loop hangs. DR emulator fully JIT-compiled (jDR=584M at t=5s, j2i=33).
+The bclr 5,8 opcode (`0x4CA80020`) was confirmed correct (10 DR gate sites compiled).
+Interrupts delivered (~55/s), but jRAM stuck at 33 — boot never progresses past SCSI.
+
+**Experiment 2: Entry-poll suppression for DR blocks**
+Result: Same SCSI loop hang. Suppressing `emit_entry_spcflags_poll` for blocks in
+ROM+0x460000..0x500000 didn't fix it. The C dispatcher's between-block spcflags check
+(ppc-cpu.cpp line 1199) still fires between the DR dispatch block and the toolbox handler,
+setting CR2.LT mid-dispatch-cycle.
+
+**Experiment 3: Full spcflags deferral (skip check when inside DR region)**
+Result: Interrupts completely starved. jNK went flat at 810K (VBL never fires), jDR
+grew at 200M/s. Deferring ALL spcflags checks while in/near the DR region prevents
+interrupt delivery entirely — the bclr 5,8 never sees CR2.LT=1.
+
+**Root cause narrowed:** The fundamental problem is that the JIT separates the DR
+dispatch cycle into multiple blocks (dispatch head + handler) with spcflags checks
+between them. The interpreter's decode cache runs the entire cycle as one block.
+The extra spcflags check point in the JIT sets CR2.LT at the wrong time, causing
+the bclr 5,8 interrupt gate to fire prematurely. Fully deferring starves interrupts.
+
+**Additional finding:** DR emulator region has 57 fallback instructions (23 `lswx`,
+11 `stswx`, 17 EMUL_OP, 1 `stbcx.`). Each fallback splits the enclosing block,
+creating additional spcflags check opportunities.
+
+**Proposed fix direction:** Instead of suppressing/deferring spcflags checks, make the
+JIT deliver interrupts at the CORRECT point — after bclr 5,8 falls through to the
+interrupt path — by NOT calling HandleInterrupt (which sets CR2.LT) during the mid-
+dispatch-cycle check_spcflags calls. Only call HandleInterrupt when re-entering the
+DR dispatch HEAD (where bclr 5,8 can evaluate it). This requires tracking "inside DR
+dispatch cycle" state in the C dispatcher.
+
+### Session 7a crashed due to API error loop
+
+The advisor tool triggered repeated 400 errors in the first half of the session.
+Session was restarted.
+
+---
+
 ## 2026-06-02 (session 5, part 2) — RETRACTION: the "deadlock" theory was wrong
 
 ### What we got wrong (read this before the section below)
@@ -99,10 +201,9 @@ Region counters implemented (commit d0307ad6) and run in both modes:
 
 **Three major findings:**
 
-1. **The "interpreter boots in ~10s" claim (HANDOFF.md:226) is FALSE for the current
-   configuration** (Mac OS 8.6 ISO via CD-ROM boot, bootdriver -62). The interpreter was
-   still booting at 190+ seconds. The old claim was likely measured against a different
-   disk/config. ALL prior speedup/slowdown ratios derived from it are unreliable.
+1. **SUPERSEDED by session 7**: ~~The "interpreter boots in ~10s" claim is FALSE~~.
+   The ~10s figure was HD boot (macos921.dsk); session 5 only tested CD boot (~318s).
+   Both numbers are valid for their respective boot media. See session 7 reconciliation.
 
 2. **NK:DR block ratio anomaly**: interpreter mode executes 1 nanokernel block per ~21 DR
    blocks; JIT mode executes ~1 nanokernel block per DR block (1:1). The JIT-mode guest
@@ -112,7 +213,8 @@ Region counters implemented (commit d0307ad6) and run in both modes:
 
 3. **Block counts are not directly comparable across modes** (DR dispatch blocks are 2-4
    instructions; RAM/toolbox blocks are larger). Wall-clock boot time to desktop is the only
-   honest comparison metric. Neither mode's full boot time has been measured for this config.
+   honest comparison metric. **SUPERSEDED by session 7**: both modes' boot times are now
+   measured — interpreter HD ~12s, interpreter CD ~318s, JIT HD 100+s (detection issue).
 
 **Hardware note**: the i2j (interp→JIT) counter always reads 0 — the increment was never
 added at the interpreter's JIT-handoff break (ppc-cpu.cpp ~line 1295). j2i is a good proxy
@@ -426,7 +528,7 @@ Known remaining JIT gap worth a future test vector: `bcl` with CTR+cond+link=1 c
 
 **Exact mechanism — one-step-early interrupt delivery:**
 
-Mac OS sets CR2.LT (bit 8) to signal a pending interrupt. The DR emulator checks it via `bclr BO=5,BI=8` (opcode `0x4C420020`) at the end of every dispatch cycle. JIT polls spcflags at **block entry**: when TRIGGER is detected it saves PC, returns to C, which runs `check_spcflags()` → sets CR2.LT, then re-dispatches the same block. The interpreter polls at **block exit** — after `bclr 5,8` has already run the current handler. Net effect: JIT fires the interrupt one dispatch step early, before the current 68k instruction handler completes.
+Mac OS sets CR2.LT (bit 8) to signal a pending interrupt. The DR emulator checks it via `bclr BO=5,BI=8` (opcode `0x4CA80020`) at the end of every dispatch cycle. JIT polls spcflags at **block entry**: when TRIGGER is detected it saves PC, returns to C, which runs `check_spcflags()` → sets CR2.LT, then re-dispatches the same block. The interpreter polls at **block exit** — after `bclr 5,8` has already run the current handler. Net effect: JIT fires the interrupt one dispatch step early, before the current 68k instruction handler completes.
 
 **The double-lhau block (504613e0) makes it critical:**
 
@@ -436,7 +538,7 @@ Block 504613e0 does two `lhau r27,2(r24)` fetches per dispatch cycle — specula
 
 All 6 DR emulator dispatch variants (ROM+0x466080/84/c0/e0/100/120) use `bclr 5,8` as the structural interrupt gate.
 
-**Fix (Option A, ~100–150 lines in ppc-jit.cpp):** In `compile_one()`, detect opcode `0x4C420020` when PC is in ROM+0x460000–0x500000. Emit an inline spcflags-check-and-inject prologue BEFORE the branch, forcing CR2.LT to be current at the exact moment `bclr` evaluates it — matching the interpreter's one-cycle-later delivery.
+**Fix (Option A, ~100–150 lines in ppc-jit.cpp):** In `compile_one()`, detect opcode `0x4CA80020` when PC is in ROM+0x460000–0x500000. Emit an inline spcflags-check-and-inject prologue BEFORE the branch, forcing CR2.LT to be current at the exact moment `bclr` evaluates it — matching the interpreter's one-cycle-later delivery.
 
 **Current safe config**: ROM range = 0x460000 (toolbox only). The JIT↔interpreter boundary costs performance but not correctness during 68k-heavy workloads. **Do NOT attempt ROM range = 0x500000 until Option A is implemented and verified.**
 

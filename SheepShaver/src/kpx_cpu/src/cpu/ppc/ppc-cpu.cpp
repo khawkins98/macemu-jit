@@ -1462,6 +1462,9 @@ void powerpc_cpu::invalidate_cache_range(uintptr start, uintptr end)
 #endif
 	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
 	my_block_cache.clear_range(start, end);
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	ppc_jit_aarch64_invalidate_range((uint32_t)start, (uint32_t)end);
+#endif
 #endif
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 	/* Evict aarch64 JIT blocks whose start PC falls in the invalidated range.

@@ -1937,17 +1937,12 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 86:   /* dcbf  — data cache block flush */
 		case 246:  /* dcbt  — data cache block touch (prefetch hint) */
 		case 278:  /* dcbtst — data cache block touch for store */
-		case 982:  /* icbi  — instruction cache block invalidate.
-		            * Compiled as a NOP (upstream behavior).  KNOWN GAP: this leaves
-		            * stale JIT translations live if guest code is rewritten in place
-		            * (same address, different code).  In practice extensions load into
-		            * fresh RAM (no prior translation exists), so this rarely bites.
-		            * The correct fix is bucket-based invalidation called from the
-		            * interpreter's execute_icbi — NOT falling icbi/isync back to the
-		            * interpreter: isync appears after every mtmsr/mtspr in OS code, so
-		            * isync-falls-back marks most toolbox blocks incomplete and was
-		            * measured to make JIT boot 42x slower than interpreter boot. */
-			return true;
+		case 982:  /* icbi rA,rB — instruction cache block invalidate.
+		            * Fall through to inline interpreter call so execute_icbi() runs
+		            * and invalidates any stale JIT block at the target address.
+		            * Without this, extension-loading overwrites RAM code but the JIT
+		            * keeps running the old compiled translation → boot hangs. */
+			return false;
 
 		/* Memory barriers — NOPs (single-threaded emulator) */
 		case 598:  /* sync  — synchronize */

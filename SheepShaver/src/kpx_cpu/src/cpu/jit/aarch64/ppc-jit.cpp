@@ -503,13 +503,15 @@ static void ra_flush_all(void) {
 }
 
 static void emit_load_gpr(int rd, int n) {
-	/* DISABLED: boot hang regression. Direct struct access. */
-	a64_ldr_w_imm(rd, RSTATE, PPCR_GPR(n));
+	int host = ra_load(n);
+	if (host != rd)
+		a64_mov_reg(rd, host);
 }
 
 static void emit_store_gpr(int rs, int n) {
-	/* DISABLED: boot hang regression. Direct struct access. */
-	a64_str_w_imm(rs, RSTATE, PPCR_GPR(n));
+	int host = ra_store(n);
+	if (host != rs)
+		a64_mov_reg(host, rs);
 }
 
 /* 64-bit GPR access for G5/PPC64 instructions.
@@ -2793,17 +2795,17 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		{
 			/* Mixed Mode guard: if LR bit 0 is set (68k code pointer),
 			 * bail to interpreter which handles the mode transition.
-			 * This is a runtime check — LR is only known at execution time. */
+			 * TBZ tests RTMP2 directly — no AND needed. */
 			a64_ldr_w_imm(RTMP2, RSTATE, PPCR_LR);
-			emit32(0x12000000 | (RTMP2 << 5) | RTMP0); /* AND W0, W(LR), #1 */
-			uint32_t *mm_cbz = jit_code_ptr;
-			emit32(0); /* placeholder CBZ — skip bail if bit 0 clear */
+			uint32_t *mm_tbz = jit_code_ptr;
+			emit32(0); /* placeholder TBZ W2, #0, skip */
+			ra_flush_all();
 			emit_load_imm32(RTMP0, (int32_t)pc);
 			a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
 			emit_bare_epilogue();
-			/* Patch CBZ to land here */
-			int32_t mm_off = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)mm_cbz);
-			*mm_cbz = 0x34000000 | (((mm_off >> 2) & 0x7FFFF) << 5) | RTMP0;
+			/* Patch TBZ to land here (imm14 at bits 18:5, bit_pos=0) */
+			int32_t mm_off = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)mm_tbz);
+			*mm_tbz = 0x36000000 | (((mm_off >> 2) & 0x3FFF) << 5) | RTMP2;
 
 			uint32_t bo = (op >> 21) & 0x1F;
 			uint32_t bi = (op >> 16) & 0x1F;

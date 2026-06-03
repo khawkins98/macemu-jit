@@ -2129,9 +2129,9 @@ static bool patch_68k(void)
 	else if (ntohs(wp[-2]) == 0x6700)
 		wp[-2] = htons(0x6000);	// bra
 
-	// Patch PowerOff()
+	// Patch PowerOff() → trigger clean host exit via OP_POWEROFF
 	wp = (uint16 *)(ROMBaseHost + find_rom_trap(0xa05b));	// PowerOff()
-	*wp = htons(M68K_EMUL_RETURN);
+	*wp = htons(M68K_EMUL_OP_POWEROFF);
 
 	// Patch VIA interrupt handler
 	static const uint8 via_int_dat[] = {0x70, 0x7f, 0xc0, 0x29, 0x1a, 0x00, 0xc0, 0x29, 0x1c, 0x00};

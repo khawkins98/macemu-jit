@@ -354,6 +354,10 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	}
 #endif
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
+
+	/* If the guest requested power-off or restart, break out of the CPU loop. */
+	if (power_off_requested || restart_requested)
+		spcflags().set(SPCFLAG_CPU_EXEC_RETURN);
 }
 
 // Execute SheepShaver instruction

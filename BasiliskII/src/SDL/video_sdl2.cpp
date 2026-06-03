@@ -1954,6 +1954,10 @@ void SDL_monitor_desc::video_close(void)
 
 void VideoExit(void)
 {
+	static bool done = false;
+	if (done) return;
+	done = true;
+
 	VNCServerShutdown();
 
 	// Shutdown evdev input

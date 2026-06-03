@@ -262,6 +262,10 @@ static const char *crash_reason = NULL;		// Reason of the crash (SIGSEGV, SIGBUS
 static rpc_connection_t *gui_connection = NULL;	// RPC connection to the GUI
 static const char *gui_connection_path = NULL;	// GUI connection identifier
 
+// Shutdown/restart flags (set by emul_op handlers, read by main loop)
+bool power_off_requested = false;
+bool restart_requested = false;
+
 uint32  SheepMem::page_size;				// Size of a native page
 uintptr SheepMem::zero_page = 0;			// Address of ro page filled in with zeros
 uintptr SheepMem::base = 0x60000000;		// Address of SheepShaver data
@@ -1267,6 +1271,10 @@ quit:
 
 static void Quit(void)
 {
+	// Stop video first — the redraw thread accesses guest memory and will
+	// segfault if we tear down the CPU or unmap RAM before it exits.
+	VideoExit();
+
 #if EMULATED_PPC
 	// Exit PowerPC emulation
 	exit_emul_ppc();
@@ -1429,14 +1437,23 @@ static void *emul_func(void *arg)
 	// Decrease priority, so more time-critical things like audio will work better
 	nice(1);
 
-	// Jump to ROM boot routine
-	D(bug("Jumping to ROM\n"));
+	for (;;) {
+		// Jump to ROM boot routine
+		D(bug("Jumping to ROM\n"));
 #if EMULATED_PPC
-	jump_to_rom(ROMBase + 0x310000);
+		jump_to_rom(ROMBase + 0x310000);
 #else
-	jump_to_rom(ROMBase + 0x310000, (uint32)emulator_data);
+		jump_to_rom(ROMBase + 0x310000, (uint32)emulator_data);
 #endif
-	D(bug("Returned from ROM\n"));
+		D(bug("Returned from ROM\n"));
+
+		if (restart_requested) {
+			D(bug("Restart requested — re-entering ROM\n"));
+			restart_requested = false;
+			continue;
+		}
+		break;
+	}
 
 	// We're no longer ready to receive signals
 	ready_for_signals = false;

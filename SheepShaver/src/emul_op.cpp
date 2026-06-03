@@ -498,6 +498,11 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			r->d[0] = (uint32)-2;
 			break;
 
+		case OP_POWEROFF:			// Guest Mac OS shut down (Special > Shut Down)
+			D(bug("*** POWEROFF ***\n"));
+			power_off_requested = true;
+			break;
+
 		default:
 			printf("FATAL: EMUL_OP called with bogus selector %08x\n", selector);
 			QuitEmulator();

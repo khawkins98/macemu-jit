@@ -42,6 +42,10 @@ struct M68kRegisters {
 };
 
 
+// Shutdown/restart flags (set by emul_op handlers, read by main loop)
+extern bool power_off_requested;
+extern bool restart_requested;
+
 // Functions
 extern bool InitAll(const char *vmdir);
 extern void ExitAll(void);

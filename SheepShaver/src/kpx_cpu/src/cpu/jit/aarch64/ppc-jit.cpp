@@ -988,6 +988,10 @@ static uint32_t jit_cum_fail_total = 0;
 
 static void jit_report_misses(void) {
 	if (jit_total_miss == 0 && jit_total_hit == 0) return;
+	double elapsed = pjit_elapsed_s();
+	int mins = (int)(elapsed / 60);
+	double secs = elapsed - mins * 60;
+	fprintf(stderr, "PPC-JIT-A64: session %.0fs (%dm%04.1fs)\n", elapsed, mins, secs);
 	fprintf(stderr, "PPC-JIT-A64: blocks=%u complete=%u (%.1f%%)\n",
 		jit_blocks_attempted, jit_blocks_complete,
 		jit_blocks_attempted ? jit_blocks_complete * 100.0 / jit_blocks_attempted : 0.0);
@@ -4086,6 +4090,7 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 #endif
 	fprintf(stderr, "PPC-JIT-A64: code cache %zu KB at %p, block cache %d buckets / %d pool\n",
 	        cache_size_kb, jit_cache_base, JIT_BC_BUCKETS, JIT_BC_POOL);
+	atexit(jit_report_misses);
 	return true;
 }
 

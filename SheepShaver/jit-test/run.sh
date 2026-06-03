@@ -1172,6 +1172,15 @@ TEST_ORDER+=(fuzz_nand_allones)
 # rlwimi with SH=0 (no rotation, just mask insert)
 T_fuzz_rlwimi_sh0="3860FF00 38A000FF 5065043E"
 TEST_ORDER+=(fuzz_rlwimi_sh0)
+# rlwimi r27,r29,3,13,28 — exact encoding from DR emulator dispatch loop (ROM 504613e8)
+# lis r29,0x1234; ori r29,r29,0x5678; lis r27,0xFFFF; rlwimi r27,r29,3,13,28
+# rotl(0x12345678,3)=0x91A2B3C0, mask(13,28)=0x0007FFF8 → r27=0xFFFAB3C0
+T_rlwimi_dr_dispatch="3FA01234 63BD5678 3F60FFFF 53BB1B78"
+TEST_ORDER+=(rlwimi_dr_dispatch)
+# rlwimi r27,r29,3,13,28 — second pattern: r27=0, r29=0xDEADBEEF
+# rotl(0xDEADBEEF,3)=0xF56DF77E, mask insert → r27=0x0005F778
+T_rlwimi_dr_dispatch2="3FA0DEAD 63BDBEEF 3B600000 53BB1B78"
+TEST_ORDER+=(rlwimi_dr_dispatch2)
 # rlwnm with count=0
 T_fuzz_rlwnm_0="3860DEAD 38800000 5C65203E"
 TEST_ORDER+=(fuzz_rlwnm_0)

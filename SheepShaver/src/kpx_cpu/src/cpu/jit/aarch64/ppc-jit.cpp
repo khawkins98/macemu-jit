@@ -4230,7 +4230,7 @@ bool ppc_jit_aarch64_compile(
 	 * BEFORE the handler for the current 68k instruction runs, causing the
 	 * bclr to skip the handler and enter the interrupt path prematurely.
 	 * The C dispatcher's between-block spcflags check is sufficient here. */
-	bool in_dr_emulator = (jit_rom_size > 0 &&
+	bool in_dr_emulator = (jit_rom_size > 0x460000 &&
 	                       pc >= jit_rom_base + 0x460000 &&
 	                       pc <  jit_rom_base + 0x500000);
 	if (!in_dr_emulator)

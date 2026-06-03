@@ -329,6 +329,29 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 	/* EMUL_OP return record ('R'): registers now hold the results (D0 = result code). */
 	ppc_jit_ring_record_emulop('R', gpr(24), emul_op, gpr(8), gpr(9), gpr(1), &gpr(16));
+
+	/* SS_EMULOP_TRACE=1: log SCSI-related EMUL_OP results to /tmp/emulop_trace.log
+	 * for differential comparison between interpreter and JIT modes. */
+	{
+		static int trace_enabled = -1;
+		static FILE *trace_fp = NULL;
+		static int trace_count = 0;
+		if (trace_enabled < 0) {
+			const char *e = getenv("SS_EMULOP_TRACE");
+			trace_enabled = (e && *e == '1') ? 1 : 0;
+			if (trace_enabled) {
+				trace_fp = fopen("/tmp/emulop_trace.log", "w");
+				if (!trace_fp) trace_enabled = 0;
+			}
+		}
+		if (trace_enabled && trace_count < 500 &&
+		    (emul_op == 41 || emul_op == 42)) { /* OP_SCSI_DISPATCH=41, OP_SCSI_ATOMIC=42 */
+			fprintf(trace_fp, "EMULOP op=%d D0=%08X D1=%08X A0=%08X PC=%08X\n",
+				emul_op, gpr(8), gpr(9), gpr(16), gpr(24));
+			fflush(trace_fp);
+			trace_count++;
+		}
+	}
 #endif
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 }

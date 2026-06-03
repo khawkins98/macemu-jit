@@ -1095,11 +1095,25 @@ void powerpc_cpu::execute(uint32 entry)
 					 * SS_JIT_NO_ROM=1: bisect switch — keep ROM interpreter-only. */
 					{
 						const char *no_rom = getenv("SS_JIT_NO_ROM");
-						if (!(no_rom && *no_rom == '1'))
-							ppc_jit_aarch64_set_rom_range(ROMBase, 0x460000, ROMBaseHost);
+						if (!(no_rom && *no_rom == '1')) {
+							/* SS_JIT_ROM_SIZE: override ROM JIT range (hex).
+							 * Binary-search between 0x460000 (safe) and 0x500000
+							 * (broken) to locate DR emulator hang region. */
+							uint32_t rom_jit_size = 0x460000;
+							const char *rom_size_env = getenv("SS_JIT_ROM_SIZE");
+							if (rom_size_env) {
+								rom_jit_size = (uint32_t)strtoul(rom_size_env, NULL, 16);
+								if (rom_jit_size < 0x100000) rom_jit_size = 0x100000;
+								if (rom_jit_size > 0x500000) rom_jit_size = 0x500000;
+							}
+							fprintf(stderr, "[JIT] ROM JIT range: [%08x..%08x] (size=0x%x%s)\n",
+								ROMBase, ROMBase + rom_jit_size, rom_jit_size,
+								rom_size_env ? ", SS_JIT_ROM_SIZE override" : "");
+							ppc_jit_aarch64_set_rom_range(ROMBase, rom_jit_size, ROMBaseHost);
+						}
 					}
 					jit_init_done = true;
-					JIT_LOG("JIT initialized, ROM range [%08x..%08x]", ROMBase, ROMBase + 0x460000);
+					JIT_LOG("JIT initialized");
 				}
 				ppc_jit_block jblk;
 				/* GATE 2: execute only complete native blocks. Incomplete blocks are

@@ -1148,13 +1148,18 @@ void powerpc_cpu::execute(uint32 entry)
 						if (now - last_t >= 5.0) {
 							jit_diag_log_open();
 							uint32_t cur_pc = (uint32_t)pc();
-							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x | jNK=%llu jDR=%llu jRAM=%llu jOTH=%llu | iNK=%llu iDR=%llu iRAM=%llu iOTH=%llu | j2i=%llu i2j=%llu\n",
-							        now, (unsigned long long)jit_block_count, cur_pc,
+							static uint64 prev_block_count = 0;
+							uint64 delta = jit_block_count - prev_block_count;
+							double dt = now - last_t;
+							double rate = (dt > 0) ? delta / dt / 1e6 : 0;
+							prev_block_count = jit_block_count;
+							uint32_t compiled = ppc_jit_aarch64_blocks_compiled();
+							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x %.0fM/s comp=%u | jNK=%llu jDR=%llu jRAM=%llu | iDR=%llu | j2i=%llu\n",
+							        now, (unsigned long long)jit_block_count, cur_pc, rate, compiled,
 							        (unsigned long long)rgn_jit_blocks[RGN_NK], (unsigned long long)rgn_jit_blocks[RGN_DR],
-							        (unsigned long long)rgn_jit_blocks[RGN_RAM], (unsigned long long)rgn_jit_blocks[RGN_OTH],
-							        (unsigned long long)rgn_interp_blocks[RGN_NK], (unsigned long long)rgn_interp_blocks[RGN_DR],
-							        (unsigned long long)rgn_interp_blocks[RGN_RAM], (unsigned long long)rgn_interp_blocks[RGN_OTH],
-							        (unsigned long long)rgn_jit_to_interp, (unsigned long long)rgn_interp_to_jit);
+							        (unsigned long long)rgn_jit_blocks[RGN_RAM],
+							        (unsigned long long)rgn_interp_blocks[RGN_DR],
+							        (unsigned long long)rgn_jit_to_interp);
 							fflush(jit_log_file);
 							/* NOTE: "same PC at consecutive heartbeats" is a SAMPLING HINT, not
 							 * proof of a hang — hot dispatch PCs (e.g. the nanokernel exception

@@ -1,56 +1,96 @@
 # Boot Test Methodology
 
-Standard procedure for testing JIT boot configurations.
+Reproducible procedure for testing JIT boot configurations across sessions.
 
-## Configuration
+## Prefs (ISO boot — use this for all tests)
 
-- **ROM**: OldWorld (`1998-07-21 - Mac OS ROM 1.1.rom`)
-- **Boot media**: Mac OS 8.6 ISO (read-only, no corruption risk)
-- **Prefs**: `bootdriver -62`, `nocdrom false`, VNC on port 5999
+```
+rom /Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom
+cdrom /Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso
+ramsize 268435456
+screen win/800/600
+nosound true
+bootdriver -62
+nocdrom false
+vncserver true
+vncport 5999
+```
+
+Use the ISO, not the HD image. The HD image (`macos921.dsk`) gets corrupted by
+every `kill -9` and triggers Disk First Aid on the next boot, which blocks on a
+dialog click we can't send through VNC. The ISO is read-only.
 
 ## Test procedure
 
-1. Kill any running SheepShaver: `pkill -9 -x SheepShaver`
-2. Start with desired config + `SS_JIT_DIAG_LOG=/tmp/jit_test.log`
-3. **Screenshot at t=20s** — should show Happy Mac or progress bar
-4. **Screenshot at t=90s** — should show desktop if boot succeeded
-5. **Check heartbeats** — jNK/jDR/jRAM all growing = healthy; any frozen = stuck
-6. Kill at 90s regardless
+1. `pkill -9 -x SheepShaver; sleep 1`
+2. Start: `SS_JIT_DIAG_LOG=/tmp/jit_test.log ./SheepShaver &>/dev/null &`
+3. **t=20s**: VNC screenshot + heartbeat sample
+4. **t=90s**: VNC screenshot + heartbeat sample
+5. `pkill -9 -x SheepShaver`
+
+### VNC screenshot capture
+
+```bash
+python3 /tmp/vnc_capture.py 2>/dev/null
+sips -s format png /tmp/ss_vnc_frame.ppm --out /tmp/ss_test.png 2>/dev/null
+```
+
+The `vnc_capture.py` script connects to localhost:5999, does an RFB handshake,
+requests a raw framebuffer update, and writes a PPM file. Requires libvncserver
+compiled in (check for "VNC server enabled" in stderr).
 
 ## Pass/fail criteria
 
-- **PASS**: VNC screenshot at 90s shows Finder desktop (menu bar visible)
-- **FAIL-STUCK**: Progress bar visible but not advancing; jNK or jDR frozen
-- **FAIL-LOOP**: SCSIGet/SCSISelect repeating in stderr; jRAM=0
-- **FAIL-CRASH**: Process exited before 90s
+| Result | t=20s screen | t=90s screen | Heartbeat pattern |
+|--------|-------------|-------------|-------------------|
+| **PASS** | Progress bar or desktop | Finder desktop (menu bar) | All counters growing, then rate drops |
+| **FAIL-STUCK** | Progress bar | Same progress bar | jNK or jDR frozen, jRAM growing |
+| **FAIL-LOOP** | Happy Mac or blank | Same | jRAM=0, SCSIGet in stderr |
+| **FAIL-CRASH** | — | — | Process exited |
 
-## Baseline (interpreter)
+## Reading heartbeats
 
-Interpreter boots 8.6 ISO to Finder desktop in ~2 minutes. Confirmed working.
+Format: `[JIT <time>] blocks=N pc=X | jNK=N jDR=N jRAM=N jOTH=N | iNK=N iDR=N iRAM=N iOTH=N | j2i=N i2j=N`
 
-## VNC capture
+Key diagnostics:
+- **jNK frozen**: nanokernel not executing — interrupts may not be reaching the NK dispatcher
+- **jDR frozen**: 68k emulator not running — boot past the 68k-heavy phase or stuck in RAM code
+- **jRAM growing fast, others frozen**: tight loop in RAM-resident Mac OS code (extension hang)
+- **j2i count**: JIT→interpreter transitions. Should be low (~100/s). If millions/s, spcflags issue.
+- **pc field**: sampled at heartbeat time. If same PC across heartbeats, that's the stuck instruction.
+
+## Baselines
+
+| Config | Boot result | Time to desktop |
+|--------|------------|-----------------|
+| Interpreter (`SS_USE_JIT=0`) | PASS | ~2 min (ISO) |
+| JIT, ROM=0x460000, chaining=0 | FAIL-STUCK | hangs at "Starting Up..." |
+| JIT, ROM=0x500000, chaining=1 | FAIL-STUCK | hangs at "Starting Up..." |
+
+The "Starting Up..." hang is a **pre-existing JIT bug** confirmed present at commit
+77d47baa (before session 7). It affects RAM-resident Mac OS extension code, not ROM or
+DR emulator code. Our subfe/adde/mftb fixes are correct and independent of this hang.
+
+## Binary search template
+
+To isolate a failing code region (worked for the subfe bug):
 
 ```bash
-python3 /tmp/vnc_capture.py 2>&1
-sips -s format png /tmp/ss_vnc_frame.ppm --out /tmp/ss_test.png
-```
-
-## Quick test function
-
-```bash
+# Test function — returns PASS/FAIL based on jRAM growth
 boot_test() {
     local label=$1; shift
     pkill -9 -x SheepShaver 2>/dev/null; sleep 1
-    SS_JIT_DIAG_LOG=/tmp/jit_test.log "$@" \
-        /path/to/SheepShaver &>/dev/null &
+    "$@" SS_JIT_DIAG_LOG=/tmp/jit_test.log ./SheepShaver &>/dev/null &
     local pid=$!
-    sleep 20
-    python3 /tmp/vnc_capture.py 2>/dev/null
-    sips -s format png /tmp/ss_vnc_frame.ppm --out "/tmp/ss_${label}_20s.png" 2>/dev/null
-    sleep 70
-    python3 /tmp/vnc_capture.py 2>/dev/null
-    sips -s format png /tmp/ss_vnc_frame.ppm --out "/tmp/ss_${label}_90s.png" 2>/dev/null
-    grep '^\[JIT.*blocks=' /tmp/jit_test.log | tail -3
+    sleep 90
+    local jnk=$(grep '^\[JIT.*blocks=' /tmp/jit_test.log | tail -1 | grep -o 'jNK=[0-9]*' | cut -d= -f2)
+    # For the extension hang: check if jNK is still growing (healthy) vs frozen (stuck)
+    local jnk_prev=$(grep '^\[JIT.*blocks=' /tmp/jit_test.log | head -3 | tail -1 | grep -o 'jNK=[0-9]*' | cut -d= -f2)
     kill -9 $pid 2>/dev/null
+    if [ "${jnk:-0}" -gt "${jnk_prev:-0}" ] && [ "$((jnk - jnk_prev))" -gt 1000000 ]; then
+        echo "${label}: PASS (jNK growing: ${jnk_prev} -> ${jnk})"
+    else
+        echo "${label}: FAIL (jNK frozen at ${jnk})"
+    fi
 }
 ```

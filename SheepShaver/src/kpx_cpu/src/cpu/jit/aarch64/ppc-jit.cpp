@@ -4094,6 +4094,8 @@ void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uin
  * its 4 KB of local sort arrays would otherwise live in compile()'s stack frame,
  * forcing __chkstk probing on every call — and compile() is called per block
  * dispatch, making that measurable (profiled during boot). */
+uint32_t ppc_jit_aarch64_blocks_compiled(void) { return jit_blocks_attempted; }
+
 __attribute__((noinline))
 static void jit_report_cum_blockers(void) {
 	fprintf(stderr, "PPC-JIT-A64-CUM: %u fail opcodes in %u blocks (%u attempted), top blockers:\n",

@@ -41,6 +41,9 @@ ppc_jit_entry_fn ppc_jit_aarch64_lookup_fast(uint32_t pc);
 /* Register the (immutable) Mac ROM as a second JIT-compilable range. */
 void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uint8_t *host_base);
 
+/* Compilation stats for heartbeat logging */
+uint32_t ppc_jit_aarch64_blocks_compiled(void);
+
 bool ppc_jit_aarch64_compile(
 	uint32_t pc,
 	const uint8_t *ram,

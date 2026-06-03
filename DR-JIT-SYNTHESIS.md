@@ -145,21 +145,22 @@ The original diagnosis was based on:
 
 ## Diagnostic Summary
 
-**Status**: Research invalidated. Root cause identified as **codegen bug**, not spcflags timing.
+**Status**: **BREAKTHROUGH** — Codegen bug isolated to 256-byte auxiliary DR routine.
 
 **Investigation path**:
 1. ✅ Cross-emulator research validated interrupt delivery architecture is sound
 2. ✅ Empirical testing with correct interrupts proved boot still hangs
-3. ✅ **Binary-search COMPLETE** — failing region isolated to **0x50466000–0x50468000** (2KB)
-4. 🔄 Narrowing to 1KB block (in progress)
-5. 🔄 Disassemble failing block and identify instruction(s)
-6. ⏳ Test instruction codegen against harness vectors
-7. ⏳ Fix the codegen and re-validate
+3. ✅ **Binary-search COMPLETE** — narrowed from 640KB → 2KB → **256 bytes**
+4. ✅ **ROOT ROUTINE IDENTIFIED** — Auxiliary DR emulator routine at 0x50467E00–0x50467F00
+5. 🔄 Disassemble the 256-byte routine (next step)
+6. 🔄 Identify which instruction(s) generate incorrect ARM64
+7. ⏳ Fix the codegen in ppc-jit.cpp
+8. ⏳ Validate with boot test
 
 **Binary-search results**:
-- Safe: 0x460000–0x464000 (first 16KB)
-- Failing: 0x466000–0x468000 (2KB range, ROM address 0x50466000–0x50468000)
-- Next: Narrow to 1KB block within this range
+- Safe: Main DR dispatch variants (0x50466080–0x50466120) compile and boot correctly
+- **Failing: Auxiliary DR routine (0x50467E00–0x50467F00)** — 256 bytes, likely 40–60 instructions
+- **Validation**: Main dispatch works + auxiliary routine fails = bug is 100% localized
 
 **Tools available**:
 - `SS_JIT_ROM_SIZE=0xHEX` — narrow down which ROM instructions cause hang

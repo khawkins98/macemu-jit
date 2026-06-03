@@ -76,6 +76,19 @@ never create log files. This property is existing behavior and is preserved.
 5. **Stale-file migration:** create a regular file at `/tmp/jit_diag.log`, run the
    emulator, verify it is replaced by a symlink.
 
+## Follow-ups (non-blocking, from code review of 8aab88de)
+
+- **Symlink-alias race**: two default-mode instances starting simultaneously can
+  interleave `unlink()`/`symlink()`, leaving `/tmp/jit_diag.log` pointing at whichever
+  run won (or emitting a spurious EEXIST warning). Per-instance logs are unaffected —
+  only the convenience alias is non-deterministic. Fix if it ever matters:
+  `symlink()` to a temp name, then atomic `rename()` over the target.
+- **`localtime_r` return value unchecked**: returns NULL on failure → garbage filename.
+  Negligible for a `time(NULL)` input; a free guard if the function is ever touched again.
+- **Override aliasing the default path**: setting `SS_JIT_DIAG_LOG=/tmp/jit_diag.log`
+  explicitly while a default-mode instance runs lets the latter's `unlink()` orphan the
+  former's log. Exotic; documents itself away if nobody does that.
+
 ## Documentation Updates
 
 - `CLAUDE.md`: update the "JIT Diagnostic Logging" section — default path is now

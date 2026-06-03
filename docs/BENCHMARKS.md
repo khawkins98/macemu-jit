@@ -216,3 +216,42 @@ The PPC→ARM64 JIT delivers a **1.88x overall speedup** (PR score) over the int
 
 Screenshots: [JIT](speedometer-jit.jpg) | [Interpreter](speedometer-interpreter.jpg)
 
+
+## Real Hardware Comparison
+
+### Where our JIT sits in the PowerPC lineup
+
+| Machine | CPU | Speedometer CPU Score |
+|---------|-----|-----------------------|
+| Quadra 605 | 25 MHz 68LC040 | 0.88 (baseline) |
+| Power Mac 6100/60 | 60 MHz 601 | 3.11 |
+| iMac Rev B | 233 MHz G3 | 15.22 |
+| Power Mac G3/266 | 266 MHz G3 | 21.05 |
+| PowerBook G4/400 | 400 MHz G4 | 30.61 |
+| Power Mac G4/450 | 450 MHz G4 | 32.80 |
+| **Our JIT (Apple Silicon)** | **PPC→ARM64 JIT** | **62.73** |
+| Power Mac G5/2.3 (Classic) | 2.3 GHz G5 | 81.02 |
+
+**By CPU integer performance, our JIT performs like a real Power Mac G4 in the
+700 MHz – 1 GHz range.** It sits between the G4/450 (32.8) and the G5/2.3
+running Classic Mode (81.0).
+
+### Emulator comparison
+
+| Configuration | Overall PR | Notes |
+|---------------|-----------|-------|
+| SheepShaver x86 interpreter | ~7x | Baseline emulator |
+| SheepShaver x86 JIT (~2010) | ~14-15x | Classic dyngen JIT |
+| **Our ARM64 JIT** | **40.4x** | **2.7x faster than x86 JIT** |
+
+### Category analysis
+
+| Category | Our Score | Closest Real Mac | Why |
+|----------|-----------|-----------------|-----|
+| CPU (62.7) | G4 700MHz-1GHz class | Native ARM64 integer ops |
+| Disk (17.8) | Exceeds ALL real Macs (best: G5 at 5.0) | NVMe SSD vs spinning disk |
+| Math (10310) | Between G4/1.8GHz and G5/2.3GHz | ARM64 FPU executes natively |
+| Graphics (42.1) | No real Mac comparison | Real Macs lack 1/2/4-bit modes |
+
+Sources: [Low End Mac Speedometer benchmarks](https://lowendmac.com/benchmarks/speedo4.shtml),
+[E-Maculation emulator benchmarks](https://www.emaculation.com/doku.php/benchmarks)

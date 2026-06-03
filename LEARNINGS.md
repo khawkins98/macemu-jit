@@ -123,33 +123,97 @@ These opcodes are forced to the inline interpreter call; all others compile nati
 | Allow {30,31} native, rest interpreted | FAIL | Multiple native opcodes needed to trigger |
 | Opcode 30 (rld*) never appears during boot | — | It's a no-op in the skip list |
 
-**Diagnosis**: the bug is a **cross-instruction state leak**. When `compile_one()` returns
-false (interpreter fallback), the block ENDS immediately — all state is flushed to the
-regs struct in memory and a fresh block starts. When `compile_one()` succeeds, the block
-continues and the next instruction shares ARM64 register state (RTMP0-3) and NZCV flags
-with the previous instruction.
+**Initial diagnosis**: the bug was hypothesized as a **cross-instruction state leak** —
+native instructions sharing dirty ARM64 register/flag state within a block. The inline
+interpreter call flushes all state (lazy_flush_cr0 + ra_flush_all + block termination)
+before each instruction, which is why SKIP_ALL passes.
 
-The inline interpreter call resets state that native codegen leaves dirty. The most
-likely candidates:
-1. **NZCV flags**: a native instruction sets NZCV as a side effect (e.g., ADDS in
-   `addic`, SUBS in `cmpwi`), then the block epilogue or spcflags poll reads NZCV
-   expecting it to be clean
-2. **Lazy CR0**: a Rc=1 instruction marks CR0 as pending in NZCV, then a subsequent
-   non-Rc instruction clobbers NZCV without flushing CR0 first
-3. **RTMP register reuse**: one instruction leaves a value in RTMP0-3 that the next
-   instruction's prologue code (address computation, immediate loading) overwrites
-   before the first instruction's result is stored
+**However, targeted experiments refuted all three state-leak candidates** (see
+"2026-06-03 — deeper investigation" below):
+- Lazy CR0 flush before every instruction: still hangs
+- RTMP register zeroing before every instruction: still hangs
+- PC store before every instruction: still hangs
+- Per-block register verification (SS_JIT_VERIFY): zero RAM divergences detected
+
+The actual mechanism is subtler — the inline interpreter call does not just flush state,
+it also **terminates the block**, returning to the C dispatcher where spcflags are checked.
+The difference between SKIP_ALL (pass) and MAX_INSNS=1 (fail) may be about dispatcher
+re-entry frequency or some non-register side effect, not dirty ARM64 state per se.
 
 **Why the inline interpreter call fixes it**: `emit_inline_interp_call()` calls
 `lazy_flush_cr0()` + `ra_flush_all()` before the BLR, then the block ends with a bare
-epilogue. This flushes all dirty state to memory. The next block starts with fresh
-register state loaded from the struct. Native instructions that succeed DON'T flush
-between themselves — they share the dirty state.
+epilogue. This flushes all dirty state to memory AND returns to the C dispatcher. The
+next block starts with fresh register state loaded from the struct AND spcflags are
+checked. Native instructions that succeed DON'T flush between themselves — they share
+the dirty state AND the block continues without a dispatcher round-trip.
 
-**Next step**: instrument `lazy_flush_cr0` and `emit_entry_spcflags_poll` to detect
-when NZCV is assumed clean but actually dirty. Alternatively, add a defensive
-`lazy_flush_cr0()` call at the START of every instruction in `compile_one()` and test
-if that fixes the boot — if so, the bug is lazy CR0 corruption.
+## 2026-06-03 (session 7 continued, later) — deeper investigation, state-leak hypothesis weakened
+
+### Additional bugs fixed
+
+4. **icbi NOP → interpreter fallback**: icbi (instruction cache block invalidate) was
+   compiled as a NOP. Fixed by falling through to the interpreter's `execute_icbi` and
+   wiring `invalidate_cache_range` to call `ppc_jit_aarch64_invalidate_range`. Correctness
+   fix but did NOT resolve the extension-loading hang.
+5. **isync NOP → interpreter fallback**: isync (instruction synchronize) was compiled as
+   a NOP. Fixed by falling through to the interpreter to flush any deferred icbi
+   invalidation. Same correctness fix; did NOT resolve the hang.
+6. **UXTW for register-offset memory access**: defensive fix to use option=010 (UXTW,
+   zero-extend W to X) instead of option=011 (LSL) for register-offset loads/stores.
+   Ensures 32-bit guest addresses in 64-bit registers don't carry upper garbage bits.
+   Did NOT resolve the hang (W-ops already zero upper 32 bits on ARM64).
+7. **mftb TBU/TBL distinction**: already fixed earlier in session 7 (listed above for
+   completeness).
+
+### Ruled-out causes of the extension-loading hang
+
+Every experiment below was tested; all still hang at "Starting Up...":
+
+| Experiment | Result | What it rules out |
+|-----------|--------|-------------------|
+| Lazy CR0 flush before every instruction | HANG | CR0 state leak |
+| RTMP register zeroing before every instruction | HANG | Temp register collision |
+| PC store before every instruction | HANG | Stale PC in regs struct |
+| UXTW memory access encoding | HANG | 32-bit address extension |
+| Block chaining disabled (SS_JIT_NO_CHAIN=1) | HANG | Chain-related interrupt miss |
+| icbi/isync coherence fixes | HANG | Stale JIT code |
+| Block length MAX_INSNS=1 | HANG | Multi-instruction interaction |
+| Block length MAX_INSNS=2,4,64,512 | ALL HANG | Block size effects |
+| Any single opcode skipped from native | PASS | Misleading — frequent interpreter calls mask bug |
+| Per-block register verification (SS_JIT_VERIFY) | 0 divergences | Register/memory corruption per-block |
+
+### Key discovery: SKIP_ALL vs MAX_INSNS=1
+
+- **SKIP_ALL (every instruction via interpreter call) PASSES** — boots to Finder desktop
+- **MAX_INSNS=1 (every instruction native, 1 per block) FAILS** — hangs
+
+Both execute one PPC instruction per dispatch. The difference: SKIP_ALL uses the C
+interpreter handler (which executes the full semantic including all side effects through
+the C++ code path); MAX_INSNS=1 uses native ARM64 codegen. This proves at least one
+native instruction codegen produces different behavior than the interpreter, but
+SS_JIT_VERIFY detected zero divergences — the difference is either too subtle for the
+register comparison or manifests only over thousands of instructions.
+
+### Memory dump comparison
+
+At t=15s into boot, JIT and interpreter memory states differ by **1.7M bytes**. Key
+findings:
+- Low-memory globals (0x10, 0x20) are NULL under JIT but valid under interpreter
+- **These NULLs are downstream symptoms** — boot hangs BEFORE the code that writes them
+- The actual stall is in RAM code at 10653b60/10695xxx (spin-wait), NOT in ROM
+
+### Trace comparison
+
+Execution chains (block dispatch sequences) match between JIT and interpreter for the
+first ~2000 blocks. A transient 20-byte SP difference appears and self-corrects. No
+persistent divergence in the trace itself — the bug accumulates over many more blocks.
+
+### RAM address instability
+
+Mac OS loads extensions at different base addresses each run. Hot PCs shift between
+boots (e.g., 10695358 in run 1 vs 106953b8 in run 2). This is why address-based binary
+search (SS_JIT_INTERP_RANGE) cannot isolate the bug with sub-ranges — only interpreting
+ALL RAM (10000000-20000000) works.
 
 ### Previous entry (partially superseded)
 

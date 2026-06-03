@@ -1,103 +1,121 @@
-# SheepShaver ARM64 JIT — Session 7 Handoff
+# SheepShaver ARM64 JIT — Session 7 Handoff (updated 2026-06-03)
 
-## Status: four bugs fixed, fifth under investigation
+## Status: workaround boots to desktop; root cause still open
 
-Boot reaches "Starting Up..." with progress bar but hangs during extension loading.
-A workaround (skip list) boots to Finder desktop. Root cause narrowed to a cross-
-instruction state leak in the JIT codegen.
+The extension-loading hang is a pre-existing JIT bug. A skip-list workaround boots
+to Finder desktop. The initial "cross-instruction state leak" hypothesis has been
+significantly weakened by experiments — the actual root cause is still unknown.
 
 ## Read first
 
-1. `LEARNINGS.md` session 7 entries — full investigation timeline
+1. `LEARNINGS.md` — session 7 entries (2026-06-03 dated sections)
 2. `docs/PPC-ARM64-JIT-LESSONS.md` — architectural narrative
 3. `docs/BOOT-TEST-METHOD.md` — reproducible test procedure
 
-## Bugs fixed this session
-
-| Bug | Root cause | Impact | Fix |
-|-----|-----------|--------|-----|
-| subfe/adde carry | ADDS reads partial carry, not full 3-operand sum | DR emulator SCSI hang | 64-bit arithmetic |
-| mftb TBU/TBL | CNTVCT_EL0 stored as-is for both halves | Time base garbage values | LSR #32 for TBU |
-| DR entry-poll | Block-entry spcflags poll fires mid-dispatch-cycle | Premature CR2.LT injection | Skip poll for DR blocks |
-| icbi NOP | icbi compiled as NOP, stale JIT blocks survive code rewrite | Potential stale code | Fall through to interpreter |
-
-## Current blocker: extension-loading hang
-
-### Symptom
-
-Boot reaches "Starting Up..." at ~10% progress and hangs. jNK freezes, jRAM grows
-at ~85M/s forever. Pre-existing bug (present at commit 77d47baa before session 7).
-
-### Workaround
+## Workaround (boots to Finder desktop)
 
 ```bash
 SS_JIT_SKIP_OPC=21,28,29,30,31,32,33,43,44,45,46,47,48,49,50,51,57,61,62,63 ./SheepShaver
 ```
 
-This forces ~20 opcode types to the inline interpreter call while letting the rest
-compile natively. Boots to Finder desktop from 8.6 ISO in ~30 seconds.
+Forces ~20 opcode types to the inline interpreter call. All others compile natively.
+Boots to Finder desktop from 8.6 ISO in ~30 seconds.
 
-### What the skip list means
+**What this does**: When `compile_one()` returns false, the JIT emits an inline
+interpreter call (BLR to C handler) and the block ENDS. This flushes all state to
+memory and returns to the C dispatcher. The interpreter handler executes the instruction
+correctly via the C++ code path. The block termination means spcflags are checked
+between every instruction.
 
-When `compile_one()` returns false for an instruction, the JIT emits an inline
-interpreter call (BLR to a C handler) instead of native ARM64 code. Crucially,
-the **block ends immediately** — all state (registers, flags) is flushed to memory.
-The next block starts fresh.
+## Bugs fixed this session
 
-When `compile_one()` succeeds, the block **continues** — the next instruction shares
-the same ARM64 NZCV flags, RTMP temporary registers, and lazy CR0 state with the
-previous instruction. No flush between them.
+| # | Bug | Root cause | Fix |
+|---|-----|-----------|-----|
+| 1 | subfe/adde carry | ADDS reads partial carry, not full 3-operand sum | 64-bit arithmetic |
+| 2 | mftb TBU/TBL | CNTVCT_EL0 stored as-is for both halves | LSR #32 for TBU |
+| 3 | DR entry-poll | Block-entry spcflags poll fires mid-dispatch-cycle | Skip poll for DR blocks |
+| 4 | icbi NOP | Stale JIT blocks survive code rewrite | Fall through to interpreter |
+| 5 | isync NOP | Deferred icbi flush not triggered | Fall through to interpreter |
+| 6 | UXTW addressing | Defensive 32-bit address extension in register-offset mem access | option=010 |
 
-### Diagnosis: cross-instruction state leak
+## Extension-loading hang: what we know
+
+### The symptom
+
+Boot reaches "Starting Up..." at ~10% progress and hangs. jNK freezes, jRAM grows
+at ~85M/s forever. Pre-existing at commit 77d47baa (before all session 7 changes).
+Interpreter boots to Finder desktop in ~2 min.
+
+### The discriminating tests
 
 | Test | Result | Implication |
 |------|--------|-------------|
-| Skip ALL opcodes | PASS | Every instruction via interpreter = correct |
-| MAX_INSNS=1 (all native) | FAIL | Even 1 native instruction per block fails |
-| Remove any single opcode from skip list | PASS | No one opcode is solely responsible |
-| Multiple native opcodes together | FAIL | Bug requires ≥2 native instruction types |
+| SKIP_ALL (every instruction via interpreter) | PASS | Interpreter-executed instructions are correct |
+| MAX_INSNS=1 (all native, 1 per block) | FAIL | At least one native codegen differs from interpreter |
+| Remove any single opcode from skip list | PASS | Misleading — interpreter calls mask the bug |
+| Allow {30,31} native, rest interpreted | FAIL | Multiple native opcodes needed |
+| SS_JIT_VERIFY (per-block register check) | 0 divergences | No detectable per-block register corruption |
 
-The bug is an interaction between native instructions sharing dirty state within
-the JIT block framework. The inline interpreter call resets this state (via
-lazy_flush_cr0 + ra_flush_all + block termination).
+### Ruled-out causes
 
-### Top suspects
+- Lazy CR0 flush before every instruction: still hangs
+- RTMP register zeroing before every instruction: still hangs
+- PC store before every instruction: still hangs
+- UXTW memory access encoding: still hangs
+- Block chaining: still hangs
+- icbi/isync coherence: still hangs
+- Block length (MAX_INSNS=1/2/4/64/512): all fail
+- Any single opcode skipped: all pass (misleading)
+- Per-block register verification: zero divergences
 
-1. **Lazy CR0**: an Rc=1 instruction stores CR0 in NZCV flags (deferred write).
-   A subsequent non-Rc instruction clobbers NZCV without flushing CR0 first.
-   When CR0 is eventually read, it gets the wrong value.
+### What the data shows
 
-2. **NZCV leak into block epilogue**: the spcflags poll or epilogue code reads
-   NZCV flags that were left dirty by the last native instruction in the block.
+- **Memory comparison**: 1.7M bytes differ between JIT and interpreter at t=15s
+- **Low-memory globals** (0x10, 0x20): NULL under JIT, valid under interpreter
+- These NULLs are **downstream symptoms** — boot hangs before the writes that set them
+- **Trace comparison**: execution chains match; transient 20-byte SP difference self-corrects
+- **The actual stall** is in RAM code at 10653b60/10695xxx (spin-wait), not in ROM
+- RAM addresses shift between boots (extension ASLR), defeating address-based binary search
 
-3. **RTMP register collision**: one instruction's address computation in RTMP0
-   overwrites a value that the previous instruction expected to persist.
+### Where to investigate next
 
-### Next step
+The state-leak hypothesis is weakened. Three avenues remain:
 
-Add a defensive `lazy_flush_cr0()` at the START of every instruction in
-`compile_one()`. If this fixes the boot, the bug is lazy CR0 corruption.
-If not, instrument the spcflags poll to detect when it reads dirty NZCV.
+1. **Side-effect audit**: SKIP_ALL passes but MAX_INSNS=1 fails. Both execute one
+   instruction per dispatch. The difference is C interpreter vs ARM64 native. Some
+   native codegen must differ from the interpreter in a way SS_JIT_VERIFY doesn't
+   catch (e.g., memory-mapped I/O side effects, atomic semantics, or write ordering).
 
-## Diagnostic tools added this session
+2. **Opcode-level differential**: run SKIP_ALL minus one opcode at a time to find
+   which single native opcode makes the boot fail. Previous "remove any one from skip
+   list = pass" tested removing from the workaround set, not adding to a full-skip
+   baseline. The inverse search may be more discriminating.
+
+3. **Long-horizon memory diff**: the 1.7M byte difference at t=15s may be traceable
+   to a specific divergence point by comparing at t=1s, t=2s, t=5s increments.
+
+## Diagnostic tools available
 
 | Tool | Purpose |
 |------|---------|
-| `SS_JIT_ROM_SIZE=<hex>` | Override ROM JIT range (ROM binary search) |
-| `SS_JIT_INTERP_RANGE=lo-hi` | Force interpreter for a PC range (RAM binary search) |
 | `SS_JIT_SKIP_OPC=n,n,...` | Force interpreter for specific primary opcodes |
 | `SS_JIT_SKIP_XO=n,n,...` | Force interpreter for specific XO31 sub-opcodes |
 | `SS_JIT_MAX_INSNS=n` | Cap JIT block length |
+| `SS_JIT_VERIFY=1` | Per-block register verification against interpreter |
+| `SS_JIT_ROM_SIZE=<hex>` | Override ROM JIT range |
+| `SS_JIT_INTERP_RANGE=lo-hi` | Force interpreter for a PC range |
+| `SS_JIT_NO_CHAIN=1` | Disable block chaining |
+| `SS_JIT_NO_ROM=1` | Keep ROM interpreter-only |
 | `SS_JIT_CHAIN_LOG=1` | Log dispatch call chain at stuck-loop entry |
 | `SS_EMULOP_TRACE=1` | Log SCSI EMUL_OP return values |
 | Heartbeat: `M/s comp=N` | Block rate and unique-blocks-compiled count |
 
 ## Current configuration
 
-- Branch: macos-arm64
+- Branch: `macos-arm64`
 - ROM range: 0x500000 (full, DR emulator JIT-compiled)
 - JIT_BLOCK_CHAINING: 1 (enabled)
 - Harness: 235/235, score=100
 - Boot: hangs at "Starting Up..." without skip list; Finder desktop WITH skip list
 - Test config: 8.6 ISO boot (`bootdriver -62`), VNC on port 5999
-- Assets: /Users/Shared/macemu/
+- Assets: `/Users/Shared/macemu/`

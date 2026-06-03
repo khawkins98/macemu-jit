@@ -4,7 +4,7 @@
 
 **Build:** ✅ macOS 26.4.1 arm64 (Apple clang 17, SDL2, no X11)
 **Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
-**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT — no skip list, no workarounds. ROM=0x500000 (full range including DR emulator), block chaining enabled. 8 bugs found and fixed (session 7, 2026-06-02/03).
+**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT — both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably. No skip list, no workarounds, no SS_JIT_SKIP_OPC needed. ROM=0x500000 (full range including DR emulator), block chaining enabled. 12 bugs found and fixed (sessions 7-8, 2026-06-02/03).
 **JIT harness:** ✅ 235/235 opcode vectors pass interpreter mode and JIT mode (score=100 both)
 **ROM harness:** ⚠️ Needs OldWorld raw ROM dump; New World CHRP ROMs are not compatible with the scanner
 **macOS-specific fixes (all on macos-arm64 branch):**
@@ -26,8 +26,9 @@
 ### JIT Boot Status
 
 With JIT active, SheepShaver boots Mac OS 8.6 to the Finder desktop (macOS arm64, VNC confirmed).
+Both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably — no workarounds needed.
 Full ROM range (0x500000, including DR 68k emulator) is JIT-compiled with block chaining enabled.
-No skip list or workarounds needed — all 8 JIT bugs from session 7 are fixed:
+No skip list or workarounds needed — all 12 JIT bugs are fixed (8 from session 7, plus bcctr and 3 earlier fixes):
 1. subfe/adde carry-out (64-bit three-operand CA)
 2. mftb TBU/TBL (interpreter fallback for time-base model)
 3. DR emulator entry-poll suppression (spcflags timing)

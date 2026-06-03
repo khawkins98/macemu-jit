@@ -32,9 +32,10 @@ lazy CR0 currently disabled (all CR0 updates are immediate), the RA should be sa
 **Effort**: Medium (need to fix the conditional bcctr codegen bug)
 **Risk**: Low (bcctr is always a block terminator, easy to fall back)
 
-`bcctr` currently falls through to the interpreter because the conditional path has
-a codegen bug (HD boot hangs). The unconditional `bctr` path was correct. Fix:
-- Debug the conditional CR bit evaluation in the bcctr handler
+`bcctr` currently falls through to the interpreter. The conditional path had a codegen
+bug (FIXED — was the last fix for HD boot, now uses interpreter fallback). The
+unconditional `bctr` path was correct. Optimization opportunity:
+- Native conditional bcctr with correct CR bit evaluation
 - Add Mixed Mode guard (check CTR bit 0, bail if odd)
 - The unconditional bctr path can be re-enabled immediately
 

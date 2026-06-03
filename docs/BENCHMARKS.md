@@ -7,7 +7,7 @@ All tests on Mac OS 8.6 Internal Edition ISO, OldWorld ROM, 256MB RAM.
 
 - **Host**: macOS arm64 (Apple Silicon)
 - **ROM**: 1998-07-21 Mac OS ROM 1.1 (OldWorld)
-- **Boot media**: Mac OS 8.6 Internal Edition ISO (CD boot, `bootdriver -62`)
+- **Boot media**: Mac OS 8.6 Internal Edition ISO (CD boot) or macos86_fresh.dsk (4GB HD boot) — both work reliably
 - **RAM**: 256 MB
 - **Display**: 800x600 windowed
 - **JIT config**: ROM=0x500000 (full DR emulator), chaining=1
@@ -89,7 +89,7 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 |------|--------|-----------|------------|-------|
 | Pre-session 7 | ROM=0x460000, chaining=0 | ~18s | ~5min | DR emulator interpreted |
 | Session 7a | ROM=0x500000, chaining=1 | ~10s* | n/a | *Disk First Aid, not true desktop |
-| Session 7 final | ROM=0x500000, chaining=1 | TBD | ~10s | Full native JIT, 8 bugs fixed |
+| Session 7 final | ROM=0x500000, chaining=1 | ~10s | ~10s | Full native JIT, 12 bugs fixed, both ISO and HD boot work |
 
 ## Next Steps
 
@@ -97,7 +97,7 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 - [ ] Speedometer 4.0
 - [ ] Application launch timing (SimpleText, TeachText)
 - [ ] Compare with upstream Linux ARM64 (rcarmo/macemu-jit)
-- [ ] HD boot timing (after clean install)
+- [x] HD boot timing — ~10s, works reliably (macos86_fresh.dsk, 4GB, Mac OS 8.6)
 
 ## Speedometer 4.02 Results
 

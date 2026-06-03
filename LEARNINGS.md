@@ -313,36 +313,40 @@ Summary: Measured HD and CD boot times in both modes. The JIT accelerates the PP
 due to transition overhead. Net effect: JIT makes the CPU do 7x more total blocks/s but
 boot progress (driven by 68k work) is slower. Fix: JIT-compile the DR region.
 
-### Boot time measurements (HD boot, OldWorld ROM + macos921.dsk)
+### Boot time measurements (HD boot, OldWorld ROM + macos921.dsk) — RESOLVED
+
+**NOTE**: These measurements were taken BEFORE the DR emulator was JIT-compiled (ROM=0x460000).
+With all 12 bugs fixed (ROM=0x500000, chaining=1), JIT HD boot takes ~10s — same as interpreter.
+Both HD (macos86_fresh.dsk) and ISO boot work reliably with no workarounds.
 
 - **Interpreter HD boot to desktop: ~12 seconds.** 535M blocks at t=5s, rate crashes to
   3.8M/s by t=15s (desktop idle signature).
-- **JIT HD boot: 100+ seconds at steady 96M blocks/s.** No phase transition detected —
-  the idle loop runs at JIT speed so the block-rate drop that signals "desktop reached"
-  never appears.
-- **Open question**: Was the JIT actually at the desktop at 100s with detection failing?
-  Or genuinely stuck? Visual confirmation needed.
+- ~~**JIT HD boot: 100+ seconds at steady 96M blocks/s.**~~ RESOLVED: was caused by
+  DR emulator running interpreted (ROM=0x460000). With ROM=0x500000, JIT HD boot is ~10s.
+- ~~**Open question**: stuck or detection failure?~~ RESOLVED: was genuinely slow due to
+  interpreted DR emulator, not stuck.
 
 ### Boot time measurements (CD boot, Mac OS 8.6 ISO)
 
 - **Interpreter CD boot to desktop: ~318 seconds (5 min 18s), 6.7B total blocks.**
 - **JIT CD boot: partial measurement only, steady 96M blocks/s.**
 
-### The core imbalance (the key insight)
+### The core imbalance (the key insight) — RESOLVED
+
+**NOTE**: This imbalance was RESOLVED by JIT-compiling the DR emulator (ROM=0x500000) after
+fixing all 12 bugs. j2i transitions dropped from 2.4M/s to ~70/s. Both HD and ISO boot
+now take ~10s with JIT.
 
 The PPC JIT accelerates the nanokernel 82x (0.4M → 33M blocks/s) but the DR (68k)
-emulator stays interpreted. Worse, the DR emulator runs 1.8x SLOWER under JIT mode
-(46M → 26M blocks/s) due to transition overhead:
+emulator ~~stays interpreted~~ was interpreted at the time of this measurement. ~~Worse,~~
+the DR emulator ran 1.8x SLOWER under JIT mode (46M → 26M blocks/s) due to transition overhead:
 
-- **2.4M JIT↔interpreter transitions per second** during JIT-mode boot.
+- **2.4M JIT↔interpreter transitions per second** during JIT-mode boot (now ~70/s with ROM=0x500000).
 - **NK:DR ratio flips from 1:21 (interpreter) to 1:1 (JIT)** — the JIT-speed PPC hits
   exception dispatch ~20x more frequently relative to the 68k work being done.
-- **Net effect**: JIT mode does 7x more total blocks/s but boot progress (driven by
-  DR/68k work) is slower because the 68k emulator is both unaccelerated and burdened
-  with transition overhead.
-- **Fix direction**: JIT-compile the DR region. This requires solving the interrupt-timing
-  issue where spcflags poll lands at the wrong point in multi-step 68k instruction
-  emulation (the "Option A" fix documented in session 4).
+- ~~**Net effect**: boot progress slower because DR unaccelerated~~ RESOLVED: DR is now JIT-compiled.
+- ~~**Fix direction**: JIT-compile the DR region~~ DONE: ROM=0x500000 with entry-poll suppression
+  and all 12 bug fixes.
 
 ### Reconciliation: the "10s interpreter boot" discrepancy
 

@@ -247,8 +247,9 @@ that prevents low-address `REAL_ADDRESSING`.
 
 ## Current Status
 
-All 7 bug classes (8 individual bugs) are FIXED. Mac OS 8.6 boots to Finder desktop
-with full native JIT -- no skip list, no workarounds.
+All 7 bug classes (8 individual bugs documented here, 12 total including bcctr and earlier
+fixes) are FIXED. Mac OS 8.6 boots to Finder desktop with full native JIT -- no skip list,
+no workarounds. Both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably.
 
 - **subfe/adde carry**: FIXED — all three-operand CA instructions use 64-bit sums
 - **mftb TBU/TBL**: FIXED — interpreter fallback (correct time-base model)
@@ -257,4 +258,5 @@ with full native JIT -- no skip list, no workarounds.
 - **UXTW addressing**: FIXED — defensive zero-extension for register-offset mem access
 - **fmsub/fnmsub encoding**: FIXED — swapped to correct ARM64 sign conventions
 - **lwarx/stwcx./mftb fallback**: FIXED — interpreter fallback for CPU-object state
+- **bcctr conditional**: FIXED — interpreter fallback (was the last fix for HD boot)
 - **Configuration**: ROM=0x500000, chaining=1, harness 235/235 score=100

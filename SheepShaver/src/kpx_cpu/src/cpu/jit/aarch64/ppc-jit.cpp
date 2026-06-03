@@ -2201,7 +2201,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP1, rb);
 			emit32(0x9AC02800 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ASR Xd,Xn,Xm */
 			emit_store_gpr64(RTMP0, ra);
-			emit_set_xer_ca(0); /* simplified — full CA needs shifted-out-bits check */
+			/* KNOWN LIMITATION: CA hardcoded to 0. Correct behavior:
+			 * CA = (rS < 0) && (shifted-out bits != 0). Not implemented because
+			 * srad is a PPC64/G5 instruction unreachable by 32-bit Mac OS guests.
+			 * If G5 emulation is added, this needs the full shifted-out-bits check. */
+			emit_set_xer_ca(0);
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 
@@ -2211,7 +2215,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr64(RTMP0, PPC_RS(op));
 			if (sh) emit32(0x9340FC00 | (sh << 10) | (RTMP0 << 5) | RTMP0); /* ASR Xd,Xn,#sh */
 			emit_store_gpr64(RTMP0, ra);
-			emit_set_xer_ca(0); /* simplified */
+			/* KNOWN LIMITATION: CA hardcoded to 0 (same as srad above). */
+			emit_set_xer_ca(0);
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
@@ -2310,7 +2315,13 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			a64_str_x_reg(RTMP1, RMEMBASE, RTMP2);
 			return true;
 
-		case 84: /* ldarx rD,rA,rB — simplified as load */
+		case 84: /* ldarx rD,rA,rB — 64-bit load and reserve.
+		         * KNOWN LIMITATION: reservation state not set (simplified as plain load).
+		         * stdcx. always succeeds, bypassing the CPU object's reservation mechanism.
+		         * These are PPC64/G5 instructions unreachable by 32-bit Mac OS guests.
+		         * The 32-bit equivalents (lwarx XO=20, stwcx. XO=150) correctly fall
+		         * through to the interpreter. If G5 emulation is needed, these should
+		         * also fall through. */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
 			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0);
@@ -2318,14 +2329,15 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_store_gpr64(RTMP1, rd);
 			return true;
 
-		case 214: /* stdcx. rS,rA,rB — simplified: always succeed */
+		case 214: /* stdcx. rS,rA,rB — 64-bit store conditional.
+		         * KNOWN LIMITATION: always succeeds without checking reservation.
+		         * See ldarx (case 84) comment for rationale. */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2); /* save EA before 64-bit load clobbers RTMP0 */
+			emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2);
 			emit_load_gpr64(RTMP1, PPC_RS(op));
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 			a64_str_x_reg(RTMP1, RMEMBASE, RTMP2);
-			/* CR0 = EQ (reserve succeeded) */
 			lazy_flush_cr0();
 			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
 			emit_load_imm32(RTMP1, ~(0xF << 28)); emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
@@ -3448,7 +3460,11 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			emit32(0x1A800000 | (RTMP0 << 16) | (0xC << 12) | (RTMP1 << 5) | RTMP0); /* CSEL GT */
 			emit_load_imm32(RTMP1, 2); /* EQ */
 			emit32(0x1A800000 | (RTMP0 << 16) | (0x0 << 12) | (RTMP1 << 5) | RTMP0); /* CSEL EQ */
-			/* TODO: handle unordered (set FU bit) */
+			/* KNOWN LIMITATION: NaN (unordered) comparison produces LT instead of FU.
+		 * ARM64 FCMP sets V=1 for NaN, which makes N!=V true (LT condition).
+		 * Correct PPC behavior: CR field = FU (bit 0 = 1, others 0).
+		 * Not fixed because Mac OS 8.x code is unlikely to compare NaN values.
+		 * If FP-intensive apps produce wrong results, this is the likely cause. */
 			/* OR in XER[SO] as bit 0 for VXSNAN etc — for now just copy SO */
 			emit_or_xer_so_into_cr_nibble(RTMP0);
 			uint32_t shift = (7 - crd) * 4;

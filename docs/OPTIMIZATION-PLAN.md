@@ -216,15 +216,12 @@ Currently falling through to interpreter:
 - `icbi` (XO=982): Could emit inline call to invalidate JIT blocks
 - `isync` (XO19=150): See P0c above
 
-### P4: Code Cache Sizing
+### P4: Code Cache Sizing — DONE (2026-06-03)
 
-**Expected impact**: 2-5% (eliminates recompilation during boot)
-**Effort**: Low (change one constant)
-**Risk**: Low
-
-The 64MB code cache fills and flushes 1-2 times during boot.  Options:
-- Increase to 128MB or 256MB (MAP_JIT memory is virtual, cost is low)
-- Implement LRU eviction instead of full flush
+**Result**: Default increased from 64 MB to 256 MB.  Configurable via
+`jitcachesize` pref (accepts K/M/G suffixes) or `SS_JIT_CACHE_KB` env var.
+MAP_JIT memory is virtual — no physical cost until touched.  Eliminates the
+2+ full flushes per session that caused recompilation churn.
 
 ---
 

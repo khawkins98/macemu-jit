@@ -23,6 +23,13 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 - **Networking**: `ether slirp` provides outbound NAT networking (web, FTP)
   with built-in DHCP. No host configuration required.
 
+- **JIT code cache sizing**: Default increased from 64 MB to 256 MB, eliminating
+  recompilation churn during boot and app launch (previously 2+ full flushes per
+  session).  Configurable via `jitcachesize` pref or `SS_JIT_CACHE_KB` env var.
+
+- **Startup prefs readout**: SheepShaver now prints each loaded pref value on
+  startup, showing what configuration is active.
+
 ### JIT Performance
 
 - **Register allocator (RA)**: Re-enabled and fully converted. All 32-bit GPR

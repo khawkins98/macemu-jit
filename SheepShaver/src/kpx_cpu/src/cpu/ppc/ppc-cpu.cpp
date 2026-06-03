@@ -1155,10 +1155,17 @@ void powerpc_cpu::execute(uint32 entry)
 				static bool jit_enabled = !(jit_env && jit_env[0] == '0' && jit_env[1] == '\0');
 				if (!jit_enabled) goto skip_jit; /* GATE 1: SS_USE_JIT=0 diagnostic override */
 				if (!jit_init_done) {
-					/* 64 MB code cache: large enough to hold translations of both
-					 * the hot RAM working set and the ROM toolbox without recurring
-					 * full flushes (each flush forces recompilation of everything). */
-					ppc_jit_aarch64_init(65536);
+					/* Code cache size: default 256 MB.  MAP_JIT memory is virtual
+					 * — no physical cost until touched.  Override via
+					 * jitcachesize pref (in KB) or SS_JIT_CACHE_KB env var.
+					 * 64 MB caused 2+ full flushes per boot; 256 MB eliminates
+					 * most flush churn during normal use. */
+					{
+						uint32 cache_kb = 262144; /* 256 MB default */
+						const char *env = getenv("SS_JIT_CACHE_KB");
+						if (env && *env) cache_kb = strtoul(env, NULL, 0);
+						ppc_jit_aarch64_init(cache_kb);
+					}
 					/* Register the Mac ROM as a JIT-compilable range.  ROM is
 					 * write-protected after patching (main_unix.cpp), so compiled
 					 * ROM blocks are permanently valid.  The range stops at

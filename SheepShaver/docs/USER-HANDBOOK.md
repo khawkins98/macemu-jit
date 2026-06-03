@@ -52,6 +52,7 @@ Integer values accept `K`, `M`, `G` suffixes and `0x` hex prefix.
 | `ether` | string | — | Network: `slirp` for NAT, or interface name |
 | `noextfs` | bool | false | Disable Unix filesystem mount |
 | `vncserver` | bool | false | Enable VNC server for headless access |
+| `jitcachesize` | int | 256M | JIT code cache size (virtual memory, no cost until used) |
 | `vncport` | int | 5999 | VNC server port |
 
 ## Shutdown and Restart
@@ -92,6 +93,7 @@ A register allocator caches PPC GPRs in ARM64 callee-saved registers
 | `SS_JIT_NO_ROM=1` | Keep ROM interpreter-only, JIT only RAM |
 | `SS_JIT_NO_CHAIN=1` | Disable block chaining |
 | `SS_JIT_TRACE_RING=1` | Enable block-level execution history ring |
+| `SS_JIT_CACHE_KB=N` | Override code cache size in KB (default 262144 = 256 MB) |
 | `SS_JIT_DIAG_LOG=/path` | Override diagnostic log path |
 
 ### Benchmarking

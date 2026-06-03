@@ -427,6 +427,9 @@ void LoadPrefsFromStream(FILE *f)
 			continue;
 		}
 
+		// Log non-default pref values at startup
+		printf("  %s = %s\n", keyword, value);
+
 		// Add item to prefs
 		switch (desc->type) {
 			case TYPE_STRING:

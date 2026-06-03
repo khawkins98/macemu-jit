@@ -60,6 +60,7 @@ prefs_desc common_prefs_items[] = {
 	{"ignoresegv", TYPE_BOOLEAN, false, "ignore illegal memory accesses"},
 	{"jit", TYPE_BOOLEAN, false,        "enable JIT compiler"},
 	{"jit68k", TYPE_BOOLEAN, false,     "enable 68k DR emulator"},
+	{"jitcachesize", TYPE_INT32, false, "JIT code cache size in KB (default 256 MB)"},
 	{"keyboardtype", TYPE_INT32, false, "hardware keyboard type"},
 	{"hardcursor", TYPE_BOOLEAN, false, "hardware mouse cursor"},
 	{"hotkey", TYPE_INT32, false,       "hotkey modifier"},

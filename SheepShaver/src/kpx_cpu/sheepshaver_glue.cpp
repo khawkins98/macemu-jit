@@ -1222,6 +1222,16 @@ regdump:
 }
 void init_emul_ppc(void)
 {
+	// Export jitcachesize pref as env var for ppc-cpu.cpp (which can't include prefs.h)
+	if (!getenv("SS_JIT_CACHE_KB")) {
+		int32 kb = PrefsFindInt32("jitcachesize");
+		if (kb > 0) {
+			char buf[32];
+			snprintf(buf, sizeof(buf), "%d", kb);
+			setenv("SS_JIT_CACHE_KB", buf, 0);
+		}
+	}
+
 	// Get pointer to KernelData in host address space
 	kernel_data = (KernelData *)Mac2HostAddr(KERNEL_DATA_BASE);
 

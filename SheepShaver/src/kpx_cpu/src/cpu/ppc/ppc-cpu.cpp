@@ -1213,6 +1213,35 @@ void powerpc_cpu::execute(uint32 entry)
 							double rate = (dt > 0) ? delta / dt / 1e6 : 0;
 							prev_block_count = jit_block_count;
 							uint32_t compiled = ppc_jit_aarch64_blocks_compiled();
+							/* SS_JIT_RING_DUMP_ON_STALL=<n>: dump the trace ring once when the
+							 * compiled-block count stops increasing for n consecutive heartbeats
+							 * while execution is still fast (>1M blocks/s). This captures tight
+							 * hang loops where the same already-compiled blocks repeat forever
+							 * (e.g. extension-loading hang), without relying on stable PCs.
+							 * Requires SS_JIT_TRACE_RING=1 to have a ring to dump. */
+							{
+								static int stall_n = -1;
+								static uint32_t stall_last_compiled = 0;
+								static int stall_count = 0;
+								if (stall_n < 0) {
+									const char *e = getenv("SS_JIT_RING_DUMP_ON_STALL");
+									stall_n = (e && *e) ? atoi(e) : 0;
+								}
+								if (stall_n > 0) {
+									if (compiled == stall_last_compiled && rate > 1.0) {
+										stall_count++;
+										if (stall_count >= stall_n) {
+											fprintf(stderr, "[JIT %.1fs] STALL: comp=%u unchanged for %d heartbeats at %.0fM/s — dumping trace ring\n",
+											        now, compiled, stall_count, rate);
+											ppc_jit_dump_trace_ring();
+											stall_n = 0; /* one-shot */
+										}
+									} else {
+										stall_count = 0;
+										stall_last_compiled = compiled;
+									}
+								}
+							}
 							fprintf(jit_log_file, "[JIT %.1fs] blocks=%llu pc=%08x %.0fM/s comp=%u | jNK=%llu jDR=%llu jRAM=%llu | iDR=%llu | j2i=%llu\n",
 							        now, (unsigned long long)jit_block_count, cur_pc, rate, compiled,
 							        (unsigned long long)rgn_jit_blocks[RGN_NK], (unsigned long long)rgn_jit_blocks[RGN_DR],

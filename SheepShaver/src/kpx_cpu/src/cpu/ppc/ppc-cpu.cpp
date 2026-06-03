@@ -46,6 +46,7 @@ extern uint32 RAMSize;
 extern uint32 ROMBase;
 extern uint8 *ROMBaseHost;
 #include "cpu/jit/aarch64/ppc-jit.h"
+#include "cpu/jit/aarch64/jit-heartbeat.hpp"
 #include <cstddef>
 /* Compile-time verification of the spcflags mask offset used by the JIT's
  * block-entry interrupt poll.  PPCR_SPCFLAGS in ppc-jit.cpp must match.
@@ -1391,6 +1392,13 @@ void powerpc_cpu::execute(uint32 entry)
 							        (unsigned long long)rgn_interp_blocks[RGN_DR],
 							        (unsigned long long)rgn_jit_to_interp);
 							fflush(jit_log_file);
+							/* Terminal heartbeat (stderr + log): 10s cadence for the
+							 * first minute, then every 60s.  See jit-heartbeat.hpp. */
+							{
+								static hb_state hb;
+								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
+								        compiled, rgn_jit_blocks, rgn_jit_to_interp);
+							}
 							/* NOTE: "same PC at consecutive heartbeats" is a SAMPLING HINT, not
 							 * proof of a hang — hot dispatch PCs (e.g. the nanokernel exception
 							 * dispatcher at 0x50313d34) recur by chance.  Do not treat
@@ -1498,6 +1506,13 @@ void powerpc_cpu::execute(uint32 entry)
 							        (unsigned long long)rgn_interp_blocks[RGN_RAM], (unsigned long long)rgn_interp_blocks[RGN_OTH],
 							        (unsigned long long)rgn_jit_to_interp, (unsigned long long)rgn_interp_to_jit);
 							fflush(jit_log_file);
+							/* Terminal heartbeat (stderr + log): 10s cadence for the
+							 * first minute, then every 60s.  See jit-heartbeat.hpp. */
+							{
+								static hb_state hb;
+								hb_tick(&hb, jit_log_file, false, now, interp_block_count,
+								        0, rgn_interp_blocks, rgn_interp_to_jit);
+							}
 							/* SS_JIT_MEMDUMP_AT: timer-based memory dump (interpreter mode) */
 							{
 								static int md_done = 0;

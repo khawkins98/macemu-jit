@@ -179,7 +179,7 @@ static void print_options(const prefs_desc *list)
 					break;
 				case TYPE_INT32:
 					typestr = "NUMBER";
-					sprintf(numstr, "%d", PrefsFindInt32(list->name));
+					snprintf(numstr, sizeof(numstr), "%d", PrefsFindInt32(list->name));
 					defstr = numstr;
 					break;
 				default:

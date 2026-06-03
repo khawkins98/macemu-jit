@@ -1099,7 +1099,7 @@ void powerpc_cpu::execute(uint32 entry)
 							/* SS_JIT_ROM_SIZE: override ROM JIT range (hex).
 							 * Binary-search between 0x460000 (safe) and 0x500000
 							 * (broken) to locate DR emulator hang region. */
-							uint32_t rom_jit_size = 0x460000;
+							uint32_t rom_jit_size = 0x500000;
 							const char *rom_size_env = getenv("SS_JIT_ROM_SIZE");
 							if (rom_size_env) {
 								rom_jit_size = (uint32_t)strtoul(rom_size_env, NULL, 16);

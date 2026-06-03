@@ -86,7 +86,7 @@ static uint32_t *jit_cache_end  = NULL;
  * History: chaining was originally written but never functional (a marking bug
  * excluded every chained block from execution).  Enabling it without the entry
  * poll hangs Mac OS I/O — see LEARNINGS.md chaining post-mortem for details. */
-#define JIT_BLOCK_CHAINING 0
+#define JIT_BLOCK_CHAINING 1
 
 /* SS_JIT_NO_CHAIN=1: runtime kill-switch for block chaining (bisect aid).
  * Read once on first use; gates both compile-time chain emission

@@ -1643,10 +1643,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 		case 8: /* subfc rD,rA,rB (rD = rB - rA, set CA) */
 		{	int hB = ra_load(rb); int hA = ra_load(ra);
-			/* SUBS into RTMP0 to set NZCV for carry extraction */
-			emit32(0x6B000000 | (hA << 16) | (hB << 5) | RTMP0); /* SUBS W0,W(hB),W(hA) */
 			int hD = ra_store(rd);
-			a64_mov_reg(hD, RTMP0);
+			emit32(0x6B000000 | (hA << 16) | (hB << 5) | hD); /* SUBS W(hD),W(hB),W(hA) */
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -1672,10 +1670,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 10: /* addc rD,rA,rB (set CA) */
 		{	int hA = ra_load(ra); int hB = ra_load(rb);
-			/* ADDS into RTMP0 to set NZCV for carry extraction */
-			emit32(0x2B000000 | (hB << 16) | (hA << 5) | RTMP0); /* ADDS W0,W(hA),W(hB) */
 			int hD = ra_store(rd);
-			a64_mov_reg(hD, RTMP0);
+			emit32(0x2B000000 | (hB << 16) | (hA << 5) | hD); /* ADDS W(hD),W(hA),W(hB) */
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -1698,9 +1694,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		switch (xo) {
 		case 522: /* addco rD,rA,rB (set CA, OV, SO) */
 		{	int hA = ra_load(ra); int hB = ra_load(rb);
-			/* ADDS into RTMP0 to set NZCV for carry extraction */
-			emit32(0x2B000000 | (hB << 16) | (hA << 5) | RTMP0); /* ADDS W0 */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			int hD = ra_store(rd);
+			emit32(0x2B000000 | (hB << 16) | (hA << 5) | hD); /* ADDS W(hD),W(hA),W(hB) */
 			emit_write_xer_ca_from_carry();
 			emit_write_xer_ov_so_from_overflow();
 			if (op & 1) lazy_update_cr0(hD);
@@ -1709,9 +1704,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 		case 520: /* subfco rD,rA,rB (rD = rB - rA; set CA, OV, SO) */
 		{	int hB = ra_load(rb); int hA = ra_load(ra);
-			/* SUBS into RTMP0 to set NZCV for carry extraction */
-			emit32(0x6B000000 | (hA << 16) | (hB << 5) | RTMP0); /* SUBS W0 */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			int hD = ra_store(rd);
+			emit32(0x6B000000 | (hA << 16) | (hB << 5) | hD); /* SUBS W(hD),W(hB),W(hA) */
 			emit_write_xer_ca_from_carry();
 			emit_write_xer_ov_so_from_overflow();
 			if (op & 1) lazy_update_cr0(hD);
@@ -1720,9 +1714,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 		case 778: /* addo rD,rA,rB (set OV, SO; CA unchanged) */
 		{	int hA = ra_load(ra); int hB = ra_load(rb);
-			/* ADDS into RTMP0 to set NZCV for overflow extraction */
-			emit32(0x2B000000 | (hB << 16) | (hA << 5) | RTMP0); /* ADDS W0 */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			int hD = ra_store(rd);
+			emit32(0x2B000000 | (hB << 16) | (hA << 5) | hD); /* ADDS W(hD),W(hA),W(hB) */
 			emit_write_xer_ov_so_from_overflow();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -1730,9 +1723,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 		case 552: /* subfo rD,rA,rB (rD = rB - rA; set OV, SO; CA unchanged) */
 		{	int hB = ra_load(rb); int hA = ra_load(ra);
-			/* SUBS into RTMP0 to set NZCV for overflow extraction */
-			emit32(0x6B000000 | (hA << 16) | (hB << 5) | RTMP0); /* SUBS W0 */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			int hD = ra_store(rd);
+			emit32(0x6B000000 | (hA << 16) | (hB << 5) | hD); /* SUBS W(hD),W(hB),W(hA) */
 			emit_write_xer_ov_so_from_overflow();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -1740,10 +1732,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 		case 616: /* nego rD,rA (rD = -rA; set OV, SO) */
 		{	int hA = ra_load(ra);
+			int hD = ra_store(rd);
 			a64_movz(RTMP0, 0, 0);
-			/* SUBS into RTMP0 to set NZCV for overflow extraction */
-			emit32(0x6B000000 | (hA << 16) | (RTMP0 << 5) | RTMP0); /* SUBS 0 - rA */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			emit32(0x6B000000 | (hA << 16) | (RTMP0 << 5) | hD); /* SUBS W(hD),0,W(hA) */
 			emit_write_xer_ov_so_from_overflow();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -1785,9 +1776,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 202: /* addze rD,rA (rD = rA + CA, set CA) */
 		{	int hA = ra_load(ra);
 			emit_read_xer_ca(RTMP1);
-			/* ADDS sets C for carry extraction */
-			emit32(0x2B000000 | (RTMP1 << 16) | (hA << 5) | RTMP0); /* ADDS W0, W(hA), CA */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			int hD = ra_store(rd);
+			emit32(0x2B000000 | (RTMP1 << 16) | (hA << 5) | hD); /* ADDS W(hD), W(hA), CA */
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -1810,9 +1800,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		{	int hA = ra_load(ra);
 			emit32(0x2A2003E0 | (hA << 16) | RTMP0); /* MVN W0 = ~rA */
 			emit_read_xer_ca(RTMP1);
-			/* ADDS sets C for carry extraction */
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS W0, ~rA, CA */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			int hD = ra_store(rd);
+			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | hD); /* ADDS W(hD), ~rA, CA */
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
@@ -2502,8 +2491,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 	{	rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		int hA = ra_load(ra);
 		emit_load_imm32(RTMP1, (int32_t)simm);
-		emit32(0x2B000000 | (RTMP1 << 16) | (hA << 5) | RTMP0); /* ADDS W0 */
-		int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+		int hD = ra_store(rd);
+		emit32(0x2B000000 | (RTMP1 << 16) | (hA << 5) | hD); /* ADDS W(hD),W(hA),SIMM */
 		emit_write_xer_ca_from_carry();
 		return true;
 	}
@@ -2604,9 +2593,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 	{	rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		int hA = ra_load(ra);
 		emit_load_imm32(RTMP0, (int32_t)simm);
+		int hD = ra_store(rd);
 		/* ARM64 SUBS: Wd = SIMM - rA, sets C = !borrow = (SIMM >= rA unsigned) = PPC CA */
-		emit32(0x6B000000 | (hA << 16) | (RTMP0 << 5) | RTMP0); /* SUBS W0, SIMM, W(hA) */
-		int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+		emit32(0x6B000000 | (hA << 16) | (RTMP0 << 5) | hD); /* SUBS W(hD), SIMM, W(hA) */
 		emit_write_xer_ca_from_carry();
 		return true;
 	}
@@ -3306,8 +3295,8 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 	{	rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		int hA = ra_load(ra);
 		emit_load_imm32(RTMP1, (int32_t)simm);
-		emit32(0x2B000000 | (RTMP1 << 16) | (hA << 5) | RTMP0); /* ADDS W0 */
-		int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+		int hD = ra_store(rd);
+		emit32(0x2B000000 | (RTMP1 << 16) | (hA << 5) | hD); /* ADDS W(hD),W(hA),SIMM */
 		emit_write_xer_ca_from_carry();
 		lazy_update_cr0(hD);
 		return true;

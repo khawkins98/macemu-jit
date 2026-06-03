@@ -40,6 +40,11 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 - **TBZ bclr optimization**: Mixed Mode guard on function returns uses single
   `TBZ` instruction instead of `AND` + `CBZ` (1 instruction saved per `bclr`).
 
+- **Trailing MOV elimination (P0f)**: Carry, overflow, and immediate-carry ops
+  (subfc, addc, addco, subfco, addo, subfo, nego, addze, subfze, addic, addic.,
+  subfic) now compute ADDS/SUBS directly into the RA destination register,
+  eliminating a redundant MOV per instruction.  Mix 638 (new high).
+
 - **RA eviction test**: New `lmw_stmw_wide` harness vector exercises 12 live
   GPRs, forcing mid-block RA eviction. Harness now 236/236.
 

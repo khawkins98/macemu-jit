@@ -134,12 +134,15 @@ a computed-goto dispatch loop eliminates the switch/case overhead.  Matters
 because several instructions still fall through to the interpreter (bcctr,
 lwarx, stwcx., mftb, icbi, isync).
 
-### 0f. Eliminate trailing MOV in carry/div/OE ops
+### 0f. Eliminate trailing MOV in carry/div/OE ops — DONE (2026-06-03)
 
-**Expected impact**: Minor per instruction, but carry/OE ops are hot in the
-68k DR emulator loops (addco/subfco are 76%+19% of compile targets there)
+**Result**: 11 ops converted (subfc, addc, addco, subfco, addo, subfo, nego,
+addze, subfze, addic, addic., subfic).  Mix 638 (new high).  Saves 1 MOV per
+instruction by computing ADDS/SUBS directly into the RA destination register.
+Safe because `emit_write_xer_ca_from_carry` and `emit_write_xer_ov_so_from_overflow`
+read NZCV via CSET without clobbering it or RTMP0.
 **Effort**: Low
-**Risk**: Low (flag-read ordering must be preserved)
+**Risk**: Low (flag-read ordering preserved — verified by inspection)
 
 Several carry and overflow ops route through RTMP0 for the ADDS/SUBS (to set
 NZCV for carry/overflow extraction), then MOV the result to the RA destination:

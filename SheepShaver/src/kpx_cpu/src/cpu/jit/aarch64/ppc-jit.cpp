@@ -1076,6 +1076,31 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		if (skip_xo63[xo10] || skip_xo63[xo5]) return false;
 	}
 
+	/* SS_JIT_SKIP_XO19: skip specific opcode-19 (CR/branch) sub-opcodes */
+	if (opc == 19) {
+		static uint16_t skip_xo19[1024] = {0};
+		static int xo19_checked = 0;
+		if (!xo19_checked) {
+			xo19_checked = 1;
+			const char *env = getenv("SS_JIT_SKIP_XO19");
+			if (env) {
+				char buf[256];
+				strncpy(buf, env, sizeof(buf)-1); buf[sizeof(buf)-1] = 0;
+				char *tok = strtok(buf, ",");
+				while (tok) {
+					int n = atoi(tok);
+					if (n >= 0 && n < 1024) skip_xo19[n] = 1;
+					tok = strtok(NULL, ",");
+				}
+				fprintf(stderr, "[JIT] SS_JIT_SKIP_XO19: XO19 sub-opcodes");
+				for (int i = 0; i < 1024; i++) if (skip_xo19[i]) fprintf(stderr, " %d", i);
+				fprintf(stderr, " forced to interpreter\n");
+			}
+		}
+		uint32_t xo19 = (op >> 1) & 0x3FF;
+		if (skip_xo19[xo19]) return false;
+	}
+
 
 	switch (opc) {
 
@@ -2825,68 +2850,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			a64_ret();
 			return true;
 		}
-		case 528: /* bcctr — branch conditional to CTR */
-		{
-			/* Mixed Mode guard: if CTR bit 0 is set, bail to interpreter */
-			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CTR);
-			emit32(0x12000000 | (RTMP0 << 5) | RTMP1); /* AND W1, W(CTR), #1 */
-			uint32_t *mm_cbz2 = jit_code_ptr;
-			emit32(0); /* placeholder CBZ */
-			emit_load_imm32(RTMP0, (int32_t)pc);
-			a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
-			emit_bare_epilogue();
-			int32_t mm_off2 = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)mm_cbz2);
-			*mm_cbz2 = 0x34000000 | (((mm_off2 >> 2) & 0x7FFFF) << 5) | RTMP1;
-
-			uint32_t bo = (op >> 21) & 0x1F;
-			uint32_t bi = (op >> 16) & 0x1F;
-			bool lk = op & 1;
-			if ((bo & 0x14) == 0x14) { /* unconditional bctr */
-				if (lk) { emit_load_imm32(RTMP0, (int32_t)(pc + 4)); a64_str_w_imm(RTMP0, RSTATE, PPCR_LR); }
-				a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CTR);
-				a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
-				lazy_flush_cr0();
-				ra_flush_all();
-				a64_ldp_post(27, 28, A64_SP, 16);
-				a64_ldp_post(25, 26, A64_SP, 16);
-				a64_ldp_post(23, 24, A64_SP, 16);
-				a64_ldp_post(21, 22, A64_SP, 16);
-				a64_ldp_post(19, RSTATE, A64_SP, 16);
-				a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
-				a64_ret();
-				return true;
-			}
-			/* Conditional bcctr: test CR[BI] */
-			{
-				uint32_t bit_pos = 31 - bi;
-				lazy_flush_cr0();
-				a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
-				if (bit_pos) { emit_load_imm32(RTMP1, bit_pos); emit32(0x1AC02400 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-				emit32(0x12000000 | (RTMP0 << 5) | RTMP0);
-				bool branch_if_true = (bo >> 3) & 1;
-				if (lk) { emit_load_imm32(RTMP1, (int32_t)(pc + 4)); a64_str_w_imm(RTMP1, RSTATE, PPCR_LR); }
-				a64_ldr_w_imm(RTMP1, RSTATE, PPCR_CTR);
-				emit_load_imm32(RTMP2, (int32_t)(pc + 4));
-				if (branch_if_true) {
-					emit32(0x35000000 | (2 << 5) | RTMP0);
-					a64_mov_reg(RTMP1, RTMP2);
-				} else {
-					emit32(0x34000000 | (2 << 5) | RTMP0);
-					a64_mov_reg(RTMP1, RTMP2);
-				}
-				a64_str_w_imm(RTMP1, RSTATE, PPCR_PC);
-				lazy_flush_cr0();
-				ra_flush_all();
-				a64_ldp_post(27, 28, A64_SP, 16);
-				a64_ldp_post(25, 26, A64_SP, 16);
-				a64_ldp_post(23, 24, A64_SP, 16);
-				a64_ldp_post(21, 22, A64_SP, 16);
-				a64_ldp_post(19, RSTATE, A64_SP, 16);
-				a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
-				a64_ret();
-				return true;
-			}
-		}
+		case 528: /* bcctr — branch conditional to CTR.
+		         * Fall through to interpreter: handles Mixed Mode (odd CTR),
+		         * conditional CR evaluation, and CTR-based dispatch tables.
+		         * bcctr is always a block terminator — zero performance cost. */
+			return false;
 		case 150: /* isync — fall through to interpreter so execute_isync() runs
 		           * execute_invalidate_cache_range(), flushing any deferred icbi.
 		           * Without this, icbi sets cache_range but isync-as-NOP never

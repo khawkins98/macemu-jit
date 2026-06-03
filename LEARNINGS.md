@@ -1862,3 +1862,72 @@ coverage) and every prior boot stayed green.
   the boot failed. Boot-to-desktop with the ring live is the verification bar.
 - Expect more latent bugs in the newly-compiled 68k region to surface after this fix
   (it has only ever executed a few hundred ms before dying). Same methodology applies.
+
+---
+
+## 2026-06-03 (session 9) — Register allocator, performance optimizations, clean shutdown
+
+### Register allocator re-enable (P1)
+
+The RA was disabled with a "boot hang regression" comment. Re-enabling it was
+safe because the original regression was one of the 12 bugs fixed in sessions 7-8.
+
+**Key lesson: ra_load before ra_store.** When `rd == ra` (e.g., `addi r3, r3, 100`),
+calling `ra_store(rd)` before `ra_load(ra)` allocates the RA slot without loading
+the old value. The subsequent `ra_load(ra)` sees it "cached" and returns the
+uninitialized register. This caused a black screen on boot — VERIFY showed no
+divergence because the first block hung before completing. Fix: always load source
+operands before allocating the destination.
+
+**Shim vs direct: the MOV bounce disaster.** First attempt re-enabled the RA via
+a shim in `emit_load_gpr`/`emit_store_gpr` that MOVed between RA regs and RTMPs.
+This was 5-8% SLOWER than no RA — Apple Silicon's L1 is so fast that the extra
+MOV costs more than the LDR it replaces for single-use GPRs. The fix: convert
+all 339 callsites to use `ra_load`/`ra_store` directly, operating on RA-assigned
+registers in emit32 encodings. Hybrid fallback for unconverted sites checks the
+RA cache first.
+
+### adde/subfe carry bug (backlog A1/A2)
+
+The 64-bit-sum approach for adde/subfe dropped the carry when CA wraps:
+`ADDS ~rA+rB` then non-flag `ADD` of CA loses the second carry contribution.
+Fix: `CMP W(CA),#1` to materialize CA into host C flag, then `ADCS` computes
+the full sum with correct carry-out. 10→4 instructions.
+
+### bcctr: harder than expected (P2)
+
+Attempted unconditional `bctr` with bit-0 Mixed Mode guard. Stalls during
+extension loading. `SS_JIT_VERIFY=1` showed the interpreter's `execute_bcctr`
+does more than `PC = CTR` — it handles Mixed Mode Manager transitions
+(CallUniversalProc) that modify GPR0, GPR2, GPR12, LR, CTR, and CR. A simple
+TBZ guard cannot replicate this. Needs Mixed Mode dispatch understanding.
+
+### Lazy CR0: NZCV is a shared resource (P0g)
+
+Attempted lazy CR0: emit CMP immediately, defer the ~12-instruction CR0 field
+construction. Crashes in early boot — an intervening instruction clobbers NZCV,
+and the re-CMP from `lazy_cr0_reg` fails because the RA evicted/reused the
+register. The fundamental problem: NZCV is shared by all flag-setting instructions.
+Fix requires tracking which instructions between Rc=1 and flush clobber NZCV.
+
+### Atomic spcflags (P0d)
+
+`basic_spcflags` used a spinlock for every set/clear/test. The 60 Hz VBL timer
+thread serialized with the JIT dispatch loop's per-block poll. Replaced with
+`std::atomic<uint32>` — `fetch_or`/`fetch_and` with relaxed/release ordering.
+CPU score 65.2 (new high).
+
+### Clean shutdown
+
+Mac OS 8.6's Special > Shut Down calls the `PowerOff()` trap, which was patched
+to `M68K_EMUL_RETURN` — this just returned to the nanokernel idle loop without
+telling the host to exit. Fix: new `OP_POWEROFF` emul op sets a flag and breaks
+the CPU loop via `SPCFLAG_CPU_EXEC_RETURN`. Video/redraw thread must be stopped
+FIRST in `Quit()` — otherwise the redraw thread segfaults accessing freed guest
+memory.
+
+### Benchmark variance
+
+Speedometer PR is highly volatile (driven by Disk and Graphics sub-scores).
+Benchmark Mix and Dhrystones are the stable integer metrics. Always compare
+Mix, not PR, for JIT codegen changes.

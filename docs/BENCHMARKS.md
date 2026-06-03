@@ -67,14 +67,15 @@ active use (launching apps, scrolling, disk access) — not at idle.
 
 ## JIT Compilation Statistics
 
-| Metric | Value |
-|--------|-------|
-| Unique blocks compiled | ~83,000 |
-| Code cache size | 64 MB |
-| Cache flushes during boot | 1-2 (at ~12s, ~28s) |
-| Opcode coverage | 100.0% (all encountered opcodes compile) |
-| Fallback opcodes | icbi, isync, lwarx, stwcx., mftb (by design) |
-| Harness vectors | 235/235, score=100 |
+| Metric | Pre-RA (session 8) | Post-RA (session 9) |
+|--------|-------------------|---------------------|
+| Unique blocks compiled | ~83,000 | ~124,000 |
+| Code cache size | 64 MB | 256 MB (configurable) |
+| Cache flushes during boot | 1-2 | 0 |
+| Opcode coverage (compile) | 100.0% | 98.4% (bcctr/isync fall to interp) |
+| Fallback opcodes | icbi, isync, lwarx, stwcx., mftb, bcctr | same |
+| Harness vectors | 235/235 | 238/238 |
+| spcflags sync | spinlock | std::atomic |
 
 ## Methodology
 
@@ -113,7 +114,7 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 - **JIT**: Full native (ROM=0x500000, chaining=1, no skip list)
 - **Reported CPU**: Power Macintosh, MC68020 (native/nominal), PowerPC Math FPU
 
-### JIT Results (PR: 40.424, relative to Quadra 605 = 1.0)
+### Pre-RA Results (session 8, PR: 40.424)
 
 | Category | Score | Rating |
 |----------|-------|--------|
@@ -122,6 +123,23 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 | **Disk** | 17.811 | 1 |
 | **Math** | 10310.327 | 1 |
 | **PR (overall)** | **40.424** | |
+
+### Post-RA Results (session 9, 2026-06-03)
+
+Optimizations applied: register allocator (P1), TBZ bclr (P0a), 256MB cache
+(P4), trailing MOV elimination (P0f), atomic spcflags (P0d), ADCS adde/subfe
+(P0b).
+
+| Category | Best Score | Delta vs Pre-RA |
+|----------|-----------|-----------------|
+| **CPU** | 65.212 | +4.0% |
+| **Benchmark Mix** | 638.522 | +14.3% |
+| **Dhrystones/sec** | 1,478,546 | +9.6% |
+| **KWhetstones/sec** | 1,557,632 | +16.2% |
+| **Math** | 12,567 | +21.9% |
+
+Note: PR composite is volatile (driven by Disk/Graphics variance).  Mix and
+Dhrystones are the stable integer metrics.
 
 ### Benchmark Mix (vs Quadra 605 = 1.0)
 
@@ -233,7 +251,7 @@ Screenshots: [JIT](speedometer-jit.jpg) | [Interpreter](speedometer-interpreter.
 | Power Mac G3/266 | 266 MHz G3 | 21.05 |
 | PowerBook G4/400 | 400 MHz G4 | 30.61 |
 | Power Mac G4/450 | 450 MHz G4 | 32.80 |
-| **Our JIT (Apple Silicon)** | **PPC→ARM64 JIT** | **62.73** |
+| **Our JIT (Apple Silicon)** | **PPC→ARM64 JIT** | **65.21** |
 | Power Mac G5/2.3 (Classic) | 2.3 GHz G5 | 81.02 |
 
 **By CPU integer performance, our JIT performs like a real Power Mac G4 in the
@@ -252,7 +270,7 @@ running Classic Mode (81.0).
 
 | Category | Our Score | Closest Real Mac | Why |
 |----------|-----------|-----------------|-----|
-| CPU (62.7) | G4 700MHz-1GHz class | Native ARM64 integer ops |
+| CPU (65.2) | G4 800MHz-1GHz class | Native ARM64 integer ops + RA |
 | Disk (17.8) | Exceeds ALL real Macs (best: G5 at 5.0) | NVMe SSD vs spinning disk |
 | Math (10310) | Between G4/1.8GHz and G5/2.3GHz | ARM64 FPU executes natively |
 | Graphics (42.1) | No real Mac comparison | Real Macs lack 1/2/4-bit modes |

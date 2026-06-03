@@ -4059,6 +4059,12 @@ ppc_jit_entry_fn ppc_jit_aarch64_lookup_fast(uint32_t pc)
 	return (e != NULL && e->complete) ? (ppc_jit_entry_fn)(void *)e->code : (ppc_jit_entry_fn)0;
 }
 
+int ppc_jit_aarch64_lookup_n_insns(uint32_t pc)
+{
+	const struct jit_bc_entry *e = jit_bc_lookup(pc);
+	return (e != NULL && e->complete) ? e->n_insns : 0;
+}
+
 /* Guest RAM range, cached from the compile() parameters so that
  * ppc_jit_aarch64_is_compilable() can answer without them. */
 static uint32_t jit_ram_base_cached = 0;

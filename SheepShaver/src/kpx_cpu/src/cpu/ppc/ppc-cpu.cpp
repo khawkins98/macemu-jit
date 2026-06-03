@@ -1158,6 +1158,20 @@ void powerpc_cpu::execute(uint32 entry)
 				ppc_jit_entry_fn fn = ppc_jit_aarch64_lookup_fast(pc());
 				if (!fn && ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete)
 					fn = (ppc_jit_entry_fn)(void*)jblk.code;
+
+				/* SS_JIT_VERIFY: differential state comparison — run every JIT block
+				 * through the interpreter and compare results.  EXTREMELY SLOW.
+				 * Gate: SS_JIT_VERIFY=1 env var; zero overhead when disabled. */
+				static int jit_verify_enabled = -1;
+				if (jit_verify_enabled < 0) {
+					const char *env = getenv("SS_JIT_VERIFY");
+					jit_verify_enabled = (env && *env == '1') ? 1 : 0;
+					if (jit_verify_enabled)
+						fprintf(stderr, "[VERIFY] JIT verification mode ENABLED — every block runs twice\n");
+				}
+				powerpc_registers jit_verify_pre_state;
+				int jit_verify_n_insns = 0;
+
 				if (fn) {
 					/* ---- Dispatch call-chain ring (SS_JIT_CHAIN_LOG=1) ----
 					 * Records last 8 block-entry PCs into a ring buffer.
@@ -1176,6 +1190,12 @@ void powerpc_cpu::execute(uint32 entry)
 							dispatch_ring[dispatch_ring_idx & 7] = jit_block_start_pc;
 							dispatch_ring_idx++;
 						}
+						if (__builtin_expect(jit_verify_enabled, false)) {
+								memcpy(&jit_verify_pre_state, regs_ptr(), sizeof(powerpc_registers));
+								jit_verify_n_insns = ppc_jit_aarch64_lookup_n_insns(jit_block_start_pc);
+								if (jit_verify_n_insns == 0)
+									jit_verify_n_insns = jblk.n_insns; /* freshly compiled */
+							}
 						fn((void*)regs_ptr());
 						if (__builtin_expect(chain_log_enabled && jit_block_start_pc == 0x50132ec8, false)) {
 							static int chain_log_budget = 20;
@@ -1190,6 +1210,89 @@ void powerpc_cpu::execute(uint32 entry)
 						}
 					}
 				  pdi_jit_post:
+					/* ---- SS_JIT_VERIFY: compare JIT output against interpreter ---- */
+					if (__builtin_expect(jit_verify_enabled && jit_verify_n_insns > 0, false)) {
+						static int verify_divergence_budget = 20;
+						/* Only verify RAM blocks (0x10000000-0x1FFFFFFF) — ROM blocks
+						 * have replay false positives from stores modifying shared memory. */
+						if (verify_divergence_budget > 0 &&
+						    jit_block_start_pc >= 0x10000000 && jit_block_start_pc < 0x20000000) {
+							/* Save post-JIT state */
+							powerpc_registers jit_state;
+							memcpy(&jit_state, regs_ptr(), sizeof(powerpc_registers));
+
+							/* Restore pre-block state and re-run via interpreter.
+							 * Run up to N instructions, but stop early if pc() leaves the
+							 * block's address range — this handles blocks where a conditional
+							 * branch (bc) exits the block mid-way and the remaining compiled
+							 * instructions are unreachable dead code in the JIT output. */
+							memcpy(regs_ptr(), &jit_verify_pre_state, sizeof(powerpc_registers));
+							uint32 verify_block_end = jit_block_start_pc + (jit_verify_n_insns * 4);
+							for (int vi = 0; vi < jit_verify_n_insns; vi++) {
+								uint32 cur_pc_v = pc();
+								if (cur_pc_v < jit_block_start_pc || cur_pc_v >= verify_block_end)
+									break; /* pc left the block (branch taken to outside) */
+								uint32 opcode = vm_read_memory_4(cur_pc_v);
+								const instr_info_t *ii = decode(opcode);
+								ii->execute(this, opcode);
+							}
+
+							/* Compare post-interpreter state against post-JIT state */
+							bool match = true;
+							for (int i = 0; i < 32; i++) {
+								if (gpr(i) != jit_state.gpr[i]) {
+									fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: GPR%d interp=0x%08x jit=0x%08x\n",
+									        jit_block_start_pc, i, gpr(i), jit_state.gpr[i]);
+									match = false;
+								}
+							}
+							if (cr().get() != jit_state.cr.get()) {
+								fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: CR interp=0x%08x jit=0x%08x\n",
+								        jit_block_start_pc, cr().get(), jit_state.cr.get());
+								match = false;
+							}
+							if (lr() != jit_state.lr) {
+								fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: LR interp=0x%08x jit=0x%08x\n",
+								        jit_block_start_pc, (uint32)lr(), (uint32)jit_state.lr);
+								match = false;
+							}
+							if (ctr() != jit_state.ctr) {
+								fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: CTR interp=0x%08x jit=0x%08x\n",
+								        jit_block_start_pc, (uint32)ctr(), (uint32)jit_state.ctr);
+								match = false;
+							}
+							if (xer().get_ca() != jit_state.xer.get_ca() ||
+							    xer().get_ov() != jit_state.xer.get_ov() ||
+							    xer().get_so() != jit_state.xer.get_so()) {
+								fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: XER interp=so%d,ov%d,ca%d jit=so%d,ov%d,ca%d\n",
+								        jit_block_start_pc,
+								        xer().get_so(), xer().get_ov(), xer().get_ca(),
+								        jit_state.xer.get_so(), jit_state.xer.get_ov(), jit_state.xer.get_ca());
+								match = false;
+							}
+							if (pc() != jit_state.pc) {
+								fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: PC interp=0x%08x jit=0x%08x\n",
+								        jit_block_start_pc, (uint32)pc(), (uint32)jit_state.pc);
+								match = false;
+							}
+
+							if (!match) {
+								verify_divergence_budget--;
+								/* Dump the block's opcodes */
+								fprintf(stderr, "[VERIFY] Block %08x (%d insns):", jit_block_start_pc, jit_verify_n_insns);
+								for (int vi = 0; vi < jit_verify_n_insns; vi++) {
+									uint32 op = vm_read_memory_4(jit_block_start_pc + vi * 4);
+									fprintf(stderr, " %08x", op);
+								}
+								fprintf(stderr, "\n");
+								if (verify_divergence_budget == 0)
+									fprintf(stderr, "[VERIFY] Budget exhausted — further divergences suppressed\n");
+							}
+
+							/* Restore JIT state so execution continues correctly */
+							memcpy(regs_ptr(), &jit_state, sizeof(powerpc_registers));
+						}
+					}
 					/* Time-based heartbeat — file only, no stderr spam */
 					{
 						static uint64_t jit_block_count = 0;
@@ -1318,6 +1421,10 @@ void powerpc_cpu::execute(uint32 entry)
 					if (!fn && ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete)
 						fn = (ppc_jit_entry_fn)(void*)jblk.code;
 					if (fn) {
+						if (__builtin_expect(jit_verify_enabled, false)) {
+							memcpy(&jit_verify_pre_state, regs_ptr(), sizeof(powerpc_registers));
+							jit_verify_n_insns = ppc_jit_aarch64_lookup_n_insns(jit_block_start_pc);
+						}
 						fn((void*)regs_ptr());
 						goto pdi_jit_post;
 					}

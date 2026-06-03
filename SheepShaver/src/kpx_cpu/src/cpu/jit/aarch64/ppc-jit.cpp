@@ -4196,6 +4196,11 @@ bool ppc_jit_aarch64_compile(
 	size_t ramsize,
 	ppc_jit_block *out)
 {
+	/* Reject misaligned PCs — PPC instructions are 4-byte aligned.
+	 * Bit 0 set = Mac OS Mixed Mode Manager flag (68k code pointer).
+	 * The interpreter handles the mode transition; the JIT must not compile these. */
+	if (pc & 3) return false;
+
 	const bool dbg = (jit_debug_pc() != 0 && pc == jit_debug_pc());
 	/* Block address cache lookup — return cached block without recompiling.
 	 * Contract: see AARCH64_JIT_RUNTIME_CONTRACT.md — block lifecycle. */

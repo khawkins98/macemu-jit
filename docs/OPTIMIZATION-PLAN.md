@@ -187,22 +187,35 @@ eliminates them.
 
 ## Open — Medium Effort
 
-### P2: Native bcctr — HIGHEST PRIORITY (98.5% of all JIT misses)
+### P2: Native bcctr — HIGHEST MISS COUNT but COMPLEX (98.5% of JIT misses)
 
-**Expected impact**: Potentially large — eliminates the dominant interpreter fallback
-**Effort**: Medium (need conditional CR bit evaluation + Mixed Mode guard)
-**Risk**: Low (bcctr is always a block terminator, easy to fall back)
+**Expected impact**: Unknown — miss count is compile-time, not runtime-weighted.
+bcctr is a block terminator either way; the win is eliminating the dispatcher
+round-trip.
+**Effort**: HIGH (not medium — see below)
+**Risk**: Medium-high
 
 **Miss data (2026-06-03):** opc=19 accounts for 44,667 of 45,332 total misses
 (98.5%). This is almost entirely `bcctr` (XO19=528) and `isync` (XO19=150).
-The JIT achieves 98.4% coverage; making bcctr native would push that above 99.5%.
 
-`bcctr` currently falls through to the interpreter.  The conditional path had
-a codegen bug (FIXED — was the last fix for HD boot, now uses interpreter
-fallback).  The unconditional `bctr` path was correct.  Optimization:
-- Native conditional bcctr with correct CR bit evaluation
-- Add Mixed Mode guard (check CTR bit 0, bail if odd)
-- The unconditional bctr path can be re-enabled immediately
+**Attempted 2026-06-03:** Unconditional `bctr` with bit-0 Mixed Mode guard
+(same TBZ pattern as bclr) — **stalled during extension loading.**
+`SS_JIT_VERIFY=1` showed the interpreter's `execute_bcctr` does far more than
+`PC = CTR`: it handles Mixed Mode Manager transitions (CallUniversalProc) that
+modify GPR0, GPR2, GPR12, LR, CTR, and CR.  A simple TBZ guard cannot
+replicate this.
+
+**Path forward:** native bcctr requires either:
+1. Emitting an inline call to the interpreter's CallUniversalProc handler
+   when CTR points to a Mixed Mode routine (more than just bit 0 — needs
+   the full routine descriptor check), OR
+2. Restricting native bctr to ROM-only blocks where CTR targets are known
+   to be PPC code (not Mixed Mode), OR
+3. Understanding the Mixed Mode dispatch deeply enough to emit the full
+   transition inline.
+
+This is no longer a "re-enable" — it's new work requiring Mixed Mode Manager
+reverse engineering.
 
 ### P3: Reduce Interpreter Fallbacks
 

@@ -4160,6 +4160,25 @@ bool ppc_jit_aarch64_compile(
 	if (!jit_cache_base)
 		return false;
 
+	/* SS_JIT_INTERP_RANGE: force interpreter for a PC range (binary search aid).
+	 * Usage: SS_JIT_INTERP_RANGE=10650000-10700000
+	 * Any block with start PC in [lo, hi) is NOT JIT-compiled. */
+	{
+		static uint32_t interp_lo = 0, interp_hi = 0;
+		static int checked = 0;
+		if (!checked) {
+			checked = 1;
+			const char *env = getenv("SS_JIT_INTERP_RANGE");
+			if (env) {
+				sscanf(env, "%x-%x", &interp_lo, &interp_hi);
+				fprintf(stderr, "[JIT] SS_JIT_INTERP_RANGE: [%08x..%08x) forced to interpreter\n",
+				        interp_lo, interp_hi);
+			}
+		}
+		if (interp_lo < interp_hi && pc >= interp_lo && pc < interp_hi)
+			return false;
+	}
+
 	/* Cache the RAM range for ppc_jit_aarch64_is_compilable() (the interpreter
 	 * handoff check, which has no access to the compile parameters). */
 	jit_ram_base_cached = (uint32_t)(uintptr_t)ram;

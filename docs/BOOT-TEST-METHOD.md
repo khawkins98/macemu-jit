@@ -73,6 +73,25 @@ DR emulator code. Our subfe/adde/mftb fixes are correct and independent of this 
 
 ## Binary search template
 
+### SS_JIT_INTERP_RANGE
+
+The `SS_JIT_INTERP_RANGE` env var forces the JIT to decline compilation for any block
+whose start PC falls in the specified range. The interpreter handles those blocks instead.
+This enables binary-searching which RAM code region causes a boot hang.
+
+```bash
+# Force interpreter for guest PCs in [0x10650000, 0x10700000):
+SS_JIT_INTERP_RANGE=10650000-10700000 ./SheepShaver
+
+# On startup, the JIT logs:
+# [JIT] SS_JIT_INTERP_RANGE: [10650000..10700000) forced to interpreter
+```
+
+Format: `SS_JIT_INTERP_RANGE=<lo_hex>-<hi_hex>` (no `0x` prefix, lowercase or uppercase hex).
+The range is half-open: lo is inclusive, hi is exclusive.
+
+### boot_test() helper
+
 To isolate a failing code region (worked for the subfe bug):
 
 ```bash
@@ -93,4 +112,7 @@ boot_test() {
         echo "${label}: FAIL (jNK frozen at ${jnk})"
     fi
 }
+
+# Binary search example using SS_JIT_INTERP_RANGE:
+boot_test "interp-10650000-10700000" env SS_JIT_INTERP_RANGE=10650000-10700000
 ```

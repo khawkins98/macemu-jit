@@ -1129,7 +1129,36 @@ void powerpc_cpu::execute(uint32 entry)
 				if (!fn && ppc_jit_aarch64_compile(pc(), RAMBaseHost, RAMSize, &jblk) && jblk.complete)
 					fn = (ppc_jit_entry_fn)(void*)jblk.code;
 				if (fn) {
-					fn((void*)regs_ptr());
+					/* ---- Dispatch call-chain ring (SS_JIT_CHAIN_LOG=1) ----
+					 * Records last 8 block-entry PCs into a ring buffer.
+					 * When the target address is hit, dumps the ring to stderr.
+					 * TEMPORARY diagnostic — remove after boot-hang investigation. */
+					{
+						static bool chain_log_enabled = false;
+						static bool chain_log_checked = false;
+						static uint32 dispatch_ring[8];
+						static int dispatch_ring_idx = 0;
+						if (__builtin_expect(!chain_log_checked, false)) {
+							chain_log_checked = true;
+							chain_log_enabled = (getenv("SS_JIT_CHAIN_LOG") && atoi(getenv("SS_JIT_CHAIN_LOG")));
+						}
+						if (__builtin_expect(chain_log_enabled, false)) {
+							dispatch_ring[dispatch_ring_idx & 7] = jit_block_start_pc;
+							dispatch_ring_idx++;
+						}
+						fn((void*)regs_ptr());
+						if (__builtin_expect(chain_log_enabled && jit_block_start_pc == 0x50132ec8, false)) {
+							static int chain_log_budget = 20;
+							if (chain_log_budget > 0) {
+								chain_log_budget--;
+								uint32 exit_pc = pc();
+								fprintf(stderr, "[CHAIN] exit=%08x ring:", exit_pc);
+								for (int i = 0; i < 8; i++)
+									fprintf(stderr, " %08x", dispatch_ring[(dispatch_ring_idx - 8 + i) & 7]);
+								fprintf(stderr, "\n");
+							}
+						}
+					}
 				  pdi_jit_post:
 					/* Time-based heartbeat — file only, no stderr spam */
 					{

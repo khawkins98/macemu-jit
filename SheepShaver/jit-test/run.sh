@@ -591,6 +591,17 @@ TEST_ORDER+=(lmw_stmw)
 T_lmw_stmw_wide="3A800014 3AA00015 3AC00016 3AE00017 3B000018 3B200019 3B40001A 3B60001B 3B80001C 3BA0001D 3BC0001E 3BE0001F BE810400 3A800000 3AA00000 3AC00000 3AE00000 3B000000 3B200000 3B400000 3B600000 3B800000 3BA00000 3BC00000 3BE00000 BA810400"
 TEST_ORDER+=(lmw_stmw_wide)
 
+# --- adde/subfe carry-wrap edge cases (backlog A1/A2) ---
+# adde carry-out edge: CA=1 and rA+rB=0xFFFFFFFF → result 0, CA_out must be 1
+# li r3,-1; addic r0,r3,1 (sets CA=1, r0=0); li r4,0; adde r5,r4,r3
+T_adde_carry_wrap="3860FFFF 30030001 38800000 7CA41914"
+TEST_ORDER+=(adde_carry_wrap)
+
+# subfe carry-out edge: CA=1 and ~rA+rB=0xFFFFFFFF (rA==rB) → result 0, CA_out must be 1
+# li r3,-1; addic r0,r3,1 (sets CA=1); lis r4,0x1234; ori r4,r4,0x5678; subfe r5,r4,r4
+T_subfe_carry_wrap="3860FFFF 30030001 3C801234 60845678 7CA42110"
+TEST_ORDER+=(subfe_carry_wrap)
+
 # --- mcrf ---
 # cmpwi cr0,r3,0 (r3=-1 → LT); mcrf cr1,cr0; then check cr1 has LT
 # cmpwi cr0,r3,0 = 0x2C030000; mcrf cr1,cr0 = 0x4C840000

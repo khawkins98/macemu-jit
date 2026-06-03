@@ -1649,22 +1649,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
 		}
-		case 136: /* subfe rD,rA,rB (rD = ~rA + rB + CA; CA = carry-out of full sum) */
-		{	/* 64-bit sum for correct carry-out: ADDS+ADD loses the +CA carry. */
+		case 136: /* subfe rD,rA,rB (rD = ~rA + rB + CA; CA = carry-out) */
+		{	/* ADCS approach: materialize CA into host C flag, then one ADCS
+			 * computes ~rA + rB + CA with correct carry-out.  Fixes the old
+			 * 64-bit-sum bug where the non-flag ADD of CA dropped the carry
+			 * when ~rA + rB + CA wraps (backlog A2). */
 			int hA = ra_load(ra); int hB = ra_load(rb);
-			emit32(0x2A2003E0 | (hA << 16) | RTMP0); /* MVN W0, W(hA) → ~rA */
-			emit32(0xD3407C00 | (RTMP0 << 5) | RTMP0);  /* UXTW X0, W0 */
-			a64_mov_reg(RTMP1, hB);
-			emit32(0xD3407C00 | (RTMP1 << 5) | RTMP1);  /* UXTW X1, W1 */
-			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X0, X0, X1 */
-			emit_read_xer_ca(RTMP1);
-			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X0, X0, CA */
-			/* Carry-out = bit 32 of 64-bit result */
-			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP1);  /* LSR X1, X0, #32 */
-			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
-			emit32(0x2A0003E0 | (RTMP0 << 16) | RTMP0); /* MOV W0, W0 (truncate) */
+			emit_read_xer_ca(RTMP2);
+			emit32(0x7100041F | (RTMP2 << 5)); /* CMP W(RTMP2), #1 → C = CA_in */
+			emit32(0x2A2003E0 | (hA << 16) | RTMP0); /* MVN W0, W(hA) — does not affect flags */
 			int hD = ra_store(rd);
-			a64_mov_reg(hD, RTMP0);
+			emit32(0x3A000000 | (hB << 16) | (RTMP0 << 5) | hD); /* ADCS W(hD), W0, W(hB) */
+			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
 		}
@@ -1742,20 +1738,17 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		return false; /* nested OE switch fell through (unreachable) */
 
-		case 138: /* adde rD,rA,rB (rD = rA + rB + CA; CA = carry-out of full sum) */
-		{	/* 64-bit sum for correct carry-out (same approach as subfe). */
+		case 138: /* adde rD,rA,rB (rD = rA + rB + CA; CA = carry-out) */
+		{	/* ADCS approach: materialize CA into host C flag, then ADCS
+			 * computes rA + rB + CA with correct carry-out.  Fixes the old
+			 * 64-bit-sum bug where the non-flag ADD of CA dropped the carry
+			 * when rA + rB + CA wraps (backlog A1). */
 			int hA = ra_load(ra); int hB = ra_load(rb);
-			a64_mov_reg(RTMP0, hA);
-			emit32(0xD3407C00 | (RTMP0 << 5) | RTMP0);  /* UXTW X0, W0 */
-			a64_mov_reg(RTMP1, hB);
-			emit32(0xD3407C00 | (RTMP1 << 5) | RTMP1);  /* UXTW X1, W1 */
-			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X0, X0, X1 */
-			emit_read_xer_ca(RTMP1);
-			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X0, X0, CA */
-			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP1);  /* LSR X1, X0, #32 */
-			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
-			emit32(0x2A0003E0 | (RTMP0 << 16) | RTMP0); /* MOV W0, W0 (truncate) */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			emit_read_xer_ca(RTMP2);
+			emit32(0x7100041F | (RTMP2 << 5)); /* CMP W(RTMP2), #1 → C = CA_in */
+			int hD = ra_store(rd);
+			emit32(0x3A000000 | (hB << 16) | (hA << 5) | hD); /* ADCS W(hD), W(hA), W(hB) */
+			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
 		}

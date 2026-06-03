@@ -1511,16 +1511,19 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP1, rb);
 			/* Save original for CA: RTMP2 = rS */
 			a64_mov_reg(RTMP2, RTMP0);
-			/* PPC sraw: if rB[5]=1 (shift>=32), result=sign-extend, CA=(rS<0) */
-			/* ARM64 ASR with shift>=32 already produces sign-extended result */
-			emit32(0x1AC02800 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ASR Wd,Wn,Wm */
+			/* PPC sraw uses 6-bit shift amount (rB[0:5], values 0-63).
+			 * For shift >= 32, result = sign-extension of rS (all 0s or all 1s).
+			 * ARM64 32-bit ASRV masks to 5 bits (mod 32), giving wrong results
+			 * for shift >= 32. Use 64-bit sign-extended shift instead:
+			 * SXTW to 64-bit, 64-bit ASRV (masks to 6 bits), truncate to 32. */
+			emit32(0x93407C00 | (RTMP0 << 5) | RTMP0); /* SXTW Xd, Wn (sign-extend to 64) */
+			emit32(0x9AC02800 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ASR Xd, Xn, Xm (64-bit) */
+			emit32(0x2A0003E0 | (RTMP0 << 16) | RTMP0); /* MOV Wd, Wn (truncate to 32) */
 			emit_store_gpr(RTMP0, ra);
-			/* CA = (rS < 0) && (rS != (result << sh)) i.e. bits were shifted out */
-			/* Simplified: CA = (rS < 0) && ((rS ^ (result << sh)) != 0) */
-			/* For variable shift this is complex. Use: CA = (rS < 0) && (result << sh != rS) */
-			/* LSL RTMP0 back by shift amount, compare with original */
-			emit32(0x1AC02000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSL Wd,result,shift */
-			/* If (rS != result<<sh) and (rS < 0), CA=1 */
+			/* CA = (rS < 0) && (bits were shifted out).
+			 * Use: CA = (rS < 0) && (result << sh != rS).
+			 * The 64-bit shift handles the >=32 case correctly. */
+			emit32(0x1AC02000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSL Wd, result, shift */
 			emit32(0x6B000000 | (RTMP2 << 16) | (RTMP0 << 5) | 0x1F); /* CMP result<<sh, rS */
 			a64_movz(RTMP0, 0, 0);
 			emit_load_imm32(RTMP1, 1);

@@ -95,7 +95,29 @@ a computed-goto dispatch loop eliminates the switch/case overhead.  Matters
 because several instructions still fall through to the interpreter (bcctr,
 lwarx, stwcx., mftb, icbi, isync).
 
-### 0f. Lazy CR0 Re-enable
+### 0f. Eliminate trailing MOV in carry/div/OE ops
+
+**Expected impact**: Minor per instruction, but carry/OE ops are hot in the
+68k DR emulator loops (addco/subfco are 76%+19% of compile targets there)
+**Effort**: Low
+**Risk**: Low (flag-read ordering must be preserved)
+
+Several carry and overflow ops route through RTMP0 for the ADDS/SUBS (to set
+NZCV for carry/overflow extraction), then MOV the result to the RA destination:
+```
+ADDS  W0, W(hA), W(hB)   ; sets NZCV
+; ... extract carry from NZCV ...
+MOV   W(hD), W0           ; ← eliminable
+```
+Where the flag-read ordering permits, compute directly into the RA host reg:
+```
+ADDS  W(hD), W(hA), W(hB)   ; sets NZCV, result already in hD
+```
+Same opportunity in divw (SDIV into RTMP2, then MOV to hD) and the mulhw/mulhwu
+64-bit product (SMULL/UMULL + LSR into RTMP0, then MOV to hD).  The `addi`/`addis`
+with `ra==0` already demonstrates this pattern — extend it uniformly.
+
+### 0g. Lazy CR0 Re-enable
 
 **Expected impact**: 5-15% on Rc=1-heavy code (andi., add., rlwinm., etc.)
 **Effort**: Low-medium (code exists, same "boot hang regression" disable as RA)
@@ -192,12 +214,52 @@ Every guest memory access includes REV/REV16.  Possible improvements:
 - Fused load+REV on some μarch
 - Pre-byte-swap known-constant addresses (ROM) at compile time
 
+### P8: Cross-Block Register Pinning (r1/SP, r2/RTOC)
+
+**Expected impact**: Potentially large — eliminates per-block reload of the two
+most-accessed GPRs in every PPC program
+**Effort**: High (requires ABI contract at chain boundaries)
+**Risk**: Medium-high
+
+Currently the RA resets at every block boundary — `ra_reset()` clears all
+cached GPRs, so every block reloads r1 (stack pointer) and r2 (RTOC) from
+the struct even if the previous block just stored them.  With block chaining,
+the callee-saved RA registers (x21-x28) survive across chain sites.
+
+Pinning r1→x21 and r2→x22 across chained blocks would eliminate two LDR/STR
+pairs per block transition.  Requires:
+- A stable RA→host-register mapping contract at chain entry points
+- Chain patching must preserve or restore the pinned registers
+- `ra_reset()` at chain entry must pre-populate the pinned mappings
+- Invalidation must account for pinned state
+
+This is the biggest remaining lever for the RA — the per-block overhead of
+reloading hot registers dominates now that intra-block allocation is done.
+
+### P9: Indirect-Branch Chaining for bclr
+
+**Expected impact**: 5-10% on function-return-heavy code
+**Effort**: High
+**Risk**: Medium
+
+Every `bclr` (function return) currently round-trips the C dispatcher: the
+JIT block stores the LR target to `regs.pc`, restores callee-saved regs,
+returns to C, C looks up the target block, and re-enters with the full
+prologue.  An indirect-branch chain would instead:
+1. Look up the LR target in the block cache at runtime (inline hash probe)
+2. If found: branch directly to the target's chain entry (skip dispatcher)
+3. If not found: fall back to the dispatcher
+
+This is independent of the RA work.  The main challenge is the inline hash
+probe code size and the correctness of cache-miss fallback.  Dolphin's PPC
+JIT uses a similar technique for `blr` fastpath.
+
 ---
 
 ## Measurement Plan
 
 For each optimization, measure:
-1. **Harness**: 235/235, score=100 (correctness gate)
+1. **Harness**: 236/236, score=100 (correctness gate)
 2. **Boot test**: HD boot to Finder desktop (no regression)
 3. **Speedometer 4.02**: Full benchmark, compare PR/Mix/CPU/Dhrystones
 4. **SS_JIT_VERIFY=1**: Differential verification (mandatory for RA/CR0 changes)

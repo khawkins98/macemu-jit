@@ -2751,6 +2751,20 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		switch (xo) {
 		case 16: /* bclr — branch conditional to LR */
 		{
+			/* Mixed Mode guard: if LR bit 0 is set (68k code pointer),
+			 * bail to interpreter which handles the mode transition.
+			 * This is a runtime check — LR is only known at execution time. */
+			a64_ldr_w_imm(RTMP2, RSTATE, PPCR_LR);
+			emit32(0x12000000 | (RTMP2 << 5) | RTMP0); /* AND W0, W(LR), #1 */
+			uint32_t *mm_cbz = jit_code_ptr;
+			emit32(0); /* placeholder CBZ — skip bail if bit 0 clear */
+			emit_load_imm32(RTMP0, (int32_t)pc);
+			a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+			emit_bare_epilogue();
+			/* Patch CBZ to land here */
+			int32_t mm_off = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)mm_cbz);
+			*mm_cbz = 0x34000000 | (((mm_off >> 2) & 0x7FFFF) << 5) | RTMP0;
+
 			uint32_t bo = (op >> 21) & 0x1F;
 			uint32_t bi = (op >> 16) & 0x1F;
 			bool lk = op & 1;
@@ -2759,8 +2773,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			bool no_cond_test = (bo & 0x10);  /* BO[0]=1: skip condition test */
 			bool cond_bit_val = (bo & 0x08);  /* BO[1]=1: branch if CR[BI]=1 */
 
-			/* bclrl/bdnzlr branches to the old LR, then optional LK writes LR=pc+4. */
-			a64_ldr_w_imm(RTMP2, RSTATE, PPCR_LR); /* taken target = old LR */
+			/* RTMP2 already holds LR from the guard above */
 			if (lk) { emit_load_imm32(RTMP1, (int32_t)(pc + 4)); a64_str_w_imm(RTMP1, RSTATE, PPCR_LR); }
 
 			/* RTMP0 = branch decision (1=taken, 0=fall through). */
@@ -2814,6 +2827,17 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 528: /* bcctr — branch conditional to CTR */
 		{
+			/* Mixed Mode guard: if CTR bit 0 is set, bail to interpreter */
+			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CTR);
+			emit32(0x12000000 | (RTMP0 << 5) | RTMP1); /* AND W1, W(CTR), #1 */
+			uint32_t *mm_cbz2 = jit_code_ptr;
+			emit32(0); /* placeholder CBZ */
+			emit_load_imm32(RTMP0, (int32_t)pc);
+			a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+			emit_bare_epilogue();
+			int32_t mm_off2 = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)mm_cbz2);
+			*mm_cbz2 = 0x34000000 | (((mm_off2 >> 2) & 0x7FFFF) << 5) | RTMP1;
+
 			uint32_t bo = (op >> 21) & 0x1F;
 			uint32_t bi = (op >> 16) & 0x1F;
 			bool lk = op & 1;

@@ -109,6 +109,22 @@ measuring perf):** an env-gated quiet mode (`SS_JIT_NO_HEARTBEAT=1`).
 
 ---
 
+## P3.5 — New World ROM support in rom-harness (deferred 2026-06-03)
+
+☐ **Deferred — revisit if Mac OS 9 / New World becomes a focus.** `rom-harness` loads the
+ROM as raw bytes and scans for PPC blocks, so it can't ingest New World CHRP ROMs
+(`<CHRP-BOOT>` header + LZSS/parcels-compressed payload) — only OldWorld raw 4MB dumps
+"scan cleanly." The emulator proper already decodes New World ROMs via `DecodeROM()` in
+`rom_patches.cpp`; only the standalone harness lacks it.
+
+**Why deferred:** the gap only matters if we commit to exercising 9.x / New World ROM code
+paths in the harness. OldWorld raw dumps already cover the JIT block exerciser's needs.
+Decision after we see whether a 9.0.4 boot is viable on this fork.
+
+**Action when ready:** make `rom-harness` call `DecodeROM()` (or port the CHRP/LZSS/parcels
+decode) before scanning, instead of `fread`-ing raw bytes. Moderate effort; brainstorm
+first. Then it could scan the decompressed image of a New World `Mac OS ROM` file.
+
 ## P4 — Flag for the other agent (their files — NOT touched by this review)
 
 These came up during review but live in the icbi/isync + opcode-correctness work another

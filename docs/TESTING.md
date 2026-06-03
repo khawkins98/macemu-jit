@@ -39,25 +39,41 @@ Two caveats:
 
 | Test | Command | Gate |
 |------|---------|------|
-| JIT opcode harness (235 vectors) | `cd SheepShaver && make test-opcodes` | score=100 |
-| Single opcode vector | `SS_TEST_HEX=<hex> SS_TEST_JIT=1 make test-opcodes` | — |
+| **JIT↔interp equivalence — THE codegen gate** | `cd SheepShaver && make test-jit` | 236/236, score=100 |
+| Interpreter determinism (default) | `cd SheepShaver && make test-opcodes` | score=100 — *but see note* |
+| Single opcode vector (JIT path) | `SS_TEST_HEX=<hex> SS_TEST_JIT=1 make test-opcodes` | — |
 | ROM harness (headless JIT exerciser) | `cd SheepShaver && make test-rom` | no failures |
 | Build | `cd SheepShaver && make build-ss` | clean |
 
-These are the correctness gate for any codegen change. **But note their blind
-spots** (below) — passing them is necessary, not sufficient.
+> **MODE MATTERS — the default does NOT test the JIT.** The same ~236 vectors run
+> two ways:
+> - `make test-opcodes` (default, `SS_HARNESS_MODE=interp`) runs each vector
+>   *twice through the interpreter* and diffs the REGDUMPs — it validates
+>   **interpreter determinism only**. It does **not** exercise JIT codegen at all.
+> - `make test-jit` (`SS_HARNESS_MODE=jit`) runs each vector through the
+>   interpreter (reference) **and the JIT**, then diffs them. **This is the real
+>   codegen correctness gate — run it on every `ppc-jit.cpp` change.**
+>
+> A green `make test-opcodes` (e.g. a cited "235/235") says *nothing* about JIT
+> correctness — always state the mode. `make test-jit` is fast (seconds, no boot),
+> so use it as the inner-loop gate. `make test` now runs both.
+
+These are the fast correctness tier for codegen changes (use `test-jit`). **But
+note their blind spots** (below) — passing them is necessary, not sufficient.
 
 ### Known coverage gaps in the automated harness
 
-1. **The harness is integer-heavy.** The 235 vectors concentrate on integer ALU,
+1. **The vectors are integer-heavy.** They concentrate on integer ALU,
    loads/stores, and branches. **Floating point (51 JIT ops) and AltiVec (156
    JIT ops) are comparatively under-tested**, and FP/vector encoding bugs are
-   subtle. This is the biggest gap — see "Conformance apps" below.
-2. **The register-allocator eviction path is unexercised.** The `lmw`/`stmw`
-   vectors top out at 4 registers, under `RA_NUM_REGS=8`, so `ra_evict` (the
-   spill/flush path under register pressure) never fires in the harness. See
-   `OPTIMIZATION-PLAN.md` item **P1a** (adding an `lmw r20` 12-register vector
-   closes this and takes the harness to 236/236).
+   subtle. This is the biggest gap — the fix is more `test-jit` vectors plus the
+   conformance apps below.
+2. **Register-allocator eviction — now covered, but only in JIT mode.** The
+   `lmw_stmw_wide` vector (12 GPRs > `RA_NUM_REGS=8`) forces mid-block `ra_evict`
+   of both clean and dirty slots and passes under `make test-jit`. Caveat: it
+   only validates the JIT spill path in **jit mode** — under default
+   `test-opcodes` it merely checks interpreter determinism. (See
+   `OPTIMIZATION-PLAN.md` P1a.)
 3. **No timing/interrupt coverage.** The harness runs isolated instruction
    sequences; it can't catch VBL/spcflags/interrupt-delivery bugs. Only a real
    booted workload (especially games) exercises those.

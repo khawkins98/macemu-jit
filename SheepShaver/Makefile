@@ -19,7 +19,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-rom \
+        test test-opcodes test-jit test-rom \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean \
@@ -83,14 +83,28 @@ build-rom-inspect:
 inspect-rom: build-rom-inspect
 	@./rom-inspect/rom-inspect "$(ROM)"
 
-test: test-opcodes test-rom
+test: test-opcodes test-jit test-rom
 	@echo ""
 	@echo "=== All tests complete ==="
 
+# test-opcodes: DEFAULT mode = interpreter determinism (each vector run twice
+# through the interpreter, REGDUMPs diffed).  This validates the interpreter, NOT
+# the JIT codegen.  For codegen changes, use `make test-jit` (the real gate).
 test-opcodes: build-ss
 	@echo ""
-	@echo "=== JIT Opcode Equivalence Harness ==="
+	@echo "=== Interpreter Determinism Harness (does NOT exercise JIT codegen) ==="
 	@cd jit-test && bash run.sh 2>&1 | grep "METRIC\|FAIL\|ERROR" | head -20
+
+# test-jit: the JIT correctness gate.  Runs every vector through BOTH the
+# interpreter (reference) and the aarch64 JIT, and diffs the REGDUMPs
+# (SS_HARNESS_MODE=jit).  THIS is what proves a codegen change is correct —
+# run it on every change to ppc-jit.cpp.  Includes the RA register-pressure /
+# eviction stress vector (lmw_stmw_wide).
+test-jit: build-ss
+	@echo ""
+	@echo "=== JIT<->Interpreter Equivalence Harness (codegen correctness gate) ==="
+	@cd jit-test && SS_HARNESS_MODE=jit bash run.sh 2>&1 | \
+		grep -E "HARNESS mode=|METRIC (pass|fail|total|score)=|opcode_[a-z0-9_]+=(0|-1)|FAIL|ERROR"
 
 test-rom: build-rom-harness
 	@echo ""

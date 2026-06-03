@@ -53,18 +53,20 @@ b5/b40 fields are zero.
 **Why first**: P1 shipped a real +15.6%, but its subtlest path — `ra_evict`
 under register pressure (>8 live GPRs in one block) — is **never exercised by
 the harness**. The `lmw`/`stmw` vectors top out at 4 registers (r28–r31), under
-`RA_NUM_REGS=8`, so eviction never fires. 235/235 proves block-exit flush for
-small blocks; it says nothing about mid-block spill. P8 (cross-block pinning)
+`RA_NUM_REGS=8`, so eviction never fired. The harness proves block-exit flush for
+small blocks; it said nothing about mid-block spill. P8 (cross-block pinning)
 extends the RA's cross-block lifetime, so this must be verified before relying
 on it.
 
 **Effort**: Low (~1 hour)
 **Risk**: This *closes* risk rather than adding it.
 
-1. **Add a >8-live-GPR eviction vector.** `lmw r20, d(r1)` loads r20–r31 (12
-   regs) → forces ≥4 evictions, including a clean-drop (the base reg) and
-   dirty-flushes (earlier-loaded regs). The REGDUMP diff catches any wrong value
-   immediately. (This is the vector that takes the harness to 236/236.)
+1. **Add a >8-live-GPR eviction vector.** ✅ **DONE** — `lmw_stmw_wide` (li
+   r20–r31, stmw, zero, lmw r20: 12 GPRs > `RA_NUM_REGS=8`) is in the harness and
+   forces mid-block `ra_evict` of both clean and dirty slots. It **passes under
+   `make test-jit` (236/236)**. CAVEAT: it only validates the JIT spill path in
+   **jit mode** (`SS_HARNESS_MODE=jit`); the default `make test-opcodes` runs
+   interpreter-determinism and does not exercise it.
 2. **Run `SS_JIT_VERIFY=1` boot** — the only check that exercises eviction +
    cross-block flush on a real workload.
 3. **Document/fix the 64-bit accessor coherence hole.** `emit_load_gpr64` /
@@ -75,7 +77,11 @@ on it.
    — a 32-bit Mac OS guest never issues these, so it is **not reachable today**
    — but it is **mandatory before any G5/PPC64 path**. Fix: route the low word
    through `ra_load`/`ra_store` (the high word is fine — the RA never caches it).
-   At minimum, comment both helpers so the next person doesn't trip on it.
+   ✅ The inline COHERENCE WARNING comment (the "minimum") is **done** in
+   ppc-jit.cpp — including the trap that the obvious fix (reusing
+   `emit_load_gpr`/`emit_store_gpr`) corrupts the high word because `a64_mov_reg`
+   is a 64-bit move. The actual RA-routing fix is **deferred** until a G5/PPC64
+   path makes it reachable *and* `SS_JIT_VERIFY`-testable.
 4. **Pin the real invariant** (comment near `RA_NUM_REGS`): the allocator is safe
    because **`RA_NUM_REGS` (8) ≥ simultaneously-live RA operands in a single
    *emitted* instruction (≤3, e.g. `ADD hD,hA,hB`)** — NOT "distinct GPRs per
@@ -375,11 +381,37 @@ This one artifact serves *both* tracks: it tells you which JIT-internals item
 (0g / P8 / P9) to do first **and** which routines clear the HLE gate above. It
 converts the rest of this plan from priors into evidence.
 
+### P0b. Microbenchmark harness — fast, deterministic perf deltas
 
+The perf analog of `make test-jit`. Today, answering "did this optimization make
+it faster?" requires a full boot + Speedometer/MacBench (minutes, manual, noisy),
+so the optimize→measure loop is slow. A microbench gives a cycles/iteration
+number in **seconds, no boot**, so you can A/B a change immediately.
+
+**Approach** (incremental on existing infra):
+- Extend the already-headless `rom-harness` to *time* a fixed block-execution
+  workload and report throughput (blocks/s, ns/block), OR add a small standalone
+  that JIT-compiles a synthetic hot loop and times N iterations.
+- Provide **targeted** kernels so the signal isn't diluted: a tight carry-chain
+  loop for 0f, a back-to-back `Rc=1` loop for 0g/lazy-CR0, a function-call/return
+  loop for P9, a stack-frame `lwzu`/`stwu` loop for P8. Each optimization A/Bs
+  against its own kernel.
+
+**Caveat**: microbenches can mislead (you optimize the bench, not the workload).
+Treat deltas as directional and confirm headline wins with an occasional real
+Speedometer/boot run. Pairs with P0 (the profiler tells you *which* kernels
+represent real hot spots).
+
+**Effort**: Low-medium (rom-harness already runs blocks headless; add timing +
+a few kernels). **Risk**: Low (measurement only).
 
 For each optimization, measure:
-1. **Harness**: 235/235 today, 236/236 once the P1a `lmw r20` vector lands;
-   score=100 (correctness gate)
+1. **JIT codegen gate**: `make test-jit` (`SS_HARNESS_MODE=jit`) — runs every
+   vector through the interpreter AND the JIT and diffs them. **236/236,
+   score=100.** This is the gate that actually exercises codegen; run it on every
+   `ppc-jit.cpp` change. NOTE: plain `make test-opcodes` only checks interpreter
+   determinism and proves nothing about the JIT — never cite a bare "236/236"
+   without the mode.
 2. **Boot test**: HD boot to Finder desktop (no regression)
 3. **Speedometer 4.02**: Full benchmark, compare PR/Mix/CPU/Dhrystones
 4. **SS_JIT_VERIFY=1**: Differential verification (mandatory for RA/CR0 changes)

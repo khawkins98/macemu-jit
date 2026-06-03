@@ -5,6 +5,19 @@ Newest entries at the top of each section. Review at the start of each session.
 
 ## 2026-06-03 (session 7 continued) — subfe carry bug found and fixed; DR emulator JIT boots
 
+### SESSION 7 COMPLETE: Mac OS 8.6 boots to Finder desktop with full JIT
+
+Final state after session 7:
+- **subfe/adde carry bug** found and fixed (64-bit carry computation)
+- **ROM=0x500000** (full range, DR emulator JIT-compiled) — default config
+- **Block chaining=1** — enabled by default
+- **VNC screenshot confirms** visual boot to Finder desktop
+- **Harness**: 235/235, score=100
+- **j2i transitions**: reduced from 2.4M/s to 6K/s (DR emulator no longer interpreted)
+- Default ROM range updated from 0x460000 to 0x500000 in Makefile/code
+- The "spcflags timing" theory (sessions 5-7a) was a red herring — actual root cause was
+  carry codegen, not interrupt delivery timing
+
 ### ROOT CAUSE FOUND: subfe (XO=136) carry-out computation was wrong
 
 The `subfe rD,rA,rB` instruction computes `rD = ~rA + rB + CA` and sets CA to the carry-out

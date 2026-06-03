@@ -1,11 +1,11 @@
 # MacEmu AArch64 JIT — Status
 
-## SheepShaver PPC JIT (2026-06-02, macOS arm64 port — branch macos-arm64)
+## SheepShaver PPC JIT (2026-06-03, macOS arm64 port — branch macos-arm64)
 
 **Build:** ✅ macOS 26.4.1 arm64 (Apple clang 17, SDL2, no X11)
 **Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
-**JIT boot (macOS arm64):** ✅ Runs sustained without crash; CPU at 100% through ROM init — desktop not yet visually confirmed (needs Ken at keyboard). See LEARNINGS.md 2026-06-02 section.
-**JIT harness:** ✅ 209/209 opcode vectors pass interpreter mode and JIT mode (score=100 both)
+**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full JIT (VNC screenshot confirmed). ROM=0x500000 (full range including DR emulator), block chaining enabled.
+**JIT harness:** ✅ 235/235 opcode vectors pass interpreter mode and JIT mode (score=100 both)
 **ROM harness:** ⚠️ Needs OldWorld raw ROM dump; New World CHRP ROMs are not compatible with the scanner
 **macOS-specific fixes (all on macos-arm64 branch):**
 - MAP_JIT + pthread_jit_write_protect_np + sys_icache_invalidate for JIT code cache
@@ -25,8 +25,9 @@
 
 ### JIT Boot Status
 
-With JIT active, SheepShaver boots Mac OS to the Welcome splash screen.
-Block cache and chaining are active; lazy CR0 and register-allocation scaffolding remain in-tree but are currently disabled after boot-regression risk:
+With JIT active, SheepShaver boots Mac OS 8.6 to the Finder desktop (macOS arm64, VNC confirmed).
+Full ROM range (0x500000, including DR 68k emulator) is JIT-compiled with block chaining enabled.
+Lazy CR0 and register-allocation scaffolding remain in-tree but are currently disabled:
 1. **Phase 1:** Hash + chaining block cache (8192 buckets)
 2. **Phase 2:** Lazy CR0 flags scaffolded, currently disabled (`lazy_update_cr0()` materializes immediately)
 3. **Phase 3:** Register allocation scaffolded, currently disabled (active path uses direct struct LDR/STR)
@@ -52,6 +53,13 @@ hardware, no SheepShaver runtime dependencies.
 
 Remaining 25 failures: CR field interactions in multi-instruction blocks
 and complex branch BO patterns (CTR+condition combo).
+
+### Recent bug fixes (2026-06)
+
+- **subfe/adde carry-out computation** (2026-06-03): The JIT read carry from a partial ADDS
+  (~rA + rB) instead of the full three-operand sum (~rA + rB + CA). For `subfe r4,r4,r4`
+  (carry-to-mask idiom), this always wrote CA=0 regardless of input. Fixed by computing in
+  64 bits and extracting bit 32. This was the root cause of the DR emulator boot hang.
 
 ### Recent bug fixes (2026-05)
 

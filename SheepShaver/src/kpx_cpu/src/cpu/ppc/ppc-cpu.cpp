@@ -1337,11 +1337,50 @@ void powerpc_cpu::execute(uint32 entry)
 											fprintf(stderr, "[JIT %.1fs] STALL: comp=%u unchanged for %d heartbeats at %.0fM/s — dumping trace ring\n",
 											        now, compiled, stall_count, rate);
 											ppc_jit_dump_trace_ring();
+											/* SS_JIT_MEMDUMP=1: dump guest RAM for diff against interpreter */
+											{
+												const char *md_env = getenv("SS_JIT_MEMDUMP");
+												if (md_env && *md_env == '1') {
+													const char *path = "/tmp/ss_memdump.bin";
+													FILE *mf = fopen(path, "wb");
+													if (mf) {
+														fwrite(RAMBaseHost, 1, RAMSize < 0x1000000 ? RAMSize : 0x1000000, mf);
+														fclose(mf);
+														fprintf(stderr, "[JIT] Memory dump: %s (%u bytes from guest 0x00000000)\n",
+														        path, RAMSize < 0x1000000 ? RAMSize : 0x1000000);
+													}
+												}
+											}
 											stall_n = 0; /* one-shot */
 										}
 									} else {
 										stall_count = 0;
 										stall_last_compiled = compiled;
+									}
+								}
+							}
+							/* SS_JIT_MEMDUMP_AT=<seconds>: dump guest RAM at a fixed time.
+							 * Use same time for both JIT and interpreter runs to compare. */
+							{
+								static int memdump_at_done = 0;
+								static double memdump_at_t = 0;
+								if (!memdump_at_done) {
+									if (memdump_at_t == 0) {
+										const char *e = getenv("SS_JIT_MEMDUMP_AT");
+										memdump_at_t = e ? atof(e) : -1;
+									}
+									if (memdump_at_t > 0 && now >= memdump_at_t) {
+										memdump_at_done = 1;
+										const char *path = getenv("SS_JIT_MEMDUMP_PATH");
+										if (!path) path = "/tmp/ss_memdump.bin";
+										FILE *mf = fopen(path, "wb");
+										if (mf) {
+											uint32 dump_size = RAMSize < 0x1000000 ? RAMSize : 0x1000000;
+											fwrite(RAMBaseHost, 1, dump_size, mf);
+											fclose(mf);
+											fprintf(stderr, "[JIT %.1fs] Memory dump: %s (%u bytes)\n",
+											        now, path, dump_size);
+										}
 									}
 								}
 							}
@@ -1459,6 +1498,29 @@ void powerpc_cpu::execute(uint32 entry)
 							        (unsigned long long)rgn_interp_blocks[RGN_RAM], (unsigned long long)rgn_interp_blocks[RGN_OTH],
 							        (unsigned long long)rgn_jit_to_interp, (unsigned long long)rgn_interp_to_jit);
 							fflush(jit_log_file);
+							/* SS_JIT_MEMDUMP_AT: timer-based memory dump (interpreter mode) */
+							{
+								static int md_done = 0;
+								static double md_t = 0;
+								if (!md_done) {
+									if (md_t == 0) {
+										const char *e = getenv("SS_JIT_MEMDUMP_AT");
+										md_t = e ? atof(e) : -1;
+									}
+									if (md_t > 0 && now >= md_t) {
+										md_done = 1;
+										const char *path = getenv("SS_JIT_MEMDUMP_PATH");
+										if (!path) path = "/tmp/ss_memdump.bin";
+										FILE *mf = fopen(path, "wb");
+										if (mf) {
+											uint32 sz = RAMSize < 0x1000000 ? RAMSize : 0x1000000;
+											fwrite(RAMBaseHost, 1, sz, mf);
+											fclose(mf);
+											fprintf(stderr, "[INTERP %.1fs] Memory dump: %s (%u bytes)\n", now, path, sz);
+										}
+									}
+								}
+							}
 							interp_last_t = now;
 						}
 					}

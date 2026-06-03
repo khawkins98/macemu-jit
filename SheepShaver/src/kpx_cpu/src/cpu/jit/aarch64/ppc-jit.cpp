@@ -1822,19 +1822,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x13003C00 | (RTMP1 << 5) | RTMP1); /* SXTH */
 			emit_store_gpr(RTMP1, rd);
 			return true;
-		case 371: /* mftb rD,TBR — move from time base */
-		{
-			/* TBR field: spr_hi (bits 15-11) << 5 | spr_lo (bits 20-16) */
-			uint32_t tbr = (rb << 5) | ra;
-			emit32(0xD53BE040 | RTMP0); /* MRS Xt, CNTVCT_EL0 (64-bit) */
-			if (tbr == 269) {
-				/* TBU: upper 32 bits of 64-bit counter */
-				emit32(0xD360FC00 | (RTMP0 << 5) | RTMP0); /* LSR Xd, Xn, #32 */
-			}
-			/* TBL (268) or unknown: lower 32 bits (implicit W-reg truncation) */
-			emit_store_gpr(RTMP0, rd);
-			return true;
-		}
+		case 371: /* mftb rD,TBR — move from time base.
+		         * The interpreter uses the CPU object's timebase model, not
+		         * the raw ARM64 counter. Fall through for correct time values. */
+			return false;
 
 		case 119: /* lbzux rD,rA,rB */
 			/* ra==0: use 0 as base; ra==rd: update gets overwritten by load (PPC undefined but harmless) */
@@ -2053,26 +2044,15 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP0);
 			return true;
 		}
-		case 20: /* lwarx rD,rA,rB — load word and reserve (treat as lwzx) */
-			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
-			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
-			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
-			emit_store_gpr(RTMP1, rd);
-			return true;
-		case 150: /* stwcx. rS,rA,rB — store word conditional (simplified: always succeed) */
-			emit_load_gpr(RTMP1, PPC_RS(op));
-			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
-			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
-			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
-			/* Set CR0.EQ to indicate success */
-			lazy_flush_cr0();
-			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
-			emit_load_imm32(RTMP1, 0x20000000); /* EQ bit in CR0 */
-			emit32(0x2A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
-			a64_str_w_imm(RTMP0, RSTATE, PPCR_CR);
-			return true;
+		case 20: /* lwarx rD,rA,rB — load word and reserve.
+			 * Must set reservation state in the CPU object (not just regs struct).
+			 * Fall through to interpreter for correct reservation semantics. */
+			return false;
+		case 150: /* stwcx. rS,rA,rB — store word conditional.
+			 * Must check reservation state and set CR0 based on success/failure.
+			 * The reservation lives in the CPU object, not the regs struct.
+			 * Fall through to interpreter for correct atomic semantics. */
+			return false;
 
 		case 595: /* mfsr — move from segment register (supervisor, treat as NOP returning 0) */
 			emit_load_imm32(RTMP0, 0);

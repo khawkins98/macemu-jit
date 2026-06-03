@@ -46,6 +46,45 @@ b5/b40 fields are zero.
 
 ---
 
+## Open — Hardening (correctness debt on P1; gates P8)
+
+### P1a. Harden the register allocator
+
+**Why first**: P1 shipped a real +15.6%, but its subtlest path — `ra_evict`
+under register pressure (>8 live GPRs in one block) — is **never exercised by
+the harness**. The `lmw`/`stmw` vectors top out at 4 registers (r28–r31), under
+`RA_NUM_REGS=8`, so eviction never fires. 235/235 proves block-exit flush for
+small blocks; it says nothing about mid-block spill. P8 (cross-block pinning)
+extends the RA's cross-block lifetime, so this must be verified before relying
+on it.
+
+**Effort**: Low (~1 hour)
+**Risk**: This *closes* risk rather than adding it.
+
+1. **Add a >8-live-GPR eviction vector.** `lmw r20, d(r1)` loads r20–r31 (12
+   regs) → forces ≥4 evictions, including a clean-drop (the base reg) and
+   dirty-flushes (earlier-loaded regs). The REGDUMP diff catches any wrong value
+   immediately. (This is the vector that takes the harness to 236/236.)
+2. **Run `SS_JIT_VERIFY=1` boot** — the only check that exercises eviction +
+   cross-block flush on a real workload.
+3. **Document/fix the 64-bit accessor coherence hole.** `emit_load_gpr64` /
+   `emit_store_gpr64` read/write `PPCR_GPR(n)` (the low word) **directly**,
+   bypassing the RA's low-word cache. A 32-bit op leaves a dirty low word in
+   x21–x28; a subsequent 64-bit read sees the stale struct word. Reachable only
+   from PPC64 doubleword opcodes (`rld*`/`sld`/`srd`/`cntlzd`/`ld`/`std`/`lwa`)
+   — a 32-bit Mac OS guest never issues these, so it is **not reachable today**
+   — but it is **mandatory before any G5/PPC64 path**. Fix: route the low word
+   through `ra_load`/`ra_store` (the high word is fine — the RA never caches it).
+   At minimum, comment both helpers so the next person doesn't trip on it.
+4. **Pin the real invariant** (comment near `RA_NUM_REGS`): the allocator is safe
+   because **`RA_NUM_REGS` (8) ≥ simultaneously-live RA operands in a single
+   *emitted* instruction (≤3, e.g. `ADD hD,hA,hB`)** — NOT "distinct GPRs per
+   opcode." `lmw` touches 12 GPRs and is still safe precisely because only one
+   RA reg (`hR`) is live per emitted op; the address and loaded value ride in
+   `RTMP0`/`RTMP1`.
+
+---
+
 ## Open — Quick Wins (Priority 0)
 
 ### 0b. subfe/adde: 64-bit sum → ADDS+ADCS (3-4 insns instead of 8)
@@ -121,7 +160,12 @@ with `ra==0` already demonstrates this pattern — extend it uniformly.
 
 **Expected impact**: 5-15% on Rc=1-heavy code (andi., add., rlwinm., etc.)
 **Effort**: Low-medium (code exists, same "boot hang regression" disable as RA)
-**Risk**: Medium (interacts with RA flush ordering and NZCV clobbers)
+**Risk**: Medium — and the risk is *real*, not nominal: lazy CR0 was disabled for
+a boot-hang regression that, like the RA's, was **never root-caused**. Re-enabling
+inherits that latent failure, so it demands the same rigor that made the RA
+re-enable safe: full flush-discipline audit + mandatory `SS_JIT_VERIFY=1` boot,
+not just a green harness. It also interacts with RA flush ordering and NZCV
+clobbers. Do not ship on harness-pass alone.
 
 Currently every `Rc=1` instruction immediately computes the full CR0 field
 (~12 ARM64 instructions: CMP + 3 CSELs + XER.SO merge + shift + CR load/mask/OR/store).
@@ -220,6 +264,8 @@ Every guest memory access includes REV/REV16.  Possible improvements:
 most-accessed GPRs in every PPC program
 **Effort**: High (requires ABI contract at chain boundaries)
 **Risk**: Medium-high
+**Depends on**: P1a (RA eviction hardening). Pinning extends the RA's cross-block
+lifetime, so the eviction/flush path must be verified before relying on it.
 
 Currently the RA resets at every block boundary — `ra_reset()` clears all
 cached GPRs, so every block reloads r1 (stack pointer) and r2 (RTOC) from
@@ -256,10 +302,67 @@ JIT uses a similar technique for `blr` fastpath.
 
 ---
 
+## Open — Orthogonal: Selective HLE (high-level emulation of hot routines)
+
+This is a *different axis* from everything above: instead of making the JIT's
+translated output better, replace a few specific, hot, well-understood guest
+routines with native C++/NEON fast-paths. **`gfxaccel.cpp` already proves the
+pattern** — native QuickDraw fillrect/bitblt/invrect hooks (opt-in via the
+`gfxaccel` pref).
+
+**Why this reaches what JIT-internals cannot**: `compile_one` is strictly
+per-PowerPC-instruction — no loop or idiom analysis. It maps guest AltiVec → NEON
+1:1, but it will **never** vectorize a scalar copy loop, because that requires
+recognizing the loop *as* a memcpy. So for bulk-data routines the gap isn't
+"native vs. JIT," it's "vectorized vs. scalar" — a 4–16× cliff that no amount of
+RA/CR0/chaining work can touch. P8/P9 lift the scalar-bound majority; HLE reaches
+the vectorizable slice. **They are additive, not competing.**
+
+**The gate (all three must hold)**:
+1. **Hot** — surfaced by the P0 profiler below (execution-weighted, not
+   compile-frequency).
+2. **Scalar in the guest** — an already-AltiVec routine is a *non-candidate*: the
+   JIT already emits NEON 1:1, so HLE buys little. The profiler's instruction-mix
+   tag decides this.
+3. **Bulk data** — so wide NEON loads/stores give a large factor.
+
+**Candidates**: `BlockMove`/`BlockMoveData`, scalar `CopyBits`/blit paths not
+already covered by gfxaccel, possibly sound mixing.
+
+**Risk**: per-routine semantic fidelity — an HLE patch must match the OS exactly
+or it silently corrupts. This is why it's gated on measurement, not done
+speculatively. It does **not** mean reimplementing the Toolbox (that's the
+Executor/WINE model — a different project, and a compatibility *loss*); it means
+patching a handful of bulk-data primitives.
+
+---
+
 ## Measurement Plan
 
+### P0. Build the mix-aware execution profiler FIRST (prerequisite)
+
+The priorities below are currently estimated from *compile frequency* (how often a
+block is compiled), which is biased — a block compiled once but executed a million
+times is what actually matters. Before investing in any 5–15%-estimate item, build
+an **execution-weighted, instruction-mix-tagged** hot-block profiler. It is
+incremental on infrastructure that already exists (block cache keyed by PC, the
+HOT-PC heartbeat sampler, the per-region NK/DR/RAM/OTH counters):
+
+1. Per-block execution counter (or accumulate sampled guest PCs into a histogram);
+   dump the top-N hottest blocks **with their disassembly** (the JIT already has it).
+2. Tag each hot block by instruction mix — the JIT sees every opcode at compile
+   time, so it can cheaply mark a block `scalar-bulk-data` / `AltiVec` / `integer-ALU`.
+3. Attribute hot PCs to named routines via the trap-dispatch / NameRegistry ranges.
+
+This one artifact serves *both* tracks: it tells you which JIT-internals item
+(0g / P8 / P9) to do first **and** which routines clear the HLE gate above. It
+converts the rest of this plan from priors into evidence.
+
+
+
 For each optimization, measure:
-1. **Harness**: 236/236, score=100 (correctness gate)
+1. **Harness**: 235/235 today, 236/236 once the P1a `lmw r20` vector lands;
+   score=100 (correctness gate)
 2. **Boot test**: HD boot to Finder desktop (no regression)
 3. **Speedometer 4.02**: Full benchmark, compare PR/Mix/CPU/Dhrystones
 4. **SS_JIT_VERIFY=1**: Differential verification (mandatory for RA/CR0 changes)

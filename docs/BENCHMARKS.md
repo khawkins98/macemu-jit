@@ -3,6 +3,10 @@
 Benchmark data for the macOS ARM64 (Apple Silicon) JIT port.
 All tests on Mac OS 8.6 Internal Edition ISO, OldWorld ROM, 256MB RAM.
 
+> This file covers **performance** (speed). For **correctness/functional**
+> testing — the `SS_JIT_VERIFY` differential oracle, FP/AltiVec conformance
+> (Paranoia), and broad-coverage workloads — see [TESTING.md](TESTING.md).
+
 ## Test Configuration
 
 - **Host**: macOS arm64 (Apple Silicon)

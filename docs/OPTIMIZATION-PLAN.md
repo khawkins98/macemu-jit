@@ -477,29 +477,31 @@ This one artifact serves *both* tracks: it tells you which JIT-internals item
 (0g / P8 / P9) to do first **and** which routines clear the HLE gate above. It
 converts the rest of this plan from priors into evidence.
 
-### P0b. Microbenchmark harness — fast, deterministic perf deltas
+### P0b. Microbenchmark harness — DONE (2026-06-03)
 
-The perf analog of `make test-jit`. Today, answering "did this optimization make
-it faster?" requires a full boot + Speedometer/MacBench (minutes, manual, noisy),
-so the optimize→measure loop is slow. A microbench gives a cycles/iteration
-number in **seconds, no boot**, so you can A/B a change immediately.
+**Result**: `jit-bench` shipped as `rom-harness --bench` / `make bench`.
+Differential per-instruction timing (compile each kernel at 16 and 144 body
+instrs; `(call_big−call_small)/(144−16)` cancels prologue/epilogue), min-of-5,
+**<1% run-to-run noise**. Discriminating on first run: `alu` 0.10 < `rc1` 0.50 <
+`carry-chain` 0.95 ns/insn. `--save-baseline`/`--compare` A/B; per the TESTING.md
+contract, `--compare` warns if the baseline predates `ppc-jit.cpp`. Kernels:
+`carry-chain` (0b/0f), `rc1` (0g lazy-CR0), `alu` (RA).
 
-**Approach** (incremental on existing infra):
-- Extend the already-headless `rom-harness` to *time* a fixed block-execution
-  workload and report throughput (blocks/s, ns/block), OR add a small standalone
-  that JIT-compiles a synthetic hot loop and times N iterations.
-- Provide **targeted** kernels so the signal isn't diluted: a tight carry-chain
-  loop for 0f, a back-to-back `Rc=1` loop for 0g/lazy-CR0, a function-call/return
-  loop for P9, a stack-frame `lwzu`/`stwu` loop for P8. Each optimization A/Bs
-  against its own kernel.
+Surfaced + fixed two standalone-harness bugs: a missing `ppc_jit_interp_one`
+link stub, and a **missing `spcflags` field in `PPCRegs`** (the 0d atomic change
+moved it to offset 1056) that made the JIT entry poll read past the struct and
+bail before every block body — silently breaking rom-harness's normal mode too.
+A `static_assert` now turns that drift into a compile error.
 
-**Caveat**: microbenches can mislead (you optimize the bench, not the workload).
-Treat deltas as directional and confirm headline wins with an occasional real
-Speedometer/boot run. Pairs with P0 (the profiler tells you *which* kernels
-represent real hot spots).
+**Deferred to v2**: a `load-store` kernel (guest data access needs the
+DIRECT_ADDRESSING base configured — macOS can't map the low 4 GB), and a
+`call-return` kernel for P9 (needs a multi-block driver — a single straight-line
+block can't isolate the dispatcher round-trip).
 
-**Effort**: Low-medium (rom-harness already runs blocks headless; add timing +
-a few kernels). **Risk**: Low (measurement only).
+**Caveat (still applies)**: microbenches can mislead (you optimize the bench, not
+the workload). Treat deltas as directional and confirm headline wins with a real
+Speedometer/boot run. Pairs with P0 (the profiler says *which* kernels are real
+hot spots).
 
 For each optimization, measure:
 1. **JIT codegen gate**: `make test-jit` (`SS_HARNESS_MODE=jit`) — runs every

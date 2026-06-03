@@ -34,6 +34,7 @@
 #include <getopt.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <sys/stat.h>
 
 /* MAP_FIXED_NOREPLACE is Linux-only; on macOS/BSD fall back to 0 so the
  * fixed-address mmap below degrades to a hint, and the non-fixed fallback
@@ -55,6 +56,18 @@
 
 /* ---------- Forward declarations for the JIT ---------- */
 #include "ppc-jit.h"
+
+/* The JIT references this bridge for its inline-interpreter fallback path
+ * (emit_inline_interp_call); the real implementation lives in the emulator
+ * (ppc-cpu.cpp), which this standalone harness does not link.  This harness
+ * (and the --bench microbench) only ever runs COMPLETE blocks, so the bridge is
+ * never invoked — provide a stub purely so ppc-jit.o links here, and abort
+ * loudly if a fallback block ever does reach it. */
+extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val) {
+	fprintf(stderr, "rom-harness: ppc_jit_interp_one stub hit (opcode=%08x pc=%08x)"
+	        " — only complete blocks are supported here\n", opcode, pc_val);
+	abort();
+}
 
 /* ---------- PPC instruction decoding helpers ---------- */
 
@@ -188,9 +201,13 @@ struct PPCRegs {
 	uint32_t padding904;     /* offset 904 */
 	uint32_t padding908;     /* offset 908 */
 	uint32_t fpscr;          /* offset 912 */
-	uint32_t lr;             /* offset 916 */
-	uint32_t ctr;            /* offset 920 */
-	uint32_t pc;             /* offset 924 */
+	uint32_t lr;             /* offset 1044 */
+	uint32_t ctr;            /* offset 1048 */
+	uint32_t pc;             /* offset 1052 */
+	uint32_t spcflags;       /* offset 1056 — the JIT block-entry poll READS this
+	                          * (PPCR_SPCFLAGS); it must exist and be zero or every
+	                          * block bails before its body runs. Added when 0d moved
+	                          * spcflags to offset 1056; was missing here. */
 };
 
 /* Register field offsets — must match ppc-jit.cpp PPCR_* */
@@ -202,6 +219,7 @@ static_assert(offsetof(PPCRegs, fpscr) == 1040, "FPSCR offset mismatch");
 static_assert(offsetof(PPCRegs, lr) == 1044, "LR offset mismatch");
 static_assert(offsetof(PPCRegs, ctr) == 1048, "CTR offset mismatch");
 static_assert(offsetof(PPCRegs, pc) == 1052, "PC offset mismatch");
+static_assert(offsetof(PPCRegs, spcflags) == 1056, "SPCFLAGS offset mismatch");
 
 /* Pack XER bytes into PPC 32-bit format */
 static inline uint32_t pack_xer(const PPCRegs *r) {
@@ -1067,6 +1085,182 @@ static void seed_regs(PPCRegs *r, uint32_t seed, uint32_t rom_base_mac) {
 	r->fpscr = 0;
 }
 
+/* ===================== Microbenchmark mode (--bench / jit-bench) ===========
+ *
+ * Fast, deterministic per-instruction timing of the JIT's codegen, so an
+ * optimization can be A/B'd in seconds without a boot.  Reuses this harness's
+ * memory + JIT-invocation scaffolding (REAL_ADDRESSING: mac_pc == host ptr).
+ *
+ * Methodology — DIFFERENTIAL timing: each kernel is compiled at two sizes
+ * (N_SMALL and N_BIG straight-line body instrs, both ending in blr) and called
+ * many times.  ns/insn = (ns_call_big - ns_call_small) / (N_BIG - N_SMALL),
+ * which cancels the fixed per-call cost (prologue/epilogue + the regs reset).
+ * Reported ns/call is the big kernel; min-of-5 runs after a warm-up.
+ *
+ * Maintenance contract (docs/TESTING.md "Keeping this current"): --compare
+ * warns if the baseline file is older than ppc-jit.cpp, so you never A/B
+ * against a baseline that predates the code you are measuring.  To add a
+ * kernel: add a k_*() emitter + a BENCH_KERNELS[] row, then re-baseline.
+ */
+
+#define BENCH_N_SMALL 16
+#define BENCH_N_BIG   144
+
+static uint32_t enc_xo(int rd, int ra, int rb, int xo, int oe, int rc) {
+	return 0x7C000000u | (rd << 21) | (ra << 16) | (rb << 11) |
+	       (oe << 10) | (xo << 1) | rc;
+}
+static uint32_t enc_d(int op, int rd, int ra, int16_t d) {
+	return ((uint32_t)op << 26) | (rd << 21) | (ra << 16) | (uint16_t)d;
+}
+
+/* Each kernel emits `n` body instrs operating on r3/r4/r1, which seed_regs
+ * initialises to valid values.  The driver appends the blr terminator. */
+static void k_carry(uint8_t *p, int n) {     /* adde r3,r3,r4 (XO=138) — 0b/0f */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_xo(3,3,4,138,0,0));
+}
+static void k_rc1(uint8_t *p, int n) {        /* add. r3,r3,r4 (XO=266,Rc=1) — 0g */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_xo(3,3,4,266,0,1));
+}
+static void k_alu(uint8_t *p, int n) {        /* add/or/xor r3,r3,r4 — RA throughput */
+	static const int xo[3] = {266, 444, 316};
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_xo(3,3,4,xo[i%3],0,0));
+}
+static void k_loadstore(uint8_t *p, int n) {  /* lwz/stw r3,8(r1) — D-form memory */
+	for (int i = 0; i < n; i++)
+		write_be32(p + i*4, (i & 1) ? enc_d(36,3,1,8) : enc_d(32,3,1,8));
+}
+
+struct BenchKernel { const char *name; const char *desc; void (*emit)(uint8_t*,int); };
+static const BenchKernel BENCH_KERNELS[] = {
+	{ "carry-chain", "adde r3,r3,r4  (0b/0f carry ops)", k_carry     },
+	{ "rc1",         "add. r3,r3,r4  (0g lazy-CR0)",     k_rc1       },
+	{ "alu",         "add/or/xor     (RA throughput)",   k_alu       },
+	/* load-store (k_loadstore) deferred to v2: guest data access goes through
+	 * RMEMBASE, which on macOS needs the DIRECT_ADDRESSING base set up so EAs land
+	 * in `mem` (low 4 GB is unmappable here). The emitter is kept for that work. */
+};
+static const int BENCH_NKERNELS = (int)(sizeof(BENCH_KERNELS)/sizeof(BENCH_KERNELS[0]));
+
+/* Compile `kern` at `n_body` instrs (+ blr) at mem+off; time `iters` calls
+ * (min of 5 runs after warm-up); return ns/call, or -1 on compile failure. */
+static double bench_time_one(const BenchKernel *kern, int n_body,
+                             uint8_t *mem, size_t total, uint32_t off,
+                             const PPCRegs *seedregs, long iters) {
+	uint8_t *p = mem + off;
+	kern->emit(p, n_body);
+	write_be32(p + n_body*4, 0x4E800020);          /* blr — block terminator */
+	uint32_t mac_pc = (uint32_t)(uintptr_t)p;
+	ppc_jit_block jblk;
+	if (!ppc_jit_aarch64_compile(mac_pc, mem, total, &jblk) || !jblk.complete) {
+		fprintf(stderr, "bench: compile failed (%s, n=%d)\n", kern->name, n_body);
+		return -1.0;
+	}
+	ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
+	PPCRegs regs;
+	for (int w = 0; w < 1000; w++) { regs = *seedregs; fn((void *)&regs); } /* warm-up */
+	double best = 1e300;
+	for (int run = 0; run < 5; run++) {
+		struct timespec t0, t1;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		for (long i = 0; i < iters; i++) { regs = *seedregs; fn((void *)&regs); }
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		double ns = (t1.tv_sec - t0.tv_sec)*1e9 + (t1.tv_nsec - t0.tv_nsec);
+		if (ns < best) best = ns;
+	}
+	return best / (double)iters;
+}
+
+/* Baseline file: trivial "name ns_per_instr" lines (no JSON dep). */
+static bool bench_baseline_stale(const char *path) {
+	struct stat sb, sj;
+	if (stat(path, &sb) != 0) return false;        /* no baseline yet */
+	const char *jit = "../src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp";
+	if (stat(jit, &sj) != 0) return false;          /* source not found — skip */
+	return sj.st_mtime > sb.st_mtime;
+}
+static double bench_baseline_lookup(const char *path, const char *name) {
+	FILE *f = fopen(path, "r");
+	if (!f) return -1.0;
+	char ln[256]; double val = -1.0;
+	while (fgets(ln, sizeof ln, f)) {
+		char nm[128]; double v;
+		if (sscanf(ln, "%127s %lf", nm, &v) == 2 && strcmp(nm, name) == 0) { val = v; break; }
+	}
+	fclose(f);
+	return val;
+}
+
+static int run_bench(int argc, char **argv) {
+	long iters = 300000;
+	const char *compare_path = NULL, *save_path = NULL;
+	for (int i = 1; i < argc; i++) {
+		if      (!strncmp(argv[i], "--bench-iters=",   14)) iters = atol(argv[i]+14);
+		else if (!strncmp(argv[i], "--compare=",       10)) compare_path = argv[i]+10;
+		else if (!strncmp(argv[i], "--save-baseline=", 16)) save_path = argv[i]+16;
+	}
+
+	const size_t total = 16 * 1024 * 1024;          /* 16 MB scratch */
+	uint8_t *mem = (uint8_t *)mmap((void *)0x10000000UL, total,
+		ROM_HARNESS_MEM_PROT, MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE, -1, 0);
+	if (mem == MAP_FAILED)
+		mem = (uint8_t *)mmap(NULL, total, ROM_HARNESS_MEM_PROT,
+			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if (mem == MAP_FAILED) { perror("bench mmap"); return 1; }
+	/* macOS arm64 cannot map below 4 GB (__PAGEZERO), so `mem` lands high — that
+	 * is fine for the register-only kernels: instruction *fetch* is offset-based
+	 * (jit_fetch_ptr keys on low32(ram) and returns ram+offset), and these kernels
+	 * touch only GPRs + the regs struct (via RSTATE), never guest memory through
+	 * RMEMBASE.  Memory kernels (load/store) would need the DIRECT_ADDRESSING base
+	 * configured so guest data addresses land in `mem` — deferred to v2 (see
+	 * k_loadstore). */
+	memset(mem, 0, total);
+
+	if (!ppc_jit_aarch64_init(4096)) {
+		fprintf(stderr, "bench: JIT init failed\n");
+		return 1;
+	}
+
+	uint32_t base = (uint32_t)(uintptr_t)mem + 0x800000;  /* mid-buffer */
+	PPCRegs seedregs;
+	seed_regs(&seedregs, 0xB3C0FFEE, base);               /* valid r1/lr; random r3/r4 */
+
+	if (compare_path && bench_baseline_stale(compare_path))
+		fprintf(stderr, "WARNING: baseline '%s' is OLDER than ppc-jit.cpp — "
+		        "comparison may be stale; re-baseline with --save-baseline.\n",
+		        compare_path);
+
+	printf("jit-bench: %d kernels, iters=%ld, differential N=%d-%d (ns/insn cancels "
+	       "prologue/epilogue)\n", BENCH_NKERNELS, iters, BENCH_N_BIG, BENCH_N_SMALL);
+	printf("%-13s %10s %10s", "kernel", "ns/call", "ns/insn");
+	if (compare_path) printf(" %10s", "vs base");
+	printf("   description\n");
+
+	FILE *out = save_path ? fopen(save_path, "w") : NULL;
+	int rc = 0;
+	for (int k = 0; k < BENCH_NKERNELS; k++) {
+		const BenchKernel *kn = &BENCH_KERNELS[k];
+		/* unique offset per (kernel,size) so the JIT block cache can't alias PCs */
+		uint32_t off_s = 0x100000 + (uint32_t)(k*2+0)*0x10000;
+		uint32_t off_b = 0x100000 + (uint32_t)(k*2+1)*0x10000;
+		double small = bench_time_one(kn, BENCH_N_SMALL, mem, total, off_s, &seedregs, iters);
+		double big   = bench_time_one(kn, BENCH_N_BIG,   mem, total, off_b, &seedregs, iters);
+		if (small < 0 || big < 0) { rc = 1; continue; }
+		double per_insn = (big - small) / (double)(BENCH_N_BIG - BENCH_N_SMALL);
+		printf("%-13s %10.1f %10.3f", kn->name, big, per_insn);
+		if (compare_path) {
+			double b = bench_baseline_lookup(compare_path, kn->name);
+			if (b > 0) printf(" %+9.1f%%", (per_insn - b) / b * 100.0);
+			else       printf(" %10s", "(new)");
+		}
+		printf("   %s\n", kn->desc);
+		if (out) fprintf(out, "%s %.6f\n", kn->name, per_insn);
+	}
+	if (out) { fclose(out); printf("baseline written: %s\n", save_path); }
+	munmap(mem, total);
+	return rc;
+}
+
 /* ---------- Main ---------- */
 
 static void usage(const char *prog) {
@@ -1086,6 +1280,10 @@ static void usage(const char *prog) {
 }
 
 int main(int argc, char **argv) {
+	/* Microbenchmark mode: self-contained, needs no ROM file. */
+	for (int i = 1; i < argc; i++)
+		if (!strcmp(argv[i], "--bench")) return run_bench(argc, argv);
+
 	/* Parse args */
 	const char *rom_path = NULL;
 	uint32_t start_offset = 0;

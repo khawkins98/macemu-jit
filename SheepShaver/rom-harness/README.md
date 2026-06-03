@@ -55,6 +55,38 @@ make clean  # removes build artifacts
 | `--compute-only` | Skip memory-access blocks | on |
 | `--all-blocks` | Include memory-access blocks | off |
 
+## Microbenchmark mode (`--bench` / `make bench`)
+
+Fast, deterministic per-instruction timing of the JIT's codegen, so an
+optimization can be A/B'd in **seconds, no boot**. Needs no ROM.
+
+```
+make bench                                   # run all kernels
+make bench BARGS=--save-baseline=/tmp/bb.txt # record a baseline (before a change)
+make bench BARGS=--compare=/tmp/bb.txt       # show % deltas vs the baseline (after)
+make bench BARGS=--bench-iters=1000000       # more iterations = less noise
+```
+
+Output is `ns/call` (the 144-instruction kernel) and **`ns/insn`**, computed by
+**differential timing**: each kernel is compiled at two sizes (16 and 144 body
+instructions) and the fixed per-call cost (prologue/epilogue + register reset)
+cancels in `(call_big − call_small) / (144 − 16)`. Reported values are the min
+of 5 runs after a warm-up; run-to-run noise is typically <1%.
+
+Kernels target specific optimizations: `carry-chain` (adde — 0b/0f), `rc1`
+(add. — 0g lazy-CR0), `alu` (RA throughput).
+
+### Maintenance (per `docs/TESTING.md`)
+- **Baselines are per-machine** (ns depends on the host CPU) — **do not commit
+  them**. Record a baseline on your machine right before an optimization, compare
+  right after.
+- `--compare` **warns if the baseline file is older than `ppc-jit.cpp`**, so you
+  never A/B against a stale baseline.
+- **To add a kernel:** add a `k_*()` emitter and a `BENCH_KERNELS[]` row in
+  `rom-harness.cpp`, then re-baseline. Register-only kernels work anywhere;
+  memory kernels (`k_loadstore`) are deferred — guest data access needs the
+  DIRECT_ADDRESSING base set up (macOS can't map the low 4 GB).
+
 ## Architecture
 
 - **No SheepShaver dependencies** — compiles standalone against only the JIT source

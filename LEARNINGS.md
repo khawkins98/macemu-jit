@@ -105,6 +105,33 @@ counted bdnz copy loop (lhau/or/stwu/bdnz with CTR=150 initial). CTR correctly
 decrements each iteration. The loop exits normally. The SCSI infinite loop is at
 a HIGHER level — the 68k SCSI scanning code repeatedly invoking SCSIGet/SCSISelect.
 This narrows the bug: it's NOT a tight PPC loop stuck on a wrong branch condition.
+
+### Binary search result: failing region is ROM+0x467E00..0x467F00 (256 bytes)
+
+Using `SS_JIT_ROM_SIZE` env var, binary-searched to isolate the exact failing code:
+- 0x466000 (+24KB): PASS — includes all 6 main DR dispatch variants (0x466080-0x466120)
+- 0x467E00: PASS — last safe boundary
+- 0x467F00: FAIL — first 256 bytes that break boot
+- 0x468000: FAIL
+
+The failing code at 0x50467E00-0x50467F00 is NOT the main dispatch variants — those work.
+It's auxiliary DR emulator code containing: `bcctr 12,5` (0x4D850420), `bclr 5,8`
+(0x4CA80020), various `rlwimi`/`lhau` patterns, and 68k instruction handler dispatch.
+
+Key opcodes in the failing blocks:
+- `4D850420` = bcctr BO=12 BI=5 (branch to CTR if CR[5]=1 i.e. CR1.SO)
+- `4CA80020` = bclr 5,8 (interrupt gate)
+- `509d1b78` / `537d1b78` = rlwimi with various insert masks
+- `af780002` = lhau (halfword load-update)
+- `7f64c2ee` = unknown XO31 (needs decode)
+- Multiple `48000004` sequences = series of `b +4` (NOP-equivalent padding)
+
+**Interrupt timing ruled out as root cause**: with correct interrupt prediction
+(jNK growing at 12M/s, ~110 fallbacks/s) the SCSI loop still hangs. The bug is a
+codegen correctness issue in one of these blocks, not spcflags timing.
+
+Next step: decode all instructions at 0x50467E00-0x50468000, identify which specific
+opcode's JIT codegen produces wrong results, and add a targeted harness test.
 It's the Mac OS ROM's 68k SCSI scan logic deciding to rescan after each attempt.
 
 ### Missing terminator: `bc` (opc=16) not in is_terminator list

@@ -50,6 +50,15 @@ ranges — the code moves. Only interpreting ALL RAM (10000000-20000000) works.
 to force specific instruction types to the interpreter. This enables testing "which
 PPC instruction type, when JIT-compiled, causes the hang" regardless of address.
 
+**Pitfall: "skip ALL opcodes" is not a framework discriminator.** In this JIT, a
+forced fallback (`compile_one()` returns false) emits an inline interpreter call and
+then **ends the block immediately** (conservative: the handler may branch / change PC).
+If you skip everything, you effectively interpret **one PPC instruction per JIT
+dispatch**, which is orders of magnitude slower and will typically hit watchdog
+timeouts even when semantics are correct. Prefer ring-driven targeted skips: dump the
+hang loop's last N blocks, histogram the primary opcodes / XO values actually present,
+then skip those small sets.
+
 **What we know about the hang**:
 - 32K unique blocks compiled during boot, then the same set loops forever
 - jNK frozen (nanokernel never re-entered after initial boot)

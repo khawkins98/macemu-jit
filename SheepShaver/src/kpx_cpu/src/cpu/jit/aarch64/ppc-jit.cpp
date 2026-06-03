@@ -423,12 +423,23 @@ static void ra_reset(void) {
 	ra_clock = 0;
 }
 
-/* Evict one slot: write back if dirty, mark free */
+/* Forward declarations — lazy CR0 must be materialized before evicting
+ * the register it depends on. Defined in the lazy CR0 section below. */
+static bool lazy_cr0_valid = false;
+static int  lazy_cr0_reg = -1;
+static void emit_materialize_cr0(void);
+
+/* Evict one slot: write back if dirty, mark free.
+ * If the evicted register is lazy_cr0_reg, materialize CR0 first
+ * (otherwise the deferred re-CMP would read a wrong value). */
 static void ra_evict(int slot) {
+	int host = RA_FIRST_REG + slot;
+	if (lazy_cr0_valid && lazy_cr0_reg == host)
+		emit_materialize_cr0();
 	int ppc = ra_host_to_ppc[slot];
 	if (ppc >= 0) {
 		if (ra_dirty[slot])
-			a64_str_w_imm(RA_FIRST_REG + slot, RSTATE, PPCR_GPR(ppc));
+			a64_str_w_imm(host, RSTATE, PPCR_GPR(ppc));
 		ra_ppc_to_host[ppc] = -1;
 	}
 	ra_host_to_ppc[slot] = -1;
@@ -932,8 +943,8 @@ static int       insn_count = 0;
  * lazy_cr0_reg: the ARM64 register that was CMP'd (needed for re-CMP after
  *               any instruction that clobbers NZCV)
  */
-static bool lazy_cr0_valid = false;
-static int  lazy_cr0_reg = -1;  /* ARM64 reg holding last Rc=1 result, -1 = none */
+/* lazy_cr0_valid and lazy_cr0_reg are declared above (near ra_evict)
+ * for forward-reference reasons. */
 
 /* Materialize CR0 from current NZCV state (call only when lazy_cr0_valid) */
 static void emit_materialize_cr0(void) {
@@ -964,9 +975,14 @@ static void emit_materialize_cr0(void) {
 	lazy_cr0_reg = -1;
 }
 
-/* Mark CR0 as pending — the result in 'reg' will be used to compute CR0 later */
+/* Mark CR0 as pending — the result in 'reg' will be used to compute CR0 later.
+ * DISABLED: crashes during early boot — a branch reads CR0 after an
+ * intervening instruction clobbered NZCV, and the re-CMP from lazy_cr0_reg
+ * produces the wrong flags (the RA may have evicted/reused the register).
+ * Needs a deeper approach: either save the CMP result to a dedicated register
+ * that survives RA pressure, or track NZCV-clobbering instructions and flush
+ * eagerly.  See OPTIMIZATION-PLAN.md P0g for the full analysis. */
 static void lazy_update_cr0(int result_reg) {
-	/* DISABLED: boot hang regression. Materialize immediately. */
 	emit_update_cr0(result_reg);
 }
 

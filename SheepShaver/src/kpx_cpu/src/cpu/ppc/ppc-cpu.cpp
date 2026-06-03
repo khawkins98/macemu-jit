@@ -55,6 +55,9 @@ static_assert(offsetof(powerpc_registers, spcflags) == 1056,
               "spcflags offset changed — update PPCR_SPCFLAGS in ppc-jit.cpp");
 
 #include <time.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
 static double jit_elapsed_s() {
 	static struct timespec t0 = {0,0};
 	struct timespec t;
@@ -63,19 +66,46 @@ static double jit_elapsed_s() {
 	return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) * 1e-9;
 }
 static FILE *jit_log_file = nullptr;
-/* Open the diagnostic log.  Path is SS_JIT_DIAG_LOG if set, else /tmp/jit_diag.log.
+/* Open the diagnostic log.
  *
- * WHY the env var: the path used to be hardcoded, and ANY concurrent SheepShaver
- * process (e.g. a jit-test harness vector running while a boot measurement is in
- * progress) would fopen(..., "w") the same file and truncate the measurement's log
- * mid-run — this silently corrupted a concurrent boot-time measurement.
- * Parallel agents must set SS_JIT_DIAG_LOG to distinct paths. */
+ * Path resolution:
+ *   - SS_JIT_DIAG_LOG, if set and non-empty, is used verbatim (no symlink touched).
+ *   - Otherwise a per-instance file /tmp/jit_diag.<YYYYMMDD-HHMMSS>.<pid>.log is
+ *     created and the stable alias /tmp/jit_diag.log is re-pointed (symlink) at it.
+ *
+ * WHY per-instance files: the default used to be a single shared /tmp/jit_diag.log
+ * opened with "w", so ANY concurrent SheepShaver process reaching a heartbeat would
+ * truncate another instance's log mid-run — silently corrupting a concurrent
+ * boot-time measurement.  Timestamp+pid naming makes each run's log unique; the
+ * symlink keeps `tail -f /tmp/jit_diag.log` and jit-analyze.py defaults working.
+ * Note: harness test vectors (SS_TEST_HEX) exit in milliseconds and never reach
+ * the first 5s heartbeat, so they never create log files. */
 static void jit_diag_log_open(void) {
 	if (jit_log_file) return;
 	const char *path = getenv("SS_JIT_DIAG_LOG");
-	if (!path || !*path) path = "/tmp/jit_diag.log";
+	char ts_path[128];
+	bool make_link = false;
+	if (!path || !*path) {
+		time_t now = time(NULL);
+		struct tm tmv;
+		localtime_r(&now, &tmv);
+		snprintf(ts_path, sizeof(ts_path), "/tmp/jit_diag.%04d%02d%02d-%02d%02d%02d.%d.log",
+		         tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+		         tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)getpid());
+		path = ts_path;
+		make_link = true;
+	}
 	jit_log_file = fopen(path, "w");
 	fprintf(stderr, "[JIT] diagnostic log: %s\n", path);
+	if (jit_log_file && make_link) {
+		/* Refresh the latest-run alias.  unlink() also replaces a stale regular
+		 * file left behind by a pre-symlink build.  Failure is non-fatal: the
+		 * real log still works, only the convenience alias is lost. */
+		unlink("/tmp/jit_diag.log");
+		if (symlink(path, "/tmp/jit_diag.log") != 0)
+			fprintf(stderr, "[JIT] warning: could not update /tmp/jit_diag.log symlink: %s\n",
+			        strerror(errno));
+	}
 }
 /* Notable events (init, interrupts, stuck, flush) → stderr */
 #define JIT_LOG(fmt, ...) fprintf(stderr, "[JIT %.2fs] " fmt "\n", jit_elapsed_s(), ##__VA_ARGS__)

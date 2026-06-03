@@ -195,3 +195,59 @@ Repository); the installed Mac OS 8.6 disk runs them.
 
 This is the loop that turns a real-world divergence into a permanent, fast
 regression test.
+
+---
+
+## Keeping this current (maintenance contract)
+
+This project has a documented history of test/doc rot — claims that were true
+once and silently went stale:
+- "235/235" was cited as a JIT correctness gate for months; it was
+  interpreter-determinism (`SS_HARNESS_MODE=interp`) the whole time and never
+  exercised the JIT.
+- A `the register allocator is disabled` source comment outlived the re-enable.
+- Plan items marked "will do X" outlived X being done.
+
+**Principle: prefer enforcement over prose.** A check that fails is worth ten
+sentences that ask a human to remember. Where a fact can be machine-verified,
+verify it; where it can't, *date* it so staleness is visible.
+
+### Enforcement already in place (keep it; extend its ethos)
+- `jit-test/run.sh` self-validates its own vector table before running (no
+  duplicate names, every vector has bytecode + sentinel, strict token format).
+  New test infrastructure should self-check the same way.
+- `make test` runs **both** harness modes + the ROM harness, so the JIT gate
+  can't be silently skipped.
+
+### Per-change checklist (changing `ppc-jit.cpp` codegen)
+1. Run **`make test-jit`** (the JIT gate) — not just `test-opcodes`.
+2. New/changed opcode codegen → add a **`test-jit` vector** that exercises it
+   (and a **bench kernel** if it's perf-relevant). A change with no vector that
+   would catch its failure mode is undertested.
+3. Optimized a hot pattern → add/refresh the matching **bench kernel** and
+   **re-baseline** (`jit-bench` writes a dated baseline; a stale baseline is a
+   stale comparison).
+4. Update the relevant `OPTIMIZATION-PLAN.md` item's status **with a date**, and
+   delete any now-false "will do" wording. Don't leave a finished item phrased as
+   pending.
+
+### Freshness rules (so staleness is visible, not silent)
+- **Date every claim** in the plan ("DONE (YYYY-MM-DD)") and every benchmark
+  number. An undated number is presumed stale.
+- **One source of truth per number.** Performance numbers live in
+  `BENCHMARKS.md`; other docs *link*, never copy (the "235/235" bug was one wrong
+  number duplicated across files).
+- **`jit-bench` self-checks baseline freshness**: it warns if its baseline file
+  is older than `ppc-jit.cpp`, so you never compare against a baseline that
+  predates the code you're measuring.
+- When you cite a harness score anywhere, **state the mode** (`test-jit` vs
+  `test-opcodes`). A bare "236/236" is ambiguous and has burned us before.
+
+### Where each artifact lives (so this doc stays the index)
+| Artifact | File | Kept current by |
+|---|---|---|
+| JIT correctness gate | `jit-test/run.sh` + `make test-jit` | per-change checklist #1–2 |
+| Microbench + kernels | `rom-harness/` (`jit-bench`) | checklist #3 + baseline self-check |
+| Perf numbers | `docs/BENCHMARKS.md` | re-baseline on perf changes |
+| Optimization status | `docs/OPTIMIZATION-PLAN.md` | checklist #4 + dated items |
+| This strategy | `docs/TESTING.md` | review when a tier is added/changed |

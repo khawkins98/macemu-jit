@@ -529,7 +529,14 @@ static void emit_store_gpr(int rs, int n) {
 
 /* 64-bit GPR access for G5/PPC64 instructions.
    Uses gpr[n] (low 32) + gpr_hi[n] (high 32) as a split 64-bit register.
-   On little-endian ARM64: load low word, load high word, combine. */
+   On little-endian ARM64: load low word, load high word, combine.
+ *
+ * COHERENCE WARNING: these helpers access PPCR_GPR(n) (the low word) directly,
+ * bypassing the RA cache.  If a preceding RA-converted instruction dirtied GPR n
+ * in an RA register, this load reads the stale struct value.  Safe today because
+ * all callers are PPC64 doubleword ops (sld/srd/ld/std/etc.) unreachable from
+ * 32-bit Mac OS guests.  Before enabling G5/PPC64 paths, route the low word
+ * through ra_load/ra_store. */
 static void emit_load_gpr64_tmp(int xd, int n, int tmp) {
 	/* LDR Wd, [RSTATE, #gpr_lo] — low 32 bits, zero-extends to Xd */
 	a64_ldr_w_imm(xd, RSTATE, PPCR_GPR(n));
@@ -547,6 +554,7 @@ static void emit_load_gpr64(int xd, int n) {
 	emit_load_gpr64_tmp(xd, n, tmp);
 }
 
+/* See COHERENCE WARNING on emit_load_gpr64_tmp above — same applies here. */
 static void emit_store_gpr64(int xs, int n) {
 	/* Store low 32: STR Ws, [RSTATE, #gpr_lo] */
 	a64_str_w_imm(xs, RSTATE, PPCR_GPR(n));
@@ -854,11 +862,11 @@ static void emit_entry_spcflags_poll(uint32_t block_start_pc) {
 
 /* Emit an inline call to the interpreter handler for one opcode at cur_pc,
  * then a bare epilogue. ABI: the BLR clobbers x0-x17 and NZCV but preserves
- * x19-x28, so RSTATE (x20) and RMEMBASE (x19) survive. All guest state is in
- * memory (the register allocator is disabled), so nothing live is lost.
+ * x19-x28, so RSTATE (x20) and RMEMBASE (x19) survive.
  *
- * Caller MUST have flushed lazy CR0 and the register allocator first, because
- * lazy CR0 lives in NZCV which the call clobbers.
+ * Caller MUST have flushed lazy CR0 and the register allocator (ra_flush_all)
+ * first — the BLR clobbers NZCV (lazy CR0) and the interpreter reads GPRs
+ * from the struct, not RA-cached registers.
  *
  * Stack alignment: the block prologue pushes 6 STP pairs = 96 bytes (a multiple
  * of 16) from a 16-aligned SP, so SP is 16-aligned at the BLR. No extra

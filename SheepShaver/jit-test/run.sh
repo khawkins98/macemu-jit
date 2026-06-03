@@ -584,6 +584,13 @@ TEST_ORDER+=(lha_signext)
 T_lmw_stmw="3B800028 3BA00029 3BC00030 3BE00031 BF810400 3B800000 3BA00000 3BC00000 3BE00000 BB810400"
 TEST_ORDER+=(lmw_stmw)
 
+# --- lmw/stmw wide (RA eviction stress) ---
+# li r20..r31 with known values (0x14..0x1F); stmw r20,0x400(r1);
+# zero r20..r31; lmw r20,0x400(r1). 12 GPRs > RA_NUM_REGS=8, forces
+# mid-block eviction of both clean and dirty RA slots.
+T_lmw_stmw_wide="3A800014 3AA00015 3AC00016 3AE00017 3B000018 3B200019 3B40001A 3B60001B 3B80001C 3BA0001D 3BC0001E 3BE0001F BE810400 3A800000 3AA00000 3AC00000 3AE00000 3B000000 3B200000 3B400000 3B600000 3B800000 3BA00000 3BC00000 3BE00000 BA810400"
+TEST_ORDER+=(lmw_stmw_wide)
+
 # --- mcrf ---
 # cmpwi cr0,r3,0 (r3=-1 → LT); mcrf cr1,cr0; then check cr1 has LT
 # cmpwi cr0,r3,0 = 0x2C030000; mcrf cr1,cr0 = 0x4C840000

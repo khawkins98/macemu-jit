@@ -29,6 +29,33 @@ all: build
 
 build: build-ss build-rom-harness
 
+# --- build-ss: platform-split build ------------------------------------------
+#
+# macOS (this fork's macos-arm64 branch): configure.ac already includes the
+# AArch64 JIT (ppc-jit.cpp) in CPUSRCS, so the autoconf build in src/Unix
+# compiles and links everything with the correct flags. We just delegate.
+#
+# Linux (upstream rcarmo workflow): upstream's configure does NOT know about
+# the JIT, so the recipe hand-compiles ppc-jit.o and hand-relinks with the
+# GTK/X11 library set. That recipe is kept byte-for-byte as upstream has it.
+#
+# NOTE: this split is a MINIMAL REMEDIATION (Option A). It exists because the
+# Linux recipe is destructive on macOS: the GTK link fails and the failed
+# linker deletes the existing SheepShaver binary. The proper fix (Option B)
+# is to teach upstream's configure.ac to put ppc-jit.cpp in CPUSRCS on Linux
+# ARM64 the same way this branch does — then BOTH platforms reduce to
+# "cd src/Unix && make -j<n>" and the hand-compile/hand-link below disappears.
+# Option B should be done in coordination with upstream (needs Linux ARM64
+# testing) and is the shape this fix should take in an upstream PR.
+# See docs/superpowers/specs/2026-06-03-build-ss-macos-fix-design.md.
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+build-ss:
+	@echo "=== Building SheepShaver (macOS: autoconf build owns the JIT) ==="
+	@cd $(SS_DIR) && $(MAKE) -j$$(sysctl -n hw.ncpu)
+	@echo "Built: $(SS_BIN)"
+else
 build-ss:
 	@echo "=== Building SheepShaver ==="
 	@cd $(SS_DIR) && $(MAKE) -j$$(nproc) 2>&1 | tail -3 || true
@@ -41,6 +68,7 @@ build-ss:
 		-lgdk_pixbuf-2.0 -lgio-2.0 -lpangoft2-1.0 -lpango-1.0 \
 		-lgobject-2.0 -lglib-2.0 -lharfbuzz -lvncserver -lfontconfig -lfreetype
 	@echo "Built: $(SS_BIN)"
+endif
 
 build-rom-harness:
 	@echo "=== Building ROM harness ==="

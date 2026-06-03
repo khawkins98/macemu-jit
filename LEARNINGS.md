@@ -3,6 +3,44 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-03 — `make build-ss`/`make test-opcodes` were destructive on macOS (now fixed)
+
+### The trap
+
+`SheepShaver/Makefile` is upstream's (rcarmo) **Linux** dev harness. Its `build-ss` target
+hand-compiled `ppc-jit.o` with minimal flags and hand-linked with GTK/X11 libraries. On
+macOS that link fails — and **the failed linker deletes the existing `SheepShaver` binary**
+(ld removes its partial output). So running the documented test command `make test-opcodes`
+silently destroyed the working binary. A running emulator process survives (its image is
+memory-mapped), but every subsequent launch fails until someone rebuilds.
+
+This bit us on 2026-06-03: an agent ran `make test-opcodes`, the binary vanished mid-session
+while another agent's boot tests were cycling. Recovery: `rm obj/ppc-jit.o` (it had been
+overwritten with wrong-flag output), then `cd src/Unix && make` (the autoconf build owns
+the JIT on this branch and links correctly).
+
+### The fix (Option A — minimal remediation, committed)
+
+`build-ss` is now platform-guarded with `uname -s`: Darwin delegates entirely to
+`cd src/Unix && make -j$(sysctl -n hw.ncpu)`; the Linux recipe is preserved byte-for-byte.
+`make test-opcodes` now works end-to-end on macOS.
+
+### The proper fix (Option B — for an eventual upstream PR, not yet done)
+
+Upstream's hand-rolled JIT compile/link exists because **their configure doesn't know about
+the JIT**. This branch's `configure.ac` already puts `ppc-jit.cpp` in `CPUSRCS`. Porting that
+to Linux ARM64 makes `build-ss` collapse to `cd src/Unix && make -j<n>` on both platforms.
+Needs coordination with upstream (only they can test Linux ARM64). See
+`docs/superpowers/specs/2026-06-03-build-ss-macos-fix-design.md`.
+
+### Related: per-instance JIT diag logs (same day)
+
+The diag log default changed from shared `/tmp/jit_diag.log` to per-instance
+`/tmp/jit_diag.<timestamp>.<pid>.log` with `/tmp/jit_diag.log` as a symlink to the latest
+run (commit 8aab88de). Concurrent runs no longer truncate each other's logs.
+`SS_JIT_DIAG_LOG` still overrides (no symlink touched). Verified: 235/235 harness,
+~35 unique log files from one morning of boot runs, zero clobbering.
+
 ## 2026-06-03 (session 7 continued) — three JIT bugs fixed, boot reaches extension loading
 
 ### CORRECTION: "desktop" was Disk First Aid dialog, not Finder

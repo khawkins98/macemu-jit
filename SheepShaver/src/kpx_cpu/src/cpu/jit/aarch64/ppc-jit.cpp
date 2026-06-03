@@ -4468,7 +4468,7 @@ bool ppc_jit_aarch64_compile(
 	}
 
 	/* Periodic report */
-	if ((jit_blocks_attempted) % 100000 == 0 && jit_blocks_attempted > 0)
+	if ((jit_blocks_attempted) % 10000000 == 0 && jit_blocks_attempted > 0)
 		jit_report_misses();
 
 	/* If the block didn't end with a control-flow exit, emit a fallback epilogue.
@@ -4509,7 +4509,7 @@ bool ppc_jit_aarch64_compile(
 		static uint32_t cum_opc[64] = {0};
 		static uint32_t cum_xo31[1024] = {0};
 		static uint32_t cum_total = 0;
-		static uint32_t cum_report_at = 100000;
+		static uint32_t cum_report_at = 10000000;
 		
 		if (!complete) {
 			/* Record the opcode that caused the failure */
@@ -4525,7 +4525,7 @@ bool ppc_jit_aarch64_compile(
 		}
 		
 		if (jit_blocks_attempted >= cum_report_at) {
-			cum_report_at += 100000;
+			cum_report_at += 10000000;
 			jit_report_cum_blockers();
 		}
 	}

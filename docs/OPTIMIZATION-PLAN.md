@@ -356,6 +356,71 @@ JIT uses a similar technique for `blr` fastpath.
 
 ---
 
+## Open — From Emulator Research (2026-06-03, Dolphin/RPCS3/Box64/FEX survey)
+
+### Quick Wins (1-2 days each)
+
+**R1. Software link stack for blr prediction** (Dolphin/RPCS3)
+Push host return address on `bl`, pop+compare on `blr`, skip hash lookup on
+hit.  Eliminates dispatcher overhead for ~30% of indirect branches.
+Effort: ~1 day.  Risk: low (fallback to hash on mispredict).
+
+**R2. Inline direct-mapped cache at indirect branch sites** (Dolphin JitArm64)
+Emit 2-instruction probe (load cached PC, compare) before falling back to hash
+dispatcher.  Removes full hash lookup for repeated indirect targets (bctr).
+Effort: ~1 day.  Risk: low (miss path is current behavior).
+
+**R3. Batch W^X toggles** (Box64)
+Accumulate multiple block compilations between `pthread_jit_write_protect_np`
+transitions instead of toggling per-block.
+Effort: <1 day.  Risk: minimal.
+
+**R4. mach_absolute_time for event scheduling** (Dolphin)
+Replace gettimeofday/clock_gettime with direct CNTVCT_EL0 reads via
+`mach_absolute_time`.  Eliminates syscall overhead in timing paths.
+Effort: <1 day.  Risk: none.
+
+### Medium Effort (3-5 days)
+
+**R5. Deferred CR0 via native NZCV** (Box64 NativeFlags + Dolphin CR fastpath)
+Keep Rc=1 results in ARM64 NZCV flags with a dirty bit per CR field; only
+materialize when a branch/mfcr reads it.  Eliminates 11-14 instructions per
+Rc=1 op.  This is the "lazy CR0" problem we hit — Box64's approach of tracking
+which instructions clobber NZCV may be the solution.
+Effort: 3 days.  Risk: moderate (CR touched everywhere).
+
+**R6. Flat dispatch table replacing hash** (RPCS3 `vm::g_exec_addr`)
+PC-indexed array of block pointers covering ROM+RAM; indirect branches resolve
+with a single indexed load.  O(1) dispatch vs hash probe chain.
+Effort: 2-3 days.  Risk: moderate (memory footprint ~32 MB; must handle invalidation).
+
+**R7. Pin hot GPRs across blocks** (RPCS3 GHC convention, FEX-Emu)
+Extend register pinning beyond r1/r2 to r3-r10 (args), r13 (SDA) using all
+x19-x28 callee-saved slots.  Fewer loads/stores at block boundaries.
+This is our existing P8 — validated by RPCS3's approach.
+Effort: 3 days.  Risk: moderate.
+
+### Strategic (1-2 weeks, highest payoff)
+
+**R8. Dual W^X mapping** (Dolphin/RPCS3 ARM64 macOS)
+`mmap` MAP_JIT code cache, create second RW mapping of same physical pages.
+Emit through RW alias, execute through RX alias, never toggle again.
+Our research doc c4 measured ~27% compilation speedup.
+Effort: 1 week.  Risk: higher (macOS VM behavior, spike exists in `spikes/wx-dual-mapping/`).
+
+**R9. Async background JIT compilation** (Dolphin tiered JIT, Cemu)
+Interpret or run baseline blocks while a background thread compiles optimized
+native code.  Use GCD QoS to pin compilation to E-cores.
+Our research doc c5 has the feasibility analysis and thread-safety audit.
+Effort: 1-2 weeks.  Risk: high (thread safety for block cache).
+
+**R10. Metal framebuffer compositing** (Dolphin Metal backend)
+Upload guest framebuffer via `MTLTexture.replace` + fullscreen quad instead of
+CPU-side SDL pixel conversion.  Frees CPU cycles from format conversion.
+Effort: 1 week.  Risk: moderate (new rendering path alongside SDL).
+
+---
+
 ## Open — Orthogonal: Selective HLE (high-level emulation of hot routines)
 
 This is a *different axis* from everything above: instead of making the JIT's

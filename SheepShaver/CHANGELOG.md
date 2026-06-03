@@ -38,7 +38,11 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 
 - **JIT miss report via atexit**: The opcode coverage histogram now prints
   reliably on process exit (via `atexit` hook), regardless of how the guest
-  shuts down.
+  shuts down. Includes session wall-clock time.
+
+- **JIT coverage**: 98.4% of compiled instructions run natively. The remaining
+  1.6% (opc=19: bcctr/isync) accounts for 98.5% of all misses — making native
+  bcctr the single highest-impact remaining optimization.
 
 ### JIT Correctness
 
@@ -55,10 +59,20 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   `emit_store_gpr64` bypass the RA cache for the low word. Safe today (PPC64
   ops unreachable from 32-bit guests), must be fixed before G5 support.
 
+### Debug Output
+
+- **Disk driver**: Suppressed per-poll DiskStatus flood for csDriverGestaltCode
+  (status 43). Replaced two-line output with single-line format showing the
+  four-char gestalt selector: `csDriverGestaltCode 43: 'flus'`.
+
 ### Documentation
 
 - **OPTIMIZATION-PLAN.md**: Updated with completed items (RA, TBZ), new
   entries (lazy CR0, trailing-MOV elimination, cross-block register pinning,
-  indirect bclr chaining), and post-RA benchmark baseline.
+  indirect bclr chaining), post-RA benchmark baseline, and miss-data-driven
+  reprioritization of P2 (native bcctr).
+
+- **USER-HANDBOOK.md**: New user guide covering prefs reference, networking
+  setup, environment variables, benchmarking, and troubleshooting.
 
 - **CHANGELOG.md**: This file — tracks user-visible changes per session.

@@ -187,11 +187,15 @@ eliminates them.
 
 ## Open — Medium Effort
 
-### P2: Native bcctr
+### P2: Native bcctr — HIGHEST PRIORITY (98.5% of all JIT misses)
 
-**Expected impact**: 5-15% on code with switch/case or dispatch tables
-**Effort**: Medium (need to fix the conditional bcctr codegen bug)
+**Expected impact**: Potentially large — eliminates the dominant interpreter fallback
+**Effort**: Medium (need conditional CR bit evaluation + Mixed Mode guard)
 **Risk**: Low (bcctr is always a block terminator, easy to fall back)
+
+**Miss data (2026-06-03):** opc=19 accounts for 44,667 of 45,332 total misses
+(98.5%). This is almost entirely `bcctr` (XO19=528) and `isync` (XO19=150).
+The JIT achieves 98.4% coverage; making bcctr native would push that above 99.5%.
 
 `bcctr` currently falls through to the interpreter.  The conditional path had
 a codegen bug (FIXED — was the last fix for HD boot, now uses interpreter

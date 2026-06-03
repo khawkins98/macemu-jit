@@ -57,9 +57,10 @@ Integer values accept `K`, `M`, `G` suffixes and `0x` hex prefix.
 ## Shutdown and Restart
 
 - **Special > Shut Down**: Cleanly exits the SheepShaver process. All cleanup
-  runs (JIT statistics, SDL teardown).
-- **Special > Restart**: Warm-restarts the emulated Mac without killing the
-  host process. Re-enters the ROM boot sequence.
+  runs (JIT coverage report, SDL teardown). On exit, the JIT prints a session
+  summary to stderr with coverage stats and top missed opcodes.
+- **Special > Restart**: Not yet supported — has no effect (same as upstream).
+  Requires deeper ROM reset state management.
 - **Closing the window**: Also triggers a clean exit.
 - **Force quit**: `pkill -9 -x SheepShaver` if the process is unresponsive.
 

@@ -67,6 +67,52 @@ then skip those small sets.
 - icbi/SMC is NOT the cause (no new blocks compiled during hang)
 - The interpreter boots the same 8.6 ISO to Finder desktop in ~2 min
 
+### Opcode-based binary search: cross-instruction state leak confirmed
+
+**Workaround found**: boot reaches Finder desktop with this skip list:
+```
+SS_JIT_SKIP_OPC=21,28,29,30,31,32,33,43,44,45,46,47,48,49,50,51,57,61,62,63
+```
+These opcodes are forced to the inline interpreter call; all others compile natively.
+
+**Key test results** (discriminating the bug class):
+
+| Test | Result | What it proves |
+|------|--------|----------------|
+| `SS_JIT_SKIP_OPC=<all 64>` | PASS (desktop) | Interpreting every instruction works |
+| `SS_JIT_MAX_INSNS=1` (all native, 1/block) | FAIL (stuck) | Single native instructions fail |
+| Remove any ONE opcode from skip list | PASS | No single opcode is solely responsible |
+| Allow {30,31} native, rest interpreted | FAIL | Multiple native opcodes needed to trigger |
+| Opcode 30 (rld*) never appears during boot | — | It's a no-op in the skip list |
+
+**Diagnosis**: the bug is a **cross-instruction state leak**. When `compile_one()` returns
+false (interpreter fallback), the block ENDS immediately — all state is flushed to the
+regs struct in memory and a fresh block starts. When `compile_one()` succeeds, the block
+continues and the next instruction shares ARM64 register state (RTMP0-3) and NZCV flags
+with the previous instruction.
+
+The inline interpreter call resets state that native codegen leaves dirty. The most
+likely candidates:
+1. **NZCV flags**: a native instruction sets NZCV as a side effect (e.g., ADDS in
+   `addic`, SUBS in `cmpwi`), then the block epilogue or spcflags poll reads NZCV
+   expecting it to be clean
+2. **Lazy CR0**: a Rc=1 instruction marks CR0 as pending in NZCV, then a subsequent
+   non-Rc instruction clobbers NZCV without flushing CR0 first
+3. **RTMP register reuse**: one instruction leaves a value in RTMP0-3 that the next
+   instruction's prologue code (address computation, immediate loading) overwrites
+   before the first instruction's result is stored
+
+**Why the inline interpreter call fixes it**: `emit_inline_interp_call()` calls
+`lazy_flush_cr0()` + `ra_flush_all()` before the BLR, then the block ends with a bare
+epilogue. This flushes all dirty state to memory. The next block starts with fresh
+register state loaded from the struct. Native instructions that succeed DON'T flush
+between themselves — they share the dirty state.
+
+**Next step**: instrument `lazy_flush_cr0` and `emit_entry_spcflags_poll` to detect
+when NZCV is assumed clean but actually dirty. Alternatively, add a defensive
+`lazy_flush_cr0()` call at the START of every instruction in `compile_one()` and test
+if that fixes the boot — if so, the bug is lazy CR0 corruption.
+
 ### Previous entry (partially superseded)
 
 Final state after session 7:

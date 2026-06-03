@@ -98,6 +98,25 @@ dispatch-cycle check_spcflags calls. Only call HandleInterrupt when re-entering 
 DR dispatch HEAD (where bclr 5,8 can evaluate it). This requires tracking "inside DR
 dispatch cycle" state in the C dispatcher.
 
+### Additional finding: bdnz loop at 5046db24 is NOT the infinite loop
+
+Traced block 5046db24 which appeared to loop to itself indefinitely. Decoded as a
+counted bdnz copy loop (lhau/or/stwu/bdnz with CTR=150 initial). CTR correctly
+decrements each iteration. The loop exits normally. The SCSI infinite loop is at
+a HIGHER level — the 68k SCSI scanning code repeatedly invoking SCSIGet/SCSISelect.
+This narrows the bug: it's NOT a tight PPC loop stuck on a wrong branch condition.
+It's the Mac OS ROM's 68k SCSI scan logic deciding to rescan after each attempt.
+
+### Missing terminator: `bc` (opc=16) not in is_terminator list
+
+The block at 5046db24 compiled 10 instructions (n=10) despite having a bdnz backward
+branch at offset +0xC. The `is_terminator` check (ppc-jit.cpp:4291-4295) only recognizes
+`b` (opc=18), `bclr` (opc=19 xo=16), and `bcctr` (opc=19 xo=528). It does NOT recognize
+`bc` (opc=16). This causes blocks containing conditional branches to include dead-code
+fall-through paths. Not a correctness bug (the bdnz codegen correctly emits both paths)
+but a code-size/cache efficiency issue. Adding `opc==16` to the terminator check would
+be a minor optimization but is NOT the cause of the SCSI hang.
+
 ### Session 7a crashed due to API error loop
 
 The advisor tool triggered repeated 400 errors in the first half of the session.

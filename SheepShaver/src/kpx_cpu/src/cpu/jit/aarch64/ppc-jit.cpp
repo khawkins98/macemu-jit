@@ -1580,17 +1580,19 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		return false; /* nested OE switch fell through (unreachable) */
 
-		case 138: /* adde rD,rA,rB (rD = rA + rB + CA) */
+		case 138: /* adde rD,rA,rB (rD = rA + rB + CA; CA = carry-out of full sum) */
+			/* 64-bit sum for correct carry-out (same fix as subfe case 136). */
 			emit_load_gpr(RTMP0, ra);
+			emit32(0xD3407C00 | (RTMP0 << 5) | RTMP0);  /* UXTW Xd, Wn */
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS rA+rB */
-			/* Now add CA: read XER.CA, add it */
-			emit32(0xD53B4200 | RTMP2); /* MRS NZCV (save carry from ADDS) */
+			emit32(0xD3407C00 | (RTMP1 << 5) | RTMP1);  /* UXTW Xd, Wn */
+			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X, X, X */
 			emit_read_xer_ca(RTMP1);
-			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD carry-in */
+			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X, X, CA */
+			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP1);  /* LSR Xd, Xn, #32 */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
+			emit32(0x2A0003E0 | (RTMP0 << 16) | RTMP0); /* MOV Wd, Wn (truncate) */
 			emit_store_gpr(RTMP0, rd);
-			/* Write new CA: set if either ADDS or the CA addition overflowed */
-			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		case 234: /* addme rD,rA (rD = rA + CA - 1, set CA) */

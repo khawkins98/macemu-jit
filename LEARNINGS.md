@@ -3,6 +3,42 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-03 (session 7 continued) — subfe carry bug found and fixed; DR emulator JIT boots
+
+### ROOT CAUSE FOUND: subfe (XO=136) carry-out computation was wrong
+
+The `subfe rD,rA,rB` instruction computes `rD = ~rA + rB + CA` and sets CA to the carry-out
+of the full 33-bit unsigned sum. The JIT used a two-step approach: ADDS (~rA + rB) then ADD
+(+CA). The `emit_write_xer_ca_from_carry()` read the ARM64 carry flag from the ADDS — but
+that only reflects the carry from (~rA + rB), not the full sum including +CA.
+
+For the idiom `subfe r4,r4,r4` (carry-to-mask), ~r4 + r4 = 0xFFFFFFFF which NEVER carries
+on ARM64. So the JIT always wrote CA=0 regardless of input CA. The correct behavior:
+CA_out = CA_in (since 0xFFFFFFFF + 1 wraps to carry, 0xFFFFFFFF + 0 doesn't).
+
+**Impact**: corrupted CA propagated through the DR emulator's address calculation chains
+(subfe/adde sequences used for 68k multi-precision arithmetic), causing wrong dispatch
+addresses and infinite SCSI retry loops.
+
+**Fix**: compute the full sum in 64 bits (UXTW + two 64-bit ADDs), extract bit 32 as carry.
+
+**This is NOT Apple Silicon specific** — the bug would manifest on ANY ARM64 platform
+(Linux, Raspberry Pi, Orange Pi). The ARM64 ADDS instruction legitimately doesn't carry
+for this specific input pattern. The issue is architectural: PPC's `subfe` carry semantics
+require the carry from the FULL three-operand sum, not a partial two-operand ADDS.
+
+### Boot verified: ROM=0x500000, full DR emulator JIT-compiled
+
+| Metric | Before fix (ROM=0x460000) | After fix (ROM=0x500000) |
+|--------|---------------------------|--------------------------|
+| jDR blocks/s | 0 (interpreted) | 37M (JIT-compiled) |
+| j2i transitions/s | 2.4M | 6K (virtually eliminated) |
+| jRAM at t=15s | 919M | 903M (comparable) |
+| Boot progress | Working | Working |
+| SCSI scan | Completes normally | Completes normally |
+
+---
+
 ## 2026-06-02 (session 7) — Boot time measurements and the core JIT imbalance
 
 Summary: Measured HD and CD boot times in both modes. The JIT accelerates the PPC nanokernel

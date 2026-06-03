@@ -533,10 +533,31 @@ static void emit_store_gpr(int rs, int n) {
  *
  * COHERENCE WARNING: these helpers access PPCR_GPR(n) (the low word) directly,
  * bypassing the RA cache.  If a preceding RA-converted instruction dirtied GPR n
- * in an RA register, this load reads the stale struct value.  Safe today because
- * all callers are PPC64 doubleword ops (sld/srd/ld/std/etc.) unreachable from
- * 32-bit Mac OS guests.  Before enabling G5/PPC64 paths, route the low word
- * through ra_load/ra_store. */
+ * in an RA register (x21-x28), the load here reads the STALE struct value, and
+ * the store side leaves the RA's cached copy stale.  Safe today ONLY because
+ * every caller is a PPC64 doubleword op (sld/srd/ld/std/cntlzd/lwa/...) that a
+ * 32-bit Mac OS 8/9 guest never issues — so the hole is currently UNREACHABLE.
+ *
+ * WHY THIS ISN'T FIXED YET: with no reachable workload the fix is both
+ * unprofitable (fixes a bug nobody can hit) and unverifiable.  The opcode
+ * harness runs interpreter-vs-interpreter by default, so it cannot catch a
+ * JIT-only coherence bug, and a booted 32-bit guest never executes these
+ * opcodes.  Fixing now = changing a hot helper with no test able to catch a
+ * slip.  Deferred to whenever a G5/PPC64 guest path is added — at that point it
+ * becomes BOTH reachable AND verifiable (SS_JIT_VERIFY=1 diffs every JIT block
+ * against the interpreter).  Tracked: docs/OPTIMIZATION-PLAN.md, item P1a #3.
+ *
+ * FOR THE FUTURE IMPLEMENTER — the obvious fix has a trap.  You CANNOT simply
+ * route the low word through emit_load_gpr/emit_store_gpr: their cached path
+ * uses a64_mov_reg, which is a 64-bit `ORR Xd,XZR,Xn`.  RA host registers hold a
+ * valid value only in their LOW 32 bits (the upper 32 are undefined garbage), so
+ * a 64-bit move would drag that garbage into the `ORR Xd, Xd, Xtmp LSL #32`
+ * combine below and corrupt the HIGH word.  Use a 32-bit zero-extending move
+ * (`ORR Wd,WZR,Wn`) on the cached low-word path instead.  The high word
+ * (PPCR_GPR_HI) stays a direct struct access — the RA never caches it.  Then
+ * validate with a JIT-mode coherence vector the default harness won't cover:
+ * dirty Rn with a 32-bit op, follow with a 64-bit op that reads Rn, run under
+ * SS_TEST_JIT=1, and diff against the interpreter. */
 static void emit_load_gpr64_tmp(int xd, int n, int tmp) {
 	/* LDR Wd, [RSTATE, #gpr_lo] — low 32 bits, zero-extends to Xd */
 	a64_ldr_w_imm(xd, RSTATE, PPCR_GPR(n));
@@ -2913,9 +2934,12 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 		}
 		case 528: /* bcctr — branch conditional to CTR.
-		         * Fall through to interpreter: handles Mixed Mode (odd CTR),
-		         * conditional CR evaluation, and CTR-based dispatch tables.
-		         * bcctr is always a block terminator — zero performance cost. */
+		         * Fall through to interpreter: the unconditional bctr path
+		         * stalls during extension loading (Mixed Mode dispatch uses
+		         * bctr with odd CTR values that need interpreter handling
+		         * beyond the bit-0 guard).  Needs deeper investigation of
+		         * how the interpreter's execute_bcctr handles mode transitions.
+		         * See LEARNINGS.md session 7 for the original boot-hang history. */
 			return false;
 		case 150: /* isync — fall through to interpreter so execute_isync() runs
 		           * execute_invalidate_cache_range(), flushing any deferred icbi.

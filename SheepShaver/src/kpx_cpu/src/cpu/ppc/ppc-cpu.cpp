@@ -179,6 +179,7 @@ struct jit_ring_rec {
 	uint32 r1;  /* 68k A7 (stack pointer) in the DR emulator convention */
 	uint32 r24, r27, r29, lr, ctr, cr;
 	uint32 a[8];
+	uint32 d[8];  /* 68k D0-D7 = PPC r8-r15 in the DR emulator */
 	uint32 opcode;
 	char   type;
 };
@@ -237,6 +238,7 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 	rec->r24 = r->gpr[24]; rec->r27 = r->gpr[27]; rec->r29 = r->gpr[29];
 	rec->lr = r->lr; rec->ctr = r->ctr; rec->cr = r->cr.get();
 	for (int i = 0; i < 8; i++) rec->a[i] = r->gpr[16 + i];
+	for (int i = 0; i < 8; i++) rec->d[i] = r->gpr[8 + i];  /* 68k D0-D7 */
 
 	/* SS_JIT_WATCH_ADDR=<hex>[,<hex>...]: generic software watchpoints on up to
 	 * 4 guest words.  After every recorded event, read each (4-aligned) word
@@ -355,6 +357,48 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 			fprintf(stderr, "RING TRIGGER: dump complete\n");
 		}
 	}
+
+	/* SS_JIT_RING_DUMP_AT_PC=<hex>: dump the ring shortly after the first
+	 * block with from_pc == <hex> is recorded.  A countdown of 200 records
+	 * after the trigger ensures the ring contains both the anchor block and
+	 * ~200 subsequent blocks (enough for branch-divergence analysis).
+	 * Works identically in interpreter and JIT modes.  Fires once, then
+	 * sends SIGTERM to self so the process exits cleanly. */
+	{
+		static int atpc_state = -1;  /* -1 unread, 0 off, 1 armed, 2 counting, 3 done */
+		static uint32 atpc_target = 0;
+		static int atpc_countdown = 0;
+		if (atpc_state < 0) {
+			const char *e = getenv("SS_JIT_RING_DUMP_AT_PC");
+			atpc_state = 0;
+			if (e && *e) {
+				atpc_target = (uint32)strtoul(e, NULL, 16);
+				if (atpc_target) atpc_state = 1;
+			}
+		}
+		if (atpc_state == 1 && from_pc == atpc_target) {
+			atpc_state = 2;
+			const char *cd = getenv("SS_JIT_RING_DUMP_AT_PC_DELAY");
+			atpc_countdown = (cd && *cd) ? atoi(cd) : 200;
+			fprintf(stderr, "RING AT-PC TRIGGER: from_pc=%08x matched (dump in 200 records)\n", from_pc);
+		}
+		if (atpc_state == 2 && --atpc_countdown <= 0) {
+			atpc_state = 3;
+			ppc_jit_dump_trace_ring();
+			/* Dump expanded ROM (0x50000000..0x50500000) to file for disassembly */
+			{
+				FILE *rf = fopen("/tmp/ss_rom_dump.bin", "wb");
+				if (rf && ROMBaseHost) {
+					fwrite(ROMBaseHost, 1, 0x500000, rf);
+					fclose(rf);
+					fprintf(stderr, "RING AT-PC TRIGGER: ROM dump to /tmp/ss_rom_dump.bin (5MB from ROMBase)\n");
+				}
+			}
+			fprintf(stderr, "RING AT-PC TRIGGER: dump complete — exiting\n");
+			fflush(stderr);
+			kill(getpid(), SIGTERM);
+		}
+	}
 }
 
 /* EMUL_OP entry/return recorder — called from sheepshaver_glue.cpp's
@@ -402,11 +446,14 @@ extern "C" void ppc_jit_dump_trace_ring(void) {
 	for (uint32 i = 0; i < n; i++) {
 		const jit_ring_rec *rec = &jit_ring[(start + i) & (JIT_RING_SIZE - 1)];
 		fprintf(f, "%c %08x %08x op=%08x sp=%08x r24=%08x r27=%08x r29=%08x lr=%08x ctr=%08x cr=%08x "
-		           "a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n",
+		           "a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x "
+		           "d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x d6=%08x d7=%08x\n",
 		        rec->type, rec->from_pc, rec->to_pc, rec->opcode, rec->r1,
 		        rec->r24, rec->r27, rec->r29, rec->lr, rec->ctr, rec->cr,
 		        rec->a[0], rec->a[1], rec->a[2], rec->a[3],
-		        rec->a[4], rec->a[5], rec->a[6], rec->a[7]);
+		        rec->a[4], rec->a[5], rec->a[6], rec->a[7],
+		        rec->d[0], rec->d[1], rec->d[2], rec->d[3],
+		        rec->d[4], rec->d[5], rec->d[6], rec->d[7]);
 	}
 	fclose(f);
 	fprintf(stderr, "JIT trace ring: %u records (of %u total) dumped to /tmp/ss_jit_ring.txt\n",

@@ -124,6 +124,56 @@ instructions (it's just a different encoding of the same load/store).
 explicit zero-extension in memory access encodings. The cost is zero and
 it eliminates an entire class of potential bugs.
 
+### 6. FP Multiply-Add Family: Sign Convention Mismatch
+
+PPC and ARM64 both have fused multiply-add instructions, but their naming
+conventions encode the negation differently:
+
+- **PPC `fmsub`** (XO63 sub-opcode 28): computes `frA*frC - frB`
+- **ARM64 `FMSUB`** (opcode 0x1F408000): computes `Da - Dn*Dm` (the OPPOSITE sign)
+
+The natural mapping (`fmsub` -> `FMSUB`) is wrong. `PPC fmsub (a*c-b)` must
+map to ARM64 `FNMSUB (n*m - a)`, and `PPC fnmsub (-(a*c-b) = b-a*c)` must
+map to ARM64 `FMSUB (a - n*m)`. The swap applies identically to the
+single-precision variants (fmsubs/fnmsubs).
+
+The `fmadd`/`fnmadd` pair happened to map correctly because both architectures
+agree on the addition case. Only the subtraction pair disagrees.
+
+**Impact**: FP-heavy Mac OS extension-loading code produced wrong intermediate
+values, causing the "Starting Up..." hang. This was one of two root causes
+of the extension-loading hang (the other being bug class 7).
+
+**Lesson**: when mapping FP multiply-add families between architectures,
+verify the sign convention for EVERY variant independently. The names are
+misleading -- `FMSUB` does not mean the same thing on PPC and ARM64.
+
+### 7. CPU-Object State: Reservation and Time-Base Model
+
+Some PPC instructions require state that lives in the CPU *object*, not in
+the flat `powerpc_registers` struct the JIT operates on:
+
+- **lwarx/stwcx.**: PPC's load-linked/store-conditional pair maintains a
+  reservation address and flag in the CPU object. The JIT's regs struct has
+  no reservation fields -- native codegen would need to emit loads/stores
+  to the CPU object (via a saved pointer), adding complexity for instructions
+  that appear rarely outside atomic loops.
+
+- **mftb**: the CPU object maintains a time-base model that accounts for
+  emulated clock scaling. Reading the raw ARM64 `CNTVCT_EL0` counter gives
+  a value in host time units, not guest time units. The earlier fix (bug 2:
+  LSR #32 for TBU) fixed the upper/lower split but still used the raw counter.
+
+**Fix**: all three instructions return `false` from `compile_one()`, falling
+through to the interpreter which has full access to the CPU object. The
+performance cost is negligible -- lwarx/stwcx. are rare outside atomic CAS
+loops, and mftb appears only in time-reading sequences (a handful per second).
+
+**Lesson**: a JIT that operates on a flat register snapshot cannot natively
+compile instructions that depend on non-register CPU state without either
+(a) passing a CPU-object pointer into generated code, or (b) accepting the
+interpreter fallback. For rare instructions, (b) is the right trade-off.
+
 ## The Investigation Method
 
 Every bug was found using the same procedure:
@@ -153,6 +203,12 @@ ASLR), address-range binary search fails. The opcode-based approach works:
    types must be native to trigger the bug.
 3. **`SS_JIT_SKIP_XO=n,n,...`**: for XO31 (primary opcode 31) sub-opcodes,
    further narrow within the extended opcode space.
+4. **`SS_JIT_SKIP_XO63=n,n,...`**: for XO63 (primary opcode 63) sub-opcodes,
+   narrow within the FP extended opcode space.
+
+This method found bugs 7-8 (session 7): narrowed from "all 64 primary opcodes"
+to "XO63 sub-opcode 30 (fnmsub)" and "XO31 sub-opcodes 20+150+371
+(lwarx/stwcx./mftb)" in a single session.
 
 **Pitfall**: "skip ALL opcodes" is not just "interpret every instruction" —
 it also **terminates every block after one instruction**, returning to the
@@ -176,12 +232,14 @@ NULL under JIT (boot hadn't reached the code that writes them).
 
 ## What's NOT Apple-Specific
 
-All five bug classes affect any ARM64 platform:
+All seven bug classes affect any ARM64 platform:
 - The `ADDS` carry semantics are architectural ARM64, not Apple Silicon
 - `CNTVCT_EL0` is the same on Linux ARM64
 - Block-boundary interrupt timing is a JIT design issue, not a platform one
 - icbi/isync coherence is a PPC semantic requirement, not platform-dependent
 - UXTW vs LSL addressing is an ARM64 encoding choice, not Apple-specific
+- FP multiply-add sign conventions are defined by the ARM64 ISA, not Apple Silicon
+- CPU-object state access (reservation, time base) is a JIT design constraint, not platform-specific
 
 The only Apple-specific concern is `MAP_JIT` for code cache allocation
 (required on macOS, not needed on Linux) and the `__PAGEZERO` 4GB mapping
@@ -189,16 +247,14 @@ that prevents low-address `REAL_ADDRESSING`.
 
 ## Current Status
 
+All 7 bug classes (8 individual bugs) are FIXED. Mac OS 8.6 boots to Finder desktop
+with full native JIT -- no skip list, no workarounds.
+
 - **subfe/adde carry**: FIXED — all three-operand CA instructions use 64-bit sums
-- **mftb TBU/TBL**: FIXED — upper/lower halves correctly extracted
+- **mftb TBU/TBL**: FIXED — interpreter fallback (correct time-base model)
 - **DR emulator timing**: FIXED — entry-poll suppression for DR blocks
 - **icbi/isync coherence**: FIXED — fall through to interpreter for correctness
 - **UXTW addressing**: FIXED — defensive zero-extension for register-offset mem access
-- **Extension-loading hang**: OPEN — pre-existing bug. Stall is in RAM code at
-  10653b60/10695xxx (spin-wait). Initial "state leak" hypothesis weakened by
-  experiments (lazy CR0 flush, RTMP zeroing, PC store all still hang;
-  SS_JIT_VERIFY shows zero per-block divergences). Workaround: skip-list boots
-  to Finder desktop. Root cause unknown.
-- **Boot status**: hangs at "Starting Up..." without workaround; Finder desktop
-  WITH `SS_JIT_SKIP_OPC=21,28,29,30,31,32,33,43,44,45,46,47,48,49,50,51,57,61,62,63`
-- **Interpreter**: boots to Finder desktop in ~2 min (8.6 ISO)
+- **fmsub/fnmsub encoding**: FIXED — swapped to correct ARM64 sign conventions
+- **lwarx/stwcx./mftb fallback**: FIXED — interpreter fallback for CPU-object state
+- **Configuration**: ROM=0x500000, chaining=1, harness 235/235 score=100

@@ -4,7 +4,7 @@
 
 **Build:** ✅ macOS 26.4.1 arm64 (Apple clang 17, SDL2, no X11)
 **Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
-**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full JIT (VNC screenshot confirmed). ROM=0x500000 (full range including DR emulator), block chaining enabled.
+**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT — no skip list, no workarounds. ROM=0x500000 (full range including DR emulator), block chaining enabled. 8 bugs found and fixed (session 7, 2026-06-02/03).
 **JIT harness:** ✅ 235/235 opcode vectors pass interpreter mode and JIT mode (score=100 both)
 **ROM harness:** ⚠️ Needs OldWorld raw ROM dump; New World CHRP ROMs are not compatible with the scanner
 **macOS-specific fixes (all on macos-arm64 branch):**
@@ -27,6 +27,16 @@
 
 With JIT active, SheepShaver boots Mac OS 8.6 to the Finder desktop (macOS arm64, VNC confirmed).
 Full ROM range (0x500000, including DR 68k emulator) is JIT-compiled with block chaining enabled.
+No skip list or workarounds needed — all 8 JIT bugs from session 7 are fixed:
+1. subfe/adde carry-out (64-bit three-operand CA)
+2. mftb TBU/TBL (interpreter fallback for time-base model)
+3. DR emulator entry-poll suppression (spcflags timing)
+4. icbi NOP -> interpreter (cache invalidation)
+5. isync NOP -> interpreter (deferred invalidation flush)
+6. UXTW addressing mode (32-bit address extension)
+7. fmsub/fnmsub encoding swap (ARM64 sign convention mismatch)
+8. lwarx/stwcx./mftb interpreter fallback (CPU-object state access)
+
 Lazy CR0 and register-allocation scaffolding remain in-tree but are currently disabled:
 1. **Phase 1:** Hash + chaining block cache (8192 buckets)
 2. **Phase 2:** Lazy CR0 flags scaffolded, currently disabled (`lazy_update_cr0()` materializes immediately)
@@ -54,12 +64,26 @@ hardware, no SheepShaver runtime dependencies.
 Remaining 25 failures: CR field interactions in multi-instruction blocks
 and complex branch BO patterns (CTR+condition combo).
 
-### Recent bug fixes (2026-06)
+### Recent bug fixes (2026-06, session 7)
 
+- **fmsub/fnmsub encoding swap** (2026-06-03): PPC fmsub (a*c-b) was mapped to ARM64 FMSUB
+  (a-n*m, wrong sign). PPC fnmsub had the reverse error. Fixed by swapping: PPC fmsub uses
+  ARM64 FNMSUB, PPC fnmsub uses ARM64 FMSUB. One of two root causes of the extension-loading hang.
+- **lwarx/stwcx./mftb interpreter fallback** (2026-06-03): lwarx/stwcx. need CPU-object
+  reservation state; mftb needs the CPU's timebase model. All three now fall through to the
+  interpreter. The other root cause of the extension-loading hang.
 - **subfe/adde carry-out computation** (2026-06-03): The JIT read carry from a partial ADDS
   (~rA + rB) instead of the full three-operand sum (~rA + rB + CA). For `subfe r4,r4,r4`
   (carry-to-mask idiom), this always wrote CA=0 regardless of input. Fixed by computing in
-  64 bits and extracting bit 32. This was the root cause of the DR emulator boot hang.
+  64 bits and extracting bit 32. Root cause of the DR emulator boot hang.
+- **icbi/isync NOP** (2026-06-03): icbi compiled as NOP left stale JIT translations; isync
+  compiled as NOP skipped deferred invalidation. Both now fall through to interpreter.
+- **UXTW addressing** (2026-06-03): register-offset memory access changed from LSL to UXTW
+  for defensive 32-bit address extension.
+- **DR emulator entry-poll** (2026-06-03): block-entry spcflags poll suppressed for DR emulator
+  blocks to prevent premature CR2.LT injection mid-dispatch-cycle.
+- **mftb TBU/TBL** (2026-06-03): CNTVCT_EL0 was stored as-is for both TBL and TBU. Fixed
+  with LSR #32 for TBU (later superseded by the interpreter fallback above).
 
 ### Recent bug fixes (2026-05)
 

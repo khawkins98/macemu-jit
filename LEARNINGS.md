@@ -3,6 +3,50 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-03 (session 7 FINAL) — Mac OS 8.6 boots to Finder desktop with full native JIT
+
+### RESOLVED: all investigation items from session 7 are closed
+
+Mac OS 8.6 boots to the Finder desktop with full native JIT — no skip list, no workarounds.
+ROM=0x500000 (full range including DR emulator), block chaining enabled. Harness: 235/235,
+score=100.
+
+### 8 bugs found and fixed
+
+| # | Bug | Root cause | Fix |
+|---|-----|-----------|-----|
+| 1 | subfe/adde carry-out | ADDS reads partial carry from two-operand sum, not full three-operand CA | 64-bit arithmetic, extract bit 32 |
+| 2 | mftb TBU/TBL | CNTVCT_EL0 stored as-is for both halves (TBU and TBL returned identical values) | LSR #32 for TBU (later superseded by bug 8's interpreter fallback) |
+| 3 | DR emulator entry-poll suppression | Block-entry spcflags poll fires mid-dispatch-cycle, injecting CR2.LT too early | Skip poll for DR emulator blocks |
+| 4 | icbi NOP | JIT compiled icbi as NOP; stale translations survived code rewrites | Fall through to interpreter's execute_icbi |
+| 5 | isync NOP | JIT compiled isync as NOP; deferred icbi invalidation never flushed | Fall through to interpreter |
+| 6 | UXTW addressing mode | Register-offset mem access used LSL (option=011), risking upper-32-bit garbage | Changed to UXTW (option=010) for defensive 32-bit extension |
+| 7 | fmsub/fnmsub encoding swap | PPC fmsub (a*c-b) was mapped to ARM64 FMSUB, but ARM64 FMSUB computes a-n*m (the opposite sign). PPC fnmsub (-(a*c-b)) had the same problem in reverse | Swapped: PPC fmsub -> ARM64 FNMSUB (n*m-a), PPC fnmsub -> ARM64 FMSUB (a-n*m) |
+| 8 | lwarx/stwcx./mftb interpreter fallback | lwarx/stwcx. need CPU-object reservation state (not in regs struct); mftb needs the CPU's timebase model (not raw ARM64 counter) | All three return false from compile_one(), falling through to interpreter |
+
+### Opcode bisection strategy (key for bugs 7-8)
+
+The extension-loading hang could not be isolated by address (Mac OS loads extensions at
+different RAM addresses each boot). The opcode-based bisection narrowed it:
+
+1. `SS_JIT_SKIP_OPC=<all 64>` — boot passes (all instructions via interpreter)
+2. Removed opcodes from skip list in groups — narrowed to primary opcodes 31 and 63
+3. `SS_JIT_SKIP_XO63=28,30` — isolated XO63 sub-opcode 30 (fnmsub) as one cause
+4. `SS_JIT_SKIP_XO=20,150,371` — isolated XO31 sub-opcodes 20 (lwarx), 150 (stwcx.), 371 (mftb)
+
+This method works even when code addresses shift between boots (extension ASLR).
+
+### Previous "OPEN" items — all RESOLVED
+
+- **Extension-loading hang**: RESOLVED — caused by bugs 7 (fmsub/fnmsub) and 8 (lwarx/stwcx./mftb)
+- **Cross-instruction state leak hypothesis**: RESOLVED — was a red herring; the actual causes were
+  incorrect FP multiply-add encodings and missing CPU-object state access
+- **Skip-list workaround**: NO LONGER NEEDED — full native JIT boots cleanly
+- **"CORRECTION: desktop was Disk First Aid"** (earlier session 7 entry): RESOLVED — the final
+  boot after all 8 fixes reaches the real Finder desktop, not Disk First Aid
+
+---
+
 ## 2026-06-03 — `make build-ss`/`make test-opcodes` were destructive on macOS (now fixed)
 
 ### The trap
@@ -41,9 +85,9 @@ run (commit 8aab88de). Concurrent runs no longer truncate each other's logs.
 `SS_JIT_DIAG_LOG` still overrides (no symlink touched). Verified: 235/235 harness,
 ~35 unique log files from one morning of boot runs, zero clobbering.
 
-## 2026-06-03 (session 7 continued) — three JIT bugs fixed, boot reaches extension loading
+## 2026-06-03 (session 7 continued) — three JIT bugs fixed, boot reaches extension loading — RESOLVED (see session 7 FINAL above)
 
-### CORRECTION: "desktop" was Disk First Aid dialog, not Finder
+### CORRECTION: "desktop" was Disk First Aid dialog, not Finder — SUPERSEDED: final boot reaches real Finder desktop
 
 The VNC screenshot showing the Mac OS desktop pattern was actually the Disk First Aid
 dialog (triggered by kill -9 leaving the disk dirty). After dismissing it, boot continues
@@ -71,7 +115,7 @@ Same binary-search methodology applies but needs RAM-region exclusion support.
 See `docs/PPC-ARM64-JIT-LESSONS.md` for the architectural narrative — why these
 bugs aren't Apple-specific and what they teach about PPC→ARM64 JIT in general.
 
-### Extension-loading hang investigation (continued)
+### Extension-loading hang investigation (continued) — RESOLVED (see session 7 FINAL: bugs 7-8 were the root cause)
 
 **icbi (instruction cache block invalidate) was NOP'd** — fixed by falling through
 to the interpreter's execute_icbi, and wiring invalidate_cache_range to call the JIT's
@@ -105,9 +149,9 @@ then skip those small sets.
 - icbi/SMC is NOT the cause (no new blocks compiled during hang)
 - The interpreter boots the same 8.6 ISO to Finder desktop in ~2 min
 
-### Opcode-based binary search: cross-instruction state leak confirmed
+### Opcode-based binary search: cross-instruction state leak confirmed — RESOLVED (see session 7 FINAL: root cause was bugs 7-8, not state leak)
 
-**Workaround found**: boot reaches Finder desktop with this skip list:
+**Workaround found** (no longer needed — all 8 bugs fixed): boot reaches Finder desktop with this skip list:
 ```
 SS_JIT_SKIP_OPC=21,28,29,30,31,32,33,43,44,45,46,47,48,49,50,51,57,61,62,63
 ```
@@ -147,7 +191,7 @@ next block starts with fresh register state loaded from the struct AND spcflags 
 checked. Native instructions that succeed DON'T flush between themselves — they share
 the dirty state AND the block continues without a dispatcher round-trip.
 
-## 2026-06-03 (session 7 continued, later) — deeper investigation, state-leak hypothesis weakened
+## 2026-06-03 (session 7 continued, later) — deeper investigation, state-leak hypothesis weakened — RESOLVED (see session 7 FINAL above)
 
 ### Additional bugs fixed
 

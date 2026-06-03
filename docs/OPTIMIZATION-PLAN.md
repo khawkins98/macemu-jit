@@ -189,3 +189,33 @@ Better: emit inline `BLR` to `execute_invalidate_cache_range()` stub, continue b
 isync appears after every mtspr/mtmsr in the ROM toolbox. Each block break costs
 ~12 instructions of prologue/epilogue overhead. An inline BLR costs ~4 instructions
 (save/restore caller-saved regs around the call).
+
+## Priority 0d: Verify Atomic spcflags (from upstream PERFORMANCE_AUDIT)
+
+**Expected impact**: Potentially significant if currently mutex-based
+**Effort**: Low (check and change if needed)
+
+The upstream audit found that mutex-based spcflags synchronization was a
+bottleneck on RPi. Verify SheepShaver uses atomic operations for spcflags
+(the VBL timer thread sets TRIGGER_INTERRUPT from a signal handler — if
+this goes through a mutex, every 60Hz tick takes a lock).
+
+## Priority 0e: Computed-goto Interpreter Dispatch (from upstream PERFORMANCE_AUDIT)
+
+**Expected impact**: 20-40% on interpreter fallback paths
+**Effort**: Medium
+**Risk**: Low
+
+The upstream audit's biggest unimplemented item. For our interpreter fallback
+path (j2i transitions, inline interpreter calls), a computed-goto dispatch
+loop eliminates the switch/case overhead. This matters because several
+instructions still fall through to the interpreter (bcctr, lwarx, stwcx.,
+mftb, icbi, isync).
+
+Source: https://github.com/rcarmo/macemu-jit/blob/master/PERFORMANCE_AUDIT.md
+
+## Upstream References
+
+- [PERFORMANCE_AUDIT.md](https://github.com/rcarmo/macemu-jit/blob/master/PERFORMANCE_AUDIT.md) — BasiliskII/RPi optimization audit (14/27 implemented)
+- [JIT-FPU-PLAN.md](https://github.com/rcarmo/macemu-jit/blob/master/JIT-FPU-PLAN.md) — 68K FPU JIT plan (shadow register pattern, validates our RA approach)
+- Key warnings: LTO must stay disabled on macOS ARM64; do NOT remove PIE/stack-protector

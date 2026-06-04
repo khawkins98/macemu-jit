@@ -103,3 +103,38 @@ decodes and type-detects as NewWorld, yet the emulator rejects it downstream. So
 | `[JIT Ns] HOT-PC ...` | same sampled PC 3+ heartbeats | **sampling hint only** — see retraction note above |
 | `[JIT Ns] STALL: comp=...` | `SS_JIT_RING_DUMP_ON_STALL=<n>` | one-shot trace-ring dump on compile freeze |
 | `[JIT Ns] interrupt delivered` | each guest interrupt | diag log file only |
+
+## Diagnostic environment variables
+
+The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
+`ppc-jit.cpp`, `sheepshaver_glue.cpp`). All are zero-cost when unset.
+
+| Env var | Effect |
+|---|---|
+| `SS_USE_JIT=0` | Force interpreter mode (the aarch64 JIT is ON by default). |
+| `SS_JIT_DIAG_LOG=/path` | Diagnostic-log path override (no `/tmp/jit_diag.log` symlink touched when set). |
+| `SS_JIT_NO_ROM=1` | Keep ROM interpreter-only, JIT only RAM — isolates ROM vs RAM bugs. |
+| `SS_JIT_ROM_SIZE=0xNNNNNN` | Limit the JIT-compiled ROM range — binary-search tool for isolating a bad ROM region. |
+| `SS_JIT_NO_CHAIN=1` | Disable block chaining at runtime (bisect chaining bugs without a rebuild). |
+| `SS_JIT_VERIFY=1` | Differential verify: re-run every JIT block through the interpreter and compare register state. **EXTREMELY SLOW**; reports the first divergences with block PC + opcodes. |
+| `SS_JIT_DEBUG_PC=0xNNNNNNNN` | Per-PC debug output. |
+| `SS_JIT_WATCH_ADDR=dec,dec` | Guest-memory watchpoints (decimal, comma-separated). |
+| `SS_JIT_WATCH_STUB=1` | Software watchpoint on Mixed Mode switch-back stubs (`ppc-cpu.cpp`). |
+| `SS_JIT_TRACE_RING=1` | Block-level execution-history ring; dumped to `/tmp/ss_jit_ring.txt` by the SIGSEGV handler (records J/I blocks, inline calls, EMUL_OP entry/return). |
+| `SS_JIT_RING_DUMP_TRIGGER=1` | Dump the trace ring when the DR emulator executes stack-region code (`ppc-cpu.cpp`). |
+| `SS_JIT_RING_DUMP_ON_STALL=<n>` | One-shot trace-ring dump on a compile freeze (see table above). |
+| `SS_EMULOP_COUNTS=1` | Per-`EMUL_OP` execution counters to stderr every ~5s (`sheepshaver_glue.cpp`). |
+| `SS_EMULOP_TRACE=1` | Log SCSI `EMUL_OP` return values to `/tmp/emulop_trace.log` (`sheepshaver_glue.cpp`). |
+
+### Dump the trace ring from a running (or hung) process
+
+With `SS_JIT_TRACE_RING=1`, the ring can be dumped from a **live** process without crashing
+it — no SIGSEGV needed:
+
+```bash
+lldb -b -p $(pgrep -x SheepShaver) \
+     -o "expression -- (void)ppc_jit_dump_trace_ring()" -o detach -o quit
+```
+
+Attach **at most once per run** and detach immediately — repeated lldb attach/detach can defer
+the 60 Hz VBL timer and hang early boot (see the lldb/VBL caveat in `CLAUDE.md` / `LEARNINGS.md`).

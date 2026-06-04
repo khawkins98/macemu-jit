@@ -3,7 +3,7 @@
 Backlog of findings from an adversarial review of this session's changes (per-instance
 diag log, terminal heartbeat + warning matrix, `build-ss` platform guard, `hb-test.cpp`).
 Deferred deliberately: pick these up once the JIT correctness work stabilizes (the
-extension-loading hang is still open — see `docs/HANDOFF-2026-06-02-SESSION7.md`).
+extension-loading hang is still open — see `LEARNINGS.md` (handoffs retired 2026-06-04)).
 
 **Status legend:** ☐ open · ☑ done · ⏸ blocked on data/other work
 
@@ -20,7 +20,7 @@ correctness-of-diagnostics, maintainability, and upstream-hygiene items.
 
 The thresholds in `jit-heartbeat.hpp` were invented from memory, not measured. Consequence:
 
-- The only **documented** hang (extension-loading, HANDOFF:46) is a *fast busy-spin*:
+- The only **documented** hang (extension-loading; since RESOLVED — see `LEARNINGS.md` session 7 FINAL) was a *fast busy-spin*:
   `jNK frozen, jRAM ~85M/s forever`. The `rate < 0.5M/s` WARN never fires (85M ≫ 0.5M);
   the `cpu < 50%` rule (doc-claimed to catch "VBL timer death") also misses, because a
   spin-wait pegs the core near 100%.
@@ -91,7 +91,7 @@ rate/transition rules — a single early transient latches the WARN for the whol
 
 ### ☐ Transition thresholds not validated against the *booting* config
 The `j2i > 100K/s` (SUSPECT) / `> 1M/s` (WARN) thresholds were reasoned against the clean
-config. But the only path that currently boots is the skip-list workaround (HANDOFF:18),
+config. But the only path that currently boots is the skip-list workaround (superseded — full boot needs no skip-list; see LEARNINGS.md),
 which forces ~20 opcode types to the inline interpreter call — inflating `j2i` on every
 block containing one. **Fix:** capture `j2i/s` under the skip-list workaround before
 trusting these thresholds (folds into the P1 data-capture work).

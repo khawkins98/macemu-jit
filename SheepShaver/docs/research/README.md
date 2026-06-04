@@ -15,8 +15,8 @@ Related plans outside this directory:
 [`../COMPATIBILITY-TESTING-PLAN.md`](../COMPATIBILITY-TESTING-PLAN.md) (how we'll measure
 correctness vs the x86 JIT and real apps) ·
 [`../AARCH64_JIT_GOLDEN_WORKLOADS.md`](../AARCH64_JIT_GOLDEN_WORKLOADS.md) (canonical test
-gate) · [`../../../docs/HANDOFF.md`](../../../docs/HANDOFF.md) (the JIT agent's session
-handoff — not owned by this research effort).
+gate) · [`../../../LEARNINGS.md`](../../../LEARNINGS.md) and [`../../../CHANGELOG.md`](../../../CHANGELOG.md)
+(the JIT work's durable findings + change log — the dated session handoff docs were retired 2026-06-04).
 
 ## Reference studies (read when working the related backlog item)
 

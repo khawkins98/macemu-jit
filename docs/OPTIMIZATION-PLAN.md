@@ -107,31 +107,24 @@ flag with `CMP W(CA),#1`, then `ADCS` computes the full three-operand sum
 with correct carry-out.  Test vectors `adde_carry_wrap` and
 `subfe_carry_wrap` added.  `SS_JIT_VERIFY=1` boot clean.
 
-### 0b-extra. Fix mullwo silent mis-execution (backlog A3)
+### 0b-extra. Fix mullwo — DONE (2026-06-04, correctness)
 
-**Bug:** `case 715` (mullwo, OE=1 multiply) aliases onto `case 235` (mullw)
-and never sets XER OV/SO.  Silent wrong results for overflow detection.
-**Fix:** split the cases; add overflow check via `SMULL` + compare high word.
-**Effort:** Low.
+**Result:** Case label was 715 (wrong XO); correct is 747.  The instruction
+was never JIT-compiled — silently fell to interpreter.  Now uses SMULL +
+ASR/CMP for overflow detection, sets XER OV/SO.  Test vectors added.
 
-### 0b-extra2. `emit_update_cr0` cleanup (backlog B1, ~18 → ~8 instructions)
+### 0b-extra2. `emit_update_cr0` cleanup — DONE (2026-06-04, B1)
 
-Instead of deferring CR0 (lazy CR0 — blocked by NZCV clobber issues), make
-the *eager* path cheaper.  The current `emit_update_cr0` uses 3 `emit_load_imm32`
-+ 3 CSEL + XER.SO merge + shift + CR load/mask/OR/store (~18 ARM64 insns).
-Dolphin's approach encodes LT/GT/EQ as conditional constants without needing
-separate load-immediate instructions — roughly halves the instruction count.
-**Effort:** Low-medium.  **Risk:** Low.
+**Result:** 19→11 ARM64 instructions.  3x CSET + 3x shifted ADD replaces
+3x emit_load_imm32 + 3x CSEL.  BFI replaces LSL + AND + ORR for CR0 merge.
+Uses ADD (not ADDS) to preserve NZCV from the initial CMP.
 
-### 0b-extra3. LogicalImm encoder for rlwinm/rlwimi (backlog B2)
+### 0b-extra3. LogicalImm encoder — DONE (2026-06-04, B2)
 
-ARM64 AND/ORR/EOR have a powerful bitmask-immediate encoding that can express
-most PPC rotate-and-mask patterns in a single instruction.  Currently we
-`emit_load_imm32(mask)` + `AND Wd,Wn,Wm` (2-3 insns for the mask load).
-Porting a `LogicalImm` encoder (from Dolphin or VIXL) would collapse this to
-`AND Wd,Wn,#mask` (1 insn) for encodable masks.  Saves 1-2 instructions per
-rlwinm/rlwimi/andi./andis.
-**Effort:** Medium (encoder is ~100 lines).  **Risk:** Low.
+**Result:** `emit_and_imm32()` helper tries ARM64 bitmask-immediate encoding
+(1 insn) before falling back to emit_load_imm32 + AND (2-3 insns).  Applied
+to all 5 AND-mask sites: rlwinm, rlwimi (both mask and ~mask), rlwnm, andi.,
+andis.  992/1024 PPC masks are encodable.  Encoder from `ppc-logical-imm.hpp`.
 
 ### 0c. isync: inline BLR instead of block break
 
@@ -385,10 +378,10 @@ Emit 2-instruction probe (load cached PC, compare) before falling back to hash
 dispatcher.  Removes full hash lookup for repeated indirect targets (bctr).
 Effort: ~1 day.  Risk: low (miss path is current behavior).
 
-**R3. Batch W^X toggles** (Box64)
-Accumulate multiple block compilations between `pthread_jit_write_protect_np`
-transitions instead of toggling per-block.
-Effort: <1 day.  Risk: minimal.
+**R3. Batch W^X toggles** — N/A (2026-06-04)
+Investigated: SheepShaver's code cache uses plain `mmap(PROT_RWX)` without
+`MAP_JIT` or `pthread_jit_write_protect_np`.  No W^X toggling exists to batch.
+Only relevant if the project migrates to MAP_JIT for hardened distribution.
 
 **R4. mach_absolute_time for event scheduling** (Dolphin)
 Replace gettimeofday/clock_gettime with direct CNTVCT_EL0 reads via

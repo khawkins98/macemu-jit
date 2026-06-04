@@ -1931,3 +1931,15 @@ memory.
 Speedometer PR is highly volatile (driven by Disk and Graphics sub-scores).
 Benchmark Mix and Dhrystones are the stable integer metrics. Always compare
 Mix, not PR, for JIT codegen changes.
+
+### SS_JIT_VERIFY false positives (2026-06-04)
+
+VERIFY produced 20+ divergences per boot — all cascading from blocks that
+call through the Mixed Mode Manager via `bl`.  The interpreter replay follows
+the call into the callee (different dispatch path), while the JIT treats `bl`
+as a block terminator.  Once one block diverges, every subsequent block sees
+poisoned register state and reports a false divergence too.
+
+Fix: skip verifying blocks ending with link-setting branches, and suppress
+further checks after any divergence until a clean block is found.  Reduces
+false positives from 20+ to 1.

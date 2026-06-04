@@ -82,6 +82,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   G4, so AltiVec is live). One-token operand swap; caught and regression-tested by
   a new differential vector.
 
+- **`emit_update_cr0` cleanup (B1)**: CR0 field construction reduced from 19 to
+  11 ARM64 instructions.  Replaced 3x `emit_load_imm32` + 3x CSEL + LSL + AND +
+  ORR with 3x CSET + 3x shifted ADD + BFI.  Every Rc=1 instruction benefits.
+
+- **LogicalImm encoder (B2)**: ARM64 bitmask-immediate encoding for AND masks in
+  rlwinm, rlwimi, rlwnm, andi., andis.  Saves 1-2 instructions per masked op
+  (992/1024 PPC masks are encodable).  Encoder from `ppc-logical-imm.hpp`.
+
+- **mullwo overflow detection (A3)**: Case label was 715 (wrong XO), should be
+  747.  The instruction was never JIT-compiled — silently fell to interpreter.
+  Now uses SMULL + ASR/CMP to detect 32-bit overflow and sets XER OV/SO.
+
+- **SS_JIT_VERIFY cascade fix**: Reduced false divergences from 20+ to 1 per
+  boot.  Skips verifying blocks ending with link-setting branches (bl/bctrl),
+  and suppresses cascade after any divergence until a clean block is found.
+  Mixed Mode Manager dispatch causes unavoidable interpreter/JIT path divergence
+  that is not a codegen bug.
+
 ### [SheepShaver] Testing & benchmarking
 
 - **18 real FP-arithmetic test vectors**: the pre-existing `fp_*` vectors were

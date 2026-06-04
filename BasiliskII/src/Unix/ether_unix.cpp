@@ -313,6 +313,8 @@ bool ether_init(void)
 		net_if_type = NET_IF_VDE;
 		printf("selected Ethernet device type VDE\n");
 	}
+	// Backported from kanjitalk755/macemu 06d8bc02 "Add support for VDE to SheepShaver":
+	// the `vde:` prefix carries the destination VDE link in the ether pref so it persists.
 	else if (strncmp(name, "vde:", 4) == 0) {
 		net_if_type = NET_IF_VDE;
 		vde_sock = strdup(name+4);
@@ -902,6 +904,9 @@ static int16 ether_do_write(uint32 arg)
 			return -1;
 		}
 
+		// Backported from kanjitalk755/macemu 06d8bc02: send the actual frame length (was
+		// sizeof(packet), which appended trailing garbage) and fail cleanly instead of
+		// looping forever on error.
 		if (vde_send(vde_conn, packet, len, 0) < 0) {
 			return excessCollsns;
 		}

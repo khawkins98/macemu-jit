@@ -921,7 +921,11 @@ static int present_sdl_video()
 		}
 	}
 	UNLOCK_PALETTE; // passed potential deadlock, can unlock palette
-	
+
+	// Backported from kanjitalk755/macemu e596e215 "SDL3: blit not required in SDL_UnlockTexture()":
+	// texture is unified to ARGB8888 and the big-endian->host swap is done in software below,
+	// removing the SDL_GetMasksForPixelFormat round-trip / blit.
+	// PROSPECTIVE: the SDL3 backend is BUILD-VERIFIED ONLY on this fork — not yet boot-tested.
 	// Update the host OS' texture
 	uint32_t *dstPixels, *srcPixels = (uint32_t *)((uint8_t *)host_surface->pixels +
 		sdl_update_video_rect.y * host_surface->pitch +

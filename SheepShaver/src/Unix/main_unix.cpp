@@ -747,6 +747,10 @@ static bool init_sdl()
 	assert(sdl_flags != 0);
 
 #ifdef USE_SDL_VIDEO
+	// Backported from kanjitalk755/macemu 91d58b12 "Fix Wayland detection when there's no GTK".
+	// PROSPECTIVE / UNVALIDATED: gated on REAL_ADDRESSING (32-bit ARM / native-PPC only), so this
+	// compiles out on every 64-bit build — macOS and 64-bit Linux alike. Brought in for a future
+	// 32-bit ARM / Wayland target; runtime behavior is not validated on this fork.
 #if REAL_ADDRESSING && defined(__linux__)
 	// Wayland's mmap usage conflicts with fixed low-address mappings; force XWayland.
 	if (getenv("WAYLAND_DISPLAY") && !getenv("SDL_VIDEODRIVER"))

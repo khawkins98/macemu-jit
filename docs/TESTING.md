@@ -80,6 +80,66 @@ note their blind spots** (below) — passing them is necessary, not sufficient.
 
 ---
 
+## Testing AltiVec instructions (read this before adding vector vectors)
+
+AltiVec is the most trap-laden corner of the harness — four rounds of vacuous or
+wrong AltiVec vectors shipped in 2026-06 before this was written down. The rules:
+
+**1. Use the generator, not hand-encoded hex.** `jit-test/gen-altivec-vectors.py`
+encodes correctly and documents the traps. Run it, splice the output into
+`run.sh`, gate with `make test-jit`. To add an op: add one `p(...)` line and
+re-run. Hand-encoding repeatedly produced illegal/no-op instructions.
+
+**2. VX-form XO is UNSHIFTED.** Unlike X/A-form (XO at bits 21-30, emitted `xo<<1`),
+VX-form AltiVec ops put an 11-bit XO at bits 21-31 with no shift. Shifting it
+yields an illegal no-op that leaves `vD` untouched — a silent vacuous pass.
+
+**3. The result must reach a GPR, with op-dependent, non-uniform operands.**
+REGDUMP captures GPRs only (not VRs/FPRs), so every vector must
+`op -> stvx v2 -> lwz result into r5/r6`. And the operands must actually exercise
+the op:
+   - **Vacuous** = result never reaches a GPR (→ r5=0 in both modes → trivial pass).
+   - **Masking** = result reaches a GPR but operands are *symmetric* so the op's
+     defining property isn't tested (e.g. `vmuleub` with byte-uniform inputs:
+     even/odd selection gives the same product). Use **distinct per-lane** operands
+     (`lvx` a `00 01 02 … 0F` pattern), not `vspltisb` uniform splats, for any op
+     whose semantics depend on element *position*.
+
+**4. The ev_mixed byte-order trap (the deep one).** The VR is stored in the
+interpreter's `ev_mixed` order (`ppc-operands.hpp`): bytes are reversed *within*
+each 32-bit word, word order preserved. The JIT's `emit_load_vr` loads that raw,
+so NEON lane `i` holds PPC element `byte_element(i)`, not `i`. **Any op whose
+semantics depend on sub-word byte position is suspect.** Status (2026-06-04):
+   - **Correct/fixed:** `vspltw`, `vsldoi`, `vspltb`/`vsplth` (remapped), and all
+     element-symmetric ops (`vand`/`vor`/`vadduwm`/`vcmpequw`/…).
+   - **Confirmed BROKEN (parked):** `vmrgh*`/`vmrgl*` (merges), `vpk*` (packs),
+     `vmulo*`/`vmule*` (even/odd multiplies — also emit the wrong NEON op).
+   See the note on `emit_load_vr` in ppc-jit.cpp for the two fix approaches.
+
+**5. Differential gate is the oracle, but it can't catch masking.** `make test-jit`
+diffs JIT vs interpreter — a real divergence fails, a correct op passes. But a
+*masking* vector passes while testing nothing, and a *vacuous* one passes too.
+The harness preflight catches malformed/duplicate vectors, **not** vacuousness —
+that defense is the generator's distinct-operand construction. When in doubt, run
+the vector with `SS_TEST_HEX=... SS_TEST_DUMP=1 SS_TEST_JIT=0` and confirm r5 holds
+the value the comment claims.
+
+**6. Validate against real AltiVec software** (the gold standard). The harness
+covers individual ops; a real app exercises them in combination and at scale.
+Best target: an AltiVec LAME-based **MP3 encoder** (DSP-heavy, deterministic).
+   - **Differential boot:** `SS_JIT_VERIFY=1 ./src/Unix/SheepShaver` re-runs every
+     JIT block through the interpreter and prints the exact block/opcode that
+     diverges — turns the encoder into a precise AltiVec bug-finder.
+   - **A/B output:** encode the same WAV with JIT (default, G4/AltiVec on) and with
+     `SS_USE_JIT=0` (interpreter); deterministic encoders should byte-match — any
+     difference is a JIT bug.
+   - Expect misbehaviour today: LAME uses the still-broken merges/packs/multiplies,
+     so garbled audio or a crash *confirms* the parked bugs bite real software.
+   - Other exercisers: QuickTime AltiVec codecs, Photoshop AltiVec filters,
+     GraphicConverter.
+
+---
+
 ## Conformance apps — fill the FP/AltiVec gap
 
 ### Paranoia (floating-point) — highest priority

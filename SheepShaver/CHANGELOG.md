@@ -70,7 +70,9 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   the JIT-vs-interpreter diff passed trivially. FP arithmetic was effectively
   untested. The new vectors load the result back into a GPR (fadd/fsub/fmul/fdiv,
   the fma family, frsp/fctiwz/fneg/fabs/fmr, and single-precision forms). Generated
-  by `jit-test/gen-fp-vectors.py` (documented, reproducible).
+  by `jit-test/gen-fp-vectors.py` (documented, reproducible). The 9 vacuous
+  originals were then removed (kept `fp_lfd_stfd`/`fp_lfs_stfs` — those *do* load
+  the round-tripped value back into a GPR, so they are real load/store tests).
 
 - **AltiVec test coverage was almost entirely fake**: an initial 15-vector batch
   (14 vacuous, doubled-XO no-ops) *and* all 12 pre-existing `vec_*` vectors were

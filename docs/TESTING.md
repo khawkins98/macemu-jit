@@ -110,11 +110,14 @@ interpreter's `ev_mixed` order (`ppc-operands.hpp`): bytes are reversed *within*
 each 32-bit word, word order preserved. The JIT's `emit_load_vr` loads that raw,
 so NEON lane `i` holds PPC element `byte_element(i)`, not `i`. **Any op whose
 semantics depend on sub-word byte position is suspect.** Status (2026-06-04):
-   - **Correct/fixed:** `vspltw`, `vsldoi`, `vspltb`/`vsplth` (remapped), and all
-     element-symmetric ops (`vand`/`vor`/`vadduwm`/`vcmpequw`/…).
-   - **Confirmed BROKEN (parked):** `vmrgh*`/`vmrgl*` (merges), `vpk*` (packs),
-     `vmulo*`/`vmule*` (even/odd multiplies — also emit the wrong NEON op).
-   See the note on `emit_load_vr` in ppc-jit.cpp for the two fix approaches.
+   - **Correct/fixed:** `vspltw`, `vsldoi`, `vspltb`/`vsplth` (remapped), the full
+     `vmrgh*`/`vmrgl*` merge family (byte/halfword via the per-op `REV32.16B`
+     normalize in `emit_vmrg`; words are plain `ZIP.4S`), and all element-symmetric
+     ops (`vand`/`vor`/`vadduwm`/`vcmpequw`/…).
+   - **Confirmed BROKEN (parked):** `vpk*` (packs), `vmulo*`/`vmule*` (even/odd
+     multiplies — also emit the wrong NEON op).
+   See the `case 12` / `emit_vmrg` note in ppc-jit.cpp; the global load/store REV32
+   approach is ruled out (per-op is the path). Live tracker: ROADMAP A2.
 
 **5. Differential gate is the oracle, but it can't catch masking.** `make test-jit`
 diffs JIT vs interpreter — a real divergence fails, a correct op passes. But a

@@ -13,7 +13,7 @@
 | Dhrystones/sec | 1,348K | **1,475K** | **+9.4%** |
 | CPU score | 62.7 | **64.2** | +2.2% |
 | Math score | 11,539 | **12,354** | +7.1% |
-| Harness | 235/235 | 255/255 (2026-06-04, post-merge) | +FP, AltiVec, carry-wrap, mullwo vectors (count via `make harness-count`) |
+| Harness | 235/235 | 261/261 (2026-06-04; count via `make harness-count`) | +FP, AltiVec (incl. full vmrg* merge family), carry-wrap, mullwo vectors |
 
 Target: **3-5x** over interpreter, approaching G4/1.8GHz class.
 
@@ -100,32 +100,38 @@ on it.
    RA reg (`hR`) is live per emitted op; the address and loaded value ride in
    `RTMP0`/`RTMP1`.
 
-### P1b. AltiVec element-order correctness (ev_mixed) — PARTIALLY FIXED (2026-06-04)
+### P1b. AltiVec element-order correctness (ev_mixed) — MOSTLY FIXED (2026-06-04)
 
-**Status**: real correctness bug, partially fixed; the rest is parked + signposted
-in code (`emit_load_vr` in ppc-jit.cpp) and CHANGELOG.
+**Status**: real correctness bug; splats + the entire merge family fixed. Only the
+pack + even/odd multiplies remain (parked + signposted in code at `emit_load_vr` /
+the `case 12` block in ppc-jit.cpp, and CHANGELOG). Live tracker: ROADMAP A2.
 
 VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed within
 each 32-bit word, word order preserved — `ppc-operands.hpp` `byte_element`/
 `half_element`). `emit_load_vr` loads that raw via `LDR Q`, so any op that selects
 or rearranges sub-word elements with raw NEON lanes is wrong.
-- **Fixed**: `vspltb`/`vsplth` (remap the DUP index through `byte_element`/
+- ✅ **Fixed**: `vspltb`/`vsplth` (remap the DUP index through `byte_element`/
   `half_element`). `vspltw`/`vsldoi`/element-symmetric ops were already correct.
-- **Still broken** (repro vectors in `jit-test/gen-altivec-vectors.py`): `vmrgh*`/
-  `vmrgl*` merges, `vpk*` packs, even/odd multiplies (`vmulo*`/`vmule*` — these
-  also emit the *wrong* NEON op, e.g. vmuloub emits `MUL.8B` not `UMULL.8H`).
+- ✅ **Fixed — merges `vmrgh/l {b,h,w}`** (2026-06-04, boot-verified, promoted to
+  the scored gate 255→261): the encodings were garbage (`0x..C400`, not ZIP);
+  corrected to `ZIP1`/`ZIP2`. Words are a plain `ZIP.4S` (word_element identity);
+  byte/halfword use the **per-op `REV32.16B` normalize** (`emit_vmrg`): `REV32.16B`
+  both inputs → `ZIP1`/`ZIP2.{16B,8H}` → `REV32.16B` back. The `ev_mixed` layout is
+  exactly `REV32.16B` at the byte level vs natural element order.
+- 🟡 **Still broken** (repro/quarantine in `jit-test/gen-altivec-vectors.py`):
+  `vpk*` packs, even/odd multiplies (`vmulo*`/`vmule*` — these also emit the *wrong*
+  NEON op, e.g. vmuloub emits `MUL.8B` not `UMULL.8H`).
 
-**Two fix approaches** (neither done; both need a boot to verify real AltiVec
-software, e.g. a LAME MP3 encoder under `SS_JIT_VERIFY=1` — see TESTING.md):
-1. **Systematic**: `emit_load_vr` = `LDR Q`+`REV32.16B`, `emit_store_vr` =
-   `REV32.16B`+`STR Q`, so NEON sees natural order and every op uses raw lanes
-   (then revert the splat remap). Simplest, but +2 NEON ops per AltiVec op (perf
-   hit) and must re-verify every op + lvx/stvx interop.
-2. **Per-op**: make each broken op's codegen ev_mixed-aware (like the splat remap).
-   Perf-neutral, but a careful derivation per op; multiplies also need UMULL/UMULL2
-   + a deinterleave.
-**Effort**: medium-high. **Reachability**: AltiVec is live (emulator advertises a
-G4), so this corrupts real AltiVec software today.
+**Fix approach — settled: per-op (approach B).** Make each op's codegen ev_mixed-aware
+locally (the merges proved it: a *local* `REV32.16B` normalize works). The *global*
+load/store `REV32.16B` variant (old approach 1) was **empirically ruled out** — it
+changes the in-JIT VR convention for every op at once and re-breaks correct ones
+(ROADMAP A2). Remaining per-op work: `vpkuhum` (normalize + `UZP1`/`XTN`-style narrow,
+then `REV32.16B` back), then the multiplies (need `UMULL.8H`/`UMULL2` + ev_mixed even/odd
+deinterleave). Final sign-off still needs a real-AltiVec boot under `SS_JIT_VERIFY=1`
+(e.g. a LAME MP3 encoder — see TESTING.md / ROADMAP A3).
+**Effort**: medium (per remaining op). **Reachability**: AltiVec is live (emulator
+advertises a G4), so the remaining ops corrupt real AltiVec software today.
 
 ---
 
@@ -345,9 +351,9 @@ this round-trip.
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 
 Tracked as **P1b** in the "Open — Hardening" section above (single source of
-truth). Summary: `vspltb`/`vsplth` fixed; `vmrg*`/`vpk*`/even-odd multiplies
-still broken (multiplies also emit the wrong NEON op). Two fix approaches and
-repro vectors documented there.
+truth). Summary: `vspltb`/`vsplth` **and the entire `vmrg*` merge family** fixed
+(per-op `REV32.16B` normalize); only `vpk*` + even-odd multiplies remain (multiplies
+also emit the wrong NEON op). Per-op approach settled; repro vectors documented there.
 
 ### P6: Instruction Scheduling
 

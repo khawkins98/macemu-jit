@@ -53,17 +53,19 @@ hidden FP/VR divergence (commit `9439666a`). Side effect: FP/VR results are no l
 otherwise-unobservable results.
 ✅ **Quarantine lane added + widened to the full worklist** (commits `4f5825bd`, `aef9fb34`):
 `QUARANTINE_ORDER` vectors run in JIT mode but don't count toward score, so `score=100` stays
-meaningful while confirmed bugs are *tracked*. Now holds **all 9** `ev_mixed` divergences —
-multiplies (`vmuloub`/`vmuleub`), merges (`vmrgh{b,h,w}`/`vmrgl{b,h,w}`), pack (`vpkuhum`) — all
-report `xfail`. When an A2 fix lands they flip `xfail`→`xpass` and `make test-jit` prints
-"promote to TEST_ORDER". **A2's worklist is now concrete + visible** (and was used to rule out
-approach A — see A2).
+meaningful while confirmed bugs are *tracked*. Originally held **all 9** `ev_mixed` divergences;
+the 6 merges (`vmrgh{b,h,w}`/`vmrgl{b,h,w}`) have since been fixed and promoted, leaving **3**:
+multiplies (`vmuloub`/`vmuleub`) + pack (`vpkuhum`). When an A2 fix lands its vector flips
+`xfail`→`xpass` and `make test-jit` prints "promote to TEST_ORDER". **A2's worklist stays
+concrete + visible** (this mechanism was also used to rule out approach A — see A2).
 ✅ **`SS_JIT_VERIFY` now compares FPR + VR** (commit `6837f642`): the boot-time oracle catches
 FP/AltiVec divergence in real software (`SS_JIT_VERIFY=1 ./SheepShaver`), not just GPR/flags —
 the in-the-wild validation path for A2.
-**Remaining A1:** regenerate the scored word-op vectors with **distinct operands** (the masking
-gap found via the A2 experiment — see A2; uniform palindrome operands can't catch byteswap/lane
-bugs). Safe + here-verifiable; do before trusting any broad VR-codegen change.
+**Remaining A1:** ✅ the merge vectors are now on **distinct operands** (vA=`00..0F`, vB=`10..1F`)
+— done as part of the A2 byte/hw merge fix. Still open: the scored **arithmetic** word-op vectors
+(`vadduwm`/`vsubuwm`/`vmaxsw`/…) use uniform palindrome operands (`0x05..`/`0x03..`) that can't
+catch a byteswap/lane bug — regenerate with **distinct AND carry-inducing** operands before
+trusting any *broad* VR-codegen change. Safe + here-verifiable.
 
 **Why:** the recurring failure mode (above). Three rounds of vacuous/masking AltiVec vectors
 slipped the harness; FP vectors were vacuous for months. Fixing more codegen on top of a
@@ -72,10 +74,12 @@ harness that can't catch mistakes just produces the next silent bug.
 **Scope (✅ = landed this cycle):**
 - ✅ **REGDUMP compares FPR + VR** (harness) and ✅ **`SS_JIT_VERIFY` compares FPR + VR** (boot
   oracle) — the two blind spots that hid every FP/AltiVec bug are closed.
-- ✅ **Quarantine lane** tracks all 9 confirmed `ev_mixed` divergences as `xfail` (the A2 gate).
-- 🟡 **Stronger AltiVec operands** — regenerate the scored word-op vectors with **distinct AND
-  carry-inducing** operands (small-distinct still masks byteswap-carry; see A2 testing-gap note).
-  Low priority for A2 (per-op, doesn't touch word ops) but needed before any *broad* VR change.
+- ✅ **Quarantine lane** tracks the `ev_mixed` divergences as `xfail` (the A2 gate); down to 3
+  (pack + 2 multiplies) after the merge family landed.
+- 🟡 **Stronger AltiVec operands** — ✅ done for the *merges* (distinct operands). Still open for
+  the scored **arithmetic** word-ops: regenerate with **distinct AND carry-inducing** operands
+  (small-distinct still masks byteswap-carry; see A2 testing-gap note). Needed before any *broad*
+  VR change.
 - 🟡 **Vacuousness guard** on `run.sh` — now narrowed to **memory-only / otherwise-unobservable**
   results (FP/VR are captured). Still needs a sentinel/mutation design; lower urgency now.
 - 🟡 **Broaden AltiVec coverage** — the suite has ~13 scored AltiVec + 9 quarantined ops out of
@@ -97,38 +101,43 @@ harness that can't catch mistakes just produces the next silent bug.
 (media codecs, AltiVec-era apps) — latent, not a boot-blocker, but the worst failure mode.
 
 **Status:** splats (`vspltb`/`vsplth`) FIXED + merged; `vspltw`/`vsldoi` were already correct.
-✅ **word merges `vmrghw`/`vmrglw` FIXED, merged + promoted** (merged to `macos-arm64`,
-**boot-verified** via `SS_JIT_VERIFY` — zero VR divergence): all 6 `vmrgh*`/`vmrgl*` encodings
-were garbage (`0x..C400`/`0x..C800` — not permute ops); replaced with correct `ZIP1`/`ZIP2`.
-Word merges flipped `xfail→xpass` and were **promoted to the scored gate (255→257, score=100)**.
-**Still wrong (7):** byte/halfword merges (`vmrgh{b,h}`/`vmrgl{b,h}`), pack (`vpkuhum`), even/odd
-byte multiplies (`vmuleub`/`vmuloub` — latter also needs `UMULL.8H` not `MUL.8B`).
-**Byte-merge mechanism (data, 2026-06-04):** with the correct `ZIP1.16B`, `vmrghb v2,v1,v1` gives
-the right byte *pairs* but **pairwise-swapped words** (`w0↔w1`, `w2↔w3`) vs interp — the
-`ev_mixed` within-word byte reversal. A trailing `REV64.4S` is the likely fix, BUT **verify with
-distinct operands** (the quarantine vectors are self-operand `v1,v1` → a fix can pass coincidentally).
-→ strengthen the byte/hw merge quarantine vectors to two distinct operands *before* fixing them.
+✅ **ALL merges `vmrgh/l {b,h,w}` FIXED + boot-verified + promoted (2026-06-04).**
+- *Word merges* (`vmrghw`/`vmrglw`): the 6 `vmrgh*`/`vmrgl*` encodings were garbage
+  (`0x..C400`/`0x..C800` — not permute ops); replaced with correct `ZIP1`/`ZIP2`. Word merges
+  are correct as a plain `ZIP.4S` (`word_element` is identity under `ev_mixed`, no byte remap).
+- *Byte/halfword merges* (`vmrgh{b,h}`/`vmrgl{b,h}`): needed more than the encoding. The fix is
+  the **`REV32.16B` normalize** sequence (`emit_vmrg` in `ppc-jit.cpp`): the `ev_mixed` layout
+  (bytes reversed within each 32-bit word) is *exactly* `REV32.16B` vs natural element order, so
+  `REV32.16B` both inputs → `ZIP1`/`ZIP2.{16B,8H}` → `REV32.16B` back. (This is the **per-op**
+  version of approach A — a *local* normalize works where the *global* load/store one failed,
+  see below.)
+- Verified `xfail→xpass` with **distinct operands** (vA=`00..0F`, vB=`10..1F`), promoted to the
+  scored gate (**255→261, score=100**), and boot-verified under `SS_JIT_VERIFY` (zero VR/FPR
+  divergence; the lone GPR/LR/PC divergence is the documented `blr`-boundary false positive).
+
+**Still wrong (3, quarantined `xfail`):** pack (`vpkuhum`) and the even/odd byte multiplies
+(`vmuleub`/`vmuloub` — these also emit the wrong NEON op: `MUL.8B`, need `UMULL.8H`/`UMULL2`).
 
 **Root cause:** VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed
 within each word). `emit_load_vr` loads raw via `LDR Q`; the JIT then indexes NEON lanes with
 the raw PPC element → wrong element for any sub-word-rearranging op.
 
-**⛔ Approach A (REV32.16B normalize at load/store) — EMPIRICALLY RULED OUT (2026-06-04).**
+**⛔ Approach A (REV32.16B normalize at load/store, GLOBAL) — RULED OUT (2026-06-04).**
 Tried on a throwaway branch: added `REV32.16B` to `emit_load_vr`/`emit_store_vr` + reverted the
-splat remap, built, ran the harness. Result: **all 9 quarantine vectors stayed `xfail`** — it
-did **not** fix the merges/multiplies — and `score=100` was *misleading* (see testing gap below).
-Reason: `REV32.16B` reverses bytes *within each 32-bit word*, but the merge/pack bug is on a
-different axis — **lane order / big-vs-little-endian element numbering**. The merges are emitted
-with `ZIP1`/`ZIP2` (e.g. `vmrghw`=`ZIP1.4S` @ ppc-jit.cpp:3322, `vmrglb`=`ZIP2.16B` @ :3323).
-PPC AltiVec numbers elements big-endian (element 0 = MSB = NEON's *highest* lane on LE ARM), so
-`vmrghb` (PPC "high" = elements 0–7) likely needs `ZIP2` (high lanes), not `ZIP1`, ± an element
-reversal — **a per-op derivation, not a blanket load/store transform.**
+splat remap, built, ran the harness. Result: **all 9 quarantine vectors stayed `xfail`**, and
+`score=100` was *misleading* (the masking gap below). A *blanket* load/store transform changes
+the in-JIT VR convention for every op at once and re-breaks the already-correct ones; it is the
+wrong granularity.
 
-**✅ Approach B (per-op) is the path.** For each broken op fix the actual NEON sequence:
-the merges (`ZIP1`↔`ZIP2` hi/lo swap + endian element-numbering), the pack (`vpkuhum`), and the
-multiplies (`vmuleub`/`vmuloub` — even/odd element select; `vmuloub` also needs `UMULL.8H` not
-`MUL.8B`). Derive each against the interpreter; the **9 quarantine vectors are the target** (flip
-`xfail`→`xpass`).
+**✅ Approach B (per-op) is the path — CONFIRMED for the merges.** Fix each op's actual NEON
+sequence locally. The merges proved the technique: a **per-op, local** `REV32.16B` normalize
+(`emit_vmrg`) is exactly approach A applied *inside one op*, and it works — the global version
+failed only because it was global. Remaining targets, same method (derive against the
+interpreter, flip the quarantine vector `xfail→xpass`):
+- **`vpkuhum`** (halfword→byte pack): likely the `REV32.16B` normalize + a `UZP1`/`XTN`-style
+  narrowing, then `REV32.16B` back. *Next up — simplest of the three.*
+- **`vmuleub`/`vmuloub`** (even/odd byte multiply): two bugs at once — wrong NEON op (`MUL.8B`,
+  must be `UMULL.8H`/`UMULL2.8H`) **and** even/odd element select under `ev_mixed`. Hardest.
 
 **⚠️ Testing gap found (A1 follow-up):** the scored word-op vectors (`av_vadduwm`/`vsubuwm`/
 `vmaxsw`/…) use **uniform operands** (`0x05050505`/`0x03030303`) which are byteswap-palindromes,
@@ -137,13 +146,15 @@ them with **distinct AND carry-inducing** operands (small-distinct like `00..0F`
 masks it — sums don't carry across byte boundaries, so byteswap stays invisible; use values that
 force inter-byte carries). Only matters for *broad* VR-codegen changes, not per-op approach B.
 
-**Order of attack (simplest → hardest):** word merges (`vmrghw`/`vmrglw` — likely just `ZIP1↔ZIP2`)
-→ byte/halfword merges (`vmrgh{b,h}`/`vmrgl{b,h}`) → pack (`vpkuhum`) → multiplies (`vmuleub`/
-`vmuloub`, + `UMULL.8H`). Fix one, watch its quarantine vector flip `xfail`→`xpass`, keep 255 green.
+**Order of attack (simplest → hardest):** ✅ word merges → ✅ byte/halfword merges → **🔜 pack
+(`vpkuhum`)** → multiplies (`vmuleub`/`vmuloub`, + `UMULL.8H`). Fix one, watch its quarantine
+vector flip `xfail`→`xpass`, keep the scored count green.
 
-**Done when:** all 9 quarantine vectors `xpass` (promote to TEST_ORDER) **and** boot-verified
-against real AltiVec software under `SS_JIT_VERIFY=1` (→ A3 "AltiVec under real software"). The
-harness flip is necessary but not sufficient — its input coverage is one pattern per op.
+**Done when:** the remaining 3 quarantine vectors `xpass` (promote to TEST_ORDER) **and**
+boot-verified against real AltiVec software under `SS_JIT_VERIFY=1` (→ A3 "AltiVec under real
+software"). The harness flip is necessary but not sufficient — its input coverage is one pattern
+per op (now on distinct operands, so positionally complete for permutes; multiplies will also
+want value coverage).
 
 **Depends on:** A1. **Needs boot verification** (yours) — the harness AltiVec coverage is partial.
 **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P1b/P5c; `CHANGELOG.md` [SheepShaver] 2026-06-04; `ppc-jit.cpp`.
@@ -297,6 +308,9 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 ---
 
 ## ✅ Done (recent — for context, newest first)
+- AltiVec `ev_mixed` merges: **full `vmrgh/l {b,h,w}` family fixed** + boot-verified + promoted
+  to the scored gate (261/100). Byte/hw via the per-op `REV32.16B` normalize (`emit_vmrg`);
+  merge test vectors strengthened to distinct operands. Remaining ev_mixed: `vpkuhum` + 2 mults.
 - Doc hygiene: fork-wide `CHANGELOG.md`, `docs/ARCHITECTURE.md` extracted, handoff docs retired
   (durables → DIAGNOSTICS/LEARNINGS), harness counts de-hardcoded, memories pruned.
 - Upstream backports: **VDE networking**, **SDL3 default backend** (boot-verified), **Wayland

@@ -37,6 +37,29 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   ⏸ blocked/deferred · ☐ todo). Created dates recovered from git history (following renames);
   existing rich intros (ROADMAP, NEW-WORLD plan) harmonized, not clobbered.
 
+### [SheepShaver] AltiVec byte/halfword merge fix (vmrgh/l b,h) + distinct-operand test strengthening
+
+- **Bug fix — completes the merge family.** Following the word-merge fix below, the byte and
+  halfword merges (`vmrghb`/`vmrglb`/`vmrghh`/`vmrglh`) needed more than a correct ZIP
+  encoding: the VR is stored `ev_mixed` (bytes reversed *within* each 32-bit word), which at
+  the byte level is exactly `REV32.16B` relative to natural PPC element order. New
+  `emit_vmrg()` helper normalizes both inputs with `REV32.16B`, merges with
+  `ZIP1`/`ZIP2.{16B,8H}` (PPC element 0 = MSB = NEON's lowest lane after the rev, so PPC "high"
+  merge = ZIP1 / "low" merge = ZIP2), then `REV32.16B` back before the store. Word merges keep
+  the plain `ZIP.4S` — `word_element` is the identity under `ev_mixed`, so they need no rev.
+- **Test strengthening (closes a masking gap).** All six merge vectors moved from self-operand
+  (`v1,v1`) to **distinct operands** (vA=`00..0F`, vB=`10..1F`), so a wrong ZIP1↔ZIP2 or A↔B
+  swap can no longer pass coincidentally; the full 128-bit result is diffed via the REGDUMP VR
+  line. The four byte/halfword merges flipped `xfail→xpass` and were promoted to the scored
+  gate (**257→261, score=100**); the word merges stayed green under distinct operands —
+  retroactively proving that fix was not coincidental.
+- **Boot-verified** under `SS_JIT_VERIFY` (Mac OS 8.6, 235K blocks, 98.7% JIT coverage): **zero
+  VR/FPR divergence**. The single GPR/LR/PC divergence is the documented `blr`-block-boundary
+  false positive (LEARNINGS, "SS_JIT_VERIFY false positives"), not a codegen bug.
+- **Remaining in the `ev_mixed` class:** `vpkuhum` (halfword→byte pack) and the even/odd byte
+  multiplies `vmuleub`/`vmuloub` (also need `UMULL.8H`, not `MUL.8B`) — still quarantined
+  (xfail). See `docs/planning/ROADMAP.md` A2.
+
 ### [SheepShaver] AltiVec word-merge codegen fix (vmrghw/vmrglw)
 
 - **Bug fix.** The JIT's AltiVec merge cases (`vmrgh*/vmrgl*`) emitted `0x..C400`/

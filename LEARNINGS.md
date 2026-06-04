@@ -2007,13 +2007,25 @@ scored gate (255→257). Lesson: a wrong-but-plausible encoding hidden behind a
 correct-sounding comment passes a *vacuous* harness silently — distrust the
 comment, decode the hex.
 
-**Still broken** (quarantined xfail, signposted in code): byte/halfword merges
-vmrgh/l b,h (correct ZIP encoding now, but ev_mixed swaps the word pairs — needs a
-trailing REV64.4S, verified with DISTINCT operands), vpk* packs, even/odd
+**Byte/halfword merges fixed via per-op normalize (2026-06-04, 257→261).** The
+right encoding alone isn't enough for sub-word merges: `ev_mixed` is *exactly*
+`REV32.16B` at the byte level vs natural PPC element order. So `emit_vmrg`
+normalizes both inputs with `REV32.16B` (→ lane k = PPC byte k), merges with
+`ZIP1`/`ZIP2.{16B,8H}` (PPC elem 0 = MSB = NEON's lowest lane after the rev, so
+PPC-high = ZIP1, PPC-low = ZIP2), then `REV32.16B` back. **Key insight: a *local*
+(per-op) REV32 normalize works, but the *global* version — REV32 in
+`emit_load_vr`/`emit_store_vr` — was empirically ruled out** (it re-breaks the
+ops that are already correct under the raw convention, e.g. word-granular ones).
+Same transform, right granularity. (My earlier `REV64.4S` guess was wrong —
+distrust the hypothesis, derive it.) Verified xpass with DISTINCT operands
+(vA=00..0F, vB=10..1F) so a ZIP1↔ZIP2 / A↔B swap can't pass coincidentally;
+boot-clean under SS_JIT_VERIFY.
+
+**Still broken** (quarantined xfail, signposted in code): vpk* packs, even/odd
 multiplies (which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
-`vspltw`/`vsldoi`/element-symmetric ops are unaffected. Two fix paths documented
-on `emit_load_vr`: systematic REV32 in load/store (simple, +2 ops/op perf hit) vs
-per-op ev_mixed-aware codegen (perf-neutral, more work).
+`vspltw`/`vsldoi`/element-symmetric ops are unaffected. Fix path = per-op
+ev_mixed-aware codegen (same as the merges); the global load/store REV32 approach
+is ruled out (above).
 
 ### VX-form XO is UNSHIFTED
 

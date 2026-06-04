@@ -81,6 +81,12 @@ Docs rot when work lands but the docs don't move. Two rules keep them honest.
 - **Update the tracking doc's item**, don't just delete it. Flip the status marker (below) on
   the relevant line in the roadmap / plan / backlog so the *record of what was decided* survives
   — a folded item with a ✅ and a one-line outcome is worth more than a vanished one.
+- **An item often lives in more than one tracker.** The cross-track map (`ROADMAP.md`) and the
+  detailed plan (`OPTIMIZATION-PLAN.md` / `IMPLEMENTATION-BACKLOG.md`) frequently record the same
+  work from different angles. When you finish something, **grep its name across `docs/`** and
+  update *every* hit — updating one and leaving the other stale is the most common way these docs
+  rot. (Real example: the AltiVec merge fix was logged in ROADMAP A2 but P1b/P5c in
+  OPTIMIZATION-PLAN.md were left saying "still broken.")
 - **Bump the doc's `Updated:` date** in its header (below).
 - For a planning/spec doc, prefer **fold-and-retire over silent deletion**: move the still-open
   items into the live tracker (`docs/planning/ROADMAP.md` or
@@ -116,11 +122,21 @@ with the header; when you touch an old doc, add it if missing.
 - [ ] `make test-jit` passes (score=100) — NOT `make test-opcodes` (that only tests the interpreter)
 - [ ] `SS_JIT_VERIFY=1 ./SheepShaver` boot for 10-20s with no divergence (for RA/flag/branch changes)
 - [ ] Normal boot to Finder desktop
-- [ ] `make bench` before/after if the change affects codegen performance
-- [ ] Add harness test vector for the affected instruction if one doesn't exist
+- [ ] `make bench` before/after if the change affects codegen performance. **If no bench kernel
+  covers the affected op** (e.g. AltiVec has no kernel today), say so explicitly in the commit
+  body rather than silently skipping — "perf delta unmeasured, no kernel for X; cost bounded at
+  N extra insns/op" — and consider adding a kernel (`rom-harness/README.md`).
+- [ ] Add harness test vector for the affected instruction if one doesn't exist. **Position/
+  byte-order-dependent ops (vector permutes, merges, packs) need DISTINCT operands** — a
+  self-operand or palindrome vector can rubber-stamp a wrong fix (see LEARNINGS "masking trap").
 - [ ] Add/update inline ARM64 mnemonic comments on emit32() calls
 - [ ] Credit any borrowed technique in an inline comment — see **Crediting Borrowed Techniques** below
-- [ ] Update `docs/planning/OPTIMIZATION-PLAN.md` if completing or investigating a plan item
+- [ ] **Update EVERY tracker that mentions the item, not just one.** A plan item is often recorded
+  in more than one doc — typically `docs/planning/ROADMAP.md` (the cross-track map) AND
+  `docs/planning/OPTIMIZATION-PLAN.md` or `…/IMPLEMENTATION-BACKLOG.md` (the detailed plan).
+  Before marking done, **grep the op/feature name across `docs/`** (e.g.
+  `grep -rni vpkuhum docs/`) and flip the marker + outcome line in each hit. Leaving one stale is
+  the most common doc gap.
 - [ ] Update `CHANGELOG.md` for user-visible changes
 - [ ] Update `LEARNINGS.md` if the change reveals a non-obvious finding
 
@@ -204,8 +220,8 @@ codegen comparisons.
 
 | If you change... | Also update... |
 |------------------|----------------|
-| `ppc-jit.cpp` (instruction handler) | `jit-test/run.sh` (test vector), `OPTIMIZATION-PLAN.md` |
-| `ppc-jit.cpp` (RA/flush/block structure) | `LEARNINGS.md`, `OPTIMIZATION-PLAN.md` |
+| `ppc-jit.cpp` (instruction handler) | `jit-test/run.sh` (test vector), **`ROADMAP.md` + `OPTIMIZATION-PLAN.md` (both, if the item is in both — grep the op name)** |
+| `ppc-jit.cpp` (RA/flush/block structure) | `LEARNINGS.md`, **`ROADMAP.md` + `OPTIMIZATION-PLAN.md` (grep the item)** |
 | Prefs parsing (`prefs.cpp`) | `USER-HANDBOOK.md` prefs table |
 | Emul ops (`emul_op.cpp`, `emul_op.h`) | `CHANGELOG.md`, `USER-HANDBOOK.md` |
 | Harness (`jit-test/run.sh`) | nothing — the count is derived (`make harness-count`); docs are de-hardcoded |

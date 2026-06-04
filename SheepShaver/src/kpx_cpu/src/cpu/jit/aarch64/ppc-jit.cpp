@@ -840,11 +840,13 @@ static void emit_load_ea_base(int ra_num) {
  * This raw `LDR Q` therefore puts PPC element `i` in NEON lane byte_element(i), NOT
  * lane `i`. Any op whose semantics depend on sub-word *position* sees the wrong
  * lanes. Confirmed by differential vectors (gen-altivec-vectors.py):
- *   BROKEN: vmrghb/vmrglb/vmrghw/vmrglw (merges), vpkuhum (pack), vmuloub/vmuleub
- *           (even/odd byte multiplies — these ALSO emit the wrong NEON op: case 8
- *           below emits MUL.8B, not the widening UMULL.8H).
+ *   STILL BROKEN: vpkuhum (pack), vmuloub/vmuleub (even/odd byte multiplies — these
+ *           ALSO emit the wrong NEON op: case 8 below emits MUL.8B, not the widening
+ *           UMULL.8H). Quarantined (xfail) in the harness; ROADMAP A2.
  *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops.
- *   FIXED:  vspltb/vsplth (case 524/588 below remap the DUP index via byte/half_element).
+ *   FIXED:  vspltb/vsplth (case 524/588 remap the DUP index via byte/half_element);
+ *           vmrghw/vmrglw (cases 140/396, plain ZIP.4S); vmrgh/l {b,h} (emit_vmrg:
+ *           REV32.16B normalize -> ZIP1/2.{16B,8H} -> REV32.16B back).
  *
  * TWO FIX APPROACHES (neither done — needs a boot to verify real AltiVec software):
  *   (A) Systematic: make this LDR Q + REV32.16B (and store = REV32.16B + STR Q) so
@@ -869,6 +871,30 @@ static void emit_load_vr(int qd, int vr_num) {
 static void emit_store_vr(int qs, int vr_num) {
 	uint32_t off = PPCR_VR(vr_num);
 	emit32(0x3D800000 | ((off / 16) << 10) | (RSTATE << 5) | qs);
+}
+
+/* AltiVec byte/halfword merge (vmrgh/l {b,h}) -- ev_mixed-aware codegen.
+ * The VR is stored ev_mixed: bytes reversed WITHIN each 32-bit word (see the
+ * emit_load_vr note). At the byte level that is exactly REV32.16B relative to
+ * natural PPC element order, so:
+ *   1. REV32.16B both raw loads  -> NEON lane k now holds PPC byte element k.
+ *   2. merge with ZIP1/ZIP2 -- PPC element 0 is the MSB, which after the rev is
+ *      NEON's LOWEST lane, so PPC "high" merge (elements 0..7) = ZIP1 (low lanes)
+ *      and PPC "low" merge (elements 8..15) = ZIP2 (high lanes). The element WIDTH
+ *      (.16B vs .8H) is carried in the zip encoding passed in.
+ *   3. REV32.16B the result back to ev_mixed order before STR Q.
+ * Word merges (vmrghw/vmrglw) do NOT use this: word_element is identity, so they
+ * are a plain ZIP{1,2}.4S with no rev (cases 140/396). Derivation verified against
+ * the interpreter by the differential harness with DISTINCT operands (jit-test). */
+static void emit_vmrg(int va, int vb, int vd, uint32_t zip)
+{
+	emit_load_vr(0, va);
+	emit_load_vr(1, vb);
+	emit32(0x6E200800 | (0 << 5) | 0);        /* REV32.16B v0, v0 */
+	emit32(0x6E200800 | (1 << 5) | 1);        /* REV32.16B v1, v1 */
+	emit32(zip | (1 << 16) | (0 << 5) | 0);   /* ZIP1/2.{16B,8H} v0, v0, v1 */
+	emit32(0x6E200800 | (0 << 5) | 0);        /* REV32.16B v0, v0 (back to ev_mixed) */
+	emit_store_vr(0, vd);
 }
 
 /* AltiVec field extraction */
@@ -3308,31 +3334,31 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 640: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA07C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsws SQADD.4S */
 		case 1536: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubsbs SQSUB.16B */
 		case 1600: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubshs SQSUB.8H */
-		/* AltiVec merges (vmrgh / vmrgl, byte/halfword/word) -- two layered bugs
-		 * found 2026-06-04:
+		/* AltiVec merges (vmrgh / vmrgl, byte/halfword/word) -- two bugs, both FIXED
+		 * 2026-06-04:
 		 *
-		 * BUG 1 (FIXED): the encodings below were garbage -- 0x..C400/0x..C800 are NOT
+		 * BUG 1 (FIXED): the encodings here were garbage -- 0x..C400/0x..C800 are NOT
 		 *   ZIP1/ZIP2 (bit15 set => a three-same arithmetic op, not a permute); the
 		 *   "ZIP1/ZIP2" comments lied, so every merge produced a wrong/no-op result.
-		 *   Replaced with the correct ZIP1/ZIP2 {16B,8H,4S} encodings.
-		 *   -> vmrghw/vmrglw (word-granular) are now CORRECT: harness av_vmrghw/lw flip
-		 *      xfail->xpass, 255 scored stay green, and SS_JIT_VERIFY boot is clean
-		 *      (zero VR divergence). These two are the proven fix.
+		 *   Replaced with the correct ZIP1/ZIP2 {16B,8H,4S} encodings. With the right
+		 *   encoding the WORD merges (vmrghw/vmrglw, cases 140/396) are correct as a
+		 *   plain ZIP.4S -- word_element is the identity under ev_mixed, so no byte
+		 *   remap is needed.
 		 *
-		 * BUG 2 (STILL OPEN, quarantined): the BYTE/HALFWORD merges (vmrgh/l b,h) need
-		 *   more than the encoding -- the VR is stored ev_mixed (bytes reversed WITHIN
-		 *   each word, see emit_load_vr), so ZIP on raw lanes gives the right byte PAIRS
-		 *   but PAIRWISE-SWAPPED WORDS vs the interpreter (data: vmrghb v2,v1,v1 ->
-		 *   interp 00000101_02020303_..  vs JIT 02020303_00000101_..). A trailing
-		 *   REV64.4S is the likely fix, but verify with DISTINCT operands (the quarantine
-		 *   vectors are self-operand and can rubber-stamp a wrong fix). Tracked: ROADMAP
-		 *   A2; repro: jit-test/gen-altivec-vectors.py (BUG list). */
-		case 12: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E003800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghb ZIP1.16B */
-		case 76: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E403800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghh ZIP1.8H */
-		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E803800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S */
-		case 268: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E007800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglb ZIP2.16B */
-		case 332: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E407800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglh ZIP2.8H */
-		case 396: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E807800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglw ZIP2.4S */
+		 * BUG 2 (FIXED): the BYTE/HALFWORD merges needed more than the encoding -- the
+		 *   VR is stored ev_mixed (bytes reversed WITHIN each 32-bit word, see
+		 *   emit_load_vr), which at the byte level is exactly REV32.16B vs natural PPC
+		 *   element order. emit_vmrg() normalizes both inputs with REV32.16B, merges
+		 *   with ZIP1/ZIP2.{16B,8H}, then REV32.16B back. Verified xpass against the
+		 *   interpreter with DISTINCT operands (vA=00..0F, vB=10..1F), promoted to the
+		 *   scored harness gate. (Only vpkuhum / the even-odd multiplies remain in the
+		 *   ev_mixed class -- still quarantined; ROADMAP A2, repro gen-altivec-vectors.py.) */
+		case 12:  emit_vmrg(va, vb, vd, 0x4E003800); return true; /* vmrghb ZIP1.16B (ev_mixed-normalized) */
+		case 76:  emit_vmrg(va, vb, vd, 0x4E403800); return true; /* vmrghh ZIP1.8H  (ev_mixed-normalized) */
+		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E803800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S (word_element identity: no rev) */
+		case 268: emit_vmrg(va, vb, vd, 0x4E007800); return true; /* vmrglb ZIP2.16B (ev_mixed-normalized) */
+		case 332: emit_vmrg(va, vb, vd, 0x4E407800); return true; /* vmrglh ZIP2.8H  (ev_mixed-normalized) */
+		case 396: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E807800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglw ZIP2.4S (word_element identity: no rev) */
 
 		case 846: { emit_load_vr(0,vb); emit32(0x4E21C800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vcfsx SCVTF.4S */
 		case 910: { emit_load_vr(0,vb); emit32(0x6E21C800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vcfux UCVTF.4S */

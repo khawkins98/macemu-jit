@@ -2,6 +2,52 @@
 
 Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 
+## 2026-06-04
+
+### JIT Correctness
+
+- **AltiVec `vsel` fix**: `vsel` (vector select) emitted ARM64 `BSL` with its two
+  source operands swapped — it computed `(vC & vA) | (vB & ~vC)` instead of PPC's
+  `(vB & vC) | (vA & ~vC)`, returning vA wherever the mask bit was set. This would
+  silently corrupt any AltiVec software that uses `vsel` (the emulator advertises a
+  G4, so AltiVec is live). One-token operand swap; caught and regression-tested by
+  a new differential vector.
+
+### Testing & Benchmarking
+
+- **18 real FP-arithmetic test vectors**: the pre-existing `fp_*` vectors were
+  *vacuous* — they ended at `stfd` and never loaded the result into a GPR, but the
+  harness REGDUMP captures GPRs, not FPRs, so a wrong FP result was invisible and
+  the JIT-vs-interpreter diff passed trivially. FP arithmetic was effectively
+  untested. The new vectors load the result back into a GPR (fadd/fsub/fmul/fdiv,
+  the fma family, frsp/fctiwz/fneg/fabs/fmr, and single-precision forms). Generated
+  by `jit-test/gen-fp-vectors.py` (documented, reproducible).
+
+- **AltiVec coverage (corrected in review)**: an initial 15-vector AltiVec batch
+  was added, but adversarial review found 14 were vacuous — VX-form ops carried a
+  doubled XO field, decoding to no-ops, so their results never reached the checked
+  GPRs. Those were removed; the one correctly-encoded vector (`vsel`) is kept. A
+  correctly-encoded `vspltb` probe exposed a *separate* hidden interp-vs-JIT
+  divergence, flagged for follow-up. A proper VX-form AltiVec batch is pending.
+
+- **`make harness-count`**: single source of truth for the harness vector count,
+  derived from `jit-test/run.sh` (the count had drifted across several docs). The
+  *gate* references in the testing docs (TESTING.md, OPTIMIZATION-PLAN.md,
+  CLAUDE.md, CONTRIBUTING.md) were de-hardcoded to reference it; dated historical
+  snapshots in session logs and baseline tables are intentionally left as-is.
+
+- **FP microbench kernels**: `make bench` gains `fp-add`/`fp-fma`. They measure the
+  FPR store/load round-trip (the JIT has no FP register allocator), not raw FP-unit
+  latency — useful as the baseline an FP register allocator would improve against.
+
+### Documentation
+
+- **Paranoia FP conformance**: concrete manual run steps documented in TESTING.md,
+  with the honest caveat that automation needs a guest binary + boot.
+
+- **IMPROVEMENT-CYCLE-1.md**: prioritized, collision-aware improvement plan from a
+  multi-agent audit (read-only auditors → adversarial verification → synthesis).
+
 ## 2026-06-03
 
 ### Emulator Features

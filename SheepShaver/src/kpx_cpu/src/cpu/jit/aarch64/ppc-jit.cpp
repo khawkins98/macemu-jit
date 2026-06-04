@@ -42,6 +42,39 @@ static double pjit_elapsed_s() {
 #include "ppc-logical-imm.hpp"
 #include "jit-target-cache.hpp"
 
+/* ---- Software link stack (R1, inspired by Dolphin JitArm64 / RPCS3) --------
+ *
+ * When the JIT compiles a `bl` (branch-and-link), it pushes the return address
+ * (pc+4) onto this stack.  When compiling an unconditional `blr` (bclr BO=20),
+ * the JIT emits an inline compare of LR against the top-of-stack prediction:
+ *   - Match: pop, branch directly to the return site's chain entry (no dispatcher)
+ *   - Mismatch: fall back to the standard store-PC-and-return-to-dispatcher path
+ *
+ * This eliminates the dispatcher round-trip for matching function returns (~30%
+ * of indirect branches in typical PPC code).  The stack is compile-time only —
+ * it doesn't persist at runtime; each `bl` within a block predicts the return
+ * site for a subsequent `blr` in the same compilation context. */
+#define LINK_STACK_DEPTH 8
+static uint32_t link_stack[LINK_STACK_DEPTH];
+static int link_stack_top = 0; /* next free slot; 0 = empty */
+
+static void link_stack_push(uint32_t return_pc) {
+	if (link_stack_top < LINK_STACK_DEPTH)
+		link_stack[link_stack_top++] = return_pc;
+}
+
+static bool link_stack_pop(uint32_t *return_pc) {
+	if (link_stack_top > 0) {
+		*return_pc = link_stack[--link_stack_top];
+		return true;
+	}
+	return false;
+}
+
+static void link_stack_reset(void) {
+	link_stack_top = 0;
+}
+
 /* ---- Code cache ---- */
 static uint8_t  *jit_cache_base = NULL;
 static size_t    jit_cache_size = 0;
@@ -2889,6 +2922,44 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			bool no_cond_test = (bo & 0x10);  /* BO[0]=1: skip condition test */
 			bool cond_bit_val = (bo & 0x08);  /* BO[1]=1: branch if CR[BI]=1 */
 
+			/* ---- R1: Software link stack fast-path (Dolphin/RPCS3 technique) ----
+			 * For unconditional blr (BO=20, no conditions, no link), check if
+			 * LR matches the predicted return address from a prior bl.  If so,
+			 * branch directly to the return site's chain entry without going
+			 * through the C dispatcher.  Falls back to the standard path on
+			 * mismatch or if the return block isn't compiled yet. */
+			uint32_t predicted_return = 0;
+			bool have_prediction = false;
+			if (no_cond_test && no_ctr_test && !lk) {
+				have_prediction = link_stack_pop(&predicted_return);
+				if (have_prediction) {
+					const struct jit_bc_entry *ret_block = jit_bc_lookup(predicted_return);
+					if (ret_block && ret_block->chain_code) {
+						/* RTMP2 already holds LR from the guard above */
+						emit_load_imm32(RTMP0, (int32_t)predicted_return);
+						emit32(0x6B00001F | (RTMP0 << 16) | (RTMP2 << 5)); /* CMP W(RTMP2), W(RTMP0) */
+						uint32_t *miss_cbz = jit_code_ptr;
+						emit32(0); /* placeholder B.NE → miss path */
+						/* Hit: LR matches prediction → branch to chain entry */
+						a64_str_w_imm(RTMP2, RSTATE, PPCR_PC);
+						lazy_flush_cr0();
+						ra_flush_all();
+						int32_t chain_off = (int32_t)((uint8_t *)ret_block->chain_code - (uint8_t *)jit_code_ptr);
+						if (chain_off >= -(1 << 25) && chain_off < (1 << 25)) {
+							emit32(0x14000000 | ((chain_off >> 2) & 0x03FFFFFF)); /* B chain_code */
+						} else {
+							/* Target out of range — fall through to standard path */
+							have_prediction = false;
+						}
+						/* Patch B.NE to land here (miss path → standard bclr) */
+						int32_t miss_off = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)miss_cbz);
+						*miss_cbz = 0x54000000 | (((miss_off >> 2) & 0x7FFFF) << 5) | 0x1; /* B.NE */
+					} else {
+						have_prediction = false; /* return block not compiled yet */
+					}
+				}
+			}
+
 			/* RTMP2 already holds LR from the guard above */
 			if (lk) { emit_load_imm32(RTMP1, (int32_t)(pc + 4)); a64_str_w_imm(RTMP1, RSTATE, PPCR_LR); }
 
@@ -3074,6 +3145,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		if (lk) {
 			emit_load_imm32(RTMP0, (int32_t)(pc + 4));
 			a64_str_w_imm(RTMP0, RSTATE, PPCR_LR);
+			link_stack_push(pc + 4); /* predict return to here */
 		}
 		lazy_flush_cr0();
 		emit_epilogue_with_pc(target);
@@ -4452,6 +4524,7 @@ bool ppc_jit_aarch64_compile(
 	lazy_cr0_valid = false;
 	lazy_cr0_reg = -1;
 	ra_reset();
+	link_stack_reset();
 
 	/* SS_JIT_MAX_INSNS=<n>: cap the number of PPC instructions compiled per block.
 	 * Diagnostic knob for isolating cross-instruction state leaks within a block

@@ -1,10 +1,20 @@
 # Codegen Bug Analysis: Auxiliary DR Routine at 0x50467E00–0x50467F00
 
+> ## ✅ RESOLVED (2026-06-03) — historical, do NOT re-investigate
+> This was an **early, superseded** investigation of the DR-emulator SCSI/boot hang. Its
+> suspects below (`rlwimi`/`bcctr`/`lhau`/unknown XO31) were **never confirmed** — the actual
+> root cause was the **`subfe`/`adde` carry-out miscompile** (the two-step `ADDS`+`ADD` dropped
+> the carry-in), found later. Fixed via the single-`ADCS` codegen: `ppc-jit.cpp` cases 136/138;
+> `docs/planning/OPTIMIZATION-PLAN.md` §0b is **DONE**. SheepShaver boots Mac OS 8.6 to the Finder
+> desktop with the **full DR region JIT-compiled** (ROM=0x500000, no skip list). Root-cause detail:
+> `docs/SUBFE-CARRY-BUG-REPORT.md` and `docs/archive/PR-SUBFE-FIX-DRAFT.md`. Kept for the record only.
+
 ## Executive Summary
 
 **Location**: ROM 0x50467E00–0x50467F00 (256 bytes)  
-**Status**: Binary search complete; bug isolated to this auxiliary routine  
-**Root cause**: NOT spcflags timing (disproven by correct interrupt prediction still causing hang). **Codegen correctness bug** in one or more instructions.
+**Status**: ✅ RESOLVED 2026-06-03 (see banner above) — symptom fixed by the `subfe`/`adde`
+carry-out fix, not by any suspect this doc hypothesized.  
+**Root cause**: NOT spcflags timing (disproven by correct interrupt prediction still causing hang). **Codegen correctness bug** — specifically the `subfe`/`adde` carry-out miscompile (this doc's own candidates were not the cause).
 
 ---
 

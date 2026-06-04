@@ -1,5 +1,13 @@
 # PPC subfe Carry-Out Bug on ARM64: Root Cause Report
 
+> ## ✅ RESOLVED (2026-06-03) — do NOT re-investigate
+> This bug is **fixed and shipped.** The `subfe`/`adde` carry-out is now computed with a single
+> `ADCS` (CMP loads CA into the host carry flag, then `ADCS` for the full three-operand sum) —
+> `ppc-jit.cpp` cases 136/138; `docs/planning/OPTIMIZATION-PLAN.md` §0b is **DONE**. The infinite
+> SCSI-scan boot hang is gone: SheepShaver boots Mac OS 8.6 to the Finder desktop with the full
+> 68K DR-emulator region JIT-compiled (ROM=0x500000, no skip list). This report is kept as the
+> durable root-cause record.
+
 ## Summary
 
 A carry-flag computation error in the PPC→ARM64 JIT's `subfe` instruction caused the Mac ROM's built-in 68k emulator to malfunction when JIT-compiled, producing an infinite SCSI scanning loop during boot. The fix is straightforward but the bug was subtle — it only manifests for specific input patterns and corrupts downstream state silently.

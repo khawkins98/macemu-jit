@@ -1,5 +1,13 @@
 # PR Draft: Fix subfe/adde carry-out computation on ARM64
 
+> ## ✅ RESOLVED / SHIPPED (2026-06-03) — historical, do NOT re-investigate
+> The `subfe`/`adde` carry-out fix described below is **committed**. The shipped codegen uses a
+> single `ADCS` (CMP loads CA into the host carry flag, then `ADCS` computes the full
+> three-operand sum) — see `ppc-jit.cpp` cases 136/138; `docs/planning/OPTIMIZATION-PLAN.md`
+> §0b is **DONE**. This resolved the 68K DR-emulator SCSI/boot hang: SheepShaver boots Mac OS 8.6
+> to the Finder desktop with the full DR region JIT-compiled. This is the archived upstream
+> PR-draft artifact, kept for the record; root-cause detail is in `docs/SUBFE-CARRY-BUG-REPORT.md`.
+
 ## PR Title
 ```
 Fix subfe/adde carry-out computation on ARM64: use 64-bit sum for correct carry semantics

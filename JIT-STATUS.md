@@ -2,7 +2,7 @@
 
 ## SheepShaver PPC JIT (2026-06-04, macOS arm64 port — branch macos-arm64)
 
-**Build:** ✅ macOS arm64 (Apple clang, no X11). **SDL3 is the default video backend** (`--with-sdl2` to opt out); VDE networking available (`ether vde:`). See `SheepShaver/CHANGELOG.md` 2026-06-04.
+**Build:** ✅ macOS arm64 (Apple clang, no X11). **SDL3 is the default video backend** (`--with-sdl2` to opt out); VDE networking available (`ether vde:`). See `CHANGELOG.md` 2026-06-04.
 **Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
 **JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT (SDL3, boot-verified 2026-06-04) — both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably. No skip list, no workarounds, no SS_JIT_SKIP_OPC needed. ROM=0x500000 (full range including DR emulator), block chaining enabled. 12 bugs found and fixed (sessions 7-8, 2026-06-02/03).
 **JIT harness:** ✅ score=100, interpreter and JIT mode (vector count via `make harness-count`, 257 as of 2026-06-04)

@@ -48,7 +48,7 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 - [ ] Add harness test vector for the affected instruction if one doesn't exist
 - [ ] Add/update inline ARM64 mnemonic comments on emit32() calls
 - [ ] Update `docs/OPTIMIZATION-PLAN.md` if completing or investigating a plan item
-- [ ] Update `SheepShaver/CHANGELOG.md` for user-visible changes
+- [ ] Update `CHANGELOG.md` for user-visible changes
 - [ ] Update `LEARNINGS.md` if the change reveals a non-obvious finding
 
 ### New instruction handler
@@ -63,7 +63,7 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 
 ### Emulator feature change (shutdown, prefs, networking, etc.)
 
-- [ ] Update `SheepShaver/CHANGELOG.md`
+- [ ] Update `CHANGELOG.md`
 - [ ] Update `SheepShaver/docs/USER-HANDBOOK.md` if it affects user-facing behavior
 - [ ] Update prefs table in USER-HANDBOOK.md if adding/changing a pref
 - [ ] Update env var table in USER-HANDBOOK.md if adding an env var
@@ -146,7 +146,7 @@ LEARNINGS.md                       # session-by-session non-obvious findings
 docs/OPTIMIZATION-PLAN.md          # perf roadmap: done, open, deferred
 docs/BENCHMARKS.md                 # Speedometer/boot timing data
 docs/TESTING.md                    # test strategy, maintenance contract
-SheepShaver/CHANGELOG.md           # user-visible changes
+CHANGELOG.md           # user-visible changes
 SheepShaver/docs/USER-HANDBOOK.md  # user guide
 SheepShaver/docs/research/         # Dolphin/RPCS3/MAME research + backlog
 SheepShaver/src/kpx_cpu/.../ppc-jit.cpp  # THE JIT (4500+ lines)

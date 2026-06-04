@@ -1,5 +1,10 @@
 # C4. W^X dual-mapping spike — can we drop `pthread_jit_write_protect_np`?
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Spike: can dual-mapping drop the W^X toggle? (backlog C4) — empirical ~27% faster.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **Question:** Can we eliminate `pthread_jit_write_protect_np` toggling on macOS arm64
 by keeping separate RW and RX mappings of the same physical code cache (oaknut
 `DualCodeBlock` style)?

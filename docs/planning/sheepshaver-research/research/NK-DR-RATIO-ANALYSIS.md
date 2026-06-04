@@ -1,5 +1,10 @@
 # NK:DR Block Ratio Analysis — JIT 1:1 vs Interpreter 1:21
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** Analysis of nanokernel:DR block ratios (JIT 1:1 vs interpreter 1:21).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > **⚠️ ARCHIVED / HISTORICAL.** A point-in-time diagnostic analysis from the DR-emulator
 > boot investigation, preserved for reference. The DR boot path was since resolved (the
 > DR emulator is now JIT-compiled; see CLAUDE.md "Crorc Fix & Block Chaining" and

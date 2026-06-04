@@ -1,5 +1,10 @@
 # B5 + C3 Video Implementation Prep — SheepShaver (macos-arm64)
 
+> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Implementation prep for B5 (hardware cursor) + C3 (QuickDraw acceleration).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Implementation-prep for backlog items **B5 (host hardware cursor)** and **C3 (paravirtual
 video acceleration protocol)**. Date: 2026-06-02.
 

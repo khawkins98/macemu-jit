@@ -1,5 +1,10 @@
 # Autoresearch Report: Experiment
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-03-28 · **Updated:** 2026-06-04
+> **Why this doc exists:** Archived autoresearch experiment report.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **Generated:** 2026-03-28T00:18:47.054Z
 **Project:** /workspace/projects/macemu
 **Primary metric:** metric (unitless, lower is better)

@@ -1,5 +1,10 @@
 # Implementation Backlog — JIT & Emulation Improvements
 
+> **Status:** 🟡 Active · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Source-of-truth work list distilled from the research corpus — Tiers A (correctness) / B (cheap) / C (strategic) / D (diagnostics).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Consolidated, implementation-ready work items from the 2026-06-02 research effort
 (Dolphin deep-dives + ARM64 dynarec / Mac video landscape surveys). Each item is written
 so an agent can pick it up cold: what to change, where, how to verify, and what to read first.

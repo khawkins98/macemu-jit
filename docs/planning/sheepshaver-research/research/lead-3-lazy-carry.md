@@ -1,5 +1,10 @@
 # Lead 3 — Lazy carry state machine for XER CA
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: lazy carry state machine for XER CA — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Study of Dolphin's lazy-carry design and a within-block-only adaptation for the
 SheepShaver PPC→ARM64 JIT. Compiled 2026-06-02.
 

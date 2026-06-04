@@ -1,5 +1,10 @@
 # Synthesized Strategies for JIT-Compiling the 68K DR Emulator Region
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-03 · **Updated:** 2026-06-04
+> **Why this doc exists:** Synthesized strategies for JIT-compiling the 68K DR-emulator region (the DR boot hang has since been resolved).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## ⚠️ INVALIDATED — Root Cause is NOT Spcflags Timing
 
 **Status**: This document represents research based on a **disproven assumption**. Experimental evidence shows:

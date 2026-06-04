@@ -1,5 +1,10 @@
 # JIT FPU Implementation Plan — ARM64
 
+> **Status:** 🟡 Open · **Created:** 2026-04-21 · **Updated:** 2026-06-04
+> **Why this doc exists:** FPU JIT implementation plan for ARM64 (shadow-register pattern).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## Current State
 
 - **Interpreter FPU**: `FPU_MPFR` — 80-bit extended precision via GNU MPFR library

@@ -1,5 +1,10 @@
 # Bug #2 Opcode Audit: JIT Miscompilation Candidates
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** Audit of JIT miscompilation candidates for Bug #2 (since resolved).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > **⚠️ ARCHIVED / HISTORICAL (2026-06-02 snapshot).** Kept for the audit methodology
 > and the per-opcode reasoning only. "Bug #2" was since **resolved** — root-caused to
 > the subfe/adde carry-out codegen bug (not the candidates first suspected here); see

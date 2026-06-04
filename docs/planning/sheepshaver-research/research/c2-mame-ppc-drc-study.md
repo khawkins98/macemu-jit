@@ -1,5 +1,10 @@
 # C2 — Study of MAME's PowerPC DRC (PPC→UML→ARM64) for technique/code lifting
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Study of MAME's PowerPC DRC for technique/code lifting (backlog C2).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Backlog item: `IMPLEMENTATION-BACKLOG.md` §C2. Landscape entry:
 `landscape-2-arm64-dynarec-projects.md` §1 (MAME PPC DRC — top lead).
 

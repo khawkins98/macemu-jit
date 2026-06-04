@@ -1,5 +1,10 @@
 # MacEmu JIT Approach Reset
 
+> **Status:** ✅ Decided — standing guidance · **Created:** 2026-04-24 · **Updated:** 2026-06-04
+> **Why this doc exists:** Policy reset on JIT approach/direction — "simple by default, complexity by proof".
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > This document is an internal engineering plan for how JIT work in this repository needs to change.
 > It intentionally focuses on our code, our workflows, and our invariants.
 

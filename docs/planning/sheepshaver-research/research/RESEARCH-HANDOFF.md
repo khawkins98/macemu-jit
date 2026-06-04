@@ -1,5 +1,10 @@
 # Research Handoff — Implementation Instructions
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Operational instructions for an implementation agent picking up the research backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **Audience:** the implementation agent picking up the 2026-06-02 research output.
 **Repo:** `/Users/khawkins/Documents/git/macemu-jit`, branch `macos-arm64`.
 **Read this file first, then `IMPLEMENTATION-BACKLOG.md` (same directory) for full item details.**

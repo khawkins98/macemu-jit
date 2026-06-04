@@ -1,5 +1,10 @@
 # BasiliskII — macOS arm64 build/JIT port status (deferred work)
 
+> **Status:** ⏸ Deferred · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** Tracks the broken BasiliskII macOS build + the deferred 68K JIT-backend port (roadmap Track D1).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **As of 2026-06-04.** Captured while integrating upstream backports; the BasiliskII
 macOS arm64 build was found to be broken in layers. Two layers fixed; the JIT-backend
 port is deferred to a dedicated effort (boot verification required — see below).

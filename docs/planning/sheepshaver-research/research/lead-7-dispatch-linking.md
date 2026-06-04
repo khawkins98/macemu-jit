@@ -1,5 +1,10 @@
 # Lead 7 — Block Dispatch and Linking (Dolphin cross-check)
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: block dispatch & linking cross-check — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Deep dive on Dolphin's JitArm64 block linking and dispatcher versus our chain-site /
 `jit_bc_heads[]` design. Sources verified against Dolphin `master`
 (`JitArm64Cache.cpp`, `JitAsm.cpp`, `JitCommon/JitCache.h`) on 2026-06-02.

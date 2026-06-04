@@ -11,6 +11,17 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-04
 
+### [docs] Documentation lifecycle convention + status/provenance headers
+
+- **New `CONTRIBUTING.md` → "Documentation Lifecycle" section**: how to keep docs honest when
+  work lands — log to `CHANGELOG.md` (component-tagged), flip the item's status marker instead
+  of deleting it, bump the doc's `Updated:` date, and fold-and-retire (not silently delete)
+  dated specs.
+- **Standardized header on all 43 docs under `docs/planning/`**: a `Status / Created / Updated /
+  Why this doc exists` block plus the canonical marker legend (✅ done · 🟡 in progress ·
+  ⏸ blocked/deferred · ☐ todo). Created dates recovered from git history (following renames);
+  existing rich intros (ROADMAP, NEW-WORLD plan) harmonized, not clobbered.
+
 ### [SheepShaver] AltiVec word-merge codegen fix (vmrghw/vmrglw)
 
 - **Bug fix.** The JIT's AltiVec merge cases (`vmrgh*/vmrgl*`) emitted `0x..C400`/

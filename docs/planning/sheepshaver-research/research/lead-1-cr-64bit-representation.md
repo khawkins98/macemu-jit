@@ -1,5 +1,10 @@
 # Lead 1 — CR fields as 64-bit values (Dolphin's `cr_val` trick)
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: CR fields as 64-bit values (Dolphin cr_val) — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Deep-dive study for the SheepShaver PPC→ARM64 JIT. Compiled 2026-06-02.
 Companion to `docs/planning/sheepshaver-research/EMULATOR-RESEARCH-LEADS.md` (Lead 1).
 

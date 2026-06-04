@@ -69,6 +69,46 @@ comment and the CHANGELOG. Keep attributions honest — if a technique was tried
 *partially* works (e.g. the compile-time link stack), say so in the comment and the plan,
 don't imply a clean win.
 
+## Documentation Lifecycle
+
+Docs rot when work lands but the docs don't move. Two rules keep them honest.
+
+### 1. When you finish (or change) something
+
+- **Log it in `CHANGELOG.md`** — component-tagged (`[SheepShaver]` / `[BasiliskII]` / `[shared]`
+  / `[build]` / `[docs]`), newest first. User-visible behaviour and notable internal changes
+  both belong here.
+- **Update the tracking doc's item**, don't just delete it. Flip the status marker (below) on
+  the relevant line in the roadmap / plan / backlog so the *record of what was decided* survives
+  — a folded item with a ✅ and a one-line outcome is worth more than a vanished one.
+- **Bump the doc's `Updated:` date** in its header (below).
+- For a planning/spec doc, prefer **fold-and-retire over silent deletion**: move the still-open
+  items into the live tracker (`docs/planning/ROADMAP.md` or
+  `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md`), preserve any
+  "verified non-issue / do-not-re-investigate" notes in `LEARNINGS.md`, *then* remove the dated
+  doc. Git history keeps the original.
+
+### 2. Every planning / spec / research doc carries a header
+
+So a reader knows at a glance what the doc is, how current it is, and why it exists. Put this
+block directly under the `#` title:
+
+```markdown
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** <one line — the decision or work it tracks, and what prompted it>
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its
+> marker, bump **Updated**, and add a `CHANGELOG.md` entry._
+```
+
+- **Status** (doc-level): ✅ done/decided · 🟡 active/open · ⏸ blocked/deferred · 📖 reference/archive.
+- **Item markers** (per line in a list): ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo.
+  (`☑`/`☐` checkboxes are equivalent for checklist-style docs — pick one per doc and be consistent.)
+- **Created** = when the doc was first written; **Updated** = last substantive edit. Don't let
+  `Updated` drift — bumping it is part of "finishing" a change.
+
+This is the standing convention for everything under `docs/planning/`. New plans/specs start
+with the header; when you touch an old doc, add it if missing.
+
 ## Change Checklists
 
 ### JIT codegen change (ppc-jit.cpp)
@@ -109,6 +149,8 @@ don't imply a clean win.
 - [ ] State the harness MODE when citing a score (`test-jit` vs `test-opcodes`); for the
   count use `make harness-count`, do not hardcode a number that will drift
 - [ ] Update `CLAUDE.md` Key Documentation table if adding a new doc file
+- [ ] Planning/spec/research doc: carries the status header (Status/Created/Updated/Why) and
+  its `Updated:` date is bumped — see **Documentation Lifecycle** above
 
 ### New test vector (jit-test/run.sh)
 

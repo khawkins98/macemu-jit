@@ -1,5 +1,10 @@
 # JIT Block Chaining Verification Plan
 
+> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Plan to verify JIT block-chaining correctness (chaining is on by default).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Analysis by chaining-analyzer agent (session 4, 2026-06-02). See LEARNINGS.md for full
 threat model. Summary: chaining=1 is safe with ROM=0x460000 — spcflags poll present at
 every chain entry, ROM is immutable (no SMC hazard).

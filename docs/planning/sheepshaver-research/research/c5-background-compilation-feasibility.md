@@ -1,5 +1,10 @@
 # C5 — Background JIT compilation: internal feasibility audit
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Internal feasibility/thread-safety audit for background JIT compilation (backlog C5).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **Scope:** what in *our* SheepShaver PPC→ARM64 JIT is thread-unsafe today, and what a
 worker-thread compilation design would require. Read-only audit; companion survey agent
 covers how other emulators (RPCS3 / Cemu / Ryujinx) do it. Pairs with backlog item C5,

@@ -1,5 +1,10 @@
 # Research Directory Index
 
+> **Status:** 📖 Index · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Index of the SheepShaver JIT research corpus (leads, landscapes, strategic studies).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Output of the 2026-06-02 research effort (Dolphin/PPC-JIT leads, landscape surveys,
 implementation prep). **Start here.**
 

@@ -1,5 +1,10 @@
 # Amiberry ARM JIT Port Plan (macemu)
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-03-17 · **Updated:** 2026-06-04
+> **Why this doc exists:** Notes on lifting Amiberry's ARM JIT techniques into macemu.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## Goal
 Enable BasiliskII 68k JIT on ARM hosts in `macemu`, prioritizing ARM64 while keeping Linux x86/x86_64 JIT behavior unchanged.
 

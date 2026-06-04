@@ -1,5 +1,10 @@
 # SheepShaver ARM64 JIT — Improvement Cycle 1 (2026-06-04)
 
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** Sequencing plan for improvement cycle 1 — the current round of JIT correctness + perf work.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > Produced by a multi-agent audit: 6 read-only auditors → 14 adversarial
 > verifications (8 confirmed, 6 refuted) → synthesis. Findings here are
 > *post-verification* (refuted claims dropped). Main-loop spot-checks noted inline.

@@ -1,5 +1,10 @@
 # Autoresearch Report: AArch64 JIT native codegen stability
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-03-29 · **Updated:** 2026-06-04
+> **Why this doc exists:** Archived autoresearch report — AArch64 JIT native codegen stability.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **Generated:** 2026-03-29T16:46:10.291Z
 **Project:** /workspace/projects/macemu
 **Primary metric:** score (unitless, higher is better)

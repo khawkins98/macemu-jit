@@ -1,5 +1,10 @@
 # C1 — JIT Residency Root-Cause Analysis
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Root-cause analysis of JIT residency (the dual-cache trap) — feeds backlog C1.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Read-only analysis of *why* SheepShaver's PPC→ARM64 JIT abandons the JIT loop after ~15 s of
 boot and stays in the interpreter inner loop (re-entering the JIT gate only ~1/sec). This is the
 mandatory "instrument *why* before building AOT machinery" first step of backlog item **C1**

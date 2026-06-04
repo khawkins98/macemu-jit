@@ -1,5 +1,10 @@
 # BasiliskII AArch64 JIT — next-phase plan
 
+> **Status:** ⏸ Deferred · **Created:** 2026-04-28 · **Updated:** 2026-06-04
+> **Why this doc exists:** Next-phase plan for the BasiliskII 68K AArch64 JIT.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## Goal
 
 Evolve the current BasiliskII ARM64 JIT from a contract-first basic-block engine into a safer, faster chained/trace-capable JIT with:

@@ -1,5 +1,10 @@
 # Research Leads: Borrowing from Dolphin and Other PPC JITs
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research narrative — what was investigated in other PPC JITs and why each verdict landed (actionable items live in IMPLEMENTATION-BACKLOG).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > **Role of this document: research narrative.** It records *what was investigated and why
 > the verdicts came out the way they did* (2026-06-02). It is not the to-do list.
 > - **Current work items / source of truth:** [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md)

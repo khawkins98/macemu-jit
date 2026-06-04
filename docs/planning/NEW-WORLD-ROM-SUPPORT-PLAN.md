@@ -1,8 +1,8 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-**Status:** Not started — pick-up-later plan.
-**Author context:** drafted 2026-06-03 after getting Mac OS 9.0.4 booting via the 1.1 ROM
-and building the `rom-inspect` tool.
+> **Status:** ⏸ Not started — pick-up-later plan · **Created:** 2026-06-03 · **Updated:** 2026-06-04
+> **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 ---
 

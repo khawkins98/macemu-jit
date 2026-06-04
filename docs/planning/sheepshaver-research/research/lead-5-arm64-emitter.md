@@ -1,5 +1,10 @@
 # Lead 5 — Dolphin/PPSSPP Arm64Emitter: vendor or crib?
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: vendor vs crib Dolphin/PPSSPP Arm64Emitter — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Deep-dive on whether to vendor Dolphin's `Arm64Emitter` or use it as a reference for our
 hand-written SheepShaver PPC→ARM64 emitter. Sources fetched 2026-06-02 from
 `raw.githubusercontent.com/dolphin-emu/dolphin/master`:

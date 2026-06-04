@@ -1,5 +1,10 @@
 # B2 prep — ARM64 logical-immediate encoder for rlwinm/rlwimi
 
+> **Status:** ✅ Largely realized · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Prep for the ARM64 logical-immediate encoder (B2 — since landed).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Implementation-prep for backlog item **B2** (`IMPLEMENTATION-BACKLOG.md`, Tier B):
 port a dependency-free ARM64 bitmask-immediate encoder and use it to emit
 `AND Wd,Wn,#imm` in the PPC rotate-mask paths instead of materialize-mask +

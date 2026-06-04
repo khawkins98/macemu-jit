@@ -1,5 +1,10 @@
 # Lead 2 — Dolphin's Nesting-Counter W^X Toggle
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: Dolphin's nesting-counter W^X toggle — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Deep-dive on whether to adopt Dolphin's thread-local nesting-counter pattern for
 `pthread_jit_write_protect_np()` toggling in the SheepShaver PPC→ARM64 JIT.
 

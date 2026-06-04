@@ -1,5 +1,10 @@
 # Landscape: Classic Mac OS Video / Graphics Acceleration in Emulation
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Landscape survey of classic Mac OS video/graphics acceleration in emulation.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Research survey for SheepShaver (macos-arm64 branch). Question: what does "nascent
 video acceleration for classic macOS" look like across the emulator ecosystem, and
 which architecture is worth pursuing for SheepShaver?

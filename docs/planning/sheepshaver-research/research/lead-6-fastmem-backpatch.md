@@ -1,5 +1,10 @@
 # Lead 6 — Fastmem + SIGSEGV Fault Backpatching
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: fastmem + SIGSEGV fault backpatching (closed) — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Study of Dolphin's `JitArm64_BackPatch.cpp` fastmem fault-backpatching scheme and
 whether it is applicable to the SheepShaver PPC→ARM64 JIT under our
 DIRECT_ADDRESSING model (`host = NATMEM_OFFSET + (uint32)guest`, NATMEM_OFFSET =

@@ -1,5 +1,10 @@
 # BasiliskII AArch64 JIT — Opcode Correctness Autoresearch
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-03-24 · **Updated:** 2026-06-04
+> **Why this doc exists:** BasiliskII AArch64 JIT opcode-correctness autoresearch — goals and method.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## Goal
 
 Achieve maximum M68K opcode correctness in the AArch64 JIT by:

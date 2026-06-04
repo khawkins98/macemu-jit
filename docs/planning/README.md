@@ -1,5 +1,10 @@
 # `docs/planning/` — forward-looking plans
 
+> **Status:** 📖 Index · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** Index of every forward-looking plan under docs/planning/ — start at ROADMAP.md.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Every plan, roadmap, and research backlog for the `macos-arm64` fork lives here, so
 planning is no longer sprayed across the repo root and component dirs.
 

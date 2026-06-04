@@ -1,5 +1,9 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
+
+
 The single place to **arrange and track outstanding work** so context survives across
 pickups (when we focus on one task we don't lose the others). When you pick up or finish a
 task, update its **Status** line. This is the **map**, not the territory — deep analysis,

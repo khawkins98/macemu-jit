@@ -1,5 +1,10 @@
 # SheepShaver Compatibility Testing Plan
 
+> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Tiered plan for measuring SheepShaver compatibility (JIT vs interpreter, real apps).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 How we will measure correctness and compatibility of the AArch64 JIT — against the
 interpreter, against the legacy x86 SheepShaver JIT, and against real-world Mac OS software.
 Drafted 2026-06-02.

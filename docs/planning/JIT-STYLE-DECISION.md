@@ -1,5 +1,10 @@
 # JIT Style Decision
 
+> **Status:** ✅ Decided — standing guidance · **Created:** 2026-04-24 · **Updated:** 2026-06-04
+> **Why this doc exists:** Why new JIT work should follow the SheepShaver style — immediate writeback, explicit state ownership.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## Decision
 
 For new JIT work in this repository, the preferred engineering style is the **SheepShaver-style approach**.

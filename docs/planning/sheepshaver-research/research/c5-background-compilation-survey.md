@@ -1,5 +1,10 @@
 # C5 — Background / Asynchronous JIT Compilation: Cross-Emulator Survey
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Cross-emulator survey of background/async JIT compilation (backlog C5).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Survey of how other emulators and VMs move JIT compilation off the executing thread, written
 to inform SheepShaver's backlog item **C5** (`IMPLEMENTATION-BACKLOG.md` §C5: use a second host
 core to compile PPC blocks while the CPU thread keeps executing). C5 is gated on **C1** (the

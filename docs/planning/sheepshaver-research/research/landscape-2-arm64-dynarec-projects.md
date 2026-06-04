@@ -1,5 +1,10 @@
 # Landscape 2: ARM64 JIT / Dynarec Projects (beyond Dolphin)
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Landscape survey of ARM64 dynarec projects beyond Dolphin.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 Survey of ARM64 dynamic-recompiler projects we had **not** covered in
 `EMULATOR-RESEARCH-LEADS.md` (which focused on Dolphin, plus QEMU/RPCS3/Cemu/Xenia/PPSSPP
 as contrasts). Goal: techniques and license-compatible code we could borrow for the

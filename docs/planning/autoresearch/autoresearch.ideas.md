@@ -1,5 +1,10 @@
 # Autoresearch Ideas — AArch64 JIT
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-03-24 · **Updated:** 2026-06-04
+> **Why this doc exists:** Running idea list for the BasiliskII JIT autoresearch.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 ## Completed
 - ✅ Score=100 achieved: cpu_compatible=false + optlev capped at 1 (native block dispatch, interpreter opcodes)
 - ✅ Native block dispatch (cache_tags lookup, endblock) is stable

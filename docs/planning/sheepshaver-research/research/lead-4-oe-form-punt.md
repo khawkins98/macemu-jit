@@ -1,5 +1,10 @@
 # Lead 4 — Punt OE-form overflow to the interpreter?
 
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research lead: punt OE-form overflow to the interpreter? (rejected) — verdict in backlog.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 **Verdict: DO NOT delete our inline OE codegen.** Lead 4's premise — "OE forms are
 rare; just fall back like Dolphin-ARM64" — is correct *for Dolphin's workload
 (native PPC games)* and **inverted for ours (Mac OS, whose ROM-resident 68K

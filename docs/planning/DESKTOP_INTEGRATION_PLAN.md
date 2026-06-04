@@ -1,5 +1,10 @@
 # Silicon Sheep — Desktop Integration Feature Plan
 
+> **Status:** ⏸ Researched — not started · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** "Silicon Sheep" — a Parallels-like macOS app layer (first-run wizard, VM library, hot-reload, coherence-lite). Research synthesis.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > *Do they dream of OS X?*
 
 A modern Cocoa launcher and desktop integration layer for SheepShaver, targeting Apple Silicon + macOS. Research synthesis from lateral-thinking agent review, June 2026.

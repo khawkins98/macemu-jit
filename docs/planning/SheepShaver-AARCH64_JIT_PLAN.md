@@ -1,5 +1,10 @@
 # SheepShaver AArch64 JIT — Project Plan
 
+> **Status:** ✅ Largely realized · **Created:** 2026-04-17 · **Updated:** 2026-06-04
+> **Why this doc exists:** Original SheepShaver PPC→ARM64 JIT project plan; mostly realized (boots to Finder) — Phase 5 hardening open.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
 > For the concise cross-emulator architecture overview (both JITs + macOS arm64 constraints),
 > see [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md). Current pass/fail status:
 > [`JIT-STATUS.md`](../../JIT-STATUS.md).

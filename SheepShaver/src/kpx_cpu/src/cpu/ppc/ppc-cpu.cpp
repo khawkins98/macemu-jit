@@ -1345,6 +1345,27 @@ void powerpc_cpu::execute(uint32 entry)
 								        jit_block_start_pc, (uint32)pc(), (uint32)jit_state.pc);
 								match = false;
 							}
+							/* FPR + VR: the boot-time oracle now also catches floating-point and
+							 * AltiVec divergence (e.g. the ev_mixed bugs in real software), not just
+							 * GPR/CR/flags. Bit-exact compare; jit_state already snapshots the full
+							 * register file. (Mirrors the harness REGDUMP FPR/VR addition.) */
+							for (int i = 0; i < 32; i++) {
+								uint64 ib; double id = fpr(i); memcpy(&ib, &id, sizeof(ib));
+								if (ib != jit_state.fpr[i].j) {
+									fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: FPR%d interp=%016llx jit=%016llx\n",
+									        jit_block_start_pc, i, (unsigned long long)ib, (unsigned long long)jit_state.fpr[i].j);
+									match = false;
+								}
+							}
+							for (int i = 0; i < 32; i++) {
+								if (vr(i).j[0] != jit_state.vr[i].j[0] || vr(i).j[1] != jit_state.vr[i].j[1]) {
+									fprintf(stderr, "[VERIFY] DIVERGENCE block %08x: VR%d interp=%016llx%016llx jit=%016llx%016llx\n",
+									        jit_block_start_pc, i,
+									        (unsigned long long)vr(i).j[1], (unsigned long long)vr(i).j[0],
+									        (unsigned long long)jit_state.vr[i].j[1], (unsigned long long)jit_state.vr[i].j[0]);
+									match = false;
+								}
+							}
 
 							if (!match) {
 								verify_divergence_budget--;

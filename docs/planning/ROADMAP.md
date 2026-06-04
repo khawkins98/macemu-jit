@@ -94,7 +94,7 @@ harness that can't catch mistakes just produces the next silent bug.
 
 ---
 
-## A2. ✅ AltiVec `ev_mixed` correctness — element-order class COMPLETE (tested ops; boot-pending)
+## A2. ✅ AltiVec `ev_mixed` correctness — element-order class COMPLETE (tested ops, boot-verified)
 
 **Why:** **silent data corruption in the emulator that works** (SheepShaver). AltiVec is live
 (the emulator advertises a G4). Only triggers when guest software uses the affected ops
@@ -115,11 +115,11 @@ harness that can't catch mistakes just produces the next silent bug.
   scored gate (**255→261, score=100**), and boot-verified under `SS_JIT_VERIFY` (zero VR/FPR
   divergence; the lone GPR/LR/PC divergence is the documented `blr`-boundary false positive).
 
-✅ **pack `vpkuhum` FIXED + promoted (2026-06-04, boot-pending):** it ignored vA *and* used the
+✅ **pack `vpkuhum` FIXED + promoted + boot-verified (2026-06-04):** it ignored vA *and* used the
 wrong op; the low-byte modulo pack is `UZP2.16B` on the `REV32.16B`-normalized inputs (reuses
 `emit_vmrg`). xfail→xpass with distinct operands, scored gate 261→262.
 
-✅ **even/odd byte multiplies `vmuloub`/`vmuleub` FIXED + promoted (2026-06-04, boot-pending):**
+✅ **even/odd byte multiplies `vmuloub`/`vmuleub` FIXED + promoted + boot-verified (2026-06-04):**
 two bugs — non-widening `MUL.8B` (must widen 8×8→16) and no ev_mixed even/odd select. Fix
 (`emit_vmul_byte`): `REV32.16B` normalize → `UZP1`(even)/`UZP2`(odd)`.16B` select → `UMULL.8H`
 widen → `REV32.8H` output. Distinct operands exercise BOTH bugs (even-lane products >255 catch a
@@ -335,7 +335,7 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 ## ✅ Done (recent — for context, newest first)
 - AltiVec `ev_mixed`: **entire tested element-order class fixed** — splats, merges `vmrgh/l
   {b,h,w}`, pack `vpkuhum`, byte multiplies `vmulo/eub` — promoted to the scored gate (**264/100**,
-  quarantine empty; merges boot-verified, pack+multiplies boot-pending). Per-op `REV32.16B`
+  quarantine empty; all boot-verified — zero VR/FPR divergence). Per-op `REV32.16B`
   normalize: merges=ZIP, pack=UZP2 (`emit_vmrg`); byte mults=UZP1/2+UMULL.8H+REV32.8H
   (`emit_vmul_byte`). Untested siblings (halfword mults, `vpkuwum`, signed byte mults) flagged.
 - Doc hygiene: fork-wide `CHANGELOG.md`, `docs/ARCHITECTURE.md` extracted, handoff docs retired

@@ -120,10 +120,10 @@ or rearranges sub-word elements with raw NEON lanes is wrong.
   byte/halfword use the **per-op `REV32.16B` normalize** (`emit_vmrg`): `REV32.16B`
   both inputs → `ZIP1`/`ZIP2.{16B,8H}` → `REV32.16B` back. The `ev_mixed` layout is
   exactly `REV32.16B` at the byte level vs natural element order.
-- ✅ **Fixed — `vpkuhum`** (2026-06-04, boot-pending): pack low bytes = `UZP2.16B` on the
+- ✅ **Fixed — `vpkuhum`** (2026-06-04, boot-verified): pack low bytes = `UZP2.16B` on the
   `REV32.16B`-normalized inputs (reuses `emit_vmrg`). It had ignored vA entirely. Promoted
   261→262.
-- ✅ **Fixed — byte multiplies `vmuloub`/`vmuleub`** (2026-06-04, boot-pending): two bugs —
+- ✅ **Fixed — byte multiplies `vmuloub`/`vmuleub`** (2026-06-04, boot-verified): two bugs —
   non-widening `MUL.8B` and no ev_mixed even/odd select. `emit_vmul_byte`: REV32.16B → UZP1
   (even)/UZP2(odd).16B → UMULL.8H → REV32.8H. Promoted 262→264; quarantine now empty.
 - 🟡 **Still broken / untested** (no test vector): halfword multiplies `vmul{o,e}{u,s}h` (need the

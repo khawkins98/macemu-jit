@@ -52,7 +52,9 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   `vmulesb` but is `vmuleub`). Remaining, untested (no test vector, flagged in code + ROADMAP A2):
   halfword multiplies `vmul*h`, word pack `vpkuwum`, signed byte multiplies `vmulosb`/`vmulesb`
   (the latter share `emit_vmul_byte` with `SMULL` — emitted as *prospective*).
-- Boot verification PENDING for the pack + multiplies (new `UMULL.8H`/`REV32.8H`/`UZP` paths).
+- Boot-verified (`SS_JIT_VERIFY`, Mac OS 8.6 clean exit): zero VR/FPR divergence for the pack +
+  multiplies (only the documented `blr`-boundary GPR false positive). The whole ev_mixed class is
+  now boot-confirmed.
 
 ### [SheepShaver] AltiVec vpkuhum pack fix (ev_mixed)
 

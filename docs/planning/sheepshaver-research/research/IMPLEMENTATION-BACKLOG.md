@@ -104,6 +104,27 @@ working tree on 2026-06-02 and will drift.
 - XER byte offsets are **SO=1028, CA=1030** (`PPCR_XER_SO`/`PPCR_XER_CA`, ppc-jit.cpp:281-283),
   not 900/902.
 
+### A6. Collapse the duplicate SMC-invalidation call (re-verify first)
+*From the 2026-06-03 diagnostics review. **Coordinate before editing `ppc-cpu.cpp`/`ppc-jit.cpp`** — concurrent edits to these files have caused churn.*
+
+- **File:** `SheepShaver/src/kpx_cpu/src/cpu/ppc/ppc-cpu.cpp` — two
+  `ppc_jit_aarch64_invalidate_range(start, end)` calls with identical args under the same
+  `__aarch64__ && USE_AARCH64_JIT` guard; the icbi/isync eviction block appears to repeat the
+  first call (~line 1800 as of 2026-06-04 — line numbers drift, locate by the call).
+- **Why it matters:** redundant W^X toggles + chain-patch walks on every self-modifying-code
+  invalidation — the "works for boot, flakes later" class; chaining is on by default.
+- **Action:** re-verify the two sites are genuinely redundant (not two paths each legitimately
+  invalidating) **before** collapsing to one.
+
+### A7. Finish XO63 FP-control semantics (latent correctness debt)
+*From the 2026-06-03 review. **Coordinate** — same `ppc-jit.cpp` ownership caveat as A6.*
+
+- `fcmpu`/`fcmpo` carries an explicit unordered-behavior TODO; the `mcrfs` native path writes
+  the CR field but doesn't mirror the interpreter's FPSCR exception-bit clearing; several FPSCR
+  update paths are simplified vs the interpreter's `record_fpscr`/`record_cr1` flow.
+- **Why it matters:** latent correctness debt in FP-control-heavy workloads even though Finder
+  boots. Compare the native paths against `ppc-execute.cpp`'s `record_fpscr`/`record_cr1`.
+
 ---
 
 ## Tier B — Cheap performance/robustness wins
@@ -297,6 +318,75 @@ Cemu/Ryujinx/RPCS3/Dolphin/QEMU do it) + `c5-background-compilation-feasibility.
 - **Effort:** wiring+stage A ~1 day (plus unknown bit-rot); stage B small once A is clean.
 - **Sequencing:** independent of the JIT work — can run any time. Stage B is most valuable
   after C1 lands (JIT executes more code).
+
+## Tier D — Diagnostics & build hygiene (from the 2026-06-03 review)
+
+Diagnostics-correctness, maintainability, and upstream-hygiene items surfaced by an adversarial
+review of the heartbeat/diag + `build-ss` guard work. None is a crash or memory-safety bug —
+those were attacked and disproven (see LEARNINGS.md 2026-06-04, "verified non-issues").
+
+### D1. Recalibrate the heartbeat warning matrix
+The thresholds in `jit-heartbeat.hpp` were set from memory, not measured. The concrete false
+positive: `comp frozen 5+ HBs` fires on a **healthy idle desktop** (the idle loop runs at JIT
+speed and compiles no new blocks — LEARNINGS.md), so a red WARN shows during normal operation
+and trains the reader to ignore red. The discriminator must be orthogonal to raw block rate
+(e.g. jNK re-entry rate, unique-PC churn in a recent window).
+**Action:** capture an idle-desktop diag log, design a discriminator that stays quiet on it
+(and on any real hang log if one recurs); until then, demote `comp frozen` from WARN to SUSPECT
+so it doesn't read as authoritative.
+*(The original "blocked on capturing the extension-loading hang" framing is retired — that hang
+was resolved 2026-06-03; this item now stands on the idle-desktop false positive. The old
+"validate thresholds against the booting config" item folds in here too: its skip-list premise
+is superseded — full boot needs no skip-list.)*
+
+### D2. Gate the interp-site heartbeat in JIT mode (one line)
+`ppc-cpu.cpp`'s interp-site `hb_tick` is not gated on `!jit_enabled`; when the interpreter
+fallback crosses 4096 blocks during a JIT run it emits a spurious near-empty
+`[HB Nm] ...interp | iNK=0 iDR=0...` line beside the real JIT line (frequent under
+`SS_JIT_NO_ROM=1` / reduced `SS_JIT_ROM_SIZE` bisection configs). **Fix:** gate the interp-site
+call on `!jit_enabled` (the interp site keeps its own throttle clock, so it won't re-fire).
+
+### D3. Single-source the warning thresholds
+The matrix is restated in three places — `jit-heartbeat.hpp` comment,
+`SheepShaver/docs/DIAGNOSTICS.md`, and
+`docs/superpowers/specs/2026-06-03-heartbeat-warnings-design.md` — with nothing keeping them in
+sync. **Fix:** extract the thresholds as named constants atop `jit-heartbeat.hpp`
+(`HB_RATE_WARN_M = 0.5`, …) and have the docs reference the constants. (Pairs with D1.)
+
+### D4. `make clean` is incomplete on macOS
+`SheepShaver/Makefile` `clean` removes only `obj/ppc-jit.o` + the binary; the macOS autoconf
+build (`build-ss` Darwin branch) leaves its full object set under `src/Unix` stale, so
+`make clean && make build` relinks old objects. **Fix:** Darwin `clean` should also
+`cd src/Unix && make clean`.
+
+### D5. `hb-test.cpp` is a demo mislabeled as a test
+`SheepShaver/tools/hb-test.cpp` prints `(expect WARN ...)` but has no assertions and no build
+target (manual `g++` only) — it rots silently if `hb_tick`'s signature changes and implies the
+warnings are tested when they aren't. **Fix:** add assertions + a `make test-heartbeat` target
+that exits non-zero on mismatch, or rename to `hb-demo.cpp`. Should not ship upstream as a test.
+
+### D6. Linux peak-RSS latch (dormant on macOS; matters for an upstream PR)
+`hb_rss_mb()`'s non-`__APPLE__` fallback returns `ru_maxrss` (peak, monotonic), so the
+"RSS 2× initial" WARN can never clear once tripped. macOS uses current `resident_size` and is
+unaffected. **Fix:** read `/proc/self/statm` for current RSS on Linux, or skip the 2×-initial
+rule when `!__APPLE__`.
+
+### D7. Make the OTH-region rule windowed
+`jit-heartbeat.hpp`'s `rgn[3]*100 > blocks` is a run-lifetime ratio (unlike the windowed
+rate/transition rules), so one early transient latches the WARN for the whole run.
+**Fix:** make it a per-HB delta like its peers.
+
+### D8. Prune `/tmp` diag logs
+Per-instance `jit_diag.<ts>.<pid>.log` files are never pruned (~35 from one morning); works now,
+fills `/tmp` over weeks. **Fix (or document):** cap to N newest on open — though keeping old
+logs aids before/after comparison, so documenting a cleanup step may suffice.
+
+### D9. Env-gated quiet mode for perf measurement
+Always-on heartbeat/diag I/O (periodic syscalls + stderr) is not a runtime regression
+(out-of-line + double-gated) but complicates profiling comparisons and automation logs.
+**Fix when measuring perf:** an env-gated quiet mode (`SS_JIT_NO_HEARTBEAT=1`).
+
+---
 
 ## Rejected / closed leads (do not implement)
 

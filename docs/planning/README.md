@@ -22,7 +22,6 @@ status and pointers.
 | [`AMIBERRY_ARM_JIT_PORT_PLAN.md`](AMIBERRY_ARM_JIT_PORT_PLAN.md) | Notes on porting Amiberry's ARM JIT ideas. |
 | [`JIT-APPROACH-RESET.md`](JIT-APPROACH-RESET.md) | JIT policy/direction reset — the "simple by default" engineering stance. |
 | [`DR-JIT-SYNTHESIS.md`](DR-JIT-SYNTHESIS.md) | DR-emulator JIT synthesis notes. |
-| [`REVIEW-RECOMMENDATIONS-2026-06-03.md`](REVIEW-RECOMMENDATIONS-2026-06-03.md) | Deferred backlog from a 2026-06-03 adversarial review (diagnostics/build hygiene); ~14 open items. |
 | [`SheepShaver-AARCH64_JIT_PLAN.md`](SheepShaver-AARCH64_JIT_PLAN.md) | SheepShaver PPC→ARM64 JIT plan + status. |
 | [`BasiliskII-MACOS-AARCH64-JIT-PORT.md`](BasiliskII-MACOS-AARCH64-JIT-PORT.md) | BasiliskII macOS build/port pick-up plan (Track D). |
 | [`BasiliskII-next-phase-plan.md`](BasiliskII-next-phase-plan.md) | BasiliskII 68K JIT next-phase plan. |

@@ -110,8 +110,7 @@ then the specific `find_rom_data` pattern that isn't found within it.
 `check_rom_patch_space` + the `find_rom_data` searches against the decoded image and report
 the first miss. More porting up front (~100 patterns), but keeps everything offline and
 reusable. The env-gated tracer is the faster first cut; the rom-inspect extension is the
-durable tool (and is already noted as a P3.5 follow-up in
-`docs/planning/REVIEW-RECOMMENDATIONS-2026-06-03.md`).
+durable tool (see **Open follow-ups** below).
 
 **Decision gate after Phase 0:**
 - Fails at `check_rom_patch_space` or very early in `patch_nanokernel_boot` → likely
@@ -182,11 +181,28 @@ patching can surface. Use the existing diagnostics (heartbeat + warnings, trace 
 
 ---
 
+## Open follow-ups
+
+*Folded from the (retired) 2026-06-03 review backlog. The reusable decoder this both depend on
+is **done** — `decode_rom_image()` / `src/include/rom_decode.hpp`, shared by the emulator and
+`rom-inspect`.*
+
+- **rom-harness New World scanning.** `rom-harness` still loads raw bytes and scans for PPC
+  blocks. To exercise New World ROM code it should call `decode_rom_image()` into a 4MB buffer
+  first, then scan the decoded image. Decoder dependency done; only the scan-loop wiring remains.
+  Revisit if New World ROM JIT coverage becomes a focus.
+- **Model the full `PatchROM` gauntlet in `rom-inspect`.** `rom-inspect` models decode +
+  type-detection only. `Mac OS ROM 9.0.1` *passes* both yet the emulator rejects it downstream
+  (a `patch_*` byte-pattern search or patch-space check fails), and the emulator's "Unsupported
+  ROM type" alert (`main.cpp:162`) fires for *any* `PatchROM()` failure — misleading. Either
+  (1) extend `rom-inspect` to run the patch-space checks and report which `patch_*` stage fails,
+  or (2) make the emulator's error distinguish type-detection failure from patch failure.
+
+---
+
 ## References
 
 - `docs/superpowers/specs/2026-06-03-rom-inspector-design.md` — the inspector + shared decoder
-- `docs/planning/REVIEW-RECOMMENDATIONS-2026-06-03.md` — P3.5 (rom-harness New World scanning; full
-  PatchROM-gauntlet modeling in rom-inspect)
 - `SheepShaver/docs/DIAGNOSTICS.md` — rom-inspect usage + runtime diagnostics
 - `SheepShaver/src/rom_patches.cpp`, `SheepShaver/src/include/rom_decode.hpp`
 - Assets: `/Users/Shared/macemu/` (9.0.1 ROM, 9.2.1/9.2.2 ISOs); CLAUDE.md "lldb Workflow"

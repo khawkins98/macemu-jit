@@ -157,6 +157,19 @@ Shipped as build/boot-verified, **not exercised**:
 
 ---
 
+## A4. 🟡 Diagnostics trustworthiness & build hygiene
+
+Verification-adjacent: noisy/miscalibrated diagnostics undermine the boot-time oracle work in
+A1. The heartbeat warning matrix is miscalibrated — `comp frozen` WARN **false-fires on a
+healthy idle desktop**, training readers to ignore red — and its thresholds live un-synced in
+three places. Plus a set of cheap build/diag-hygiene fixes (gate the interp-site heartbeat in
+JIT mode, complete macOS `make clean`, fix the mislabeled `hb-test.cpp`, Linux RSS latch, window
+the OTH rule, prune `/tmp` logs, quiet-mode env gate).
+**Detail:** `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` Tier D
+(+ correctness items A6/A7 there: duplicate SMC-invalidation call, XO63 FP-control semantics).
+
+---
+
 # Track B — Performance / JIT optimization
 
 Full plan, with per-lever effort/payoff and measured baselines, lives in

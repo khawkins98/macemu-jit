@@ -3,6 +3,27 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-04 — Verified non-issues from the 2026-06-03 diagnostics review (do NOT re-investigate)
+
+An adversarial review of the heartbeat/diag + `build-ss` guard work attacked these and proved
+them safe — recorded so nobody re-burns the time. (Its still-open items were folded into
+`docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` Tier D + A6/A7; the
+standalone REVIEW-RECOMMENDATIONS doc was then retired.)
+
+- **snprintf findings/line accumulation** — guarded with `(size_t)len < sizeof line` at every
+  accumulating call; truncation short-circuits safely. No overflow.
+- **`findings[6]` overflow** — the six rule groups are mutually exclusive `if/else-if`, so at
+  most 6 fire simultaneously; the cap is exact.
+- **Hot-path cost of `hb_tick`/`getrusage`/`task_info`** — out-of-line (confirmed via `nm` on
+  `ppc-cpu.o`), behind the pre-existing 4096-block + 5s gate; getrusage/task_info run at
+  hb_tick's own 10s/60s cadence, never per-block. No new per-block clock read.
+- **Wrongful interpreter fallthrough from the diag changes** — the diag/heartbeat diffs touch
+  only diagnostic blocks; dispatch/compile/chaining untouched. (The lwarx/stwcx/mftb fallthroughs
+  are a separate, intentional correctness fix.)
+- **Same-second double emulator start** — diag filename includes pid; logs stay distinct.
+- **`build-ss` Darwin change** — dropping `| tail | || true` is a correctness improvement
+  (failed builds now halt instead of silently relinking stale objects).
+
 ## 2026-06-03 (session 7 FINAL) — Mac OS 8.6 boots to Finder desktop with full native JIT
 
 ### RESOLVED: all investigation items from session 7 are closed

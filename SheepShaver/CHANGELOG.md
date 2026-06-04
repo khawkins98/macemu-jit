@@ -28,15 +28,18 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   G4, so AltiVec is live). One-token operand swap; caught and regression-tested by
   a new differential vector.
 
-- **AltiVec element-order bug (found + root-caused, fix pending)**: `vspltb`,
-  `vsplth`, and the even/odd byte multiplies (`vmuloub`/`vmuleub`) select the WRONG
-  element. Confirmed via differential vectors (e.g. `vspltb v2,v1,3` → interp
-  `0x03030303`, JIT `0x00000000`). Root cause: `emit_load_vr` (ppc-jit.cpp:779) is a
-  plain `LDR Q` that reverses byte order *within* each 32-bit word but preserves
-  word order — so word ops (`vspltw`) are correct while any sub-word-position op is
-  wrong. Likely blast radius: `vmrgh*`/`vmrgl*`, `vpk*`/`vupk*`, `vsldoi`, `vperm`.
-  Repro vectors preserved in `gen-altivec-vectors.py`; fix deferred (needs care
-  across all AltiVec ops + the interpreter's VR byte order).
+- **AltiVec element-order bug — `vspltb`/`vsplth` FIXED, multiplies pending**:
+  byte/halfword splats and the even/odd byte multiplies (`vmuloub`/`vmuleub`)
+  selected the WRONG element. Root cause: the VR is stored in the interpreter's
+  `ev_mixed` byte order (`byte_element(i)=(i&~3)+(3-(i&3))`, `half_element`
+  similarly — bytes reversed *within* each word, word order preserved), and
+  `emit_load_vr` (ppc-jit.cpp:779) loads it raw via `LDR Q`; the JIT then indexed
+  NEON lanes with the raw PPC element. **Fixed** `vspltb`/`vsplth` by applying the
+  `ev_mixed` remap to the DUP index (verified across indices 0/3/15 and 0/3/7).
+  `vspltw` was already correct (word order preserved). The even/odd multiplies
+  share the root cause but need a different fix (NEON UMULL/UMULL2 lane selection)
+  — still in the bug-repro set, along with the untested likely-affected sub-word
+  ops (`vmrgh*`/`vmrgl*`, `vpk*`/`vupk*`, `vsldoi`, `vperm`).
 
 - **Harness integrity preflight added**: the SheepShaver `jit-test/run.sh` had NO
   self-validation (unlike BasiliskII's). Added a preflight that aborts on a

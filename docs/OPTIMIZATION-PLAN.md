@@ -8,7 +8,7 @@
 | Dhrystones/sec | 1,348K | **1,475K** | **+9.4%** |
 | CPU score | 62.7 | **64.2** | +2.2% |
 | Math score | 11,539 | **12,354** | +7.1% |
-| Harness | 235/235 | 235/235 | — |
+| Harness | 235/235 | 257/257 (2026-06-04) | +FP, AltiVec, carry-wrap vectors |
 
 Target: **3-5x** over interpreter, approaching G4/1.8GHz class.
 
@@ -34,6 +34,12 @@ rD == rA) returns uninitialized data.
 The bclr Mixed Mode bail path includes `ra_flush_all()` before
 `emit_bare_epilogue()`.  All other exit paths (block terminators, interp
 fallbacks, spcflags poll) were audited and confirmed safe.
+
+### AltiVec vsel fix — DONE (2026-06-04)
+
+**Result**: BSL operands were swapped — `vsel` computed `(vC & vA) | (vB & ~vC)`
+instead of PPC's `(vB & vC) | (vA & ~vC)`.  One-token swap.  Would have silently
+corrupted any AltiVec software using `vsel`.
 
 ### P0a: bclr Mixed Mode guard: AND+CBZ → TBZ — DONE (2026-06-03)
 
@@ -93,29 +99,13 @@ on it.
 
 ## Open — Quick Wins (Priority 0)
 
-### 0b. subfe/adde: 64-bit sum → ADDS+ADCS — CORRECTNESS + PERF
+### 0b. subfe/adde via ADCS — DONE (2026-06-03, correctness + perf)
 
-**Expected impact**: Minor perf (carry ops ~2% of dynamic mix), but **fixes
-two verified correctness bugs** (backlog A1/A2).
-**Effort**: Low
-**Risk**: Low — fix is designed and ready to apply (see backlog)
-
-**Bugs (from IMPLEMENTATION-BACKLOG.md A1/A2):**
-The current 64-bit sum approach in adde (case 138) and subfe (case 136) drops
-the carry when CA wraps: `ADDS ~rA+rB` then non-flag `ADD` of CA loses the
-second carry contribution.  Example: `rA+rB=0xFFFFFFFF, CA=1 → result 0`,
-recorded CA=0 but correct CA=1.
-
-**Fix:** materialize CA into the host C flag with `CMP W(CA), #1`, then use
-`ADCS` which reads C and produces the correct carry-out in one instruction:
-```
-emit_read_xer_ca(RTMP2);
-CMP   W(RTMP2), #1      ; C = CA_in
-MVN   W0, Wa             ; ~rA  (subfe only)
-ADCS  Wd, Wn, Wm         ; result + C, sets C = carry-out
-CSET  Wca, CS            ; extract carry
-```
-8 instructions → 4.  Test vectors in backlog (adde_carry_wrap, subfe_carry_wrap).
+**Result:** Fixed two verified carry-out bugs (backlog A1/A2) and reduced
+adde from 10→4 instructions, subfe from 11→5.  Materialize CA into host C
+flag with `CMP W(CA),#1`, then `ADCS` computes the full three-operand sum
+with correct carry-out.  Test vectors `adde_carry_wrap` and
+`subfe_carry_wrap` added.  `SS_JIT_VERIFY=1` boot clean.
 
 ### 0b-extra. Fix mullwo silent mis-execution (backlog A3)
 
@@ -293,6 +283,31 @@ ori  r3, r3, 0x5678 ; r3 = 0x12345678
 ```
 Could detect `lis+ori` and emit a single `MOVZ+MOVK` pair.  Other patterns:
 `li + slwi`, `addi rX, rX, 0` (NOP), dead stores.
+
+### P5b: FP Register Allocator
+
+**Expected impact**: HIGH — jit-bench shows FP ops at 2.84 ns/insn vs integer
+ALU at 0.095 ns/insn (30x gap).  Every FP instruction reloads/stores FPRs
+through the `powerpc_registers` struct because there is no FP register cache.
+An FP RA mapping PPC FPRs to ARM64 d8-d15 (callee-saved) would eliminate
+this round-trip.
+**Effort**: High (new RA for FPR space, flush discipline, FP block exit)
+**Risk**: Medium
+**Measured by**: jit-bench `fp-add` / `fp-fma` kernels (2.84 ns/insn baseline)
+
+### P5c: AltiVec ev_mixed Element-Order Fixes
+
+**Status**: Partially done (2026-06-04).  `vspltb`/`vsplth` fixed by remapping
+the DUP index through the interpreter's `ev_mixed` byte order.  `vspltw` was
+already correct (word order preserved).
+
+**Remaining**: `vmrghb`/`vmrglb`/`vmrghw`/`vmrglw` (merges), `vpkuhum` (pack),
+and `vmuloub`/`vmuleub` (even/odd multiplies — these have an ADDITIONAL bug:
+`MUL.8B` instead of `UMULL.8H`).  Systematic fix option: `emit_load_vr`/
+`emit_store_vr` do `REV32.16B` to convert ev_mixed↔natural lane order, at the
+cost of 2 extra NEON ops per AltiVec instruction.  Repro vectors in
+`gen-altivec-vectors.py`.
+**Effort**: Medium.  **Risk**: Medium (must re-verify every AltiVec op + boot).
 
 ### P6: Instruction Scheduling
 

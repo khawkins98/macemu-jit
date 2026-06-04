@@ -500,12 +500,12 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 
 		case OP_POWEROFF:			// Guest Mac OS shut down (Special > Shut Down)
 			printf("\n"
-			       "    ┌─────────┐\n"
-			       "    │  ┌───┐  │\n"
-			       "    │  │ ◠ ◠│  │\n"
-			       "    │  │ ╰─╯│  │\n"
-			       "    │  └───┘  │\n"
-			       "    └────┬────┘\n"
+			       "    ┌───────────┐\n"
+			       "    │  ┌─────┐  │\n"
+			       "    │  │ ◠ ◠ │  │\n"
+			       "    │  │ ╰─╯ │  │\n"
+			       "    │  └─────┘  │\n"
+			       "    └────┬──────┘\n"
 			       "         │\n"
 			       "  Shutdown complete.\n\n");
 			power_off_requested = true;

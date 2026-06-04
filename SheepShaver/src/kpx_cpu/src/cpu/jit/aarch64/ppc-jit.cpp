@@ -3308,11 +3308,24 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 640: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA07C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsws SQADD.4S */
 		case 1536: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubsbs SQSUB.16B */
 		case 1600: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubshs SQSUB.8H */
-		/* FIXME(altivec-ev_mixed, PARKED): the vmrgh and vmrgl merges below are BROKEN.
-		 * ZIP1/ZIP2 interleave raw NEON lanes, but the VR is in ev_mixed byte order
-		 * (see emit_load_vr), so the merged result has the wrong byte positions.
-		 * Confirmed by differential test. Fix per the two approaches documented on
-		 * emit_load_vr. Repro: jit-test/gen-altivec-vectors.py. */
+		/* AltiVec merges (vmrgh*/vmrgl*) — two layered bugs found 2026-06-04:
+		 *
+		 * BUG 1 (FIXED): the encodings below were garbage — 0x..C400/0x..C800 are NOT
+		 *   ZIP1/ZIP2 (bit15 set => a three-same arithmetic op, not a permute); the
+		 *   "ZIP1/ZIP2" comments lied, so every merge produced a wrong/no-op result.
+		 *   Replaced with the correct ZIP1/ZIP2 {16B,8H,4S} encodings.
+		 *   → vmrghw/vmrglw (word-granular) are now CORRECT: harness av_vmrgh/lw flip
+		 *     xfail->xpass, 255 scored stay green, and SS_JIT_VERIFY boot is clean
+		 *     (zero VR divergence). These two are the proven fix.
+		 *
+		 * BUG 2 (STILL OPEN, quarantined): the BYTE/HALFWORD merges (vmrgh/l b,h) need
+		 *   more than the encoding — the VR is stored ev_mixed (bytes reversed WITHIN
+		 *   each word, see emit_load_vr), so ZIP on raw lanes gives the right byte PAIRS
+		 *   but PAIRWISE-SWAPPED WORDS vs the interpreter (data: vmrghb v2,v1,v1 ->
+		 *   interp 00000101_02020303_..  vs JIT 02020303_00000101_..). A trailing
+		 *   REV64.4S is the likely fix, but verify with DISTINCT operands (the quarantine
+		 *   vectors are self-operand and can rubber-stamp a wrong fix). Tracked: ROADMAP
+		 *   A2; repro: jit-test/gen-altivec-vectors.py (BUG list). */
 		case 12: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E003800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghb ZIP1.16B */
 		case 76: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E403800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghh ZIP1.8H */
 		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E803800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S */

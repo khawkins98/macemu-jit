@@ -85,7 +85,7 @@ approach" is therefore DIRECT_ADDRESSING, not a low-memory workaround.
 ### Phase 3 — JIT boot completion (the centerpiece)
 
 1. Reproduce and root-cause the splash→desktop hang (upstream diagnosis: partial-block
-   truncation epilogue corrupts state; see upstream JIT-STATUS.md and JIT-APPROACH-RESET.md)
+   truncation epilogue corrupts state; see upstream JIT-STATUS.md and docs/planning/JIT-APPROACH-RESET.md)
 2. Fix the 25 failing ROM-harness blocks (CR field interactions in multi-instruction
    blocks; complex branch BO patterns)
 3. Re-enable lazy CR0 and register allocation behind correctness proofs, using the opcode +

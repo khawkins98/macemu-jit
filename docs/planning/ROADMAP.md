@@ -65,16 +65,18 @@ bugs). Safe + here-verifiable; do before trusting any broad VR-codegen change.
 slipped the harness; FP vectors were vacuous for months. Fixing more codegen on top of a
 harness that can't catch mistakes just produces the next silent bug.
 
-**Scope:**
-- **Vacuousness guard** on `SheepShaver/jit-test/run.sh` — reject any vector whose checked
-  result can't actually move (must reach a GPR the REGDUMP captures, or be otherwise
-  asserted). The integrity preflight (duplicate-name detection) exists; the vacuousness guard
-  is still deferred — needs a sentinel/mutation design.
-- **Confirm/extend `SS_JIT_VERIFY`** to compare **VR and FPR** state, not just GPRs — so the
-  differential oracle catches vector/FP corruption directly (sidesteps the vacuous-vector
-  problem for boot-time verification).
-- A **trustworthy AltiVec differential** built on the above.
-- **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
+**Scope (✅ = landed this cycle):**
+- ✅ **REGDUMP compares FPR + VR** (harness) and ✅ **`SS_JIT_VERIFY` compares FPR + VR** (boot
+  oracle) — the two blind spots that hid every FP/AltiVec bug are closed.
+- ✅ **Quarantine lane** tracks all 9 confirmed `ev_mixed` divergences as `xfail` (the A2 gate).
+- 🟡 **Stronger AltiVec operands** — regenerate the scored word-op vectors with **distinct AND
+  carry-inducing** operands (small-distinct still masks byteswap-carry; see A2 testing-gap note).
+  Low priority for A2 (per-op, doesn't touch word ops) but needed before any *broad* VR change.
+- 🟡 **Vacuousness guard** on `run.sh` — now narrowed to **memory-only / otherwise-unobservable**
+  results (FP/VR are captured). Still needs a sentinel/mutation design; lower urgency now.
+- 🟡 **Broaden AltiVec coverage** — the suite has ~13 scored AltiVec + 9 quarantined ops out of
+  ~100+; most AltiVec ops are still untested. Grow `gen-altivec-vectors.py` alongside A2.
+- 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered
   G4 golden results (catches bugs shared by *both* interp and JIT). See IMPLEMENTATION-BACKLOG T1.
@@ -118,8 +120,17 @@ multiplies (`vmuleub`/`vmuloub` — even/odd element select; `vmuloub` also need
 **⚠️ Testing gap found (A1 follow-up):** the scored word-op vectors (`av_vadduwm`/`vsubuwm`/
 `vmaxsw`/…) use **uniform operands** (`0x05050505`/`0x03030303`) which are byteswap-palindromes,
 so they can't catch a byteswap/lane bug — that's why approach A falsely scored 100. Regenerate
-them in `gen-altivec-vectors.py` with **distinct** per-lane operands before trusting any VR-codegen
-change. (Safe on `macos-arm64`: word ops are correct there today, so distinct operands stay green.)
+them with **distinct AND carry-inducing** operands (small-distinct like `00..0F`/`10..1F` still
+masks it — sums don't carry across byte boundaries, so byteswap stays invisible; use values that
+force inter-byte carries). Only matters for *broad* VR-codegen changes, not per-op approach B.
+
+**Order of attack (simplest → hardest):** word merges (`vmrghw`/`vmrglw` — likely just `ZIP1↔ZIP2`)
+→ byte/halfword merges (`vmrgh{b,h}`/`vmrgl{b,h}`) → pack (`vpkuhum`) → multiplies (`vmuleub`/
+`vmuloub`, + `UMULL.8H`). Fix one, watch its quarantine vector flip `xfail`→`xpass`, keep 255 green.
+
+**Done when:** all 9 quarantine vectors `xpass` (promote to TEST_ORDER) **and** boot-verified
+against real AltiVec software under `SS_JIT_VERIFY=1` (→ A3 "AltiVec under real software"). The
+harness flip is necessary but not sufficient — its input coverage is one pattern per op.
 
 **Depends on:** A1. **Needs boot verification** (yours) — the harness AltiVec coverage is partial.
 **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P1b/P5c; `CHANGELOG.md` [SheepShaver] 2026-06-04; `ppc-jit.cpp`.

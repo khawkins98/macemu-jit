@@ -111,7 +111,7 @@ then the specific `find_rom_data` pattern that isn't found within it.
 the first miss. More porting up front (~100 patterns), but keeps everything offline and
 reusable. The env-gated tracer is the faster first cut; the rom-inspect extension is the
 durable tool (and is already noted as a P3.5 follow-up in
-`docs/REVIEW-RECOMMENDATIONS-2026-06-03.md`).
+`docs/planning/REVIEW-RECOMMENDATIONS-2026-06-03.md`).
 
 **Decision gate after Phase 0:**
 - Fails at `check_rom_patch_space` or very early in `patch_nanokernel_boot` → likely
@@ -185,7 +185,7 @@ patching can surface. Use the existing diagnostics (heartbeat + warnings, trace 
 ## References
 
 - `docs/superpowers/specs/2026-06-03-rom-inspector-design.md` — the inspector + shared decoder
-- `docs/REVIEW-RECOMMENDATIONS-2026-06-03.md` — P3.5 (rom-harness New World scanning; full
+- `docs/planning/REVIEW-RECOMMENDATIONS-2026-06-03.md` — P3.5 (rom-harness New World scanning; full
   PatchROM-gauntlet modeling in rom-inspect)
 - `SheepShaver/docs/DIAGNOSTICS.md` — rom-inspect usage + runtime diagnostics
 - `SheepShaver/src/rom_patches.cpp`, `SheepShaver/src/include/rom_decode.hpp`

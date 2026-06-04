@@ -1268,9 +1268,24 @@ void powerpc_cpu::execute(uint32 entry)
 					/* ---- SS_JIT_VERIFY: compare JIT output against interpreter ---- */
 					if (__builtin_expect(jit_verify_enabled && jit_verify_n_insns > 0, false)) {
 						static int verify_divergence_budget = 20;
-						/* Only verify RAM blocks (0x10000000-0x1FFFFFFF) — ROM blocks
-						 * have replay false positives from stores modifying shared memory. */
-						if (verify_divergence_budget > 0 &&
+						static bool verify_suppressed = false;
+						/* Skip blocks that end with bl/bctrl to the Mixed Mode dispatch
+						 * area (0x10100000-0x10110000) or any callee — these produce
+						 * cascading false divergences because the interpreter follows
+						 * the call through a different dispatch path.  Also skip if a
+						 * prior divergence poisoned the register state (suppress until
+						 * we see a clean block). */
+						bool has_link_call = false;
+						{
+							uint32 last_op = vm_read_memory_4(jit_block_start_pc + (jit_verify_n_insns - 1) * 4);
+							uint32 pri = last_op >> 26;
+							bool lk = last_op & 1;
+							if (lk && (pri == 18 || pri == 16 ||
+							           (pri == 19 && (((last_op >> 1) & 0x3FF) == 16 ||
+							                         ((last_op >> 1) & 0x3FF) == 528))))
+								has_link_call = true;
+						}
+						if (verify_divergence_budget > 0 && !has_link_call && !verify_suppressed &&
 						    jit_block_start_pc >= 0x10000000 && jit_block_start_pc < 0x20000000) {
 							/* Save post-JIT state */
 							powerpc_registers jit_state;
@@ -1333,6 +1348,7 @@ void powerpc_cpu::execute(uint32 entry)
 
 							if (!match) {
 								verify_divergence_budget--;
+								verify_suppressed = true; /* suppress subsequent cascade */
 								/* Dump the block's opcodes */
 								fprintf(stderr, "[VERIFY] Block %08x (%d insns):", jit_block_start_pc, jit_verify_n_insns);
 								for (int vi = 0; vi < jit_verify_n_insns; vi++) {
@@ -1342,6 +1358,8 @@ void powerpc_cpu::execute(uint32 entry)
 								fprintf(stderr, "\n");
 								if (verify_divergence_budget == 0)
 									fprintf(stderr, "[VERIFY] Budget exhausted — further divergences suppressed\n");
+							} else {
+								verify_suppressed = false; /* clean block — resume checking */
 							}
 
 							/* Restore JIT state so execution continues correctly */

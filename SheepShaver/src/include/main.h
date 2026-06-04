@@ -47,6 +47,11 @@ struct M68kRegisters {
 extern bool power_off_requested;
 extern bool restart_requested;
 
+// E2E harness (ROADMAP A5): host-requested clean guest shutdown. Set by the SIGUSR1
+// handler (async-signal-safe), read by the guest idle hook (OP_IDLE_TIME), which injects the
+// ADB Power key (with dwell) so the guest shuts down from its own top-level event loop.
+extern volatile int host_shutdown_requested;
+
 // Functions
 extern bool InitAll(const char *vmdir);
 extern void ExitAll(void);

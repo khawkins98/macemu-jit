@@ -1,6 +1,8 @@
 """Spawn the emulator, capture stderr, and guarantee teardown."""
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import threading
 
@@ -37,6 +39,15 @@ class Runner:
     def log_text(self) -> str:
         with self._lock:
             return "".join(self._buf)
+
+    def request_shutdown(self) -> None:
+        """Ask the guest to cleanly shut down via the host->guest hook (ROADMAP A5).
+
+        Sends SIGUSR1; the emulator's idle hook injects the ADB Power key + Return, so the
+        guest runs its real shutdown (flush/unmount) from its own event loop. No VNC needed.
+        """
+        if self._proc and self._proc.poll() is None:
+            os.kill(self._proc.pid, signal.SIGUSR1)
 
     def wait(self, timeout: float) -> int | None:
         """Return exit code, or None if it did not exit within `timeout`."""

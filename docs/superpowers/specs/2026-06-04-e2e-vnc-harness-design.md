@@ -285,3 +285,27 @@ minimal System + the benchmark/test tools (Speedometer, MacBench, our harness he
 ideal canonical medium — read-only, small, purpose-built. Cost: building a *bootable* classic-Mac
 HFS CD image (blessed System Folder + HFS mastering + a CD driver) is a real task, tracked under
 ROADMAP A5 as a follow-up.
+
+## 14. Host→guest shutdown hook — SOLVED (2026-06-04)
+
+The shutdown trigger is now a clean **host→guest hook**, not VNC menu-clicking. `SIGUSR1` →
+the emulator's idle hook runs a small state machine that injects **ADB Power key (with dwell) →
+wait for the Shut Down dialog → Return** (confirms the default "Shut Down" button). The guest then
+runs its real shutdown (procs + flush/unmount) from its own event loop → patched `PowerOff()` →
+`OP_POWEROFF` → "Shutdown complete." → clean exit. **Verified live on both Mac OS 8.6 and 9.0.4
+ISOs** (`PASS: clean lifecycle`).
+
+This supersedes §12's "reverted" status. What unlocked it (two corrections to §12's findings):
+1. **Power-key dwell** — injecting key down+up back-to-back was drained in one `ADBInterrupt` pass
+   = an instantaneous press the OS ignores. Holding the key across idle-hook cycles fixes that.
+2. **The dialog needs confirming** — the power key raises the "Shut Down / Restart / Sleep" dialog;
+   it does *not* shut down on its own. Pressing **Return** (Mac key 0x24) activates the default
+   button. (The earlier "no effect on 8.6" was actually "dialog shown, waiting for confirmation" —
+   a vncdotool screenshot-connect was dismissing the dialog before it could be seen.)
+
+Key property: the idle hook (`OP_IDLE_TIME`/`_2`) **fires even while the modal dialog is up**, so
+the whole sequence runs from inside the emulator — no VNC for shutdown. The `Execute68kTrap`
+re-entrancy crash (§12) is avoided entirely by posting events rather than re-entering. Code:
+`e2e_check_host_shutdown` in `emul_op.cpp`; harness side `runner.request_shutdown()` sends SIGUSR1.
+The VNC menu-drive (and its 640×480 coordinate calibration) is retired from the default path; VNC
+is now used only for optional, best-effort boot screenshots.

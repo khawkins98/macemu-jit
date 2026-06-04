@@ -213,21 +213,26 @@ the OTH rule, prune `/tmp` logs, quiet-mode env gate).
 
 ## A5. 🟡 End-to-end VNC test harness — system-level boot/run/shutdown regression
 
-**Status (2026-06-04): P1 LANDED + verified live.** `make e2e` boots an isolated copy of Mac OS
-8.6, waits for a deterministic boot-ready signal, drives Special ▸ Shut Down over VNC, and asserts
-a clean exit — `PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0` (repeatable).
-Boot detection is a proper OS-call hook (`[BOOT] idle` from the `SynchIdleTime`/`OP_IDLE_TIME(_2)`
-patch, enriched with frontmost-app + modal state to reject dialog false-positives). Shutdown drives
-the Finder's real Special ▸ Shut Down (a host→guest *hook* — `ShutDwnPower` trap and ADB power-key
-— was explored and reverted: the trap flushes-then-SIGSEGVs re-entrantly, the power-key no-ops on
-8.6; see spec §12). Harness is Python + `vncdotool`, checked-in config, pristine-disk-per-run, 12
-offline unit tests. Run it locally: `SheepShaver/e2e/README.md` (full setup + troubleshooting).
+**Status (2026-06-04): P1 LANDED + verified live; both boot-detection AND shutdown are proper
+host→guest hooks now.** `make e2e` boots an isolated **read-only ISO** of Mac OS 8.6/9, waits for a
+deterministic boot-ready signal, requests a clean shutdown via a signal, and asserts clean exit —
+`PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0` (repeatable on both 8.6 and 9.0.4).
+- **Boot detection** — a proper OS-call hook: `[BOOT] idle` from the `SynchIdleTime`/`OP_IDLE_TIME(_2)`
+  patch, enriched with frontmost-app + modal state to reject dialog false-positives.
+- **Shutdown** — a proper host→guest hook (✅ solved, spec §14): `SIGUSR1` → the emulator injects
+  ADB Power key (with dwell) → waits for the Shut Down dialog → Return, so the guest runs its real
+  shutdown from its own event loop. No VNC menu-clicking. The earlier trap/power-key dead-ends (§12)
+  were corrected by the dwell + dialog-confirm insight.
+- **Medium** — read-only ISO is the default (§13): can't get dirty → no repair-prompt/dialog
+  false-positives, no pristine-copy-per-run, reproducible. Disk-boot retained for writable scenarios.
+Harness is Python + `vncdotool` (VNC only for optional screenshots now), checked-in config, 14
+offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
 
 **Open:**
 - **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
 - **P3** — declarative scenario DSL ("Playwright-for-VNC").
-- **Host→guest shutdown hook** — the menu drive works; a signal-driven hook was explored and
-  reverted (invoke the Shutdown Manager from a *non-reentrant* top-level context; spec §12).
+- **Slim custom benchmark ISO** — convert a HD install into a small read-only bootable ISO carrying
+  a minimal System + benchmark tools (MacBench/Speedometer). The ideal canonical medium (spec §13).
 - **GitHub/CI integration (future — complications known).** The harness is already a clean CLI
   gate (`make e2e`, exit 0/1; env-resolved `SS_E2E_ROM`/`SS_E2E_DISK`; artifacts dir for upload).
   Blockers before it runs in CI: (1) **no headless macOS** — SDL needs a live WindowServer, so it

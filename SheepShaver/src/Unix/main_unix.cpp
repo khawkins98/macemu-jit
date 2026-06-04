@@ -268,6 +268,15 @@ static const char *gui_connection_path = NULL;	// GUI connection identifier
 bool power_off_requested = false;
 bool restart_requested = false;
 
+// E2E harness (ROADMAP A5): host-requested clean guest shutdown. SIGUSR1 sets this
+// (async-signal-safe — just a flag); the guest idle hook (OP_IDLE_TIME) injects the ADB Power
+// key with dwell. SIGUSR1 is free here (SIGUSR2 is the nanokernel's interrupt mechanism).
+volatile int host_shutdown_requested = 0;
+static void sigusr1_handler(int)
+{
+	host_shutdown_requested = 1;
+}
+
 uint32  SheepMem::page_size;				// Size of a native page
 uintptr SheepMem::zero_page = 0;			// Address of ro page filled in with zeros
 uintptr SheepMem::base = 0x60000000;		// Address of SheepShaver data
@@ -795,6 +804,16 @@ static bool init_sdl()
 	// Don't let SDL catch SIGINT and SIGTERM signals
 	signal(SIGINT, SIG_DFL);
 	signal(SIGTERM, SIG_DFL);
+
+	// E2E harness (ROADMAP A5): SIGUSR1 requests a clean guest shutdown. SA_RESTART so it
+	// doesn't EINTR blocking syscalls. The handler only sets host_shutdown_requested.
+	{
+		struct sigaction sa;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_handler = sigusr1_handler;
+		sa.sa_flags = SA_RESTART;
+		sigaction(SIGUSR1, &sa, NULL);
+	}
 	return true;
 }
 #endif

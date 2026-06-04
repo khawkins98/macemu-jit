@@ -105,6 +105,57 @@ static void e2e_emit_boot_ready_once(void)
 }
 
 
+// E2E harness clean-shutdown trigger (ROADMAP A5). When the host requests shutdown (SIGUSR1 ->
+// host_shutdown_requested), inject the ADB Power key — the same call the SDL window-close handler
+// uses (video_sdl3.cpp). The guest routes the power key to the Shutdown Manager, which runs the
+// REAL shutdown (procs + flush/unmount volumes) then powers off -> patched PowerOff() ->
+// OP_POWEROFF -> "Shutdown complete." -> clean exit. Posting an event (vs re-entering via
+// Execute68kTrap) is non-reentrant: the guest shuts down from its own top-level event loop.
+//
+// Sequence (driven across idle-hook cycles, each >= ~1 VBL apart):
+//   1. ADB Power key down+up (with dwell) -> Mac OS raises the "Shut Down / Restart / Sleep"
+//      confirmation dialog (verified on Mac OS 9.0.4).
+//   2. wait for the dialog to appear, then press Return -> activates the default "Shut Down"
+//      button -> the OS runs its real shutdown (procs + flush/unmount) -> patched PowerOff() ->
+//      OP_POWEROFF -> "Shutdown complete." -> clean exit.
+// Technique: ADB key DWELL — ADBKeyDown/Up buffer into key_buffer, drained in one pass by
+// ADBInterrupt on the 60 Hz VBL (adb.cpp); back-to-back down+up = instantaneous press the OS
+// ignores, so we hold across cycles. Return's Mac key code is 0x24. Posting events (vs
+// Execute68kTrap) is non-reentrant: the guest acts from its own top-level/modal event loop.
+static void e2e_check_host_shutdown(void)
+{
+	static int phase = 0;		// 0=idle 1=hold power 2=wait-for-dialog 3=done
+	static int counter = 0;
+	switch (phase) {
+	case 0:
+		if (!host_shutdown_requested)
+			return;
+		host_shutdown_requested = 0;
+		fprintf(stderr, "[BOOT] host shutdown requested — ADB Power key down\n");
+		fflush(stderr);
+		ADBKeyDown(0x7f);
+		phase = 1; counter = 0;
+		break;
+	case 1:				// hold the power key a few cycles, then release
+		if (++counter < 4)
+			break;
+		ADBKeyUp(0x7f);
+		fprintf(stderr, "[BOOT] Power key up; waiting for Shut Down dialog\n");
+		fflush(stderr);
+		phase = 2; counter = 0;
+		break;
+	case 2:				// let the dialog appear (~1s of idle cycles), then confirm with Return
+		if (++counter < 45)
+			break;
+		fprintf(stderr, "[BOOT] confirming Shut Down dialog (Return)\n");
+		fflush(stderr);
+		ADBKeyDown(0x24); ADBKeyUp(0x24);	// Return = default "Shut Down" button
+		phase = 3;
+		break;
+	}
+}
+
+
 /*
  *  Execute EMUL_OP opcode (called by 68k emulator)
  */
@@ -533,6 +584,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 
 		case OP_IDLE_TIME:
 			e2e_emit_boot_ready_once();
+			e2e_check_host_shutdown();	// inject Power key (with dwell) if host asked (A5)
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();
@@ -541,6 +593,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 
 		case OP_IDLE_TIME_2:
 			e2e_emit_boot_ready_once();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
+			e2e_check_host_shutdown();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();

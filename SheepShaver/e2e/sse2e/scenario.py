@@ -1,4 +1,4 @@
-"""P1 lifecycle scenario: boot -> Special>Shut Down -> assert clean exit."""
+"""P1 lifecycle scenario: boot -> host->guest shutdown hook -> assert clean exit."""
 from __future__ import annotations
 
 import time
@@ -8,12 +8,6 @@ from pathlib import Path
 from . import observe
 from .runner import Runner
 from .vnc import Vnc
-
-# Menu-bar coordinates at pinned 640x480 — CALIBRATED + verified live (2026-06-04, Mac OS 8.6
-# Finder). Drives the real Special > Shut Down command (a clean guest shutdown). Must be done in
-# ONE VNC session: open the sticky menu, then select the item without disconnecting between.
-SPECIAL_MENU_XY = (175, 8)       # "Special" title in the menu bar
-SHUTDOWN_ITEM_XY = (195, 118)    # "Shut Down" (last item) in the dropped menu
 
 
 @dataclass
@@ -46,15 +40,18 @@ def run_lifecycle(
                 runner.log_text(),
             )
 
-        # 2. Drive Special > Shut Down over VNC.
+        # 2. Request a clean shutdown via the host->guest hook (SIGUSR1 -> the emulator injects
+        #    the ADB Power key + Return; the guest runs its real shutdown from its own event loop).
+        #    No VNC menu-clicking — the only VNC use is an optional, best-effort boot screenshot.
         time.sleep(2.0)  # small settle margin after idle
-        vnc = Vnc(port=vncport)
         if artifact_dir:
-            vnc.capture(str(artifact_dir / "01-desktop.png"))
-        vnc.click(*SPECIAL_MENU_XY)     # open the sticky Special menu
-        time.sleep(1.0)
-        vnc.click(*SHUTDOWN_ITEM_XY)    # select Shut Down -> real clean guest shutdown
-        vnc.close()
+            try:
+                v = Vnc(port=vncport)
+                v.capture(str(artifact_dir / "01-desktop.png"))
+                v.close()
+            except Exception:
+                pass  # screenshot is a debugging artifact, not on the critical path
+        runner.request_shutdown()
 
         # 3. Assert clean exit: process exits on its own, log shows both signatures.
         code = runner.wait(timeout=shutdown_timeout)

@@ -1,8 +1,10 @@
 # SheepShaver E2E VNC harness (P1)
 
-A scriptable end-to-end smoke test: it boots SheepShaver in a **repo-tracked isolated config**
-(`config/test.prefs.template` — *not* your `~/.sheepshaver_prefs`), waits for a deterministic
-boot-ready signal, drives the Finder's **Special ▸ Shut Down** over VNC, and asserts a clean exit.
+A scriptable end-to-end smoke test: it boots SheepShaver from a **repo-tracked isolated config**
+(`config/test.prefs.iso.template` — *not* your `~/.sheepshaver_prefs`), waits for a deterministic
+boot-ready signal, requests a clean shutdown via a **host→guest signal hook** (`SIGUSR1`), and
+asserts a clean exit. Both the boot-ready signal and the shutdown are proper hooks — VNC is used
+only for optional screenshots, not to drive the GUI.
 
 A green run prints:
 
@@ -121,9 +123,11 @@ fixtures, no emulator required.
   the desktop. The default **read-only ISO can't trigger this** (no disk-repair prompt — a CD is
   never dirty). It can only occur on the disk-boot path with a dirty master; re-create that master
   from a clean, cleanly-shut-down install.
-- **Shutdown click misses / `shutdown timed out`** — the menu coordinates in `sse2e/scenario.py`
-  (`SPECIAL_MENU_XY`, `SHUTDOWN_ITEM_XY`) are calibrated for **640×480**. If you change the screen
-  size, recalibrate: open the Special menu over VNC, screenshot, and read the new pixel positions.
+- **`shutdown timed out`** — the guest didn't shut down after the `SIGUSR1` hook fired. Check the
+  log for the `[BOOT] host shutdown requested … Power key … Return` lines (the in-emulator
+  sequence) and `Shutdown complete.`. The hook needs an OS whose power key raises the Shut Down
+  dialog (verified on 8.6 + 9.0.4); a very different System might need the dialog-confirm key
+  adjusted in `emul_op.cpp` (`e2e_check_host_shutdown`).
 - **Two instances / port in use** — kill strays first: `pkill -9 -x SheepShaver`.
 - **Nothing happens / SDL error** — you're likely not in a logged-in GUI session (see Prerequisite 1).
 
@@ -131,10 +135,12 @@ fixtures, no emulator required.
 
 ## Status & roadmap
 
-P1 lifecycle smoke — boot → clean shutdown → assert. Open (ROADMAP A5):
+P1 lifecycle smoke — boot → clean shutdown → assert — **complete**. Both boot detection and
+shutdown are proper host→guest hooks (no VNC GUI driving); read-only ISO is the default medium.
+Open (ROADMAP A5):
 - **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
 - **P3** — declarative scenario DSL.
-- **CI integration** — needs a self-hosted macOS runner with a GUI session + asset provisioning +
-  ideally a smaller test disk; see ROADMAP A5 for the full complication list.
-- **Host→guest shutdown hook** — the menu drive works; a signal-driven hook was explored and
-  reverted (spec §12).
+- **Slim custom benchmark ISO** — a small read-only bootable ISO with a minimal System + benchmark
+  tools (MacBench/Speedometer); the ideal canonical medium (spec §13).
+- **CI integration** — needs a self-hosted macOS runner with a GUI session + asset provisioning;
+  see ROADMAP A5 for the full complication list.

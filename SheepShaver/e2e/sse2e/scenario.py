@@ -78,3 +78,86 @@ def _await_boot_ready(runner: Runner, timeout: float) -> observe.BootReady | Non
                 return ev
         time.sleep(0.5)
     return None
+
+
+# --- Benchmark scenario (Speedometer) -------------------------------------------------
+
+# Speedometer auto-launches from the guest Startup Items; we wait for its [APP] signal (deterministic)
+# rather than guessing the (highly variable) launch time. BENCH_RUN_WAIT is the only fixed wall-clock.
+SPEEDO_LAUNCH_TIMEOUT = 90.0   # max wait for Speedometer to launch + idle on its splash
+BENCH_RUN_WAIT = 105.0         # OK-the-disk -> full Speedometer suite done (~90 s + margin)
+
+
+@dataclass
+class BenchResult:
+    ok: bool
+    reason: str
+    log: str
+    result_image: str | None = None
+
+
+def run_benchmark(
+    *,
+    emulator: str,
+    prefs: str,
+    vncport: int,
+    boot_timeout: float = 90.0,
+    shutdown_timeout: float = 30.0,
+    artifact_dir: Path,
+) -> BenchResult:
+    """Boot the benchmark disk, drive Speedometer's full suite, capture results, shut down.
+
+    Sequence (Speedometer auto-launches from the guest Startup Items):
+      splash -> Return; registration -> Esc; Cmd+A (run all) -> "choose drive" dialog ->
+      Return (OK = the main Desktop disk) -> ~90 s benchmark -> screenshot results.
+    """
+    runner = Runner(argv=[emulator, "--config", prefs])
+    runner.start()
+    try:
+        ev = _await_boot_ready(runner, boot_timeout)
+        if ev is None:
+            return BenchResult(False, "boot timed out (no [BOOT] idle)", runner.log_text())
+
+        # Wait DETERMINISTICALLY for Speedometer to auto-launch and idle on its splash (the [APP]
+        # signal), instead of a fixed sleep — boot+launch time is highly variable.
+        if not _await_app(runner, "Speedometer", SPEEDO_LAUNCH_TIMEOUT):
+            return BenchResult(False, "Speedometer did not launch (no [APP] frontApp='Speedometer')",
+                               runner.log_text())
+        time.sleep(2.0)  # small settle after the splash-idle signal
+        vnc = Vnc(port=vncport)
+        vnc.key("enter"); time.sleep(2.5)    # dismiss splash (stable, waits for Enter)
+        vnc.key("esc");   time.sleep(2.5)    # dismiss registration prompt
+        vnc.key("super-a"); time.sleep(3.0)  # Cmd+A -> run all -> "choose drive to test" dialog
+        vnc.key("enter"); time.sleep(2.5)    # OK = main (Desktop) disk -> benchmark auto-starts
+        time.sleep(BENCH_RUN_WAIT)           # full suite runs -> "The tests are done!" dialog
+        img = str(artifact_dir / "benchmark-result.png")
+        vnc.capture(img)                     # capture the results (with the done-dialog)
+        vnc.key("enter"); time.sleep(2.0)    # dismiss "The tests are done!" -> guest returns to idle
+        vnc.close()
+
+        runner.request_shutdown()
+        code = runner.wait(timeout=shutdown_timeout)
+        log = runner.log_text()
+        if code is None:
+            return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img)
+        return BenchResult(True, "benchmark complete; results + log captured", log, img)
+    finally:
+        # Always save the emulator log (even on early failure) — terminal output for analysis.
+        try:
+            (artifact_dir / "benchmark-emulator.log").write_text(runner.log_text())
+        except Exception:
+            pass
+        runner.terminate()
+
+
+def _await_app(runner: Runner, app: str, timeout: float) -> bool:
+    """Wait until a frontmost-app line CONTAINS `app` (substring, e.g. 'Speedometer' matches
+    'Speedometer 4.02'). CurApName carries the full app name + version."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for line in runner.log_text().splitlines():
+            fa = observe.front_app(line)
+            if fa is not None and app in fa:
+                return True
+        time.sleep(0.5)
+    return False

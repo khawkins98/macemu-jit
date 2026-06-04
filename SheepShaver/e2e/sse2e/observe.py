@@ -36,6 +36,19 @@ def is_desktop_ready(ev: BootReady) -> bool:
     return ev.front_app == "Finder" and not ev.modal
 
 
+_FRONTAPP_RE = re.compile(r"frontApp='(?P<app>[^']*)'")
+
+
+def front_app(line: str) -> str | None:
+    """The frontmost-app name from a [BOOT]/[APP] line, else None.
+
+    The emulator emits `[APP] frontApp='X'` whenever the frontmost app changes, so the harness can
+    wait for a specific app (e.g. Speedometer auto-launching) deterministically, not by timing.
+    """
+    m = _FRONTAPP_RE.search(line)
+    return m.group("app") if m else None
+
+
 def saw_clean_shutdown(text: str) -> bool:
     """True if the log shows a clean guest shutdown (both signatures present)."""
     return bool(_SHUTDOWN_RE.search(text)) and bool(_ATEXIT_RE.search(text))

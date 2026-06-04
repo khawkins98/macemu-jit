@@ -21,3 +21,6 @@ class Vnc:
 
     def close(self) -> None:
         self._client.disconnect()
+        # Stop vncdotool's Twisted reactor — without this the non-daemon reactor thread keeps the
+        # process alive after disconnect (every capture/drive command would hang until timeout).
+        api.shutdown()

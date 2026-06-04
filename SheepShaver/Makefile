@@ -19,7 +19,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-rom harness-count e2e \
+        test test-opcodes test-jit test-rom harness-count e2e e2e-bench \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean help \
@@ -152,6 +152,10 @@ e2e: build-ss
 		exit 1; \
 	fi
 	cd e2e && .venv/bin/python run_smoke.py
+
+e2e-bench: build-ss
+	@if [ ! -x e2e/.venv/bin/python ]; then echo "e2e venv missing (see e2e/README.md)"; exit 1; fi
+	cd e2e && .venv/bin/python run_benchmark.py
 
 test-rom: build-rom-harness
 	@echo ""

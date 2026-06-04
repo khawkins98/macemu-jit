@@ -15,7 +15,7 @@ cdrom {cdrom}
 nocdrom false
 bootdriver -62
 ramsize 134217728
-screen win/640/480
+screen win/800/600
 displaycolordepth 8
 nosound true
 nogui true
@@ -24,3 +24,4 @@ ignoreillegal true
 vncserver true
 vncport {vncport}
 cpuclock 500
+extfs /ss-e2e-no-host-fs

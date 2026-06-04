@@ -19,6 +19,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>	// E2E harness frontmost-app change tracking (strcmp/strncpy)
 
 #include "sysdeps.h"
 #include "main.h"
@@ -72,13 +73,8 @@ static uint32 MakeExecutableTvec;
 // fixed low-mem addresses are stable across classic Mac OS; SheepShaver maps guest low memory via
 // Mac2HostAddr/ReadMacIntN. The idle hook itself reuses SheepShaver's own SynchIdleTime ROM patch
 // (rom_patches.cpp), so this adds only the state read, not a new trap.
-static void e2e_emit_boot_ready_once(void)
+static void e2e_emit_idle_signals(void)
 {
-	static bool emitted = false;
-	if (emitted)
-		return;
-	emitted = true;
-
 	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars).
 	char app[32];
 	uint8 *namep = Mac2HostAddr(0x910);
@@ -97,11 +93,27 @@ static void e2e_emit_boot_ready_once(void)
 		if (kind == 2)			// dialogKind
 			modal = 1;
 	}
-
 	uint32 ticks = ReadMacInt32(0x16a);	// Ticks since boot (60/s)
-	fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d ticks=%u (%.1fs)\n",
-	        app, modal, ticks, ticks / 60.0);
-	fflush(stderr);
+
+	// [BOOT]: one-shot at the first idle (boot-ready) — the smoke gate waits for this line.
+	static bool boot_emitted = false;
+	if (!boot_emitted) {
+		boot_emitted = true;
+		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d ticks=%u (%.1fs)\n",
+		        app, modal, ticks, ticks / 60.0);
+		fflush(stderr);
+	}
+
+	// [APP]: emit whenever the frontmost app CHANGES — e.g. an app auto-launching from Startup
+	// Items (Speedometer for the benchmark). Lets the harness wait deterministically for an app to
+	// be up + idle, independent of how long the (highly variable) boot + launch took.
+	static char last_app[32] = { 0 };
+	if (strcmp(app, last_app) != 0) {
+		strncpy(last_app, app, sizeof(last_app) - 1);
+		last_app[sizeof(last_app) - 1] = '\0';
+		fprintf(stderr, "[APP] frontApp='%s' modal=%d ticks=%u\n", app, modal, ticks);
+		fflush(stderr);
+	}
 }
 
 
@@ -583,7 +595,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME:
-			e2e_emit_boot_ready_once();
+			e2e_emit_idle_signals();
 			e2e_check_host_shutdown();	// inject Power key (with dwell) if host asked (A5)
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
@@ -592,7 +604,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME_2:
-			e2e_emit_boot_ready_once();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
+			e2e_emit_idle_signals();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
 			e2e_check_host_shutdown();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)

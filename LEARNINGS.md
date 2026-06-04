@@ -2002,3 +2002,25 @@ Both adversarial-subagent rounds found real defects (vacuous vectors, wrong fmad
 frB/frC field order, a masking vector, the duplicate names) that a green
 `make test-jit` hid. Generators (`gen-fp-vectors.py`, `gen-altivec-vectors.py`)
 now encode correctly and document the traps — use them, don't hand-encode.
+
+## 2026-06-04 — Evaluated and rejected: per-opcode spcflags gate before `bclr 5,8`
+
+A salvaged experiment (`wip/dr-bclr-spcflags-gate`, tip 51b6bec3, since deleted)
+injected a spcflags poll **before one hardcoded instruction** — the DR emulator's
+`bclr 5,8` (op `0x4C420020`): `LDR spcflags; AND #0x0F; CBZ fast-path; else store PC +
+bare epilogue back to the C dispatcher`. The idea was to make CR2.LT reflect pending
+interrupts at that branch's evaluation time.
+
+**Verdict: superseded — do not re-salvage.** Mainline already does a strictly more
+general version: `emit_entry_spcflags_poll` (ppc-jit.cpp) polls spcflags at **every
+block / chain entry** (the dyngen `gen_start` equivalent), masking the **same**
+actionable bits (`PPCR_SPCFLAGS_POLL_MASK = 0x0F`) and re-dispatching via
+`check_spcflags()`. It uses the same struct offset the experiment "discovered"
+(`PPCR_SPCFLAGS = 1056`, where the 0d atomic-spcflags change relocated the field).
+A per-block-entry poll subsumes a single-opcode poll completely; hardcoding
+`op == 0x4C420020` is the inferior design (catches that one instruction, misses every
+other boundary). The DR emulator is JIT-compiled and boots correctly **without** this
+gate. This approach also descends from the spcflags-timing theory that produced the
+reverted, guest-memory-corrupting fix (see the session-5 retraction above) — extra
+reason not to revive it. If interrupt-poll *frequency* ever becomes a perf concern,
+optimize `emit_entry_spcflags_poll`, don't resurrect a per-opcode gate.

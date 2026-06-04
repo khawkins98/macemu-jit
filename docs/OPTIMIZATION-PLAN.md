@@ -64,7 +64,7 @@ on it.
 1. **Add a >8-live-GPR eviction vector.** ✅ **DONE** — `lmw_stmw_wide` (li
    r20–r31, stmw, zero, lmw r20: 12 GPRs > `RA_NUM_REGS=8`) is in the harness and
    forces mid-block `ra_evict` of both clean and dirty slots. It **passes under
-   `make test-jit` (253/253)**. CAVEAT: it only validates the JIT spill path in
+   `make test-jit` (score=100; `make harness-count`)**. CAVEAT: it only validates the JIT spill path in
    **jit mode** (`SS_HARNESS_MODE=jit`); the default `make test-opcodes` runs
    interpreter-determinism and does not exercise it.
 2. **Run `SS_JIT_VERIFY=1` boot** — the only check that exercises eviction +
@@ -505,10 +505,9 @@ hot spots).
 
 For each optimization, measure:
 1. **JIT codegen gate**: `make test-jit` (`SS_HARNESS_MODE=jit`) — runs every
-   vector through the interpreter AND the JIT and diffs them. **253/253,
-   score=100 (2026-06-04).** This is the gate that actually exercises codegen; run
+   vector through the interpreter AND the JIT and diffs them. **score=100** (count: `make harness-count`). This is the gate that actually exercises codegen; run
    it on every `ppc-jit.cpp` change. NOTE: plain `make test-opcodes` only checks
-   interpreter determinism and proves nothing about the JIT — never cite a bare "253/253"
+   interpreter determinism and proves nothing about the JIT — never cite a bare pass count
    without the mode.
 2. **Boot test**: HD boot to Finder desktop (no regression)
 3. **Speedometer 4.02**: Full benchmark, compare PR/Mix/CPU/Dhrystones

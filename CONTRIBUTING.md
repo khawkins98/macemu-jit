@@ -32,7 +32,7 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 ```
 
 **Include in the commit message body:**
-- Harness result (`238/238 score=100`)
+- Harness result (`make test-jit` score=100; count via `make harness-count`)
 - Benchmark delta if measurable (`Mix 638, +15.6%`)
 - `SS_JIT_VERIFY=1` status for RA/CR/flag changes
 - What was tried and reverted, if applicable
@@ -41,7 +41,7 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 
 ### JIT codegen change (ppc-jit.cpp)
 
-- [ ] `make test-jit` passes (238/238) — NOT `make test-opcodes` (that only tests the interpreter)
+- [ ] `make test-jit` passes (score=100) — NOT `make test-opcodes` (that only tests the interpreter)
 - [ ] `SS_JIT_VERIFY=1 ./SheepShaver` boot for 10-20s with no divergence (for RA/flag/branch changes)
 - [ ] Normal boot to Finder desktop
 - [ ] `make bench` before/after if the change affects codegen performance
@@ -73,7 +73,8 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 
 - [ ] One source of truth per number — don't duplicate harness counts or benchmark scores
   in multiple files without a clear "current as of" date
-- [ ] State the harness MODE when citing a score (`test-jit` 238/238, not just "238/238")
+- [ ] State the harness MODE when citing a score (`test-jit` vs `test-opcodes`); for the
+  count use `make harness-count`, do not hardcode a number that will drift
 - [ ] Update `CLAUDE.md` Key Documentation table if adding a new doc file
 
 ### New test vector (jit-test/run.sh)
@@ -130,7 +131,7 @@ codegen comparisons.
 | `ppc-jit.cpp` (RA/flush/block structure) | `LEARNINGS.md`, `OPTIMIZATION-PLAN.md` |
 | Prefs parsing (`prefs.cpp`) | `USER-HANDBOOK.md` prefs table |
 | Emul ops (`emul_op.cpp`, `emul_op.h`) | `CHANGELOG.md`, `USER-HANDBOOK.md` |
-| Harness (`jit-test/run.sh`) | `CLAUDE.md` vector count, `OPTIMIZATION-PLAN.md` harness count |
+| Harness (`jit-test/run.sh`) | nothing — the count is derived (`make harness-count`); docs are de-hardcoded |
 | Build system (`Makefile`, `configure.ac`) | `CLAUDE.md` build commands |
 | Env vars (any `getenv()` call) | `USER-HANDBOOK.md` env var table, `CLAUDE.md` |
 | Research findings | `docs/OPTIMIZATION-PLAN.md`, `research/IMPLEMENTATION-BACKLOG.md` |
@@ -149,6 +150,6 @@ SheepShaver/CHANGELOG.md           # user-visible changes
 SheepShaver/docs/USER-HANDBOOK.md  # user guide
 SheepShaver/docs/research/         # Dolphin/RPCS3/MAME research + backlog
 SheepShaver/src/kpx_cpu/.../ppc-jit.cpp  # THE JIT (4500+ lines)
-SheepShaver/jit-test/run.sh        # opcode test harness (238 vectors)
+SheepShaver/jit-test/run.sh        # opcode test harness (count: make harness-count)
 SheepShaver/rom-harness/           # standalone JIT exerciser + microbench
 ```

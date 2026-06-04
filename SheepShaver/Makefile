@@ -19,7 +19,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-rom \
+        test test-opcodes test-jit test-rom harness-count \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean help \
@@ -149,6 +149,13 @@ test-rom: build-rom-harness
 	@timeout 120 $(ROM_HARNESS) $(ROM) \
 		--count=10000 --min-insns=1 --max-insns=64 2>&1 | \
 		grep "Score:\|Passed:\|Failed:\|Testable\|JIT compile\|SIGSEGV"
+
+# harness-count: the AUTHORITATIVE harness vector count, derived from the one real
+# source — the TEST_ORDER entries in jit-test/run.sh. Docs cite dated snapshots
+# that drift; this never does. Use it instead of trusting a hardcoded number.
+harness-count:
+	@printf 'harness vectors (TEST_ORDER in jit-test/run.sh): '
+	@grep -cE '^TEST_ORDER\+=\(' jit-test/run.sh
 
 ensure-xvfb:
 	@pgrep -x Xvfb > /dev/null 2>&1 || \

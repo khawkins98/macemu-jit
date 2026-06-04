@@ -2,6 +2,11 @@
 # SheepShaver PPC opcode equivalence test harness
 # Phase 1: interpreter determinism validation
 # Phase 2+: interpreter vs JIT comparison
+#
+# AUTHORITATIVE VECTOR COUNT: this file (the TEST_ORDER entries) IS the source of
+# truth for how many vectors exist. Get the live number with `make harness-count`
+# (from SheepShaver/). Docs cite dated snapshots that drift — do not trust them
+# over this file or the target.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

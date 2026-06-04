@@ -138,7 +138,7 @@ test-jit: build-ss
 	@echo ""
 	@echo "=== JIT<->Interpreter Equivalence Harness (codegen correctness gate) ==="
 	@cd jit-test && SS_HARNESS_MODE=jit bash run.sh 2>&1 | \
-		grep -E "HARNESS mode=|METRIC (pass|fail|total|score)=|opcode_[a-z0-9_]+=(0|-1)|FAIL|ERROR"
+		grep -E "HARNESS mode=|HARNESS quarantine:|METRIC (pass|fail|total|score)=|METRIC quarantine_(total|xfail|xpass)=|opcode_[a-z0-9_]+=(0|-1)|QUARANTINE-XPASS|FAIL|ERROR"
 	@echo ""
 	@echo "TIP: For deeper verification, boot with:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
 	@echo "     For quick perf A/B:  cd rom-harness && make bench"

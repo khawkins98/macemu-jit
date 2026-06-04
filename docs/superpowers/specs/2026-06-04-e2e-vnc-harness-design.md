@@ -133,14 +133,34 @@ agent concurrently — avoid clobbering in-flight work):
 - `CHANGELOG.md` entry under **[SheepShaver] Testing & benchmarking** when P1 lands.
 - A `make e2e` (or `SheepShaver/e2e/README.md`) entry documenting how to run it.
 
-## 10. Open questions (for the plan)
+## 10. Groundwork findings (resolved 2026-06-04, read-only investigation)
 
-1. **Steady-state log signal:** which exact line means "booted to Finder, idle"? Needs a short
-   investigation against a real boot's diag log (the heartbeat block-rate flattening is a
-   candidate).
-2. **Menu coordinates vs. keyboard:** is Special ▸ Shut Down reachable by a keyboard equivalent,
-   or must we click fixed menu coordinates (resolution-dependent)? Affects robustness.
-3. **Pristine image source:** build a minimal dedicated test disk, or snapshot the existing
-   `macos86_fresh.dsk`? Smaller is faster to copy-per-run.
-4. **CI host reality:** does the eventual CI runner have a display/SDL path, or do we run the
-   emulator fully headless (offscreen SDL + VNC only)? Determines the spawn flags.
+1. **Clean-exit signal — SOLVED, deterministic.** A clean guest shutdown prints, in order:
+   `"Shutdown complete."` (emul_op.cpp:510) → the `PPC-JIT-A64: session …` atexit block
+   (`blocks=… complete=… (100.0%)`, coverage) → process **exit 0**. A crash/kill produces none
+   of it. This is the primary pass gate. (Confirmed against a real 43 s boot→shutdown log.)
+2. **Boot-complete signal — heuristic, no explicit line.** There is *no* "reached Finder" log
+   line. The implicit signal is the heartbeat **block-rate collapse + CPU drop** as the desktop
+   goes idle (observed 42M/s\@10s → 1.8M/s\@30s, cpu 97%→26%). Plan: P1 waits for rate-below-
+   threshold-for-N-seconds (note: the current heartbeat *mislabels* this idle as a `WARN` — the
+   A4 issue; the harness must not treat that WARN as failure). P2 replaces the heuristic with a
+   `wait_for_image` of the menu bar (the robust signal).
+3. **Shutdown trigger — must drive the menu over VNC; no shortcut.** SheepShaver sets
+   `signal(SIGINT/SIGTERM, SIG_DFL)` (main_unix.cpp:796) so SIGTERM just *kills* it. Clean exit
+   only comes from the guest Special ▸ Shut Down. The VNC framebuffer **is** the Mac framebuffer
+   at the same resolution (vnc_server.cpp:205), so at a pinned `screen win/640/480` a coordinate-
+   click on the Special menu → Shut Down is deterministic. (No power-key keysym mapping found; the
+   keysym table covers Return/arrows/F-keys — usable for dialogs, not for the menu itself.)
+4. **Isolation — SOLVED.** `SheepShaver --config <path>` sets `UserPrefsPath` (main_unix.cpp:918),
+   so the harness points at its own prefs file; combined with `--nogui`, the spawn never touches
+   `~/.sheepshaver_prefs`. The isolated prefs sets `disk` (pristine per-run copy), `rom`,
+   `screen win/640/480`, `vncserver true`, a unique `vncport`, `nogui true`.
+5. **CI host reality — honest constraint.** `video_sdl3.cpp` calls `SDL_CreateWindow`
+   (line 754), which on macOS needs a live **WindowServer (logged-in GUI session)** — there is no
+   Xvfb equivalent on macOS. So "classic CI" works on a **logged-in Mac runner**, not a truly
+   headless box. (Linux could use Xvfb later; out of scope for v1.) Document this in the README so
+   nobody expects it to run on a headless macOS CI agent.
+6. **Tooling — available.** Python 3.14, `pip` present; `vncdotool` 1.3.0 installable from PyPI;
+   `Pillow` 12.2.0 already installed (`imagehash` for P2 still to add). Pristine-image decision
+   for the plan: start by **copy-per-run of a small dedicated test disk** (smaller = faster copy);
+   snapshotting `macos86_fresh.dsk` is the fallback if building a minimal disk is too costly.

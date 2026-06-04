@@ -213,7 +213,16 @@ case "$target_cpu" in
   sparc* ) HAVE_SPARC=yes;;
   powerpc* ) HAVE_POWERPC=yes;;
   x86_64* | amd64* ) HAVE_X86_64=yes;;
-  arm* ) HAVE_ARM=yes;;
+  arm* )
+    dnl On Apple Silicon, config.guess reports the CPU as `arm` (arm-apple-darwin),
+    dnl but it is always 64-bit arm64 — there is no 32-bit ARM macOS. Route Darwin
+    dnl `arm` to AArch64 so it does not fall into the ARM32/ARMv6 assembly path
+    dnl (which emits 32-bit inline asm that does not compile on arm64).
+    case "$target_os" in
+      darwin* ) HAVE_AARCH64=yes;;
+      * )       HAVE_ARM=yes;;
+    esac
+    ;;
   aarch64* ) HAVE_AARCH64=yes;;
 esac
 

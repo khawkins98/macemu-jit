@@ -657,34 +657,27 @@ static void emit_or_xer_so_into_cr_nibble(int reg) {
 }
 
 static void emit_update_cr0(int result_reg) {
-	/* Simple approach: compute CR0 nibble with conditional instructions */
-	/* Compare result with 0 */
+	/* Optimized: build CR0 nibble with CSET + shifted ADD, merge with BFI.
+	 * CR0 nibble = {LT, GT, EQ, SO} in bits 3:0.
+	 * All intermediate ops use ADD (not ADDS) to preserve NZCV from the CMP.
+	 * 11 instructions total (was 19). */
+
+	/* 1. CMP result with 0 — sets NZCV */
 	emit32(0x7100001F | (result_reg << 5)); /* CMP Wn, #0 */
-	/* CR0 = 0 by default */
-	a64_movz(RTMP2, 0, 0);
-	/* MOV W(RTMP0), #8; MOV W(RTMP1), #4; MOV W(RTMP2), #2 */
-	/* CSEL based on condition */
-	/* Simplest: use three conditional moves */
-	a64_movz(RTMP2, 0, 0);
-	emit_load_imm32(RTMP0, 8); /* LT value */
-	emit_load_imm32(RTMP1, 4); /* GT value */
-	/* CSEL RTMP2, RTMP0, RTMP2, LT (if signed less than) */
-	emit32(0x1A800000 | (RTMP2 << 16) | (0xB << 12) | (RTMP0 << 5) | RTMP2); /* CSEL Wd,Wn,Wm,LT */
-	/* CSEL RTMP2, RTMP1, RTMP2, GT (if signed greater than) */
-	emit32(0x1A800000 | (RTMP2 << 16) | (0xC << 12) | (RTMP1 << 5) | RTMP2); /* CSEL Wd,Wn,Wm,GT */
-	/* If EQ, set to 2 */
-	emit_load_imm32(RTMP0, 2);
-	emit32(0x1A800000 | (RTMP2 << 16) | (0x0 << 12) | (RTMP0 << 5) | RTMP2); /* CSEL Wd,Wn,Wm,EQ */
-	/* OR in XER[SO] as bit 0 */
-	emit_or_xer_so_into_cr_nibble(RTMP2);
-	/* Shift nibble into CR0 position (bits 31:28) */
-	emit_load_imm32(RTMP0, 28);
-	emit32(0x1AC02000 | (RTMP0 << 16) | (RTMP2 << 5) | RTMP2); /* LSL Wd,Wn,Wm */
-	/* Load CR, clear CR0 field, OR in new value */
+
+	/* 2. Build nibble = 8*LT + 4*GT + 2*EQ + SO via CSET + shifted ADD */
+	emit32(0x1A9F07E0 | (0xA << 12) | RTMP0); /* CSET RTMP0, LT (inv=GE=0xA) */
+	emit32(0x1A9F07E0 | (0xD << 12) | RTMP1); /* CSET RTMP1, GT (inv=LE=0xD) */
+	emit32(0x0B000000 | (RTMP0 << 16) | (1 << 10) | (RTMP1 << 5) | RTMP2); /* ADD RTMP2, RTMP1, RTMP0 LSL #1 */
+	emit32(0x1A9F07E0 | (0x1 << 12) | RTMP0); /* CSET RTMP0, EQ (inv=NE=0x1) */
+	emit32(0x0B000000 | (RTMP2 << 16) | (1 << 10) | (RTMP0 << 5) | RTMP2); /* ADD RTMP2, RTMP0, RTMP2 LSL #1 */
+	emit_read_xer_so(RTMP0); /* LDRB RTMP0, [RSTATE, #XER_SO] */
+	emit32(0x0B000000 | (RTMP2 << 16) | (1 << 10) | (RTMP0 << 5) | RTMP2); /* ADD RTMP2, RTMP0, RTMP2 LSL #1 */
+
+	/* 3. Merge nibble into CR0 (bits 31:28) with BFI — replaces LSL+AND+ORR.
+	 * BFI Wd, Wn, #lsb, #width: immr = (-lsb MOD 32), imms = width-1 */
 	a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
-	emit_load_imm32(RTMP1, 0x0FFFFFFF);
-	emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* AND */
-	emit32(0x2A000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* ORR */
+	emit32(0x33000000 | (4 << 16) | (3 << 10) | (RTMP2 << 5) | RTMP0); /* BFI RTMP0, RTMP2, #28, #4 */
 	a64_str_w_imm(RTMP0, RSTATE, PPCR_CR);
 }
 
@@ -955,21 +948,17 @@ static void emit_materialize_cr0(void) {
 		emit32(0x7100001F | (lazy_cr0_reg << 5)); /* CMP Wn, #0 */
 
 	/* Build CR0 nibble from ARM64 condition codes:
-	 * CR0.LT = N, CR0.GT = !N && !Z, CR0.EQ = Z, CR0.SO = XER.SO */
-	a64_movz(RTMP2, 0, 0);
-	emit_load_imm32(RTMP0, 8); /* LT */
-	emit_load_imm32(RTMP1, 4); /* GT */
-	emit32(0x1A800000 | (RTMP2 << 16) | (0xB << 12) | (RTMP0 << 5) | RTMP2); /* CSEL RTMP2,RTMP0,RTMP2,LT */
-	emit32(0x1A800000 | (RTMP2 << 16) | (0xC << 12) | (RTMP1 << 5) | RTMP2); /* CSEL RTMP2,RTMP1,RTMP2,GT */
-	emit_load_imm32(RTMP0, 2); /* EQ */
-	emit32(0x1A800000 | (RTMP2 << 16) | (0x0 << 12) | (RTMP0 << 5) | RTMP2); /* CSEL RTMP2,RTMP0,RTMP2,EQ */
-	emit_or_xer_so_into_cr_nibble(RTMP2);
-	emit_load_imm32(RTMP0, 28);
-	emit32(0x1AC02000 | (RTMP0 << 16) | (RTMP2 << 5) | RTMP2); /* LSL */
+	 * CR0.LT = N, CR0.GT = !N && !Z, CR0.EQ = Z, CR0.SO = XER.SO
+	 * Same optimized CSET+ADD+BFI approach as emit_update_cr0. */
+	emit32(0x1A9F07E0 | (0xA << 12) | RTMP0); /* CSET RTMP0, LT */
+	emit32(0x1A9F07E0 | (0xD << 12) | RTMP1); /* CSET RTMP1, GT */
+	emit32(0x0B000000 | (RTMP0 << 16) | (1 << 10) | (RTMP1 << 5) | RTMP2); /* ADD RTMP2, RTMP1, RTMP0 LSL #1 */
+	emit32(0x1A9F07E0 | (0x1 << 12) | RTMP0); /* CSET RTMP0, EQ */
+	emit32(0x0B000000 | (RTMP2 << 16) | (1 << 10) | (RTMP0 << 5) | RTMP2); /* ADD RTMP2, RTMP0, RTMP2 LSL #1 */
+	emit_read_xer_so(RTMP0);
+	emit32(0x0B000000 | (RTMP2 << 16) | (1 << 10) | (RTMP0 << 5) | RTMP2); /* ADD RTMP2, RTMP0, RTMP2 LSL #1 */
 	a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
-	emit_load_imm32(RTMP1, 0x0FFFFFFF);
-	emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* AND clear CR0 */
-	emit32(0x2A000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* ORR merge */
+	emit32(0x33000000 | (4 << 16) | (3 << 10) | (RTMP2 << 5) | RTMP0); /* BFI RTMP0, RTMP2, #28, #4 */
 	a64_str_w_imm(RTMP0, RSTATE, PPCR_CR);
 	lazy_cr0_valid = false;
 	lazy_cr0_reg = -1;

@@ -1,13 +1,27 @@
 # JIT Block Chaining Verification Plan
 
-> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-04
-> **Why this doc exists:** Plan to verify JIT block-chaining correctness (chaining is on by default).
+> **Status:** ✅ Resolved / superseded · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Plan to verify JIT block-chaining correctness. Outcome: chaining=1 is validated at the full ROM range and is the default.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
+> ## ✅ RESOLVED / SUPERSEDED (2026-06-03) — do NOT implement "Option A" or restrict to 0x460000
+> This plan (session 4) was built around a **threat model that was later disproven.** It assumed
+> JIT block chaining could fire the DR-emulator's interrupt one dispatch step early (the
+> "spcflags-timing" hazard), so it **restricted the JIT ROM range to `0x460000`** and proposed an
+> inline interrupt-injection **"Option A"** (Tier 4) before extending to `0x500000`.
+>
+> The real cause of the DR-emulator boot hang was the **`subfe`/`adde` carry-out miscompile**, not
+> interrupt timing (see `docs/archive/SUBFE-CARRY-BUG-REPORT.md`; `LEARNINGS.md` session 7 FINAL,
+> and the session-5 "STUCK"/deadlock **RETRACTION**). With that fixed (ADCS codegen), **chaining=1
+> at the full `ROM=0x500000` range — including the 68K DR emulator — is the default shipped config
+> and boots Mac OS 8.6 to Finder** (harness score=100). So **Option A is unnecessary, the
+> `0x460000` restriction is obsolete, and Tiers 1/4 are answered empirically.** The Tier 2
+> (Ticks-rate) and Tier 3 (chain-streak latency) recipes below remain useful as **reusable
+> diagnostics** if a chaining regression ever needs investigating.
 
-Analysis by chaining-analyzer agent (session 4, 2026-06-02). See LEARNINGS.md for full
-threat model. Summary: chaining=1 is safe with ROM=0x460000 — spcflags poll present at
-every chain entry, ROM is immutable (no SMC hazard).
+Analysis by chaining-analyzer agent (session 4, 2026-06-02). See `LEARNINGS.md` for the original
+threat model. **(Superseded — see banner above: chaining=1 is validated at the full `ROM=0x500000`
+range, not just `0x460000`.)**
 
 ---
 
@@ -112,11 +126,17 @@ block is looping via something other than the chain mechanism.
 
 ---
 
-## Tier 4 — Full ROM Range (requires DR emulator interrupt fix first)
+## Tier 4 — Full ROM Range — ✅ DONE (but NOT via Option A)
 
-**Goal**: Extend JIT range to 0x500000 with chaining=1, booting cleanly to desktop.
+**Goal**: Extend the JIT ROM range to 0x500000 (which includes the 68K DR emulator at
+ROMBase+0x460000–0x500000) with chaining=1, booting cleanly to desktop.
 
-**Prerequisite — Option A fix (Task #12, ~100-150 lines in ppc-jit.cpp)**:
+**Outcome**: ✅ Achieved and shipped as the default — but **not** via the Option A fix below. The
+boot hang was the `subfe`/`adde` carry-out bug; once fixed, `0x500000` + chaining=1 boots to Finder
+with no interrupt-injection needed. Everything below is **retained as a record of the disproven
+spcflags-timing theory** — ❌ do not implement it.
+
+**Prerequisite — Option A fix (Task #12, ~100-150 lines in ppc-jit.cpp) — ❌ NOT NEEDED (theory disproven)**:
 
 Root cause confirmed (session 4, dr-emulator-analyzer): JIT polls spcflags at BLOCK ENTRY;
 the DR emulator's dispatch variants (6 sites, ROM+0x466080/84/c0/e0/100/120) check for
@@ -149,11 +169,15 @@ In `compile_one()` in ppc-jit.cpp, when the current PC is in ROM+0x460000–0x50
 
 ---
 
-## Current Status
+## Current Status (resolved 2026-06-03)
 
-| Tier | Status | Config |
-|------|--------|--------|
-| 1 | Pending (Path 1 boot in progress with chaining=0 first) | ROM=0x460000, chaining=1 |
-| 2 | Not started | ROM=0x460000, chaining=1 |
-| 3 | Not started (optional) | ROM=0x460000, chaining=1, debug build |
-| 4 | Blocked on dr-emulator-analyzer findings | ROM=0x500000, chaining=1 |
+Chaining=1 at the JIT ROM range `0x500000` (which includes the 68K DR emulator) is the default
+shipped config and boots Mac OS 8.6 to Finder (harness score=100). The restricted-range tiers are
+moot; the diagnostics remain available if a chaining-related regression ever needs investigating.
+
+| Tier | Status | Note |
+|------|--------|------|
+| 1 (basic correctness) | ✅ Satisfied empirically | Boots to Finder, chaining=1, range=0x500000 |
+| 2 (interrupt delivery) | ⏸ Optional diagnostic | Ticks-rate recipe reusable on demand; not a blocker |
+| 3 (latency bound) | ⏸ Optional diagnostic | chain-streak instrumentation reusable on demand |
+| 4 (full DR-inclusive range) | ✅ Done — **not** via Option A | Real fix was the `subfe`/`adde` carry-out bug |

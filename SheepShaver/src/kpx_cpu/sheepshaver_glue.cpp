@@ -1212,6 +1212,21 @@ regdump:
 		fprintf(stderr, " LR=%08x", (unsigned)cpu->get_register(powerpc_registers::LR).i);
 		fprintf(stderr, " CTR=%08x", (unsigned)cpu->get_register(powerpc_registers::CTR).i);
 		fprintf(stderr, " XER=%08x", (unsigned)cpu->get_register(powerpc_registers::XER).i);
+		/* FPR/VR raw bits: dumped so the harness (which raw-diffs the REGDUMP line, interp vs
+		 * JIT) actually compares floating-point and AltiVec results. Without these, any result
+		 * that lands only in an FPR/VR was invisible — the root cause of the vsel/ev_mixed/
+		 * vacuous-FP bugs slipping through. Bits are dumped raw (consistent both modes), so the
+		 * differential is valid regardless of the interpreter's ev_mixed VR byte order. */
+		for (int i = 0; i < 32; i++) {
+			double fd = cpu->fpr(i);
+			uint64 fbits; memcpy(&fbits, &fd, sizeof(fbits));
+			fprintf(stderr, " FPR%d=%016llx", i, (unsigned long long)fbits);
+		}
+		for (int i = 0; i < 32; i++) {
+			const powerpc_vr &v = cpu->vr(i);
+			fprintf(stderr, " VR%d=%08x%08x%08x%08x", i,
+			        (unsigned)v.w[0], (unsigned)v.w[1], (unsigned)v.w[2], (unsigned)v.w[3]);
+		}
 		fprintf(stderr, "\n");
 	}
 

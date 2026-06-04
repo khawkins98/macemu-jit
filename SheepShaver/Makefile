@@ -22,10 +22,34 @@ JIT_INCLUDES := -I$(JIT_DIR)
         test test-opcodes test-jit test-rom \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
-        screenshot kill clean \
+        screenshot kill clean help \
         ensure-xvfb ensure-prefs
 
 all: build
+
+help:
+	@echo "SheepShaver AArch64 JIT — Build & Test Targets"
+	@echo ""
+	@echo "  Build:"
+	@echo "    make build          Build SheepShaver + rom-harness"
+	@echo "    make build-ss       Build SheepShaver only"
+	@echo ""
+	@echo "  Test (run after every ppc-jit.cpp change):"
+	@echo "    make test-jit       JIT codegen gate — interp vs JIT diff (USE THIS)"
+	@echo "    make test-opcodes   Interpreter determinism only (not a JIT test)"
+	@echo "    make test           Run all tests (opcodes + jit + rom)"
+	@echo ""
+	@echo "  Benchmark:"
+	@echo "    cd rom-harness && make bench                     Quick per-instruction ns"
+	@echo "    cd rom-harness && make bench BARGS=--save-baseline=/tmp/b.txt   Save baseline"
+	@echo "    cd rom-harness && make bench BARGS=--compare=/tmp/b.txt         Compare after change"
+	@echo ""
+	@echo "  Run:"
+	@echo "    ./src/Unix/SheepShaver                           Normal boot"
+	@echo "    SS_JIT_VERIFY=1 ./src/Unix/SheepShaver           Differential JIT verification"
+	@echo "    ./src/Unix/SheepShaver 2>/tmp/jit.log            Capture JIT miss report on exit"
+	@echo ""
+	@echo "  See also: CONTRIBUTING.md, docs/OPTIMIZATION-PLAN.md, docs/TESTING.md"
 
 build: build-ss build-rom-harness
 
@@ -55,6 +79,10 @@ build-ss:
 	@echo "=== Building SheepShaver (macOS: autoconf build owns the JIT) ==="
 	@cd $(SS_DIR) && $(MAKE) -j$$(sysctl -n hw.ncpu)
 	@echo "Built: $(SS_BIN)"
+	@echo ""
+	@echo "TIP: Run tests with:  make test-jit    (JIT codegen gate)"
+	@echo "     Quick benchmark:  cd rom-harness && make bench"
+	@echo "     Boot emulator:    ./src/Unix/SheepShaver"
 else
 build-ss:
 	@echo "=== Building SheepShaver ==="
@@ -86,6 +114,9 @@ inspect-rom: build-rom-inspect
 test: test-opcodes test-jit test-rom
 	@echo ""
 	@echo "=== All tests complete ==="
+	@echo ""
+	@echo "TIP: For quick perf A/B, run:  cd rom-harness && make bench"
+	@echo "     For differential JIT verify:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
 
 # test-opcodes: DEFAULT mode = interpreter determinism (each vector run twice
 # through the interpreter, REGDUMPs diffed).  This validates the interpreter, NOT
@@ -94,6 +125,9 @@ test-opcodes: build-ss
 	@echo ""
 	@echo "=== Interpreter Determinism Harness (does NOT exercise JIT codegen) ==="
 	@cd jit-test && bash run.sh 2>&1 | grep "METRIC\|FAIL\|ERROR" | head -20
+	@echo ""
+	@echo "TIP: This only tests the interpreter. To test JIT codegen, run:"
+	@echo "     make test-jit"
 
 # test-jit: the JIT correctness gate.  Runs every vector through BOTH the
 # interpreter (reference) and the aarch64 JIT, and diffs the REGDUMPs
@@ -105,6 +139,9 @@ test-jit: build-ss
 	@echo "=== JIT<->Interpreter Equivalence Harness (codegen correctness gate) ==="
 	@cd jit-test && SS_HARNESS_MODE=jit bash run.sh 2>&1 | \
 		grep -E "HARNESS mode=|METRIC (pass|fail|total|score)=|opcode_[a-z0-9_]+=(0|-1)|FAIL|ERROR"
+	@echo ""
+	@echo "TIP: For deeper verification, boot with:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
+	@echo "     For quick perf A/B:  cd rom-harness && make bench"
 
 test-rom: build-rom-harness
 	@echo ""

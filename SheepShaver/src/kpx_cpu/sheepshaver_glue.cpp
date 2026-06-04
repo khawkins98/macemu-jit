@@ -1237,10 +1237,15 @@ regdump:
 }
 void init_emul_ppc(void)
 {
-	// Export jitcachesize pref as env var for ppc-cpu.cpp (which can't include prefs.h)
+	// Export jitcachesize pref as env var for ppc-cpu.cpp (which can't include prefs.h).
+	// The pref value is in bytes (after K/M/G suffix parsing); convert to KB for the
+	// env var since ppc_jit_aarch64_init() takes KB.
 	if (!getenv("SS_JIT_CACHE_KB")) {
-		int32 kb = PrefsFindInt32("jitcachesize");
-		if (kb > 0) {
+		int32 bytes = PrefsFindInt32("jitcachesize");
+		if (bytes > 0) {
+			int32 kb = bytes / 1024;
+			if (kb < 1024) kb = 1024;       /* minimum 1 MB */
+			if (kb > 1048576) kb = 1048576;  /* maximum 1 GB */
 			char buf[32];
 			snprintf(buf, sizeof(buf), "%d", kb);
 			setenv("SS_JIT_CACHE_KB", buf, 0);

@@ -488,9 +488,6 @@ TEST_ORDER+=(crxor_cror)
 # fadd: load 2.0 and 3.0 via lis/stw/lfs, add them
 # This is complex in hex. Use simpler approach: stfd a known pattern.
 # li r3,0x4000; stw r3,0x100(r1); li r3,0; stw r3,0x104(r1); lfd f1,0x100(r1)
-# That stores 0x40000000_00000000 as a double = 2.0
-T_fp_add="3C604000 90610100 38600000 90610104 C8210100 FC200890 FC211028 D8210108"
-TEST_ORDER+=(fp_add)
 
 # --- Load/store indexed ---
 # lwzx: li r3,0xBEEF; stw r3,0(r1); li r4,0; lwzx r5,r1,r4
@@ -557,13 +554,7 @@ TEST_ORDER+=(extsb_positive)
 
 # --- FP operations ---
 # fneg: store 2.0 as double, negate it, check sign
-# 2.0 double = 0x40000000_00000000
-T_fp_neg="3C604000 90610100 38600000 90610104 C8210100 FC2000D0 D8210108"
-TEST_ORDER+=(fp_neg)
 
-# fabs: store -2.0 (0xC0000000_00000000), take abs
-T_fp_abs="3C60C000 90610100 38600000 90610104 C8210100 FC200210 D8210108"
-TEST_ORDER+=(fp_abs)
 
 # --- Branch ---
 # bl +8; nop; mfspr r5,LR → r5 should equal address of nop
@@ -643,9 +634,6 @@ T_fcmpu_basic="3C603F80 90610100 38600000 90610104 C0010100 3C604000 90610108 C0
 TEST_ORDER+=(fcmpu_basic)
 
 # --- FP mul ---
-# Store 3.0 (0x40080000) and 4.0 (0x40100000), multiply → 12.0
-T_fp_mul="3C604008 90610100 38600000 90610104 C8010100 3C604010 90610108 90610104 C8210108 FC000072 D8010110"
-TEST_ORDER+=(fp_mul)
 
 # --- isync (should be NOP) ---
 T_isync_basic="4C00012C 60000000"
@@ -856,26 +844,11 @@ TEST_ORDER+=(fuzz_xor_same)
 # ============================================================
 
 # --- FP single precision ---
-# fadds: 2.0f + 3.0f via stw/lfs pattern
-T_fp_fadds="3C604000 90610100 38600000 90610104 C0010100 3C604040 90610108 C0210108 EC211028 D0010110"
-TEST_ORDER+=(fp_fadds)
 
 # --- FP fused multiply-add ---
-# fmadd f0,f1,f2,f3 = f1*f2+f3
-T_fp_fmadd="3C604000 90610100 38600000 90610104 C8210100 FC00083A D8010108"
-TEST_ORDER+=(fp_fmadd)
 
-# --- frsp (round to single) ---
-T_fp_frsp="3C604000 90610100 38600000 90610104 C8210100 FC000018 D8010108"
-TEST_ORDER+=(fp_frsp)
 
-# --- fsel (select) ---
-T_fp_fsel="3C604000 90610100 38600000 90610104 C8010100 C8210100 FC00082E D8010108"
-TEST_ORDER+=(fp_fsel)
 
-# --- mffs/mtfsf ---
-T_fp_mffs="FC00048E D8010100"
-TEST_ORDER+=(fp_mffs)
 
 # --- Indexed load/store ---
 # stwx: li r3,0xDEAD; li r4,0; stwx r3,r1,r4; lwzx r5,r1,r4

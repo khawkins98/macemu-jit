@@ -49,7 +49,7 @@ Integer values accept `K`, `M`, `G` suffixes and `0x` hex prefix.
 | `nosound` | bool | false | Disable audio |
 | `nocdrom` | bool | false | Disable CD-ROM |
 | `bootdriver` | int | 0 | Boot device: `0` = hard disk, `-62` = CD-ROM |
-| `ether` | string | — | Network: `slirp` for NAT, or interface name |
+| `ether` | string | — | Network: `slirp` for NAT, an interface name, or `vde:<dest>` for a VDE switch (see Networking) |
 | `noextfs` | bool | false | Disable Unix filesystem mount |
 | `vncserver` | bool | false | Enable VNC server for headless access |
 | `jitcachesize` | int | 256M | JIT code cache size (virtual memory, no cost until used) |
@@ -77,6 +77,29 @@ Add `ether slirp` to your prefs. In the guest Mac OS:
 Slirp provides outbound NAT — web browsing, FTP, etc. work. The guest gets
 an IP in the 10.0.2.x range. DNS resolves through the host. No inbound
 connections (no port forwarding from host to guest).
+
+### VDE (virtual distributed Ethernet)
+
+If SheepShaver was built with `--with-vdeplug` and the `vdeplug` library is
+present (Homebrew: `brew install vde`; header `libvdeplug.h`), you can attach
+the guest to a VDE switch instead of slirp. This gives full bidirectional
+Ethernet (bridging, inbound connections, TAP devices), unlike slirp's NAT.
+
+Two pref forms:
+
+- `ether vde` — connect to the default VDE socket (legacy form, no destination).
+- `ether vde:<dest>` — connect to a specific VDE endpoint, where `<dest>` is a
+  vdeplug URL. The destination is stored in the pref, so it persists across runs.
+
+Example — establish a remote TAP device over ssh:
+
+```
+sheepshaver --ether 'vde:cmd://ssh root@server vde_plug tap://tap0'
+```
+
+VDE support is compiled out (the `vde` / `vde:` ether prefs are ignored) if the
+build did not find `libvdeplug`; the `configure` summary prints
+`VDE support ...... : yes` when it is enabled.
 
 ## Performance
 
@@ -120,10 +143,15 @@ Baseline (2026-06-03, Mac OS 8.6 on Apple Silicon):
 cd SheepShaver/src/Unix
 NO_CONFIGURE=1 ./autogen.sh
 ./configure --enable-sdl-video --enable-sdl-audio --enable-jit \
-            --without-gtk --without-x --without-esd
+            --without-gtk --without-x --without-esd --with-vdeplug
 cd ../..
 make build
 ```
+
+`--with-vdeplug` (default yes) enables VDE networking; it needs the `vdeplug`
+library (`brew install vde`). If `configure` reports `VDE support ...... : no`,
+point it at the Homebrew prefix:
+`CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib`.
 
 See `CLAUDE.md` in the repo root for full build commands, test harness
 usage, and debugging workflow.

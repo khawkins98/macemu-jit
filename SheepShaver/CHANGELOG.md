@@ -19,6 +19,19 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   Linux/Wayland target; runtime Wayland behavior is not verifiable on macOS.
   Harness unaffected: `make test-jit` 257/257, score=100.
 
+- **VDE virtual networking** (backport of upstream `06d8bc02`): SheepShaver can now use
+  a VDE switch for Ethernet. The destination VDE link is configured directly in the
+  `ether` pref via a new `vde:` prefix (e.g.
+  `--ether 'vde:cmd://ssh root@server vde_plug tap://tap0'`), so it persists with the
+  rest of the prefs. Two correctness fixes in the shared `ether_unix.cpp` send path:
+  outgoing packets now send the actual frame length (was `sizeof(packet)`, which
+  appended trailing garbage), and the infinite `do {} while (len < 0)` send-retry was
+  replaced with a proper `excessCollsns` error return. SheepShaver's `configure` gains
+  `--with-vdeplug` (default yes) and an `AC_CHECK_LIB(vdeplug, vde_close)` probe that
+  defines `HAVE_LIBVDEPLUG` and links `-lvdeplug` when the library is present (Homebrew
+  `vde`, header `libvdeplug.h`). The bare `vde` ether pref (no destination) still works.
+  Boot/packet-flow on real hardware is unverified by this change.
+
 ### JIT Correctness
 
 - **AltiVec `vsel` fix**: `vsel` (vector select) emitted ARM64 `BSL` with its two

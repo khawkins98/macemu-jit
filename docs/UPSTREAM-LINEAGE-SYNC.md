@@ -14,6 +14,11 @@ for **our** target: the macOS arm64 port of BasiliskII + SheepShaver with the AA
 > (b) aren't already present by capability, **nothing is a required backport.** The only
 > substantive optional pickup is **VDE networking for SheepShaver** (`06d8bc02`); SDL3
 > video work (`e596e215`) is worth tracking for a future SDL2→SDL3 migration.
+>
+> **Update 2026-06-04 — acted on:** VDE, the SDL3 backend (taken sooner than the
+> "future migration" framed above — now the **default**, boot-verified), and the
+> Wayland fix were all merged to `macos-arm64`. See §5 for status and §6 for the
+> deferred Linux backlog.
 
 ---
 

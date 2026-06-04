@@ -47,12 +47,16 @@ not by order. The only hard sequencing is *within* a track (noted per item).
 hidden FP/VR divergence (commit `9439666a`). Side effect: FP/VR results are no longer
 "vacuous" (they're captured), so the vacuousness-guard scope below narrows to memory-only /
 otherwise-unobservable results.
-✅ **Quarantine lane added** (commit `4f5825bd`): `QUARANTINE_ORDER` vectors run in JIT mode but
-don't count toward score, so `score=100` stays meaningful while confirmed bugs are *tracked*.
-Seeded with `av_vmuloub`/`av_vmuleub` (both `xfail`); when an A2 fix lands they flip to `xpass`
-and `make test-jit` prints "promote to TEST_ORDER". A2's worklist is now concrete + visible.
-**Next:** (a) extend `gen-altivec-vectors.py` to quarantine the merges (`vmrgh*`/`vmrgl*`) and
-pack (`vpkuhum`) too; (b) mirror the FPR/VR compare into `SS_JIT_VERIFY` (the boot-time oracle).
+✅ **Quarantine lane added + widened to the full worklist** (commits `4f5825bd`, `aef9fb34`):
+`QUARANTINE_ORDER` vectors run in JIT mode but don't count toward score, so `score=100` stays
+meaningful while confirmed bugs are *tracked*. Now holds **all 9** `ev_mixed` divergences —
+multiplies (`vmuloub`/`vmuleub`), merges (`vmrgh{b,h,w}`/`vmrgl{b,h,w}`), pack (`vpkuhum`) — all
+report `xfail`. When an A2 fix lands they flip `xfail`→`xpass` and `make test-jit` prints
+"promote to TEST_ORDER". **A2's worklist is now concrete + visible** (and was used to rule out
+approach A — see A2).
+**Remaining A1:** (a) regenerate the scored word-op vectors with distinct operands (masking gap
+found via the A2 experiment — see A2); (b) mirror the FPR/VR compare into `SS_JIT_VERIFY` (the
+boot-time oracle).
 
 **Why:** the recurring failure mode (above). Three rounds of vacuous/masking AltiVec vectors
 slipped the harness; FP vectors were vacuous for months. Fixing more codegen on top of a
@@ -91,12 +95,30 @@ multiplies (`vmuleub`/`vmuloub`). `vmuloub` *also* emits non-widening `MUL.8B` i
 within each word). `emit_load_vr` loads raw via `LDR Q`; the JIT then indexes NEON lanes with
 the raw PPC element → wrong element for any sub-word-rearranging op.
 
-**Approach (decision):** prefer **normalizing at the boundary** — `REV32.16B` in
-`emit_load_vr`/`emit_store_vr` so all ops see natural order and the whole class is fixed at
-once (vs. per-op remapping = whack-a-mole the harness can't police). Cost: 2 NEON ops per VR
-load/store + revert the splat remap + re-verify every op. Do **after A1**; measure perf.
+**⛔ Approach A (REV32.16B normalize at load/store) — EMPIRICALLY RULED OUT (2026-06-04).**
+Tried on a throwaway branch: added `REV32.16B` to `emit_load_vr`/`emit_store_vr` + reverted the
+splat remap, built, ran the harness. Result: **all 9 quarantine vectors stayed `xfail`** — it
+did **not** fix the merges/multiplies — and `score=100` was *misleading* (see testing gap below).
+Reason: `REV32.16B` reverses bytes *within each 32-bit word*, but the merge/pack bug is on a
+different axis — **lane order / big-vs-little-endian element numbering**. The merges are emitted
+with `ZIP1`/`ZIP2` (e.g. `vmrghw`=`ZIP1.4S` @ ppc-jit.cpp:3322, `vmrglb`=`ZIP2.16B` @ :3323).
+PPC AltiVec numbers elements big-endian (element 0 = MSB = NEON's *highest* lane on LE ARM), so
+`vmrghb` (PPC "high" = elements 0–7) likely needs `ZIP2` (high lanes), not `ZIP1`, ± an element
+reversal — **a per-op derivation, not a blanket load/store transform.**
 
-**Depends on:** A1. **Needs boot verification** (yours).
+**✅ Approach B (per-op) is the path.** For each broken op fix the actual NEON sequence:
+the merges (`ZIP1`↔`ZIP2` hi/lo swap + endian element-numbering), the pack (`vpkuhum`), and the
+multiplies (`vmuleub`/`vmuloub` — even/odd element select; `vmuloub` also needs `UMULL.8H` not
+`MUL.8B`). Derive each against the interpreter; the **9 quarantine vectors are the target** (flip
+`xfail`→`xpass`).
+
+**⚠️ Testing gap found (A1 follow-up):** the scored word-op vectors (`av_vadduwm`/`vsubuwm`/
+`vmaxsw`/…) use **uniform operands** (`0x05050505`/`0x03030303`) which are byteswap-palindromes,
+so they can't catch a byteswap/lane bug — that's why approach A falsely scored 100. Regenerate
+them in `gen-altivec-vectors.py` with **distinct** per-lane operands before trusting any VR-codegen
+change. (Safe on `macos-arm64`: word ops are correct there today, so distinct operands stay green.)
+
+**Depends on:** A1. **Needs boot verification** (yours) — the harness AltiVec coverage is partial.
 **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P1b/P5c; `CHANGELOG.md` [SheepShaver] 2026-06-04; `ppc-jit.cpp`.
 
 ---

@@ -1678,6 +1678,25 @@ if [[ "x$HAVE_GCC30" = "xyes" ]]; then
   CFLAGS="$SAVED_CFLAGS"
 fi
 
+dnl Check whether the compiler rejects K&R-style function definitions (C23 removed them).
+dnl If the test fails (e.g. clang with autoconf-baked -std=gnu23), add -std=gnu89 to
+dnl SLIRP_CFLAGS so the vendored slirp sources compile correctly.  A later -std= flag
+dnl overrides an earlier one, so this cancels out any -std=gnu23 injected into $(CC).
+AC_CACHE_CHECK([whether slirp needs -std=gnu89 for K&R definitions],
+  ac_cv_slirp_needs_gnu89, [
+  AC_LANG_PUSH(C)
+  AC_COMPILE_IFELSE(
+    [AC_LANG_SOURCE([int f(x) int x; { return x; }
+int main() { return f(0); }])],
+    [ac_cv_slirp_needs_gnu89=no],
+    [ac_cv_slirp_needs_gnu89=yes])
+  AC_LANG_POP(C)
+])
+if [[ "x$ac_cv_slirp_needs_gnu89" = "xyes" ]]; then
+  SLIRP_CFLAGS="$SLIRP_CFLAGS -std=gnu89"
+  AC_SUBST(SLIRP_CFLAGS)
+fi
+
 dnl Add -mdynamic-no-pic for MacOS X (XXX icc10 will support MacOS X)
 if [[ "x$HAVE_GCC30" = "xyes" -a "x$HAVE_ICC" = "xno" ]]; then
   SAVED_CFLAGS="$CFLAGS"

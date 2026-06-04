@@ -153,6 +153,25 @@ library (`brew install vde`). If `configure` reports `VDE support ...... : no`,
 point it at the Homebrew prefix:
 `CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib`.
 
+### Video backend (SDL3 default, SDL2 opt-out)
+
+This fork **defaults to SDL3** for video. `configure` (with no `--with-sdlN` flag)
+selects SDL 3.x, so the command above builds against SDL3 — no extra flag needed.
+
+- **Dependency:** the `sdl3` pkg-config module. On macOS: `brew install sdl3`
+  (tested with 3.4.10). SDL2 (`brew install sdl2`) is still required if you opt out.
+- **Opt back to SDL2:** add `--with-sdl2` to the `configure` line:
+
+  ```bash
+  ./configure --enable-sdl-video --enable-sdl-audio --enable-jit \
+              --without-gtk --without-x --without-esd --with-sdl2
+  ```
+
+> **SDL3 is BUILD-VERIFIED ONLY.** The SDL3 backend compiles and links against
+> `libSDL3.0.dylib`, but has **not been boot-tested** on this fork — the JIT harness
+> validates codegen, not video. If you see display problems after a fresh build, fall
+> back to SDL2 with `--with-sdl2` and please report the SDL3 behavior.
+
 See `CLAUDE.md` in the repo root for full build commands, test harness
 usage, and debugging workflow.
 

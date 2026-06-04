@@ -32,6 +32,28 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   `vde`, header `libvdeplug.h`). The bare `vde` ether pref (no destination) still works.
   Boot/packet-flow on real hardware is unverified by this change.
 
+### Video backend
+
+- **SDL3 is now the default video backend** (was SDL2). `configure` selects SDL 3.x
+  when no `--with-sdlN` flag is given; pass `--with-sdl2` to opt back to SDL 2.x.
+  Requires the `sdl3` pkg-config module (Homebrew `sdl3`, tested with 3.4.10). The
+  SheepShaver binary now links `libSDL3.0.dylib`.
+- Picked up upstream `e596e215` ("SDL3: blit not required in `SDL_UnlockTexture()`"):
+  the SDL3 texture is unified to `ARGB8888` and the big-endian→host swap is done in
+  software (`__builtin_bswap32`) inside the `SDL_LockTexture`/`UnlockTexture` copy,
+  removing the `SDL_GetMasksForPixelFormat` round-trip.
+- macOS SDL3 build fixes (this backend had never been compiled on the fork before):
+  `video_sdl3.cpp` used `dynamic_cast` (needs RTTI, but the build uses `-fno-rtti`) →
+  changed to `static_cast` to match `video_sdl2.cpp`; the three macOS Objective-C++
+  files (`prefs_macosx.mm`, `VMSettingsController.mm`, shared `utils_macosx.mm`) used
+  a raw `#include <SDL.h>` that does not resolve under SDL3's `sdl3/SDL.h` layout →
+  switched to the version-aware `my_sdl.h` shim.
+
+> **CAVEAT:** SDL3 video on this fork is **BUILD-VERIFIED ONLY** — it compiles and
+> links, but has **never been boot-tested**. The JIT harness validates codegen, not
+> video. SDL3 must be boot-verified before it can be trusted as the default; until
+> then, opt back to SDL2 with `--with-sdl2` if you hit display problems.
+
 ### JIT Correctness
 
 - **AltiVec `vsel` fix**: `vsel` (vector select) emitted ARM64 `BSL` with its two

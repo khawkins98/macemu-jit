@@ -72,8 +72,9 @@ AC_ARG_ENABLE(sdl-video,    [  --enable-sdl-video      use SDL for video graphic
 AC_ARG_ENABLE(sdl-audio,    [  --enable-sdl-audio      use SDL for audio [default=no]], [WANT_SDL_AUDIO=$enableval], [WANT_SDL_AUDIO=yes])
 AC_ARG_ENABLE(sdl-framework,    [  --enable-sdl-framework  use SDL framework [default=no]], [WANT_SDL_FRAMEWORK=$enableval], [WANT_SDL_FRAMEWORK=no])
 AC_ARG_ENABLE(sdl-framework-prefix,    [  --enable-sdl-framework-prefix=PFX    default=/Library/Frameworks], [SDL_FRAMEWORK="$enableval"], [SDL_FRAMEWORK=/Library/Frameworks])
-AC_ARG_WITH(sdl1,            [  --with-sdl1             use SDL 1.x, rather than SDL 2.x [default=no]], [WANT_SDL_VERSION_MAJOR=1], [])
-AC_ARG_WITH(sdl3,            [  --with-sdl3             use SDL 3.x, rather than SDL 2.x [default=no]], [WANT_SDL_VERSION_MAJOR=3], [])
+AC_ARG_WITH(sdl1,            [  --with-sdl1             use SDL 1.x [default=no]], [WANT_SDL_VERSION_MAJOR=1], [])
+AC_ARG_WITH(sdl2,            [  --with-sdl2             use SDL 2.x, rather than the default SDL 3.x [default=no]], [WANT_SDL_VERSION_MAJOR=2], [])
+AC_ARG_WITH(sdl3,            [  --with-sdl3             use SDL 3.x (this fork's default) [default=yes]], [WANT_SDL_VERSION_MAJOR=3], [])
 
 dnl Checks for programs.
 AC_PROG_CC_C99
@@ -191,6 +192,8 @@ if [[ "x$WANT_SDL" = "xyes" ]]; then
   if [[ "x$WANT_SDL_FRAMEWORK" = "xyes" ]]; then
     TEMP_WANT_SDL_VERSION_MAJOR=$WANT_SDL_VERSION_MAJOR
     if [[ "x$TEMP_WANT_SDL_VERSION_MAJOR" = "x" ]]; then
+      dnl The SDL.framework path supports SDL 1/2 only; default it to 2.
+      dnl (The pkg-config path below defaults to SDL 3 on this fork.)
       TEMP_WANT_SDL_VERSION_MAJOR=2
     fi
     if [[ "x$TEMP_WANT_SDL_VERSION_MAJOR" = "x2" ]]; then
@@ -211,7 +214,8 @@ if [[ "x$WANT_SDL" = "xyes" ]]; then
   if [[ "x$ac_cv_framework_SDL" = "xno" ]]; then
     TEMP_WANT_SDL_VERSION_MAJOR=$WANT_SDL_VERSION_MAJOR
     if [[ "x$TEMP_WANT_SDL_VERSION_MAJOR" = "x" ]]; then
-      TEMP_WANT_SDL_VERSION_MAJOR=2
+      dnl This fork defaults to SDL 3.x; pass --with-sdl2 to opt back to SDL 2.x.
+      TEMP_WANT_SDL_VERSION_MAJOR=3
     fi
 
     dnl use PKG_PROG_PKG_CONFIG to declare PKG_CONFIG variables.  Otherwise,

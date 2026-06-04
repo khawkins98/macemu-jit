@@ -1,11 +1,11 @@
 # MacEmu AArch64 JIT — Status
 
-## SheepShaver PPC JIT (2026-06-03, macOS arm64 port — branch macos-arm64)
+## SheepShaver PPC JIT (2026-06-04, macOS arm64 port — branch macos-arm64)
 
-**Build:** ✅ macOS 26.4.1 arm64 (Apple clang 17, SDL2, no X11)
+**Build:** ✅ macOS arm64 (Apple clang, no X11). **SDL3 is the default video backend** (`--with-sdl2` to opt out); VDE networking available (`ether vde:`). See `SheepShaver/CHANGELOG.md` 2026-06-04.
 **Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
-**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT — both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably. No skip list, no workarounds, no SS_JIT_SKIP_OPC needed. ROM=0x500000 (full range including DR emulator), block chaining enabled. 12 bugs found and fixed (sessions 7-8, 2026-06-02/03).
-**JIT harness:** ✅ 235/235 opcode vectors pass interpreter mode and JIT mode (score=100 both)
+**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT (SDL3, boot-verified 2026-06-04) — both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably. No skip list, no workarounds, no SS_JIT_SKIP_OPC needed. ROM=0x500000 (full range including DR emulator), block chaining enabled. 12 bugs found and fixed (sessions 7-8, 2026-06-02/03).
+**JIT harness:** ✅ score=100, interpreter and JIT mode (vector count via `make harness-count`, 257 as of 2026-06-04)
 **ROM harness:** ⚠️ Needs OldWorld raw ROM dump; New World CHRP ROMs are not compatible with the scanner
 **macOS-specific fixes (all on macos-arm64 branch):**
 - MAP_JIT + pthread_jit_write_protect_np + sys_icache_invalidate for JIT code cache
@@ -205,11 +205,18 @@ All JIT access uses byte-level LDRB/STRB at individual field offsets:
 
 ## BasiliskII 68K JIT
 
-**Build:** ✅
+> ⚠️ **macOS arm64 (2026-06-04): does NOT currently build.** The configure host-routing
+> fix (`c71100d0`) now selects the AArch64 path, but the AArch64 JIT backend
+> (`compemu_support_arm.cpp`) is unported to macOS (Linux `uc_mcontext`, undeclared
+> `uae_vm_jit_write_protect`/`uae_vm_page_size`, `_XOPEN_SOURCE`). See
+> **`BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`**. The ✅ status lines below are
+> **historical (Linux / pre-regression)**, not a current macOS arm64 build.
+
+**Build:** ✅ *(historical — see caveat above)*
 **Interpreter:** ✅ Boots Mac OS 7.x, idle loop reached
 **JIT optlev=0:** ✅ Full boot, zero SEGVs
 **JIT optlev=2:** ✅ Full boot, zero SEGVs (mid-block branch side-exit fix applied)
-**JIT harness:** ✅ 301/301 vectors pass (score=100)
+**JIT harness:** ✅ 301/301 vectors pass (score=100) *(historical)*
 
 See `BasiliskII/src/uae_cpu_2026/compiler/` for the 68K → AArch64 JIT.
 

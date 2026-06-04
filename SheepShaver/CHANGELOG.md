@@ -6,7 +6,7 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 
 ### Upstream Backports
 
-- **Wayland detection without GTK** (backport of upstream `91d58b12`, Dave
+- **Wayland detection without GTK** (backport of kanjitalk755/macemu `91d58b12`, Dave
   Vasilevsky): `init_sdl()` previously forced `SDL_VIDEODRIVER=x11` only under
   `#if REAL_ADDRESSING && defined(GDK_WINDOWING_WAYLAND)`, so a `--without-gtk`
   SDL build never got the XWayland workaround that avoids a Wayland mmap/fixed-
@@ -15,11 +15,12 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   workaround applies in non-GTK SDL builds. **Inert on macOS**: the block is
   gated on `defined(__linux__)`, which is never defined on Darwin (only
   `__APPLE__`/`__MACH__`), so it compiles out entirely on the macOS arm64 build
-  (which uses DIRECT_ADDRESSING regardless). Brought in for a future
+  (`REAL_ADDRESSING` is not defined here regardless — see `docs/UPSTREAM-LINEAGE-SYNC.md`
+  §6.1). Brought in for a future
   Linux/Wayland target; runtime Wayland behavior is not verifiable on macOS.
   Harness unaffected: `make test-jit` 257/257, score=100.
 
-- **VDE virtual networking** (backport of upstream `06d8bc02`): SheepShaver can now use
+- **VDE virtual networking** (backport of kanjitalk755/macemu `06d8bc02`): SheepShaver can now use
   a VDE switch for Ethernet. The destination VDE link is configured directly in the
   `ether` pref via a new `vde:` prefix (e.g.
   `--ether 'vde:cmd://ssh root@server vde_plug tap://tap0'`), so it persists with the
@@ -38,7 +39,7 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   when no `--with-sdlN` flag is given; pass `--with-sdl2` to opt back to SDL 2.x.
   Requires the `sdl3` pkg-config module (Homebrew `sdl3`, tested with 3.4.10). The
   SheepShaver binary now links `libSDL3.0.dylib`.
-- Picked up upstream `e596e215` ("SDL3: blit not required in `SDL_UnlockTexture()`"):
+- Picked up kanjitalk755/macemu `e596e215` ("SDL3: blit not required in `SDL_UnlockTexture()`"):
   the SDL3 texture is unified to `ARGB8888` and the big-endian→host swap is done in
   software (`__builtin_bswap32`) inside the `SDL_LockTexture`/`UnlockTexture` copy,
   removing the `SDL_GetMasksForPixelFormat` round-trip.
@@ -49,10 +50,18 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   a raw `#include <SDL.h>` that does not resolve under SDL3's `sdl3/SDL.h` layout →
   switched to the version-aware `my_sdl.h` shim.
 
-> **CAVEAT:** SDL3 video on this fork is **BUILD-VERIFIED ONLY** — it compiles and
-> links, but has **never been boot-tested**. The JIT harness validates codegen, not
-> video. SDL3 must be boot-verified before it can be trusted as the default; until
-> then, opt back to SDL2 with `--with-sdl2` if you hit display problems.
+> **Status:** SDL3 is **boot-verified** — Mac OS 8.6 boots to the Finder desktop on the
+> SDL3-default build (2026-06-04). The JIT harness validates codegen, not video, so this
+> confirmation is the boot test, not the harness. If you hit display problems on a future
+> build, `--with-sdl2` falls back to the SDL2 backend.
+
+### BasiliskII (cross-reference)
+
+- BasiliskII macOS arm64 build changes from this date are tracked separately in
+  **`BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`** (this changelog is SheepShaver-scoped).
+  In brief: the configure host-routing was fixed (Apple Silicon → AArch64, not ARM32;
+  `c71100d0`) and Linux-only code in `main_unix.cpp` guarded (`2f967f4b`), but the B2
+  AArch64 JIT backend is still unported — **BasiliskII does not yet build on macOS arm64.**
 
 ### JIT Correctness
 

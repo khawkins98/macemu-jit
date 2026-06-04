@@ -24,6 +24,10 @@ port is deferred to a dedicated effort (boot verification required — see below
    Linux `uc_mcontext.pc/.regs[]` layout (added Darwin `__ss` branch); the DIRECT_ADDRESSING
    I/O mmap used Linux-only `MAP_FIXED_NOREPLACE` (ported with a map-at-hint + unmap-if-not-
    honored fallback preserving no-clobber semantics). `main_unix.o` now compiles.
+   These Linux-isms were introduced by **`3c6c2106`** ("ARM64 JIT: critical fixes …
+   I/O mmap, ROM patch"). *(Errata: the VDE commit message `3bfa680a` mis-cited the
+   introducing commit as `c7fb557c` — that commit is "self-disable ASLR on aarch64 Linux"
+   and is unrelated; `3c6c2106` is correct, as `2f967f4b` states.)*
    *(Runtime placement of the I/O ranges on macOS is unverified — needs a boot.)*
 
 ## Remaining (deferred — the B2 AArch64 JIT backend is unported to macOS)

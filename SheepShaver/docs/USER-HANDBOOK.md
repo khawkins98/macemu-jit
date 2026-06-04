@@ -167,10 +167,10 @@ selects SDL 3.x, so the command above builds against SDL3 — no extra flag need
               --without-gtk --without-x --without-esd --with-sdl2
   ```
 
-> **SDL3 is BUILD-VERIFIED ONLY.** The SDL3 backend compiles and links against
-> `libSDL3.0.dylib`, but has **not been boot-tested** on this fork — the JIT harness
-> validates codegen, not video. If you see display problems after a fresh build, fall
-> back to SDL2 with `--with-sdl2` and please report the SDL3 behavior.
+> **SDL3 is boot-verified.** The SDL3 backend links against `libSDL3.0.dylib`, and
+> Mac OS 8.6 boots to the Finder desktop on it (verified 2026-06-04). If you see display
+> problems after a fresh build, fall back to SDL2 with `--with-sdl2` and please report the
+> SDL3 behavior.
 
 See `CLAUDE.md` in the repo root for full build commands, test harness
 usage, and debugging workflow.

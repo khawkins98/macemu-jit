@@ -5,11 +5,16 @@ import shutil
 from pathlib import Path
 
 
-def render_prefs(template: Path, out_path: Path, *, rom: str, disk: str, vncport: int) -> Path:
-    """Render the checked-in prefs template, substituting the system-specific paths."""
+def render_prefs(template: Path, out_path: Path, **fields) -> Path:
+    """Render a checked-in prefs template, substituting `{field}` placeholders.
+
+    Works for both the disk template (rom/disk/vncport) and the ISO template
+    (rom/cdrom/vncport). Uses targeted `.replace()` rather than `str.format()` so a
+    stray brace anywhere in the template (e.g. in a comment) can never raise.
+    """
     text = template.read_text()
-    # Only format placeholder lines; leave '#' comment lines (which contain no braces) intact.
-    text = text.format(rom=rom, disk=disk, vncport=vncport)
+    for key, value in fields.items():
+        text = text.replace("{" + key + "}", str(value))
     out_path.write_text(text)
     return out_path
 

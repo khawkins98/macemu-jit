@@ -64,6 +64,14 @@ static uint32 MakeExecutableTvec;
 // modal dialog" (disk-repair prompt etc.). The two heuristic alternatives (heartbeat block-rate
 // collapse / compiled-block plateau) cannot make that distinction; this idle hook can, because it
 // can read guest state. See docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md §11.
+//
+// Technique: reading classic Mac OS low-memory globals to inspect the running system from the
+// host. Source: Inside Macintosh (Operating System Utilities / Toolbox) — CurApName ($0910, the
+// frontmost app name as a Str31), WindowList ($09D6, head of the window list), the WindowRecord
+// windowKind field (offset +$6C; dialogKind == 2), and Ticks ($016A, 60/s since boot). These
+// fixed low-mem addresses are stable across classic Mac OS; SheepShaver maps guest low memory via
+// Mac2HostAddr/ReadMacIntN. The idle hook itself reuses SheepShaver's own SynchIdleTime ROM patch
+// (rom_patches.cpp), so this adds only the state read, not a new trap.
 static void e2e_emit_boot_ready_once(void)
 {
 	static bool emitted = false;

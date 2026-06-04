@@ -21,12 +21,14 @@ VNCPORT = 5950
 def main() -> int:
     assets = config.resolve_assets()
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-"))
-    run_disk = disk.copy_pristine(Path(assets.disk), work)
+    # Read-only ISO boot (default): no pristine-copy needed — the ISO can't be dirtied, so it's
+    # stable and reproducible. (Disk-boot via copy_pristine + test.prefs.template stays available
+    # for scenarios that need a writable volume, e.g. P2 app-launch.)
     prefs = disk.render_prefs(
-        HERE / "config" / "test.prefs.template",
+        HERE / "config" / "test.prefs.iso.template",
         work / "test.prefs",
         rom=assets.rom,
-        disk=str(run_disk),
+        cdrom=assets.iso,
         vncport=VNCPORT,
     )
     artifacts = HERE / "artifacts"

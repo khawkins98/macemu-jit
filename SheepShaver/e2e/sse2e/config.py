@@ -12,18 +12,23 @@ from dataclasses import dataclass
 
 # Local-dev defaults (the shared asset dir documented in CLAUDE.md). CI overrides via env.
 DEFAULT_ROM = "/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom"
+# Read-only ISO is the PREFERRED boot medium (can't get dirty -> stable, reproducible, no
+# pristine-copy-per-run). The disk default is kept for disk-boot scenarios (e.g. P2 app-launch).
+DEFAULT_ISO = "/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso"
 DEFAULT_DISK = "/Users/Shared/macemu/e2e_master.dsk"
 
 
 @dataclass(frozen=True)
 class Assets:
     rom: str
+    iso: str
     disk: str
 
 
 def resolve_assets() -> Assets:
-    """ROM/disk paths from env (SS_E2E_ROM / SS_E2E_DISK) or local-dev defaults."""
+    """Asset paths from env (SS_E2E_ROM / SS_E2E_ISO / SS_E2E_DISK) or local-dev defaults."""
     return Assets(
         rom=os.environ.get("SS_E2E_ROM", DEFAULT_ROM),
+        iso=os.environ.get("SS_E2E_ISO", DEFAULT_ISO),
         disk=os.environ.get("SS_E2E_DISK", DEFAULT_DISK),
     )

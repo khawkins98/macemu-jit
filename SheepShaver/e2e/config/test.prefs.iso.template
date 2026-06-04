@@ -1,0 +1,26 @@
+# SheepShaver E2E harness prefs — ISO BOOT (read-only). CHECKED INTO THE REPO (ROADMAP A5).
+#
+# Boots a read-only CD-ROM ISO instead of a hard-disk image. This is the preferred test
+# medium: a read-only volume can never get dirty, so there are NO disk-repair prompts, NO
+# modal-dialog-on-boot false positives, and NO pristine-copy-per-run — the same ISO is booted
+# every time, fully reproducible. The harness renders this template per run, substituting the
+# system-specific {rom} and {cdrom} paths (resolved from SS_E2E_ROM / SS_E2E_ISO) and {vncport}.
+#
+# CD boot: `cdrom` points at the ISO, `nocdrom false` installs the CD driver, and
+# `bootdriver -62` (= CDROMRefNum, src/include/cdrom.h) boots from the CD instead of a HD.
+# No `disk` line — ISO-only boot. idlewait MUST be true: it installs the SynchIdleTime patch
+# that fires the [BOOT] idle signal the harness waits for.
+rom {rom}
+cdrom {cdrom}
+nocdrom false
+bootdriver -62
+ramsize 134217728
+screen win/640/480
+displaycolordepth 8
+nosound true
+nogui true
+idlewait true
+ignoreillegal true
+vncserver true
+vncport {vncport}
+cpuclock 500

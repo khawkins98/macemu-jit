@@ -42,10 +42,13 @@ A force-kill (timeout) or a `frontApp != Finder` / `modal=1` idle is a **FAIL**,
 4. **Two assets** (large, not in git), resolved by env var or local-dev default:
    - **ROM** — an OldWorld PPC ROM. `SS_E2E_ROM` (default
      `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom`).
-   - **Pristine master disk** — a bootable Mac OS 8.x install that was **cleanly shut down** (so the
-     volume is "properly put away" and never triggers a disk-repair prompt on boot). `SS_E2E_DISK`
-     (default `/Users/Shared/macemu/e2e_master.dsk`). The harness copies this per run and boots the
-     copy — your master/original is only ever read.
+   - **A bootable ISO** (the default, preferred medium) — a read-only Mac OS 8.x CD that boots to a
+     Finder. `SS_E2E_ISO` (default `/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso`). Because
+     a CD is **read-only it can never get dirty** — no disk-repair prompts, no pristine-copy per run,
+     fully reproducible. This is why ISO boot is the default.
+   - *(Alternative)* a **writable disk image** for scenarios that need to write (e.g. P2 app-launch):
+     `SS_E2E_DISK`. The disk path uses `config/test.prefs.template` + pristine-copy-per-run; the ISO
+     path uses `config/test.prefs.iso.template`. `run_smoke.py` boots the ISO by default.
 
 ---
 
@@ -65,11 +68,9 @@ cd e2e
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-# 3. Provide the pristine master disk. Easiest: copy a known-good, cleanly-shut-down install.
-#    (If your install was force-killed last time, boot it once and Special > Shut Down by hand
-#     first, so the copy is clean.)
-cp /path/to/your/clean-install.dsk /Users/Shared/macemu/e2e_master.dsk
-#    ...and make sure the ROM exists at SS_E2E_ROM (default path above).
+# 3. Provide the assets: a ROM at SS_E2E_ROM and a bootable ISO at SS_E2E_ISO (defaults above).
+#    The default ISO boot needs NO disk setup — the read-only CD is booted directly each run.
+#    (Only if you use the disk path instead: provide a cleanly-shut-down master at SS_E2E_DISK.)
 ```
 
 ---
@@ -85,9 +86,10 @@ cd e2e
 SS_E2E_ROM=/path/rom SS_E2E_DISK=/path/e2e_master.dsk .venv/bin/python run_smoke.py
 ```
 
-A run takes ~1–2 min (boot ~7–15 s, shutdown flush ~20–30 s, plus the per-run disk copy). The SDL
-window appears on your screen and VNC is served on port **5950** if you want to watch live. On
-failure, `e2e/artifacts/fail.log` (full merged log) and any screenshots are written for inspection.
+A run takes ~1 min on the default ISO path (boot ~5 s, shutdown flush ~20–30 s; no per-run disk
+copy — the ISO is read-only). The SDL window appears on your screen and VNC is served on port
+**5950** if you want to watch live. On failure, `e2e/artifacts/fail.log` (full merged log) and any
+screenshots are written for inspection.
 
 ### Offline unit tests (no boot, no assets)
 
@@ -115,9 +117,10 @@ fixtures, no emulator required.
 - **`boot timed out (no [BOOT] idle …)`** — the guest never reached the idle Finder desktop. Check
   `artifacts/fail.log`; the disk may be non-bootable (a blank disk gives the "?" icon and this
   message — that's the correct failure), or `idlewait` got turned off in the config.
-- **`boot blocked on dialog (frontApp=… modal=…)`** — the guest idled on a modal dialog (e.g. a
-  disk-repair prompt) instead of the desktop. The pristine-per-run copy normally prevents this; if
-  it recurs, your master disk was not cleanly shut down — re-create it from a clean install.
+- **`boot blocked on dialog (frontApp=… modal=…)`** — the guest idled on a modal dialog instead of
+  the desktop. The default **read-only ISO can't trigger this** (no disk-repair prompt — a CD is
+  never dirty). It can only occur on the disk-boot path with a dirty master; re-create that master
+  from a clean, cleanly-shut-down install.
 - **Shutdown click misses / `shutdown timed out`** — the menu coordinates in `sse2e/scenario.py`
   (`SPECIAL_MENU_XY`, `SHUTDOWN_ITEM_XY`) are calibrated for **640×480**. If you change the screen
   size, recalibrate: open the Special menu over VNC, screenshot, and read the new pixel positions.

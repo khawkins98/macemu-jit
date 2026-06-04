@@ -1,3 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Verbose by default: list every test name + PASS/FAIL, and a short summary of any
+# non-passing outcomes (-ra). Gives "what ran / what passed" without extra flags.
+addopts = "-v -ra"

@@ -258,3 +258,30 @@ clean top-level context. A working host→guest hook would need to invoke it fro
 point (not mid-`SynchIdleTime`) — e.g. deferring the `Execute68kTrap` to a top-level dispatch
 boundary, or finding why the power-key event isn't consumed. The SIGUSR1 scaffolding (reverted)
 is in git history at the pre-revert state if useful.
+
+## 13. Read-only ISO boot — the default test medium (2026-06-04)
+
+The harness now boots a **read-only CD-ROM ISO** by default instead of a writable disk image.
+Validated live: the `Mac OS 8.6 Internal Edition.iso` boots to a Finder desktop in ~4.8s
+(`[BOOT] idle frontApp='Finder'`), and the full lifecycle passes
+(`PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0`).
+
+**Why it's better** (and supersedes the §6 pristine-disk machinery for the default path):
+- A read-only volume **can never get dirty** → no disk-repair prompts → the entire dirty-disk →
+  modal-dialog false-positive class (§11's three-layer defense) simply cannot occur.
+- **No pristine-copy-per-run** (the §6 4 GB copy each run) → faster (~1 min vs ~2) and simpler.
+- **Static + reproducible** — the same bytes boot every time, not "somebody's disk image that might
+  have been left dirty." Ideal for a regression gate, and much better for CI (smaller to fetch, no
+  copy step).
+
+**Mechanism:** CD boot via prefs — `cdrom <iso>`, `nocdrom false`, `bootdriver -62`
+(= `CDROMRefNum`, src/include/cdrom.h), no `disk` line. Template: `config/test.prefs.iso.template`.
+Asset resolved from `SS_E2E_ISO`. The disk-boot path (`config/test.prefs.template` +
+pristine-copy) is retained for scenarios that need a *writable* volume (e.g. P2 app-launch with
+saved state); `run_smoke.py` boots the ISO by default.
+
+**Future (your idea):** convert a hard-drive install into a **slim custom bootable ISO** carrying a
+minimal System + the benchmark/test tools (Speedometer, MacBench, our harness helpers). That is the
+ideal canonical medium — read-only, small, purpose-built. Cost: building a *bootable* classic-Mac
+HFS CD image (blessed System Folder + HFS mastering + a CD driver) is a real task, tracked under
+ROADMAP A5 as a follow-up.

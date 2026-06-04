@@ -219,3 +219,42 @@ into a non-Finder dialog → fail → loop.
 - This is the v1 boot gate. The general "semantic telemetry for every guest event" (app launch via
   `CheckLoad`, app quit, dialog shown via new trap-table patches) is a **P3 stretch** — larger and
   uneven in difficulty; out of v1 scope.
+
+## 12. Implementation outcome (2026-06-04) — verified live on Mac OS 8.6
+
+P1 is **working end-to-end**: `make e2e` boots an isolated copy, waits for the boot-ready
+signal, drives Special ▸ Shut Down, and asserts a clean exit. Verified repeatedly:
+`PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0`.
+
+**Boot-ready signal — works as designed (a proper OS-call hook).** `[BOOT] idle frontApp='Finder'
+modal=0 ticks=N` fires ~7s in. One ROM-specific fix: this OldWorld ROM patches the **`0x70fe`
+variant** of `SynchIdleTime`, so the hook must be in **both** `OP_IDLE_TIME` *and* `OP_IDLE_TIME_2`
+(a diagnostic confirmed `installed IDLE_TIME_2`). `CurApName`(0x910) and the modal/window-kind
+read(0x9d6) are correct (`frontApp='Finder' modal=0` at the desktop). Blank-disk boot emits **no**
+signal → harness times out → FAIL (failure-detection validated; the "?" screen was confirmed).
+
+**Shutdown trigger — Option A (host→guest hook) explored and REVERTED; menu-drive is the working
+path.** Two hook variants were tried and neither works cleanly on this ROM/OS:
+1. **`Execute68kTrap(0xA895, d0=1)` (ShutDwnPower) from the idle hook** — *flushed volumes*
+   (stdout showed the `'flus'` driver calls, so the real shutdown sequence ran) but then
+   **SIGSEGV'd at the power-off step** (`pc=0x55590000`). Cause: calling the Shutdown Manager
+   *re-entrantly* from inside `SynchIdleTime` corrupts the guest stack at power-off.
+2. **ADB power-key injection (`ADBKeyDown(0x7f)`) from the idle hook** — the exact call the SDL
+   window-close handler uses, but it had **no effect** on Mac OS 8.6 (no dialog, no shutdown).
+Both were reverted to keep the binary clean. The **working** shutdown is driving the Finder's real
+**Special ▸ Shut Down** over VNC at the pinned 640×480 (calibrated `SPECIAL_MENU_XY=(175,8)`,
+`SHUTDOWN_ITEM_XY=(195,118)`), in a **single VNC session** (open the sticky menu, then select —
+disconnecting between closes the menu). This calls the same Shutdown Manager path, but from the
+Finder's clean top-level context, so it does the real flush+unmount and reaches
+`OP_POWEROFF` → "Shutdown complete." This is "drive the OS's own Shut Down command," not blind
+pixel-mashing — deterministic at the pinned resolution.
+
+**Harness finding: `OP_POWEROFF` prints "Shutdown complete." to STDOUT**, while the `[BOOT]`
+signals are on stderr. `runner.py` therefore merges stderr into stdout (`stderr=STDOUT`) so
+`observe.saw_clean_shutdown` sees both the marker and the atexit `PPC-JIT-A64: session` block.
+
+**If resuming the shutdown hook (future):** the menu path proves the Shutdown Manager works from a
+clean top-level context. A working host→guest hook would need to invoke it from a *non-reentrant*
+point (not mid-`SynchIdleTime`) — e.g. deferring the `Execute68kTrap` to a top-level dispatch
+boundary, or finding why the power-key event isn't consumed. The SIGUSR1 scaffolding (reverted)
+is in git history at the pre-revert state if useful.

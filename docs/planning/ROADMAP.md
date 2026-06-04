@@ -211,7 +211,20 @@ the OTH rule, prune `/tmp` logs, quiet-mode env gate).
 
 ---
 
-## A5. 🔜 End-to-end VNC test harness — system-level boot/run/shutdown regression
+## A5. 🟡 End-to-end VNC test harness — system-level boot/run/shutdown regression
+
+**Status (2026-06-04): P1 LANDED + verified live.** `make e2e` boots an isolated copy of Mac OS
+8.6, waits for a deterministic boot-ready signal, drives Special ▸ Shut Down over VNC, and asserts
+a clean exit — `PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0` (repeatable).
+Boot detection is a proper OS-call hook (`[BOOT] idle` from the `SynchIdleTime`/`OP_IDLE_TIME(_2)`
+patch, enriched with frontmost-app + modal state to reject dialog false-positives). Shutdown drives
+the Finder's real Special ▸ Shut Down (a host→guest *hook* — `ShutDwnPower` trap and ADB power-key
+— was explored and reverted: the trap flushes-then-SIGSEGVs re-entrantly, the power-key no-ops on
+8.6; see spec §12). Harness is Python + `vncdotool`, checked-in config, pristine-disk-per-run, 12
+offline unit tests. **Open:** P2 (golden-image diff + scripted app launch), P3 (scenario DSL), and
+a working host→guest shutdown hook (future — invoke the Shutdown Manager from a non-reentrant
+top-level context). **Detail:** spec §12 in `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`,
+plan in `docs/superpowers/plans/`, code in `SheepShaver/e2e/`.
 
 **Why:** A1/A2 verify the JIT *per instruction*; nothing automatically checks the emulator *as a
 running system* — "does it still boot to the Finder and shut down cleanly after a codegen

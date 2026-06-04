@@ -19,7 +19,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-rom harness-count \
+        test test-opcodes test-jit test-rom harness-count e2e \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean help \
@@ -142,6 +142,16 @@ test-jit: build-ss
 	@echo ""
 	@echo "TIP: For deeper verification, boot with:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
 	@echo "     For quick perf A/B:  cd rom-harness && make bench"
+
+# End-to-end VNC lifecycle smoke (ROADMAP A5). Boots the emulator in an isolated
+# repo-tracked config, drives Special>Shut Down over VNC, asserts a clean exit.
+# Requires a logged-in macOS GUI session + the venv (see e2e/README.md).
+e2e: build-ss
+	@if [ ! -x e2e/.venv/bin/python ]; then \
+		echo "e2e venv missing — run:  cd e2e && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"; \
+		exit 1; \
+	fi
+	cd e2e && .venv/bin/python run_smoke.py
 
 test-rom: build-rom-harness
 	@echo ""

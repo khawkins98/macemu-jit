@@ -58,6 +58,45 @@ void PlayStartupSound();
 static uint32 MakeExecutableTvec;
 
 
+// E2E harness boot-ready signal (ROADMAP A5). Emit ONE line the first time the guest reaches
+// Process-Manager idle (OP_IDLE_TIME = SynchIdleTime patch), enriched with frontmost-app + modal
+// state so an automated harness can tell "idle at the Finder desktop" from "idle blocked on a
+// modal dialog" (disk-repair prompt etc.). The two heuristic alternatives (heartbeat block-rate
+// collapse / compiled-block plateau) cannot make that distinction; this idle hook can, because it
+// can read guest state. See docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md §11.
+static void e2e_emit_boot_ready_once(void)
+{
+	static bool emitted = false;
+	if (emitted)
+		return;
+	emitted = true;
+
+	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars).
+	char app[32];
+	uint8 *namep = Mac2HostAddr(0x910);
+	int len = namep[0];
+	if (len > 31)
+		len = 31;
+	for (int i = 0; i < len; i++)
+		app[i] = (char)namep[1 + i];
+	app[len] = '\0';
+
+	// Modal check: is the front window a dialog? WindowList head = 0x9D6; windowKind at +0x6C.
+	int modal = 0;
+	uint32 front = ReadMacInt32(0x9d6);
+	if (front) {
+		int16 kind = (int16)ReadMacInt16(front + 0x6c);
+		if (kind == 2)			// dialogKind
+			modal = 1;
+	}
+
+	uint32 ticks = ReadMacInt32(0x16a);	// Ticks since boot (60/s)
+	fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d ticks=%u (%.1fs)\n",
+	        app, modal, ticks, ticks / 60.0);
+	fflush(stderr);
+}
+
+
 /*
  *  Execute EMUL_OP opcode (called by 68k emulator)
  */
@@ -485,6 +524,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME:
+			e2e_emit_boot_ready_once();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();
@@ -492,6 +532,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME_2:
+			e2e_emit_boot_ready_once();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();

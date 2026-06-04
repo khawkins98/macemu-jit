@@ -222,6 +222,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ### [SheepShaver] Testing & benchmarking
 
+- **End-to-end VNC test harness (P1, ROADMAP A5)**: `make e2e` boots an isolated copy of
+  Mac OS 8.6 in a checked-in config (not `~/.sheepshaver_prefs`), waits for a deterministic
+  boot-ready signal, drives the Finder's Special ▸ Shut Down over VNC, and asserts a clean
+  exit — the first *system-level* regression gate, complementing `make test-jit`/`SS_JIT_VERIFY`.
+  A new one-shot `[BOOT] idle frontApp='Finder' modal=0` signal is emitted from the guest idle
+  hook (`OP_IDLE_TIME`/`OP_IDLE_TIME_2` = the `SynchIdleTime` patch), enriched with `CurApName`
+  (0x910) + a front-window modal check (0x9d6) so the harness distinguishes "idle at the desktop"
+  from "idle blocked on a modal dialog". Python + `vncdotool`, env-resolved asset paths for CI,
+  pristine-disk-per-run isolation, 12 offline unit tests. A host→guest shutdown *hook*
+  (`ShutDwnPower` trap / ADB power-key) was explored and reverted — see spec §12. Requires a
+  logged-in macOS GUI session (SDL needs a WindowServer; no Xvfb equivalent). `SheepShaver/e2e/`.
+
 - **18 real FP-arithmetic test vectors**: the pre-existing `fp_*` vectors were
   *vacuous* — they ended at `stfd` and never loaded the result into a GPR, but the
   harness REGDUMP captures GPRs, not FPRs, so a wrong FP result was invisible and

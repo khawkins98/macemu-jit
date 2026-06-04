@@ -74,7 +74,7 @@ active use (launching apps, scrolling, disk access) — not at idle.
 | Cache flushes during boot | 1-2 | 0 |
 | Opcode coverage (compile) | 100.0% | 98.4% (bcctr/isync fall to interp) |
 | Fallback opcodes | icbi, isync, lwarx, stwcx., mftb, bcctr | same |
-| Harness vectors | 235/235 | 238/238 |
+| Harness vectors | 235/235 | 257+ (`make harness-count`) |
 | spcflags sync | spinlock | std::atomic |
 
 ## Methodology
@@ -137,6 +137,28 @@ Optimizations applied: register allocator (P1), TBZ bclr (P0a), 256MB cache
 | **Dhrystones/sec** | 1,478,546 | +9.6% |
 | **KWhetstones/sec** | 1,557,632 | +16.2% |
 | **Math** | 12,567 | +21.9% |
+
+### Post-B1/B2/A3 Results (2026-06-04)
+
+Additional optimizations: emit_update_cr0 cleanup (B1, 19→11 insns),
+LogicalImm encoder (B2, bitmask-immediate ANDs), mullwo overflow fix (A3).
+
+| Category | Score | Delta vs Pre-RA |
+|----------|-------|-----------------|
+| **CPU** | 64.776 | +3.3% |
+| **Benchmark Mix** | 630.252 | +12.9% |
+| **Dhrystones/sec** | 1,470,156 | +12.1% |
+| **KWhetstones/sec** | 1,503,759 | +12.2% |
+| **Math** | 12,261.8 | +18.9% |
+| **Graphics** | 43.816 | +4.0% |
+| **FP KWhetstones** | 1,564,945 | +21.3% |
+| **Fast Fourier** | 403.695 | **+61.5%** |
+| **Color Average** | 52.054 | +9.3% |
+| **FP Average** | 293.519 | +30.5% |
+
+FP benchmarks improved significantly — likely from reduced code cache pressure
+(B2's bitmask-immediate encoding shrinks compiled blocks, keeping more FP
+blocks resident).
 
 Note: PR composite is volatile (driven by Disk/Graphics variance).  Mix and
 Dhrystones are the stable integer metrics.

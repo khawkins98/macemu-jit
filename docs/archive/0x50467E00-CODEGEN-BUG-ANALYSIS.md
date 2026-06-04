@@ -7,7 +7,7 @@
 > the carry-in), found later. Fixed via the single-`ADCS` codegen: `ppc-jit.cpp` cases 136/138;
 > `docs/planning/OPTIMIZATION-PLAN.md` §0b is **DONE**. SheepShaver boots Mac OS 8.6 to the Finder
 > desktop with the **full DR region JIT-compiled** (ROM=0x500000, no skip list). Root-cause detail:
-> `docs/SUBFE-CARRY-BUG-REPORT.md` and `docs/archive/PR-SUBFE-FIX-DRAFT.md`. Kept for the record only.
+> `docs/archive/SUBFE-CARRY-BUG-REPORT.md` and `docs/archive/PR-SUBFE-FIX-DRAFT.md`. Kept for the record only.
 
 ## Executive Summary
 

@@ -6,7 +6,7 @@
 > three-operand sum) — see `ppc-jit.cpp` cases 136/138; `docs/planning/OPTIMIZATION-PLAN.md`
 > §0b is **DONE**. This resolved the 68K DR-emulator SCSI/boot hang: SheepShaver boots Mac OS 8.6
 > to the Finder desktop with the full DR region JIT-compiled. This is the archived upstream
-> PR-draft artifact, kept for the record; root-cause detail is in `docs/SUBFE-CARRY-BUG-REPORT.md`.
+> PR-draft artifact, kept for the record; root-cause detail is in `docs/archive/SUBFE-CARRY-BUG-REPORT.md`.
 
 ## PR Title
 ```
@@ -75,7 +75,7 @@ Test idiom verification available in `jit-test/run.sh` (rlwimi dispatch vectors)
 
 ### Reference
 
-Detailed root-cause analysis: See `docs/SUBFE-CARRY-BUG-REPORT.md` in this PR.
+Detailed root-cause analysis: See `docs/archive/SUBFE-CARRY-BUG-REPORT.md` in this PR.
 
 **Note**: This same bug pattern has been independently discovered in other ARM64 PPC JIT projects (RPCS3 PR #17520, Dolphin PR #13251). This fix aligns with the broader emulation community's carry semantics improvements.
 
@@ -102,7 +102,7 @@ Detailed root-cause analysis: See `docs/SUBFE-CARRY-BUG-REPORT.md` in this PR.
 
 **Confidence**: The fix is conservative and well-tested. It addresses a real correctness issue with clear reproduction cases. I'm confident in the approach, though I defer to your familiarity with this codebase for any stylistic or architectural improvements.
 
-The detailed root-cause analysis is in `docs/SUBFE-CARRY-BUG-REPORT.md` if you want to audit the reasoning.
+The detailed root-cause analysis is in `docs/archive/SUBFE-CARRY-BUG-REPORT.md` if you want to audit the reasoning.
 
 ---
 
@@ -112,6 +112,6 @@ The detailed root-cause analysis is in `docs/SUBFE-CARRY-BUG-REPORT.md` if you w
 2. Copy the body
 3. Go to: https://github.com/rcarmo/macemu-jit/compare/master...YOUR_BRANCH
 4. Paste into PR description
-5. Attach or reference `docs/SUBFE-CARRY-BUG-REPORT.md` in a comment
+5. Attach or reference `docs/archive/SUBFE-CARRY-BUG-REPORT.md` in a comment
 
 Would you like me to adjust anything in the description?

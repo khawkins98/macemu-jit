@@ -56,14 +56,19 @@ Verify the JIT opcode harness passes before running the full emulator:
 
 ```bash
 cd SheepShaver && ./jit-test/run.sh
-# Expected: pass=233 fail=0 total=233 score=100
+# Expected: score=100 (fail=0, pass==total).
+# The vector count is not fixed — it drifts as vectors are added; query it with: make harness-count
 ```
 
 ### Known limitations
 
 - Mac OS 9.2.1 "Internal Edition" requires a newer ROM (Mac OS ROM 9.0.1+); ROM 1.1 identifies as an older machine model and will not boot 9.2.1.
-- The JIT covers the ROM toolbox only (up to offset 0x460000); the 68k DR emulator range requires a future fix before it can run under JIT.
 - Boot from CD ISO is slow (full SCSI scan on each boot); a pre-installed disk image is recommended for day-to-day use.
+
+> The full native JIT now covers the **whole** ROM range including the 68K DR emulator
+> (ROM=0x500000) and boots Mac OS 8.6 to the Finder desktop — see `JIT-STATUS.md`. (An earlier
+> 0x460000 toolbox-only limitation was resolved 2026-06-03; the root cause was the `subfe`/`adde`
+> carry-out fix — `docs/archive/`.)
 
 ---
 

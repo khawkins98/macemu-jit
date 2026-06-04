@@ -1283,6 +1283,14 @@ TEST_ORDER+=(fuzz_divw_exact)
 T_fuzz_cntlzw_alt="3C605555 60635555 7C650034"
 TEST_ORDER+=(fuzz_cntlzw_alt)
 
+# --- mullwo (OE=1 multiply with overflow detection) ---
+# mullwo: 0x10000 × 0x10000 overflows → r5=0, XER OV=1 SO=1
+T_mullwo_overflow="3C600001 3C800001 7CA325D6"
+TEST_ORDER+=(mullwo_overflow)
+# mullwo: 7 × 6 = 42, no overflow → r5=42, XER OV=0
+T_mullwo_no_overflow="38600007 38800006 7CA325D6"
+TEST_ORDER+=(mullwo_no_overflow)
+
 # ==== AltiVec coverage (2026-06-04) ===========================================
 # NOTE: an earlier batch of 14 VX-form AltiVec vectors was REMOVED here. They had
 # a DOUBLED XO field (VX-form XO is unshifted, unlike X/A-form), so each decoded

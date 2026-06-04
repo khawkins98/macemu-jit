@@ -195,6 +195,20 @@ codegen defect). Takes the residual 1 → 0.
 *reduces* oracle coverage (return blocks stop being checked) — only worth doing if
 the single residual is causing noise; otherwise leave it documented.
 
+### 0b-extra5. SS_JIT_VERIFY suppression latch decay (colleague review #1)
+
+**Concern (from colleague review, 2026-06-04):** the cascade suppression latch
+(`verify_suppressed`) is cleared when a clean block is verified, but if no
+verifiable block follows a divergence (e.g. the remaining blocks are all
+link-call-terminated and skipped), suppression becomes permanent for the rest
+of the boot — silently disabling the oracle.
+
+**Fix:** add a block-count decay: unsuppress after N blocks regardless
+(e.g. `verify_suppress_countdown = 100; if (--countdown <= 0) suppressed = false;`).
+This bounds the blind window while still suppressing the immediate cascade.
+**Effort**: Low (<10 lines).  **Risk**: None (worst case: a few more false
+positives in the decay window).
+
 ### 0c. isync: inline BLR instead of block break
 
 **Expected impact**: Minor per instance, but isync appears after every
@@ -327,6 +341,11 @@ Currently falling through to interpreter:
 `jitcachesize` pref (accepts K/M/G suffixes) or `SS_JIT_CACHE_KB` env var.
 MAP_JIT memory is virtual — no physical cost until touched.  Eliminates the
 2+ full flushes per session that caused recompilation churn.
+
+**Bug fix (2026-06-04, colleague review #2):** the `jitcachesize` pref value
+(bytes after K/M/G parsing) was passed to `SS_JIT_CACHE_KB` without dividing
+by 1024 — `jitcachesize 256M` was interpreted as 256 TB.  Fixed with byte→KB
+conversion + bounds (min 1 MB, max 1 GB).
 
 ---
 

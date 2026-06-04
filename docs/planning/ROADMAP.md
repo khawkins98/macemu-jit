@@ -196,6 +196,16 @@ healthy idle desktop**, training readers to ignore red — and its thresholds li
 three places. Plus a set of cheap build/diag-hygiene fixes (gate the interp-site heartbeat in
 JIT mode, complete macOS `make clean`, fix the mislabeled `hb-test.cpp`, Linux RSS latch, window
 the OTH rule, prune `/tmp` logs, quiet-mode env gate).
+
+**From colleague review (2026-06-04):**
+- ✅ **`jitcachesize` unit bug** — pref value (bytes after K/M/G parse) was passed as KB to the
+  JIT init, causing `256M` → 256 TB. Fixed with byte→KB conversion + bounds (min 1 MB, max 1 GB).
+- 🟡 **VERIFY suppression latch decay** — the cascade suppression can become permanent if no
+  clean block follows a divergence. Add a block-count decay (~10 lines). Tracked in
+  OPTIMIZATION-PLAN 0b-extra5.
+- 🟡 **Bench diagnostics unmasked** — `2>/dev/null` in rom-harness bench target hides
+  stale-baseline warnings. Remove/guard so warnings are visible.
+
 **Detail:** `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` Tier D
 (+ correctness items A6/A7 there: duplicate SMC-invalidation call, XO63 FP-control semantics).
 

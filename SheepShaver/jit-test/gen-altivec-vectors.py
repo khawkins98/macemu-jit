@@ -90,8 +90,10 @@ b("av_vmrghb", load_distinct(1)+[vx(2,1,1,12)] +grab(), "vmrghb v2,v1,v1: high-b
 b("av_vmrglb", load_distinct(1)+[vx(2,1,1,268)]+grab(), "vmrglb v2,v1,v1: low-byte merge — ev_mixed element-order")
 b("av_vmrghh", load_distinct(1)+[vx(2,1,1,76)] +grab(), "vmrghh v2,v1,v1: high-halfword merge — ev_mixed element-order")
 b("av_vmrglh", load_distinct(1)+[vx(2,1,1,332)]+grab(), "vmrglh v2,v1,v1: low-halfword merge — ev_mixed element-order")
-b("av_vmrghw", load_distinct(1)+[vx(2,1,1,140)]+grab(), "vmrghw v2,v1,v1: high-word merge — ev_mixed (verify: word-granular may xpass)")
-b("av_vmrglw", load_distinct(1)+[vx(2,1,1,396)]+grab(), "vmrglw v2,v1,v1: low-word merge — ev_mixed (verify: word-granular may xpass)")
+# vmrghw/vmrglw FIXED 2026-06-04 (correct ZIP1.4S/ZIP2.4S encoding; word-granular so no ev_mixed
+# byte issue) — verified xpass + boot-clean, promoted from BUG to PASS (scored regression gate).
+p("av_vmrghw", load_distinct(1)+[vx(2,1,1,140)]+grab(), "vmrghw v2,v1,v1 -> high-word merge [w0,w0,w1,w1]")
+p("av_vmrglw", load_distinct(1)+[vx(2,1,1,396)]+grab(), "vmrglw v2,v1,v1 -> low-word merge [w2,w2,w3,w3]")
 b("av_vpkuhum",load_distinct(1)+[vx(2,1,1,14)] +grab(), "vpkuhum v2,v1,v1: halfword->byte pack — ev_mixed element-order")
 
 if __name__ == "__main__":

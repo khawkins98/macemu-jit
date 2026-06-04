@@ -895,10 +895,26 @@ int main(int argc, char **argv)
 		};
 		for (auto &r : io_ranges) {
 			void *target = (void*)(MEMBaseDiff + r.mac_start);
+#if defined(MAP_FIXED_NOREPLACE)
 			void *result = mmap(target, r.size,
 				PROT_READ | PROT_WRITE,
 				MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE,
 				-1, 0);
+#else
+			// macOS has no MAP_FIXED_NOREPLACE. Map at `target` as a hint (no MAP_FIXED, so an
+			// existing mapping is never clobbered); if the kernel can't honor the exact address,
+			// unmap and treat it as a failure — preserving MAP_FIXED_NOREPLACE's no-clobber
+			// semantics. (Runtime placement on macOS is unverified — see CHANGELOG.)
+			void *result = mmap(target, r.size,
+				PROT_READ | PROT_WRITE,
+				MAP_ANONYMOUS | MAP_PRIVATE,
+				-1, 0);
+			if (result != MAP_FAILED && result != target) {
+				munmap(result, r.size);
+				errno = EEXIST;
+				result = MAP_FAILED;
+			}
+#endif
 			if (result == MAP_FAILED) {
 				fprintf(stderr, "MEM: failed to map %s at %p size=%lx: %s\n",
 					r.name, target, (unsigned long)r.size, strerror(errno));
@@ -2081,19 +2097,35 @@ void jit_one_tick(void)
 #include <signal.h>
 static void sigill_handler_diag(int sig, siginfo_t *si, void *ctx) {
     ucontext_t *uc = (ucontext_t *)ctx;
-    fprintf(stderr, "\n=== SIGILL at PC=0x%lx addr=%p ===\n",
-        (unsigned long)uc->uc_mcontext.pc, si->si_addr);
+    // aarch64 register/PC access differs per OS. Originally written for Linux
+    // (uc_mcontext.pc / .regs[]); add the Darwin layout so the macOS build compiles.
+#if defined(__APPLE__) && defined(__aarch64__)
+    // Darwin: mcontext is a pointer; thread state holds x0..x28, fp(=x29), lr(=x30).
+    #define DIAG_PC      ((unsigned long)uc->uc_mcontext->__ss.__pc)
+    #define DIAG_REG(i)  ((unsigned long)((i) < 29 ? uc->uc_mcontext->__ss.__x[i] \
+                                        : (i) == 29 ? uc->uc_mcontext->__ss.__fp \
+                                                    : uc->uc_mcontext->__ss.__lr))
+#elif defined(__linux__) && defined(__aarch64__)
+    #define DIAG_PC      ((unsigned long)uc->uc_mcontext.pc)
+    #define DIAG_REG(i)  ((unsigned long)uc->uc_mcontext.regs[i])
+#else
+    #define DIAG_PC      (0UL)
+    #define DIAG_REG(i)  (0UL)
+#endif
+    fprintf(stderr, "\n=== SIGILL at PC=0x%lx addr=%p ===\n", DIAG_PC, si->si_addr);
     for (int i = 0; i < 31; i++) {
-        fprintf(stderr, "x%02d=0x%016lx ", i, (unsigned long)uc->uc_mcontext.regs[i]);
+        fprintf(stderr, "x%02d=0x%016lx ", i, DIAG_REG(i));
         if ((i % 4) == 3) fprintf(stderr, "\n");
     }
     fprintf(stderr, "\nInstruction words around PC:\n");
-    uae_u32 *p = (uae_u32*)(uc->uc_mcontext.pc - 16);
+    uae_u32 *p = (uae_u32*)(DIAG_PC - 16);
     for (int i = 0; i < 12; i++)
         fprintf(stderr, "  %s %p: %08x\n", i==4 ? ">>>" : "   ", p+i, p[i]);
     fprintf(stderr, "=== END ===\n");
     fflush(stderr);
     _exit(132);
+    #undef DIAG_PC
+    #undef DIAG_REG
 }
 
 static void install_sigill_diag() __attribute__((constructor));

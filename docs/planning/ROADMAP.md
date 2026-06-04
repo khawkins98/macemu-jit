@@ -221,10 +221,25 @@ patch, enriched with frontmost-app + modal state to reject dialog false-positive
 the Finder's real Special ▸ Shut Down (a host→guest *hook* — `ShutDwnPower` trap and ADB power-key
 — was explored and reverted: the trap flushes-then-SIGSEGVs re-entrantly, the power-key no-ops on
 8.6; see spec §12). Harness is Python + `vncdotool`, checked-in config, pristine-disk-per-run, 12
-offline unit tests. **Open:** P2 (golden-image diff + scripted app launch), P3 (scenario DSL), and
-a working host→guest shutdown hook (future — invoke the Shutdown Manager from a non-reentrant
-top-level context). **Detail:** spec §12 in `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`,
-plan in `docs/superpowers/plans/`, code in `SheepShaver/e2e/`.
+offline unit tests. Run it locally: `SheepShaver/e2e/README.md` (full setup + troubleshooting).
+
+**Open:**
+- **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
+- **P3** — declarative scenario DSL ("Playwright-for-VNC").
+- **Host→guest shutdown hook** — the menu drive works; a signal-driven hook was explored and
+  reverted (invoke the Shutdown Manager from a *non-reentrant* top-level context; spec §12).
+- **GitHub/CI integration (future — complications known).** The harness is already a clean CLI
+  gate (`make e2e`, exit 0/1; env-resolved `SS_E2E_ROM`/`SS_E2E_DISK`; artifacts dir for upload).
+  Blockers before it runs in CI: (1) **no headless macOS** — SDL needs a live WindowServer, so it
+  requires a **self-hosted Mac with auto-login**, not a github-hosted/headless runner (no Xvfb
+  equiv); (2) **asset provisioning** — ROM + a multi-GB disk aren't in git, CI must fetch them;
+  (3) a **small dedicated test disk** (~200–400 MB vs the 4 GB master) is the biggest readiness
+  win (faster fetch + per-run copy); (4) ~2 min/run. The offline pytest suite (`pytest -q`, no
+  boot) *can* run on any runner today. A starter self-hosted workflow is sketched in the session
+  notes; not committed pending the small-disk + asset-fetch pieces.
+
+**Detail:** spec §12 in `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`, plan in
+`docs/superpowers/plans/`, run guide in `SheepShaver/e2e/README.md`, code in `SheepShaver/e2e/`.
 
 **Why:** A1/A2 verify the JIT *per instruction*; nothing automatically checks the emulator *as a
 running system* — "does it still boot to the Finder and shut down cleanly after a codegen

@@ -128,31 +128,31 @@ The SLiRP buffer-overflow hardening (`d26ae37e` on cebix) is **already in HEAD**
 
 ## 5. Recommendations & decisions
 
-> **Decision (2026-06-04):** import **VDE networking**, **SDL3 (with the `e596e215` fix)**,
-> and the **Wayland-detection fix** now; defer the remaining Linux-only patches to the
-> backlog in §6. Work tracked via subagents following `CONTRIBUTING.md`.
+> **Decision (2026-06-04):** imported **VDE networking**, **SDL3 (with the `e596e215` fix,
+> now the default backend)**, and the **Wayland-detection fix**; deferred the remaining
+> Linux-only patches to the backlog in §6. Done via subagents in isolated worktrees, then
+> cherry-picked onto `macos-arm64` (FF to `d4d0cfec`, 2026-06-04). All three MERGED.
 
-1. **Import VDE networking (`06d8bc02`) — IN PROGRESS.** The single substantive,
-   applicable, self-contained item in the gap. Touches shared `ether_unix.cpp` plus
-   SheepShaver `configure.ac`/`main_unix.cpp`/`main.h`. Requires `vdeplug` at build/run time
-   (`vdeplug 2.3.3` confirmed installed via Homebrew `vde`). Also fixes two real bugs in the
-   existing VDE path (packet length sent as `sizeof(packet)` → trailing garbage; an infinite
-   send-retry loop). Verify it builds against our SDL/Unix config and doesn't disturb the
-   harness (`make harness-count` / `make test-jit` score=100) or boot.
+1. **VDE networking (`06d8bc02`) — ✅ MERGED.** Shared `ether_unix.cpp` + SheepShaver
+   `configure.ac`/`main_unix.cpp`/`main.h`. Links `libvdeplug.3.dylib` (Homebrew `vde` 2.3.3);
+   configurable via the `ether vde:` pref. Fixed two real bugs (packet length was
+   `sizeof(packet)` → trailing garbage; infinite send-retry). SheepShaver harness 257/257
+   score=100. Boot/packet-flow on real hardware still unverified.
 
-2. **Integrate SDL3 + the `e596e215` fix — IN PROGRESS.** We already carry `video_sdl3.cpp`
-   (present, not compiled; build defaults to SDL2). Bring the `SDL_UnlockTexture()`
-   blit-removal/format-unification fix and make the SDL3 backend buildable (`--with-sdl3`,
-   requires `brew install sdl3`). SDL2 stays the default backend.
+2. **SDL3 default + `e596e215` — ✅ MERGED.** SDL3 is now the **default** SheepShaver video
+   backend (links `libSDL3.0.dylib`; `--with-sdl2` opts back). **Boot-verified to Finder
+   2026-06-04.** BasiliskII stays on SDL2 — its SDL3 path needs extra porting
+   (`SDL_HINT_GRAB_KEYBOARD` etc.; see `BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`).
 
-3. **Import the Wayland-detection fix (`91d58b12`) — IN PROGRESS.** Gated
-   `#if REAL_ADDRESSING && defined(__linux__)`, so it is **inert on our macOS
-   `DIRECT_ADDRESSING` build** (compiles out). Bringing it now means a future
-   headless/SDL Linux deployment already has the fix in place. **Validation caveat:** it is
-   inert on *any* 64-bit host — including 64-bit Linux ARM64 — because 64-bit builds use
-   `DIRECT_ADDRESSING` (see §6.1). Exercising it requires a **32-bit ARM** (real-addressing)
-   build or an explicit `--enable-addressing=real`. So it ships as "correct + free, validation
-   deferred to a 32-bit ARM rig," not "verified."
+3. **Wayland-detection fix (`91d58b12`) — ✅ MERGED (inert on macOS, unvalidated).** Gated
+   `#if REAL_ADDRESSING && defined(__linux__)`, so it **compiles out on this macOS build**:
+   empirically, the SheepShaver macOS arm64 configure defines *neither* `REAL_ADDRESSING` nor
+   `DIRECT_ADDRESSING` (it reports addressing "real" but emits only `NATMEM_OFFSET`-based
+   translation; BasiliskII *does* define `DIRECT_ADDRESSING`). Either way `REAL_ADDRESSING` is
+   undefined → the block is dead code here. **Validation still needs a `REAL_ADDRESSING`
+   build** — i.e. a **32-bit ARM** target or an explicit `--enable-addressing=real` (whether a
+   64-bit Linux build ever takes the real-addressing path is unverified — confirm on the rig,
+   don't assume). Ships as "correct + free, validation deferred," not "verified."
 
 4. **Maintenance going forward — content-diff sweeps, not rebases.** Because imports are
    selective cherry-picks with new SHAs, the git "behind" count will *always* look enormous
@@ -217,12 +217,17 @@ addressing mode by host word size, not OS.
   and selects `direct,$NATMEM_OFFSET`. `REAL_ADDRESSING` is only forced for *native* PowerPC.
 - `NATMEM_OFFSET` needs a 48-bit space → the `direct` path is fundamentally **64-bit-host**.
 
-**Consequence:** *every* 64-bit host uses `DIRECT_ADDRESSING` — macOS arm64 **and** 64-bit
-Linux aarch64 alike. `REAL_ADDRESSING` only appears on **32-bit ARM** (armv7/armhf) or
-native-PPC. So a 64-bit Ubuntu build leaves all `#if REAL_ADDRESSING` code (e.g. the Wayland
-fix `91d58b12`, and the deferred `533cf6fa`) **compiled out**, same as on macOS.
-Empirical check on any build: `./configure` prints `addressing mode to use: …`; confirm with
-`grep -E 'REAL_ADDRESSING|DIRECT_ADDRESSING' config.h`.
+**Consequence:** on a 64-bit host, `REAL_ADDRESSING` is **not** defined — so all
+`#if REAL_ADDRESSING` code (the Wayland fix `91d58b12`, the deferred `533cf6fa`) is **compiled
+out**. `REAL_ADDRESSING` is the **32-bit ARM** (armv7/armhf) / native-PPC path. *Empirically
+verified on this macOS arm64 build (2026-06-04):* BasiliskII defines `-DDIRECT_ADDRESSING`;
+SheepShaver defines **neither** `REAL_ADDRESSING` nor `DIRECT_ADDRESSING` (configure *prints*
+"addressing mode: real" but emits only `NATMEM_OFFSET`-based translation — the printed label
+is misleading). In both cases `#if REAL_ADDRESSING` is false, so the Wayland fix is dead code
+here. **Caveat:** whether a *64-bit Linux* build likewise avoids `REAL_ADDRESSING` is **not
+verified** — confirm it on the actual rig rather than assuming. Empirical check on any build:
+`grep -E 'REAL_ADDRESSING|DIRECT_ADDRESSING' config.h` and inspect the `-D` flags in `Makefile`
+(the `configure` summary label alone is not reliable).
 
 **What 64-bit Parallels Ubuntu ARM64 validates:**
 

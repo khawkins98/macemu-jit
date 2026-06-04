@@ -98,7 +98,15 @@ A register allocator caches PPC GPRs in ARM64 callee-saved registers
 
 ### Benchmarking
 
-Use **Speedometer 4.02** inside the guest for reproducible benchmarks.
+**Quick A/B (no boot needed):**
+```bash
+cd SheepShaver/rom-harness
+make bench BARGS=--save-baseline=/tmp/before.txt   # before a change
+# ... make your codegen change, rebuild ...
+make bench BARGS=--compare=/tmp/before.txt          # after — shows % deltas
+```
+
+**Full benchmark:** Use **Speedometer 4.02** inside the guest.
 Key metrics: Benchmark Mix (integer ALU), Dhrystones, CPU score.
 
 Baseline (2026-06-03, Mac OS 8.6 on Apple Silicon):

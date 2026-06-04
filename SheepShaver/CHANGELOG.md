@@ -75,6 +75,19 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   `emit_store_gpr64` bypass the RA cache for the low word. Safe today (PPC64
   ops unreachable from 32-bit guests), must be fixed before G5 support.
 
+### Testing & Benchmarking
+
+- **`make test-jit`**: New target that runs the harness in JIT equivalence mode
+  (`SS_HARNESS_MODE=jit`), actually testing JIT codegen against the interpreter.
+  The old `make test-opcodes` only tested interpreter determinism.
+
+- **`make bench` (jit-bench)**: Microbenchmark for fast A/B testing of codegen
+  changes — reports ns/insn for targeted kernels (carry-chain, rc1/CR0, ALU).
+  Supports `--save-baseline` / `--compare` for differential timing. No boot needed.
+
+- **TESTING.md maintenance contract**: Freshness rules, per-change checklist,
+  harness mode awareness. Prevents test/doc rot.
+
 ### Debug Output
 
 - **Disk driver**: Suppressed per-poll DiskStatus flood for csDriverGestaltCode

@@ -8,8 +8,14 @@
 Retired here (rather than deleted) so the original investigation survives. Each was a
 one-off output of a single session or PR, superseded by the durable record.
 
-| File | What it was | Where the durable record lives |
+All three describe **resolved** issues (or a drifting snapshot). The first two are two angles on
+the *same* now-fixed bug — the 68K DR-emulator SCSI/boot hang, root-caused to the `subfe`/`adde`
+carry-out miscompile and fixed via the single-`ADCS` codegen (`ppc-jit.cpp` cases 136/138;
+OPTIMIZATION-PLAN §0b "DONE"). SheepShaver now boots Mac OS 8.6 to Finder with the full DR region
+JIT-compiled.
+
+| File | What it was | Status / durable record |
 |---|---|---|
-| [`0x50467E00-CODEGEN-BUG-ANALYSIS.md`](0x50467E00-CODEGEN-BUG-ANALYSIS.md) | Deep-dive debug of one codegen bug (2026-06-03) — the subfe/adde carry-out miscompile | `LEARNINGS.md` (2026-06-03); `CHANGELOG.md` carry-out fix |
-| [`PR-SUBFE-FIX-DRAFT.md`](PR-SUBFE-FIX-DRAFT.md) | Draft PR body for the upstream subfe/adde carry fix | Fix shipped — see `CHANGELOG.md`; backlog A1/A2 |
-| [`JIT-OPCODE-TABLE.md`](JIT-OPCODE-TABLE.md) | Generated opcode-coverage snapshot (2026-04-21, "1603/1605") | Live count is `make harness-count` — never a hardcoded table |
+| [`0x50467E00-CODEGEN-BUG-ANALYSIS.md`](0x50467E00-CODEGEN-BUG-ANALYSIS.md) | **Superseded** investigation of the DR-emulator SCSI/boot hang (2026-06-03) — hypothesized `rlwimi`/`bcctr`/`lhau`; none confirmed | ✅ Resolved, but by a *different* cause: the real culprit (`subfe`/`adde`) was found later — see the next row + `LEARNINGS.md` |
+| [`PR-SUBFE-FIX-DRAFT.md`](PR-SUBFE-FIX-DRAFT.md) | Draft upstream PR body for the actual fix — `subfe`/`adde` carry-out | ✅ Shipped — `ppc-jit.cpp` cases 136/138 (ADCS), OPTIMIZATION-PLAN §0b, `CHANGELOG.md`; root-cause detail in `docs/SUBFE-CARRY-BUG-REPORT.md` |
+| [`JIT-OPCODE-TABLE.md`](JIT-OPCODE-TABLE.md) | Generated opcode-coverage snapshot (2026-04-21, "1603/1605") | Drifting snapshot — live count is `make harness-count`, never a hardcoded table |

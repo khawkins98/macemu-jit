@@ -368,10 +368,14 @@ JIT uses a similar technique for `blr` fastpath.
 
 ### Quick Wins (1-2 days each)
 
-**R1. Software link stack for blr prediction** (Dolphin/RPCS3)
-Push host return address on `bl`, pop+compare on `blr`, skip hash lookup on
-hit.  Eliminates dispatcher overhead for ~30% of indirect branches.
-Effort: ~1 day.  Risk: low (fallback to hash on mispredict).
+**R1. Software link stack for blr prediction** (Dolphin/RPCS3) — PARTIAL (2026-06-04)
+Compile-time link stack infrastructure added (bl pushes, blr pops+compares).
+**Finding:** bl is always a block terminator, so the compile-time stack is empty
+by the time the callee's blr compiles.  The fast-path never fires.
+**Next step:** runtime link stack — emit ARM64 push/pop instructions that operate
+on a small stack in the regs struct, persisting across block boundaries.  This
+is the Dolphin/RPCS3 approach and requires adding ~16 bytes to the regs struct.
+Effort: ~1 day (incremental on existing infrastructure).  Risk: low.
 
 **R2. Inline direct-mapped cache at indirect branch sites** (Dolphin JitArm64)
 Emit 2-instruction probe (load cached PC, compare) before falling back to hash

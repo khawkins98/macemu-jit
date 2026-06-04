@@ -198,6 +198,17 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
     Ok(profile)
 }
 
+pub fn rename_profile(id: &str, new_name: &str) -> Result<(), String> {
+    let mut vms = load_manifest();
+    if let Some(vm) = vms.iter_mut().find(|v| v.id == id) {
+        vm.name = new_name.to_string();
+        save_manifest(&vms);
+        Ok(())
+    } else {
+        Err(format!("VM '{}' not found", id))
+    }
+}
+
 pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> {
     let source = get_profile(id)?;
     let mut vms = load_manifest();

@@ -609,9 +609,10 @@ async function handleAction(e: Event) {
         try {
           await invoke("launch_vm", { id });
           runningVmId = id;
+          showToast("Virtual machine started. Click inside the classic desktop to capture the mouse. Press Ctrl-F5 to release.", "info", 8000);
           render();
         } catch (err) {
-          alert(`Failed to launch: ${err}`);
+          showToast(`Failed to launch: ${err}`, "error");
         }
       }
       break;
@@ -628,13 +629,14 @@ async function handleAction(e: Event) {
 
     case "duplicate":
       if (id) {
-        const name = target.dataset.name || "Copy";
+        const vmName = target.dataset.name || "Copy";
         try {
-          await invoke("duplicate_vm", { id, newName: `${name} (Copy)` });
+          await invoke("duplicate_vm", { id, newName: `${vmName} (Copy)` });
           vms = await loadVms();
+          showToast("VM duplicated", "success");
           render();
         } catch (err) {
-          alert(`Failed to duplicate: ${err}`);
+          showToast(`Failed to duplicate: ${err}`, "error");
         }
       }
       break;
@@ -658,21 +660,26 @@ async function handleAction(e: Event) {
 
     case "save-settings":
       if (selectedVmId) {
-        const nameEl = document.getElementById("setting-name") as HTMLInputElement;
-        const ramEl = document.getElementById("setting-ram") as HTMLSelectElement;
-        const screenEl = document.getElementById("setting-screen") as HTMLSelectElement;
+        try {
+          const nameEl = document.getElementById("setting-name") as HTMLInputElement;
+          const ramEl = document.getElementById("setting-ram") as HTMLSelectElement;
+          const screenEl = document.getElementById("setting-screen") as HTMLSelectElement;
 
-        if (nameEl) {
-          await invoke("update_vm_setting", { id: selectedVmId, key: "name", value: nameEl.value }).catch(() => {});
+          if (nameEl) {
+            await invoke("update_vm_setting", { id: selectedVmId, key: "name", value: nameEl.value });
+          }
+          if (ramEl) {
+            await invoke("update_vm_setting", { id: selectedVmId, key: "ramsize", value: ramEl.value + "M" });
+          }
+          if (screenEl) {
+            await invoke("update_vm_setting", { id: selectedVmId, key: "screen", value: screenEl.value });
+          }
+          vms = await loadVms();
+          showToast("Settings saved", "success");
+          render();
+        } catch (err) {
+          showToast(`Failed to save: ${err}`, "error");
         }
-        if (ramEl) {
-          await invoke("update_vm_setting", { id: selectedVmId, key: "ramsize", value: ramEl.value + "M" }).catch(() => {});
-        }
-        if (screenEl) {
-          await invoke("update_vm_setting", { id: selectedVmId, key: "screen", value: screenEl.value }).catch(() => {});
-        }
-        vms = await loadVms();
-        render();
       }
       break;
 
@@ -718,6 +725,32 @@ async function handleAction(e: Event) {
 
 // Error banner state
 let errorBanner: string | null = null;
+
+// Toast notifications
+let toasts: { id: number; message: string; type: "info" | "success" | "error" }[] = [];
+let toastCounter = 0;
+
+function showToast(message: string, type: "info" | "success" | "error" = "info", durationMs = 5000) {
+  const id = ++toastCounter;
+  toasts.push({ id, message, type });
+  renderToasts();
+  setTimeout(() => {
+    toasts = toasts.filter((t) => t.id !== id);
+    renderToasts();
+  }, durationMs);
+}
+
+function renderToasts() {
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    document.body.appendChild(container);
+  }
+  container.innerHTML = toasts
+    .map((t) => `<div class="toast toast-${t.type}">${escapeHtml(t.message)}</div>`)
+    .join("");
+}
 
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
 

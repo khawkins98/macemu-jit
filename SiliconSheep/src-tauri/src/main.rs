@@ -65,6 +65,9 @@ fn save_vm_prefs(id: String, entries: Vec<prefs::PrefEntry>) -> Result<(), Strin
 
 #[tauri::command]
 fn update_vm_setting(id: String, key: String, value: String) -> Result<(), String> {
+    if key == "name" {
+        return vm::rename_profile(&id, &value);
+    }
     let vm_dir = vm::vm_dir_for(&id);
     let prefs_path = vm_dir.join("prefs");
     let mut pf = prefs::load_prefs(&prefs_path)?;
@@ -83,7 +86,10 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
     let _profile = vm::get_profile(&id)?;
     let vm_dir = vm::vm_dir_for(&id);
 
-    let child = std::process::Command::new("../SheepShaver/src/Unix/SheepShaver")
+    let emu_path = find_emulator_binary()
+        .ok_or("SheepShaver binary not found. Build it first: cd SheepShaver && make build-ss")?;
+
+    let child = std::process::Command::new(&emu_path)
         .arg(vm_dir.to_str().unwrap_or("."))
         .current_dir(&vm_dir)
         .spawn()
@@ -132,25 +138,35 @@ fn is_vm_running(state: State<AppState>) -> Option<String> {
     }
 }
 
-#[tauri::command]
-fn check_emulator_status() -> Result<EmulatorStatus, String> {
-    let paths = [
+fn find_emulator_binary() -> Option<String> {
+    let candidates = [
         "../SheepShaver/src/Unix/SheepShaver",
         "/usr/local/bin/SheepShaver",
+        "/opt/homebrew/bin/SheepShaver",
     ];
-    for path in &paths {
+    for path in &candidates {
         let p = std::path::Path::new(path);
         if p.exists() {
-            return Ok(EmulatorStatus {
-                found: true,
-                path: p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string(),
-            });
+            return Some(
+                p.canonicalize()
+                    .unwrap_or_else(|_| p.to_path_buf())
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
     }
-    Ok(EmulatorStatus {
-        found: false,
-        path: String::new(),
-    })
+    None
+}
+
+#[tauri::command]
+fn check_emulator_status() -> Result<EmulatorStatus, String> {
+    match find_emulator_binary() {
+        Some(path) => Ok(EmulatorStatus { found: true, path }),
+        None => Ok(EmulatorStatus {
+            found: false,
+            path: String::new(),
+        }),
+    }
 }
 
 #[derive(serde::Serialize)]

@@ -50,6 +50,20 @@ p("av_vspltw_2", load_distinct(1)+[vx(2,2,1,652)]+grab(), "vspltw v2,v1,2 -> 0x0
 p("av_vmuloub",  [vspltisb(0,5),vspltisb(1,3),vx(2,0,1,8)]+grab(),   "vmuloub v2,v0,v1: 5*3 odd unsigned bytes")
 p("av_vmuleub",  [vspltisb(0,5),vspltisb(1,3),vx(2,0,1,520)]+grab(), "vmuleub v2,v0,v1: even unsigned bytes")
 
+# --- arithmetic / logical / compare: two splat-immediate operands (v0=0x05.., v1=0x03..).
+# These REPLACE 12 pre-existing vec_* vectors that were confirmed VACUOUS (r5=r6=0,
+# their setup ops were doubled-XO no-ops). VXO is the unshifted 11-bit XO. ---
+def two(xo): return [vspltisb(0,5),vspltisb(1,3),vx(2,0,1,xo)]+grab()
+p("av_vadduwm", two(128),  "vadduwm: 0x05050505+0x03030303=0x08080808")
+p("av_vsubuwm", two(1152), "vsubuwm: 0x05..-0x03..=0x02020202")
+p("av_vand",    two(1028), "vand: 0x05&0x03=0x01010101")
+p("av_vor",     two(1156), "vor: 0x05|0x03=0x07070707")
+p("av_vxor",    two(1220), "vxor: 0x05^0x03=0x06060606")
+p("av_vnor",    two(1284), "vnor: ~(0x05|0x03)=0xF8F8F8F8")
+p("av_vmaxsw",  two(386),  "vmaxsw: signed-word max=0x05050505")
+p("av_vminsw",  two(898),  "vminsw: signed-word min=0x03030303")
+p("av_vcmpequw",[vspltisb(0,5),vx(2,0,0,134)]+grab(), "vcmpequw v2,v0,v0: equal -> 0xFFFFFFFF")
+
 # --- CONFIRMED JIT BUG (2026-06-04): vspltb/vsplth select the WRONG element.
 # Correct encodings (verified), distinct-lane source. The JIT diverges from the
 # interpreter (the reference): e.g. vspltb idx 3 -> interp 0x03030303, JIT

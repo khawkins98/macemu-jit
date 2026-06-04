@@ -8,6 +8,7 @@ Requires a logged-in macOS GUI session (SDL needs a live WindowServer). Asset pa
 (ROM/disk) come from SS_E2E_ROM / SS_E2E_DISK or local-dev defaults (see sse2e/config.py).
 """
 import sys
+import os
 import tempfile
 from pathlib import Path
 
@@ -20,17 +21,29 @@ VNCPORT = 5950
 
 def main() -> int:
     assets = config.resolve_assets()
+    medium = os.environ.get("SS_E2E_MEDIUM", "iso")  # "iso" (read-only, default) or "disk"
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-"))
-    # Read-only ISO boot (default): no pristine-copy needed — the ISO can't be dirtied, so it's
-    # stable and reproducible. (Disk-boot via copy_pristine + test.prefs.template stays available
-    # for scenarios that need a writable volume, e.g. P2 app-launch.)
-    prefs = disk.render_prefs(
-        HERE / "config" / "test.prefs.iso.template",
-        work / "test.prefs",
-        rom=assets.rom,
-        cdrom=assets.iso,
-        vncport=VNCPORT,
-    )
+    if medium == "disk":
+        # Writable disk boot: copy the pristine master per run (instant APFS clonefile) so the
+        # master is never dirtied. Used for the benchmark medium (Mac OS 9 + Speedometer).
+        run_disk = disk.copy_pristine(Path(assets.disk), work)
+        prefs = disk.render_prefs(
+            HERE / "config" / "test.prefs.template",
+            work / "test.prefs",
+            rom=assets.rom,
+            disk=str(run_disk),
+            vncport=VNCPORT,
+        )
+    else:
+        # Read-only ISO boot (default): no pristine-copy — the ISO can't be dirtied, so it's
+        # stable and reproducible.
+        prefs = disk.render_prefs(
+            HERE / "config" / "test.prefs.iso.template",
+            work / "test.prefs",
+            rom=assets.rom,
+            cdrom=assets.iso,
+            vncport=VNCPORT,
+        )
     artifacts = HERE / "artifacts"
     artifacts.mkdir(exist_ok=True)
     res = scenario.run_lifecycle(

@@ -6,12 +6,13 @@
 # Asset paths are resolved at runtime (env vars SS_E2E_ROM / SS_E2E_DISK, or local
 # defaults) so CI can point at its own ROM/disk without editing this file.
 #
-# Pinned for reproducibility: 640x480 / 8-bit (stable menu coordinates), no sound, no
-# CD, headless GUI, VNC on. idlewait MUST be true — it installs the SynchIdleTime patch
-# that fires the [BOOT] idle signal the harness waits for.
+# Pinned for reproducibility: 640x480 / 8-bit, no sound, no CD, headless GUI, VNC on.
+# 256 MB RAM (comfortable for Mac OS 9). idlewait MUST be true — it installs the
+# SynchIdleTime patch that fires the [BOOT] idle signal, and the shutdown hook rides the
+# same idle path. Shutdown is via SIGUSR1 (host->guest hook), not VNC, so no menu coordinates.
 rom {rom}
 disk {disk}
-ramsize 134217728
+ramsize 268435456
 screen win/640/480
 displaycolordepth 8
 nosound true

@@ -230,9 +230,15 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
 
 **Open:**
 - **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
+- **P2 (benchmark automation)** — boot the small disk and run Speedometer (Cmd+A → ~90s full
+  suite), then capture/parse the result for a perf-regression number. The medium is **ready**:
+  ✅ a small stripped Mac OS 9.0.4 + Speedometer disk (`macos9_mini.dsk`, ~142 MB sparse) boots and
+  passes the smoke via `SS_E2E_MEDIUM=disk` (copy-per-run = instant APFS clonefile). What remains
+  is driving the benchmark + scraping the score.
 - **P3** — declarative scenario DSL ("Playwright-for-VNC").
-- **Slim custom benchmark ISO** — convert a HD install into a small read-only bootable ISO carrying
-  a minimal System + benchmark tools (MacBench/Speedometer). The ideal canonical medium (spec §13).
+- *(deferred)* **Bootable benchmark ISO** — a read-only bootable HFS CD version of the above
+  (harder: needs blessing + HFS mastering on modern macOS). The writable small disk covers the need
+  for now (spec §13).
 - **GitHub/CI integration (future — complications known).** The harness is already a clean CLI
   gate (`make e2e`, exit 0/1; env-resolved `SS_E2E_ROM`/`SS_E2E_DISK`; artifacts dir for upload).
   Blockers before it runs in CI: (1) **no headless macOS** — SDL needs a live WindowServer, so it

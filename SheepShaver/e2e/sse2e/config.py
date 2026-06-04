@@ -15,7 +15,10 @@ DEFAULT_ROM = "/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom"
 # Read-only ISO is the PREFERRED boot medium (can't get dirty -> stable, reproducible, no
 # pristine-copy-per-run). The disk default is kept for disk-boot scenarios (e.g. P2 app-launch).
 DEFAULT_ISO = "/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso"
-DEFAULT_DISK = "/Users/Shared/macemu/e2e_master.dsk"
+# Small purpose-built test/benchmark disk: stripped Mac OS 9.0.4 + Speedometer (~142 MB sparse).
+# Writable, so it's used via copy-per-run (instant APFS clonefile). The benchmark-automation
+# scenario boots this and runs Speedometer (Cmd+A).
+DEFAULT_DISK = "/Users/Shared/macemu/macos9_mini.dsk"
 
 
 @dataclass(frozen=True)

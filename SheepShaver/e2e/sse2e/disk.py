@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -27,5 +28,10 @@ def copy_pristine(master: Path, dest_dir: Path) -> Path:
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     run_copy = dest_dir / master.name
-    shutil.copyfile(master, run_copy)
+    # APFS clonefile (`cp -c`): instant, copy-on-write — the per-run copy is free regardless of
+    # the image's logical size. Falls back to a real byte copy off APFS (e.g. Linux/CI).
+    try:
+        subprocess.run(["cp", "-c", str(master), str(run_copy)], check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        shutil.copyfile(master, run_copy)
     return run_copy

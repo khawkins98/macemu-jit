@@ -48,9 +48,11 @@ A force-kill (timeout) or a `frontApp != Finder` / `modal=1` idle is a **FAIL**,
      Finder. `SS_E2E_ISO` (default `/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso`). Because
      a CD is **read-only it can never get dirty** — no disk-repair prompts, no pristine-copy per run,
      fully reproducible. This is why ISO boot is the default.
-   - *(Alternative)* a **writable disk image** for scenarios that need to write (e.g. P2 app-launch):
-     `SS_E2E_DISK`. The disk path uses `config/test.prefs.template` + pristine-copy-per-run; the ISO
-     path uses `config/test.prefs.iso.template`. `run_smoke.py` boots the ISO by default.
+   - *(Disk medium)* a **writable disk image** — `SS_E2E_DISK` (default
+     `/Users/Shared/macemu/macos9_mini.dsk`, a small stripped Mac OS 9.0.4 + Speedometer used for
+     benchmarks). Selected with `SS_E2E_MEDIUM=disk`; it boots `config/test.prefs.template` with
+     copy-per-run isolation (instant APFS clonefile, so logical image size is irrelevant). The
+     default ISO path uses `config/test.prefs.iso.template` and needs no copy.
 
 ---
 
@@ -83,9 +85,10 @@ python3 -m venv .venv
 cd SheepShaver
 make e2e                       # build-ss + run the smoke; exit 0 = PASS, non-zero = FAIL
 
-# or directly, with explicit assets:
+# read-only ISO (default) vs the writable Mac OS 9 + Speedometer disk:
 cd e2e
-SS_E2E_ROM=/path/rom SS_E2E_DISK=/path/e2e_master.dsk .venv/bin/python run_smoke.py
+.venv/bin/python run_smoke.py                      # ISO medium (default)
+SS_E2E_MEDIUM=disk .venv/bin/python run_smoke.py   # disk medium (macos9_mini.dsk)
 ```
 
 A run takes ~1 min on the default ISO path (boot ~5 s, shutdown flush ~20–30 s; no per-run disk

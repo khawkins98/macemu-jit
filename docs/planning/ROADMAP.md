@@ -318,27 +318,26 @@ recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still
 
 # Track C — Desktop integration ("Silicon Sheep") — the Parallels-like experience
 
-⏸ **Researched, not started.** A complete multi-tier plan for turning the raw emulator into a
-first-class macOS app — guided first-run, VM library, hot-reloading prefs, multi-folder shared
-volumes, and (research-grade) coherence/seamless windows. This is a **large, JIT-independent
-work stream**; it can proceed in parallel with Tracks A/B once someone picks it up.
+🟡 **Active — scaffolded (2026-06-05).** Tauri v2 project at `SiliconSheep/` compiles (Rust
+backend + Vite frontend). Framework pivoted from Cocoa/ObjC to Tauri for cross-platform door
+and CLI-only build (no Xcode.app). Competitive teardown, host-guest channel audit, UX flows,
+and Tauri architecture all researched; findings synthesized into the plan.
 
 **Tiers (full detail in `docs/planning/DESKTOP_INTEGRATION_PLAN.md`):**
-- **C1. Tier 1 — First-run & VM management:** ROM picker + SHA verify, disk creation wizard, OS
-  selector, **VM profile library**, **prefs hot-reload** (kill the quit/relaunch cycle),
-  fullscreen-escape affordance, dark mode, Gatekeeper signing/notarization.
-- **C2. Tier 2 — Enhanced integration:** multi-folder shared volumes (extend `extfs` beyond one
-  RootPath), live mount/unmount, Unicode (utxt/UT16) clipboard fix, clipboard status, network
-  assistant, display-scaling controls.
-- **C3. Tier 3 — Coherence Lite (novel research):** parse the guest `WindowList` global → host
-  title-bar overlay, per-window Dock entries; **true seamless windows** is low-feasibility
-  near-term (no guest agent exists for Mac OS 9).
+- **C1. Tier 1 — First-run wizard + VM library** (launcher-only, no emulator changes): guided
+  4-screen wizard (ROM drop → disk → review → boot), VM card grid with APFS `clonefile`
+  duplicate, settings sidebar with hot-reload indicators, fullscreen escape overlay, dark mode,
+  Gatekeeper `xattr -cr` button, disk backup, drag-and-drop file import, coach marks.
+- **C2. Tier 2 — Enhanced integration** (emulator IPC needed): true hot-reload via UDS RPC
+  (extend existing `rpc_unix.cpp`), multi-folder `extfs`, Unicode clipboard (`utxt`/`UT16`),
+  direct framebuffer screenshots, disk-image snapshots, network assistant.
+- **C3. Tier 3 — Coherence Lite** (novel research): guest WindowList polling (0x9D6, proven in
+  e2e code), frontmost app tracking (CurApName 0x910), host title-bar overlays, per-window
+  Dock entries. True seamless windows infeasible near-term (no guest agent for Mac OS 9).
 
-**Framework decision (recorded in the plan):** extend the existing Cocoa/ObjC launcher — not
-Tauri/Qt/SwiftUI/Electron. **Repo strategy:** the plan also proposes a pruned hard-fork
-("Silicon Sheep") tracking `kanjitalk755` + `rcarmo` as cherry-pick remotes — revisit whether
-that fork happens or this branch *is* it before starting Tier 1.
-**Detail:** `docs/planning/DESKTOP_INTEGRATION_PLAN.md`.
+**Framework:** Tauri v2 (Rust + pnpm + TypeScript). **Repo strategy:** hard-fork decision
+deferred but recognized as increasingly inevitable with Track C divergence.
+**Detail:** `docs/planning/DESKTOP_INTEGRATION_PLAN.md`, `docs/planning/HOST-GUEST-CHANNELS.md`.
 
 ---
 

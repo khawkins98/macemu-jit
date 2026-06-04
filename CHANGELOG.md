@@ -9,6 +9,25 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-05
+
+### [docs] Silicon Sheep — Tauri v2 launcher scaffolded + plan expanded
+
+- **Framework pivot:** Desktop integration plan (`DESKTOP_INTEGRATION_PLAN.md`) revised from
+  Cocoa/ObjC to **Tauri v2** (Rust + pnpm + TypeScript). Rationale: cross-platform door stays
+  open, CLI-buildable (no Xcode.app needed), modern web UI for free.
+- **Tauri scaffold:** `SiliconSheep/` at repo root — Rust backend with VM profile CRUD
+  (`vm.rs`), Tauri command registrations (`main.rs`), web frontend with VM card grid UI
+  (`main.ts`, `styles.css`), dark/light mode. Both `cargo check` and `vite build` pass.
+- **Feature roadmap expanded** with competitive teardown (Parallels, VMware, UTM, Infinite Mac,
+  DOSBox-X), detailed UX flows (4-screen first-run wizard, VM library cards, settings sidebar,
+  error states, coach marks), Tauri sidecar architecture (IPC via existing `rpc_unix.cpp` UDS),
+  APFS `clonefile` for instant VM duplication, and an explicit "Infeasible" tier.
+- **Host-Guest Channels reference** (`HOST-GUEST-CHANNELS.md`): all existing host↔guest
+  interaction channels, readable guest OS structures (WindowList, CurApName, MenuList,
+  ScrnBase), achievable new channels, and hard limits.
+- **ROADMAP Track C** updated from "⏸ Researched" to "🟡 Active — scaffolded".
+
 ## 2026-06-04
 
 ### [docs] Doc hygiene sweep — stale-claim fixes, /workspace paths, archive

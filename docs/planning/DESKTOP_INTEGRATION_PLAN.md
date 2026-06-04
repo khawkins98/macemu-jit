@@ -1,7 +1,7 @@
 # Silicon Sheep — Desktop Integration Feature Plan
 
-> **Status:** ⏸ Researched — not started · **Created:** 2026-06-02 · **Updated:** 2026-06-04
-> **Why this doc exists:** "Silicon Sheep" — a Parallels-like macOS app layer (first-run wizard, VM library, hot-reload, coherence-lite). Research synthesis.
+> **Status:** 🟡 Active — scaffolded · **Created:** 2026-06-02 · **Updated:** 2026-06-05
+> **Why this doc exists:** "Silicon Sheep" — a Tauri v2 launcher/VM manager for SheepShaver (first-run wizard, VM library, hot-reload, coherence-lite). Framework pivoted from Cocoa to Tauri (2026-06-05). Scaffold at `SiliconSheep/`.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 
@@ -111,77 +111,224 @@ GitHub topic search for `sheepshaver` returns exactly 2 repositories, neither of
 
 ## Framework Decision
 
-### Decision: Extend the existing Cocoa/ObjC launcher
+### Decision: Tauri v2 (revised 2026-06-05)
 
-**Architecture:** Evolve the existing `AppController.mm` / `VMSettingsController.mm` / `VMListController.mm` Cocoa app in place. Add VM profile management, a first-run wizard, and deeper native integration directly in Objective-C++, calling the same `NSPasteboard`, `NSOpenPanel`, and `NSFileCoordinator` APIs the codebase already uses. No new language runtime, no new process model, no two-window coordination problem. The launcher is built entirely from code (programmatic `NSApplication` setup, no NIBs) so the build requires only Xcode Command Line Tools — no `xcodebuild`, no Xcode.app.
+**Architecture:** A Tauri v2 app with a Rust backend and web frontend (HTML/CSS/JS). SheepShaver
+runs as a Tauri **sidecar** child process — the same process model the existing Cocoa launcher
+already uses (`NSTask`). The launcher manages VM profiles, preferences, and lifecycle; the
+emulator owns its own SDL window for the guest display. IPC between the launcher and a running
+emulator uses a Unix domain socket (for hot-reload, status, shutdown).
 
-**Why this over alternatives:**
+**Why Tauri over the existing Cocoa launcher (the previous decision):**
+
+1. **Cross-platform door stays open.** The user wants to keep Linux/Windows as a future option,
+   not build for them now. Tauri lets the UI port naturally; Cocoa/ObjC locks to macOS.
+2. **No Xcode.app required.** The dev environment has only Command Line Tools. The Cocoa launcher
+   depends on NIBs (`VMListWindow.nib`, `VMSettingsWindow.nib`) that require Xcode.app or
+   pre-compiled artifacts. Tauri builds with `cargo` + `npm` — CLI-only.
+3. **Modern UI for free.** Dark mode, responsive layout, accessibility, animations — CSS handles
+   what would be manual `NSAppearance` / Auto Layout work in Cocoa.
+4. **The "two-window" concern is moot.** The existing Cocoa launcher *already* spawns SheepShaver
+   as a separate process with a separate window. Tauri does the same thing. The framebuffer-
+   sharing concern only applies if embedding the guest display inside the launcher, which is not
+   a Tier 1 or Tier 2 goal.
+
+**What the Cocoa launcher did well (preserve in Tauri):**
+- `.sheepvm` bundle directories (prefs + disk images together)
+- VM list in `NSUserDefaults` → migrate to a JSON manifest
+- Settings editor that reads/writes the plain-text prefs format
+- Child process lifecycle management with termination notification
 
 | Option | Verdict |
 |---|---|
-| **Extend existing Cocoa/ObjC launcher** | **Chosen.** Lowest risk; code already exists and builds. First-class macOS native integration (clipboard, dark mode, Gatekeeper, sandboxing, full-screen). Single window model — launcher and guest display are the same process. Buildable with CLT only via `xcodebuild` or programmatic `NSApplication` + CMake. |
-| **Tauri v2** | CLI-buildable, cross-platform. Two-window model (Tauri launcher + SDL guest window) is a real coordination cost. IPC cannot use shared memory on macOS, so framebuffer data can't flow through it. Worthwhile if cross-platform (Linux/Windows) becomes a first-class goal. |
+| **Tauri v2** | **Chosen.** CLI-buildable (Rust + Node, no Xcode.app). Cross-platform door open. ~5 MB overhead. Web UI = modern UX with minimal effort. Sidecar model matches the existing launcher's architecture. |
+| **Extend existing Cocoa/ObjC launcher** | Previously chosen, reversed. NIB dependency requires Xcode.app or ground-up programmatic rewrite. Locks to macOS. The existing ~1100 LOC is heavily deprecated (pre-10.5 APIs). |
 | **SDL3 + Dear ImGui** | Best for an in-process developer overlay (RetroArch style). No separate launcher window. Weakest for first-run wizard UX aimed at non-technical users. |
-| **Qt6** | VirtualBox precedent; solid cross-platform. 60–80MB binary, Qt + SDL event loop bridging non-trivial. Only wins if Linux/Windows parity is a first-class goal from day one. |
-| **Electron** | No advantage over Tauri; 150–200MB overhead. Skip. |
+| **Qt6** | VirtualBox precedent; solid cross-platform. 60–80 MB binary, Qt + SDL event loop bridging non-trivial. Only wins if Linux/Windows parity is a first-class goal from day one. |
+| **Electron** | No advantage over Tauri; 150–200 MB overhead. Skip. |
 | **SwiftUI** | Xcode-dependent in practice; locks to Apple platforms. Skip. |
 
 ---
 
 ## Feature Roadmap
 
-### Tier 1 — First-Run & VM Management (no core changes required)
+### Tier 1 — First-Run & VM Management (launcher-only, no emulator changes)
 
-Pure launcher/wrapper work. SheepShaver binary is a child process; Tauri manages it.
+Pure launcher/wrapper work. SheepShaver binary is a sidecar child process; Tauri manages it.
+**Happy path: 3 clicks + 1 file drop (the ROM).** ROM is the only irreducible user-supplied input.
 
-- [ ] **Guided first-run wizard**: ROM file picker with SHA hash verification against known-good ROM hashes, disk image creation UI (size picker + format), OS version selector.
-- [ ] **VM profile library**: Named configurations stored as JSON/TOML alongside disk images. Browse, duplicate, delete, rename.
-- [ ] **Disk image management**: Drag-and-drop to add images, eject, resize via `hdiutil`/`dd` wrapper, show used/free space.
-- [ ] **Preference hot-reload**: Write prefs file and `SIGTERM` + relaunch SheepShaver child process automatically — eliminates the manual quit-relaunch cycle.
-- [ ] **Fullscreen escape overlay**: Detect fullscreen state; show macOS-native escape affordance (e.g., hover-reveal top bar with "Exit Fullscreen" button).
-- [ ] **Dark mode support**: Built-in prefs UI has no dark mode. Tauri web UI inherits macOS dark/light via CSS `prefers-color-scheme`.
-- [ ] **Gatekeeper mitigation**: Bundle with proper signing/notarization workflow; document the copy-to-Desktop workaround in-app if entitlement is missing.
+#### First-Run Wizard (screen by screen)
 
-### Tier 2 — Enhanced Desktop Integration (some SheepShaver core changes)
+- [ ] **Screen 1 — Welcome.** Illustration of a classic Mac desktop inside a modern macOS window
+  frame. "Silicon Sheep — Classic Mac OS on Apple Silicon." Single button: "Get Started."
+- [ ] **Screen 2 — ROM.** "You need a Macintosh ROM file." Large drop target + browse button.
+  SHA-256 check against known-good hashes: recognized → green check + ROM name; unrecognized
+  but 4 MB → amber "accepted (unverified)"; wrong size → red error. SHA is an *indicator*,
+  never a gate. Help disclosure links to E-Maculation and 68kMLA (no hosted downloads).
+- [ ] **Screen 3 — Disk.** Two paths: (A) "I have a disk image" — file picker. (B) "Create a
+  new disk" — size slider (500 MB / 1 / 2 / 4 GB, default 2 GB), auto-creates raw image.
+  Optional: "Do you have a Mac OS install CD image?" drop target for ISO/toast.
+- [ ] **Screen 4 — Review & Boot.** Summary card: ROM, disk, RAM (256 MB default), display
+  (windowed 1024×768), networking (slirp on). All editable inline. Single "Start" button
+  creates `.sheepvm` bundle, writes prefs, launches SheepShaver.
 
-Requires C++ changes to the emulator alongside Tauri frontend work.
+#### VM Library
 
-- [ ] **Multi-folder shared volumes**: Extend `extfs.cpp` beyond its single `RootPath` to support N configured volumes, each appearing as a separate disk icon in the Finder. Tauri UI adds a "Shared Folders" list with add/remove/path pickers.
-- [ ] **Live folder mount/unmount**: Hook into `extfs` volume lifecycle to allow adding/removing shared folders without full restart. Requires an IPC mechanism between the Tauri process and the running emulator (Unix domain socket or shared memory flag).
-- [ ] **`utxt`/UT16 clipboard fix**: `clip_macosx64.mm` explicitly skips Unicode scrap types with a "sometime, it might be interesting" comment. Implement the UTF-16 ↔ Mac Roman converter — Carbon apps (AppleWorks, BBEdit) rely on this.
-- [ ] **Clipboard status indicator**: Emit clipboard sync events over Tauri IPC so the UI can show "Last synced: text / image" — useful for diagnosing clipboard issues.
-- [ ] **Network configuration assistant**: Guided UI for slirp vs. tap networking, port forwarding rules, and AppleTalk configuration — currently requires manual pref key editing.
-- [ ] **Display scaling controls**: Expose `mag_rate` as a live slider in the Tauri UI sidebar; write pref + signal SheepShaver to re-scale without full restart.
+- [ ] **Card grid**, responsive (1 col narrow → 2–3 wide). Per card: name (editable),
+  screenshot thumbnail (captured on clean shutdown, placeholder if never run), OS version,
+  disk size, last-launched date. Status pill: Running (green) / Stopped (grey).
+- [ ] **Actions per card:** Play, Settings (gear), Duplicate (APFS `clonefile` — instant,
+  zero-copy on APFS), Delete (confirmation, option to keep disk image).
+- [ ] **Top-level "+" button** opens the wizard flow (minus welcome screen).
+- [ ] **Import:** drag `.sheepvm` folder onto library. **Export:** right-click → Reveal in Finder.
+- [ ] **Search/filter bar** appears once library exceeds 6 VMs.
+
+#### Settings Panel
+
+- [ ] **Sidebar categories:** General (name, RAM, ROM), Display (resolution, scale), Storage
+  (disks, shared folders), Network (slirp/vde), Advanced (JIT toggle, debug env vars).
+- [ ] **Hot-reload indicators per setting:** "Applies instantly" (frameskip, mouse) vs
+  "Applies on next boot" (writes prefs, auto-restarts child) vs "Requires shutdown" (RAM,
+  JIT — greyed out while running).
+
+#### Other Tier 1 Items
+
+- [ ] **Auto-restart on pref change**: Write prefs, SIGTERM child, relaunch. Eliminates the
+  manual quit/relaunch cycle for non-hot-reloadable settings.
+- [ ] **Fullscreen escape overlay**: Hover-reveal bar at top edge: "Press Ctrl-Return to exit
+  fullscreen" with clickable button. Auto-hides after 3s, reappears on mouse-to-top-edge.
+- [ ] **Dark mode**: CSS `prefers-color-scheme` — free with web UI. Guest display is always
+  the guest's own palette; don't try to tint it.
+- [ ] **Gatekeeper mitigation**: Detect blocked launch (exit code / `xattr` check). Dialog:
+  "macOS blocked SheepShaver." One-click `xattr -cr` "Fix Now" button (admin password prompt).
+- [ ] **Disk backup ("snapshots")**: Available only when VM is stopped. Copies `.dsk` with
+  timestamp suffix. Restore = swap file back. Labelled honestly as "Disk Backup", not
+  "snapshot" (no saved CPU/RAM state). Uses APFS `clonefile` when possible (instant).
+- [ ] **Screenshot/recording capture**: Grab the SDL framebuffer from host side (no guest
+  involvement).
+- [ ] **Drag-and-drop file import**: Drop host files onto the launcher → write to the `extfs`
+  shared folder. Pure launcher plumbing, no emulator change needed.
+- [ ] **CRT/scanline shaders + integer scaling** (stretch): SDL render pipeline or Metal
+  post-process pass. Pixel-perfect integer scaling by default (retro aesthetic); optional
+  "Smooth scaling" toggle for bilinear.
+- [ ] **Coach marks** for first-time tasks: "Your install CD is mounted…", "Click inside the
+  classic desktop to capture the mouse. Press Ctrl-F5 to release.", "Networking is on. Open
+  TCP/IP in Control Panels and set Configure to 'Using DHCP Server'."
+
+#### Error States
+
+- [ ] ROM not found: red banner + "Locate ROM" file picker.
+- [ ] Disk missing/corrupt: card warning badge → "Locate" / "Remove from VM".
+- [ ] Emulator crashed: card flips to "Crashed" (red pill), shows stderr tail. "Relaunch" +
+  "View Full Log" buttons.
+- [ ] Mouse capture toast on first launch.
+
+### Tier 2 — Enhanced Desktop Integration (emulator IPC/hooks needed)
+
+Requires C++ changes to the emulator alongside Tauri frontend work. Key enabler: SheepShaver
+already has a Unix-domain-socket RPC layer (`rpc_unix.cpp`, activated via `--gui-connection
+<path>`) with `RPC_METHOD_EXIT`, `RPC_METHOD_ERROR_ALERT`, `RPC_METHOD_WARNING_ALERT`. Extend
+this with new methods rather than inventing a new protocol.
+
+- [ ] **True hot-reload** for frameskip/mouse/display: Add `SIGHUP` handler +
+  `PrefsReloadFromDisk()` (~200 LOC in `prefs.cpp`), or extend the UDS RPC with
+  `RPC_METHOD_RELOAD_PREFS`.
+- [ ] **Multi-folder shared volumes**: Extend `extfs.cpp` beyond its single `RootPath` to
+  support N configured volumes. Use the multi-value pref pattern (multiple `extfs` lines, like
+  `disk`). ~2–3 days. See Implementation Notes §extfs.
+- [ ] **Live folder mount/unmount**: Hook `ExtFSInit()`/`ExtFSExit()` for hot-add/remove via
+  UDS RPC.
+- [ ] **`utxt`/UT16 clipboard fix**: `clip_macosx64.mm` explicitly skips Unicode scrap types.
+  Implement the UTF-16 ↔ Mac Roman converter. Mac OS 8.5+ supports `utxt` natively. Low-medium
+  effort.
+- [ ] **Emulator lifecycle control via IPC**: Pause/resume/quit/config-reload commands from
+  launcher to emulator. Parse `CommandEvent::Stderr` for `[HB ...]` diagnostic heartbeats for
+  status without any emulator change.
+- [ ] **Disk-image snapshots** (beyond file copy): APFS clonefile overlay chains or qcow2-style
+  layering. Needs launcher orchestration to pause emulator, snapshot, resume.
+- [ ] **Network configuration assistant**: Guided UI for slirp vs. VDE, port forwarding,
+  AppleTalk. Currently requires manual pref editing.
+- [ ] **Display scaling controls**: Live slider in the Tauri sidebar; write pref + signal
+  SheepShaver to re-scale without full restart.
+- [ ] **Guest-initiated file import**: Host writes file to ExtFS shared dir, then injects a
+  Finder `odoc` AppleEvent via `Execute68kTrap(AESend)`. Medium complexity.
+- [ ] **Direct framebuffer screenshot** (non-VNC): Read `ScrnBase` (0x824) + `ScreenRow`
+  (0x106) + depth from `GDevice` list (0xCC8) — raw framebuffer blit. Faster than VNC.
 
 ### Tier 3 — Coherence Lite (significant research, novel work)
 
-No prior art exists for classic Mac OS. Technically feasible but requires deep emulator internals work.
+No prior art exists for classic Mac OS. The key insight making this tractable: SheepShaver has
+**full read access to guest RAM** via `Mac2HostAddr()`, and the Window Manager's structures are
+at well-known addresses. No guest agent needed for *reading* — only for *modifying* guest
+behaviour.
 
-- [ ] **Guest window metadata extraction**: Parse the Mac OS Window Manager's `WindowList` low-memory global (`0x9D6`) via `Mac2HostAddr()` to extract window titles, bounds, and Z-order from guest RAM in real time. SheepShaver has full read access to guest RAM — this is the key insight that makes this tractable at all.
-- [ ] **Host title bar overlay**: Using extracted window metadata, draw styled title-bar overlay panels on the host desktop that mirror guest window positions. Does not decompose the framebuffer — just adds a floating chrome layer above the SDL window for a more native feel.
-- [ ] **Per-window taskbar/Dock entries**: Use extracted window titles to show individual classic Mac OS windows in the macOS Dock or a custom HUD panel — approximates Parallels-style task switching.
-- [ ] **True coherence / seamless windows** *(research project)*: Decompose the guest framebuffer into per-window regions using guest WindowList bounds, composite each region into a separate host `NSWindow`. Requires: window-boundary detection, Z-order compositing, cursor-capture per window, and handling overlapping/occluded windows. Unprecedented in open-source classic Mac OS emulation. Parallels implements this via a guest agent + custom display driver — neither is available for Mac OS 9. Feasibility: low in the near term; high if guest RAM parsing proves reliable.
+- [ ] **Guest window list polling**: Read `WindowList` (0x9D6) from a host thread on a timer.
+  Walk the chain: `+0x18` (nextWindow) for Z-order, `+0x08` (titleHandle) for titles, `+0x04`
+  (port.portRect) for bounds, `+0x6C` (windowKind: 2=dialog, 8+=DA). Already proven in the
+  `e2e_emit_boot_ready_once()` code. Pipe to Tauri frontend as a live window list.
+- [ ] **Frontmost app tracking**: Poll `CurApName` (0x910, Str31) periodically, or patch
+  `_Launch`/`_ExitToShell` A-traps to emit an EmulOp. Display in Tauri titlebar.
+- [ ] **Host title bar overlay**: Draw styled title-bar panels on the host desktop mirroring
+  guest window positions. Adds a floating chrome layer above the SDL window.
+- [ ] **Per-window Dock entries**: Use extracted window titles + bounds to show individual
+  classic Mac OS windows in a custom HUD panel. Approximates Parallels-style task switching.
+- [ ] **True coherence / seamless windows** *(research project)*: Decompose the guest
+  framebuffer into per-window regions using guest WindowList bounds, composite each into a
+  separate host `NSWindow`. Unprecedented for classic Mac OS. Parallels/VMware do this via
+  guest agents + custom display drivers — neither exists for Mac OS 9.
+- [ ] **Full execution-state save/restore**: Serialize all CPU/JIT/device state for
+  DOSBox-X-style save slots. Very high effort.
+
+### Infeasible (no workaround for classic Mac OS)
+
+These features **require a guest agent, guest kernel extension, or modern guest OS** — none of
+which exist or can be injected for Mac OS 8/9:
+
+- **Full Coherence/Unity mode** (continuous per-window pixel buffers). Parallels/VMware do this
+  via a guest-side hook DLL + custom display driver. No equivalent for Mac OS 9.
+- **Guest-initiated shared folder mounting** (auto-mounts from inside guest). Requires a guest
+  daemon. Sharing must remain host-initiated via `extfs` HLE.
+- **Dynamic memory ballooning** (adjust guest RAM live). Requires a guest kernel driver.
+- **Guest-initiated resolution changes** (dragging the host window resizes the guest). Mac OS
+  8/9 only changes resolution via the Monitors control panel; no programmatic API to push
+  resolution changes into the guest without a display driver stub.
 
 ---
 
 ## JIT + GUI: Orthogonal but Complementary
 
-The `macemu-jit` ARM64 JIT project (branch `macos-arm64`) and this GUI frontend are independent efforts that together represent a step-change improvement:
+The ARM64 JIT and this GUI frontend are independent efforts that together represent a
+step-change improvement:
 
 - **GUI frontend** removes the usability barrier for new users.
-- **ARM64 JIT** closes the performance gap vs. x86_64 + Rosetta 2 (currently, native ARM64 without JIT is slower than Rosetta 2 with JIT).
+- **ARM64 JIT** delivers native Apple Silicon performance (1.88× over interpreter; boots
+  Mac OS 8.6 to Finder in ~10s).
 
-Note: the x86_64 build running under Rosetta 2 with JIT enabled benchmarks faster than the native ARM64 build today. Until ARM64 JIT lands, the Tauri launcher should default to launching the x86_64 binary under Rosetta 2 on Apple Silicon with JIT enabled, with a UI toggle for "native ARM64 (no JIT)" for users who prefer it.
+The JIT is fully operational — the launcher should default to the native ARM64 binary with JIT
+enabled. No Rosetta 2 fallback is needed.
 
 ---
 
 ## What Other Emulators Teach Us
 
-- **QEMU/UTM clipboard**: Uses SPICE `vdagent` over a virtio serial port — requires a modern guest agent. Inapplicable to Mac OS 9.
-- **DOSBox-X clipboard**: Timer-based SDL clipboard polling + a virtual `CLIP$` device. SheepShaver's trap-interception approach is strictly superior.
-- **Wine `winemac.drv`**: Creates real `NSWindow` objects per Win32 `HWND` — seamless by construction because Wine IS the runtime. Architecturally inapplicable here; SheepShaver is a hardware abstraction layer, not the Mac OS runtime.
-- **Parallels Coherence**: Guest-side `prl_hook.dll` + host VMM trap. Requires a guest agent. Not possible for Mac OS 9.
-- **Conclusion**: SheepShaver's existing clipboard and volume-sharing implementations are already at or above the state of the art for classic Mac OS emulation. The gap is UX, not core capability.
+**Competitive teardown (2026-06-05):**
+
+| Product | What's worth stealing | What's impossible for us |
+|---------|----------------------|--------------------------|
+| **Parallels** | VM gallery, linked clones, first-run wizard UX, settings sidebar, Dock integration | Coherence mode (requires `prl_hook.dll` guest agent), dynamic RAM, guest-initiated resolution |
+| **VMware Fusion** | VM library (filter/tag/search/clone badges), linked clones, Unity mode UX | Unity mode (requires guest tools), balloon driver |
+| **UTM** | Prebuilt VM gallery, Apple Virtualization integration, how they handle "no guest tools" case for older OSes — closest to our situation | SPICE agent features (clipboard, display resize) |
+| **Infinite Mac** | Browser-based classic Mac UX — chronological OS picker, instant boot, drag-and-drop file import. **Best model for the "retro OS in modern frame" problem** | N/A (different architecture entirely) |
+| **DOSBox-X** | 100-slot save states, CRT/scanline shaders, built-in capture, pixel-perfect scaling | Save states require full CPU/device serialization (very high effort) |
+
+**Key insight:** APFS `clonefile(2)` gives us VMware's linked clones for free — duplicate a 4 GB
+`.dsk` in milliseconds, zero extra disk space until divergence. "Duplicate VM" becomes instant.
+
+**Conclusion**: SheepShaver's existing clipboard and volume-sharing implementations are already
+at or above the state of the art for classic Mac OS emulation. The gap is purely UX. The
+no-guest-agent constraint means we get the *launcher/management* features from
+Parallels/VMware but not their *coherence/integration* features — and that's fine, because no
+one else has solved coherence for classic Mac OS either.
 
 ---
 
@@ -241,10 +388,14 @@ The existing launcher is clean and well-factored:
 **Minimum viable hot-reload implementation:**
 1. Add `PrefsRegisterReloadHandler(name, callback)` + `PrefsReloadFromDisk(name)` to `prefs.cpp` (~200 LOC, needs a `pthread_mutex_t`).
 2. Register handlers in `video.cpp` (frameskip), `extfs.cpp` (path remount), and optionally input code (mousewheel).
-3. In `VMSettingsController.mm`, call `PrefsReloadFromDisk()` after saving instead of requiring a full relaunch.
-4. Optional: add a Unix domain socket listener thread so the Cocoa launcher can poke the running emulator directly.
+3. Add a `SIGHUP` handler that calls `PrefsReloadFromDisk()`, OR extend the existing UDS RPC
+   (`rpc_unix.cpp`, activated via `--gui-connection <path>`) with `RPC_METHOD_RELOAD_PREFS`.
+   The RPC path is preferred — it allows targeted reload of specific keys.
 
-No `SIGHUP` handler exists today; no existing IPC mechanism to exploit.
+**Existing IPC mechanism:** `rpc_unix.cpp` implements a Unix-domain-socket RPC layer with
+`RPC_METHOD_EXIT`, `RPC_METHOD_ERROR_ALERT`, `RPC_METHOD_WARNING_ALERT`. Activated by the
+`--gui-connection <socket-path>` CLI flag. Extensible for hot-reload, status queries, etc.
+Tauri's Rust side connects to this socket for Phase 2 IPC.
 
 ### extfs Multi-Volume
 
@@ -264,23 +415,44 @@ No `SIGHUP` handler exists today; no existing IPC mechanism to exploit.
 
 **Prior art:** No existing fork has implemented this. The git log shows drag-and-drop volume support was added to the Windows GUI (`#135`) but `extfs.cpp` was never updated to match.
 
+### Tauri Sidecar Architecture
+
+**Project location:** `SiliconSheep/` at repo root — sibling to `SheepShaver/` and `BasiliskII/`.
+Clean boundary: SiliconSheep never `#include`s emulator headers. It interacts with SheepShaver
+only through the prefs file format, process lifecycle, and (future) UDS IPC.
+
+**Sidecar launch:** `tauri-plugin-shell` with `externalBin`. The SheepShaver binary is copied to
+`SiliconSheep/src-tauri/binaries/SheepShaver-aarch64-apple-darwin` by a prebuild script. Tauri
+manages launch, stdout/stderr capture, and termination notification.
+
+**IPC — layered by phase:**
+
+| Need | Phase 1 (no C++ changes) | Phase 2 (extend emulator) |
+|------|--------------------------|---------------------------|
+| Status/heartbeat | Parse stderr for `[HB ...]` lines | — |
+| Clean shutdown | `kill(pid, SIGUSR1)` | — |
+| Screenshots | VNC to `localhost:{vncport}` or `ScrnBase` read | — |
+| Error/warning | Parse stderr `ERROR:`/`WARNING:` | Extend `rpc_unix.cpp` |
+| Hot-reload prefs | Write prefs + SIGTERM + relaunch | `SIGHUP` handler + `PrefsReloadFromDisk()` |
+| Bidirectional RPC | Not needed | Extend `rpc_unix.cpp` (existing UDS RPC via `--gui-connection`) |
+
+**Sidecar entitlements (open question):** The SheepShaver binary needs
+`com.apple.security.cs.allow-jit` for `MAP_JIT` W^X on ARM64. Tauri's bundler may not
+propagate entitlements to sidecar binaries — may need a post-build `codesign` step. The
+existing `SheepShaver.entitlements` file in `src/MacOSX/` declares the right keys.
+
 ### Build System
 
-**No Xcode.app required.** The canonical build is Autotools:
+**Emulator:** Autotools (unchanged). `SheepShaver/src/Unix/` → `make` → binary.
 
-```bash
-cd SheepShaver/src/Unix
-NO_CONFIGURE=1 ./autogen.sh
-./configure --enable-sdl-video --enable-sdl-audio --with-sdl2 \
-            --disable-vosf --with-mon --enable-addressing=banks
-make -j$(sysctl -n hw.logicalcpu)
-```
+**Launcher:** Tauri v2 (Rust + pnpm). `SiliconSheep/` → `pnpm install && pnpm tauri build`.
+Dependencies: Rust 1.70+, Node 18+, pnpm. No Xcode.app needed.
 
-Dependencies: `brew install sdl2 autoconf automake libtool` — that's it.
+**Integration:** A `prebuild.sh` script builds the emulator via Autotools and copies the
+binary to the Tauri binaries dir. `tauri.conf.json`'s `beforeBuildCommand` calls this.
 
-The existing Xcode projects (`SheepShaverLauncher.xcodeproj`) are being replaced by a programmatic Cocoa build. The launcher app bundle is assembled manually: compile the `.mm`/`.cpp` sources with `clang`, link against `Cocoa.framework`, and `cp` the Unix `SheepShaver` binary in as an auxiliary executable. No `xcodebuild` involved.
-
-App bundle structure: `SheepShaver.app/Contents/MacOS/SheepShaver` + `Resources/SheepShaver.icns` + `Info.plist`.
+The existing Xcode projects (`SheepShaverLauncher.xcodeproj`) and Cocoa launcher
+(`Launcher/*.mm`) remain in the repo as upstream code — not modified or deleted.
 
 ### ROM Loading and Verification
 
@@ -304,6 +476,21 @@ We can optionally add SHA-256 verification against known-good ROMs in the launch
 
 ## Open Questions
 
-1. For Tier 3 coherence work: is `Mac2HostAddr()` + WindowList parsing reliable enough across OS versions (System 7 through 9.0.4) to build on?
-2. Should `extfs` multi-volume use the existing multi-value pref pattern (multiple `extfs` lines, same as how multiple `disk` entries work) or a new numbered key scheme (`extfs`, `extfs2`, …)? The multi-value pattern is the path of least resistance and consistent with the rest of the prefs file.
-3. Should Silicon Sheep live as a subdirectory in this repo or as a separate repo that pulls in macemu as a submodule?
+1. **Sidecar entitlements:** Does `tauri build` propagate entitlements to `externalBin`
+   binaries, or is a manual `codesign` step required? Needs empirical testing.
+2. **WindowList reliability:** Is `Mac2HostAddr()` + WindowList parsing reliable enough across
+   OS versions (System 7 through 9.0.4) to build Tier 3 on? The e2e harness already reads
+   `CurApName` and `WindowList` successfully — encouraging but needs broader testing.
+3. **extfs multi-value vs numbered keys:** Use the multi-value pref pattern (multiple `extfs`
+   lines, like `disk`) — path of least resistance, consistent with the rest of the prefs file.
+   (Consensus from earlier research; treat as decided unless problems arise.)
+4. ~~Should Silicon Sheep live as a subdirectory or a separate repo?~~ **Decided:** sibling
+   directory at `SiliconSheep/` in this repo. The hard-fork question is deferred but recognized
+   as increasingly inevitable.
+
+## Host-Guest Interaction Channels
+
+Full reference in `docs/planning/HOST-GUEST-CHANNELS.md` — documents all existing and
+achievable host↔guest channels, readable guest OS structures (low-memory globals, WindowList,
+CurApName, MenuList, ScrnBase, etc.), and the hard limits (no arbitrary guest code execution
+on demand, no guest-initiated async callbacks, no Toolbox calls outside EmulOp context).

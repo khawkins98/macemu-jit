@@ -230,11 +230,13 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
 
 **Open:**
 - **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
-- **P2 (benchmark automation)** — boot the small disk and run Speedometer (Cmd+A → ~90s full
-  suite), then capture/parse the result for a perf-regression number. The medium is **ready**:
-  ✅ a small stripped Mac OS 9.0.4 + Speedometer disk (`macos9_mini.dsk`, ~142 MB sparse) boots and
-  passes the smoke via `SS_E2E_MEDIUM=disk` (copy-per-run = instant APFS clonefile). What remains
-  is driving the benchmark + scraping the score.
+- ✅ **P2 (benchmark automation) — DONE (2026-06-05).** `make e2e-bench` boots the small Mac OS 9 +
+  Speedometer disk (`macos9_mini.dsk`, ~142 MB sparse, copy-per-run = instant clonefile), drives the
+  full Speedometer 4.02 suite over VNC (splash→registration→Cmd+A→choose-disk, gated on a new `[APP]
+  frontApp` signal so it doesn't race the variable launch), captures `benchmark-result.png` (PR/CPU),
+  and shuts down via the hook. Verified PASS (PR 29.375, CPU 66.976). **Remaining:** score *parsing*
+  — OCR the result image (or read Speedometer's "Machine Records" file) for an automated perf number.
+  See spec §15.
 - **P3** — declarative scenario DSL ("Playwright-for-VNC").
 - *(deferred)* **Bootable benchmark ISO** — a read-only bootable HFS CD version of the above
   (harder: needs blessing + HFS mastering on modern macOS). The writable small disk covers the need

@@ -309,3 +309,37 @@ re-entrancy crash (§12) is avoided entirely by posting events rather than re-en
 `e2e_check_host_shutdown` in `emul_op.cpp`; harness side `runner.request_shutdown()` sends SIGUSR1.
 The VNC menu-drive (and its 640×480 coordinate calibration) is retired from the default path; VNC
 is now used only for optional, best-effort boot screenshots.
+
+## 15. Benchmark automation (P2) — Speedometer, fully driven (2026-06-05)
+
+`make e2e-bench` (`run_benchmark.py` → `scenario.run_benchmark`) boots the small Mac OS 9 +
+Speedometer disk and runs the full Speedometer 4.02 suite end-to-end, unattended. Verified PASS:
+results captured (e.g. **PR 29.375, CPU 66.976**), clean shutdown.
+
+**Flow:** boot → wait for the **`[APP] frontApp='Speedometer 4.02'`** signal → drive over VNC:
+Enter (dismiss splash) → Esc (dismiss registration) → Cmd+A (`super-a`; run all tests) → Enter
+(the "choose drive to test" dialog → OK = the Desktop disk) → ~90 s suite → capture
+`benchmark-result.png` → Enter (dismiss "The tests are done!") → SIGUSR1 shutdown hook → clean exit.
+
+**Two robustness lessons (both now fixed):**
+1. **Boot+launch time is highly variable** (observed the desktop taking ~25 s to draw on a cold
+   run). Fixed `sleep`s raced Speedometer's launch and mis-fired keys onto the registration prompt.
+   Fix: the emulator emits **`[APP] frontApp='X'` on every `CurApName` change** (emul_op.cpp
+   `e2e_emit_idle_signals`), so the harness waits *deterministically* for Speedometer to be up +
+   idle. `CurApName` carries the version, so the harness matches the substring (`Speedometer`).
+   (Note: `CurApName` oscillates among background extensions under cooperative multitasking, so the
+   `[APP]` stream is noisy — fine for detection, just log spam.)
+2. **vncdotool didn't release** — `api.connect()` starts a Twisted reactor in a non-daemon thread;
+   without `api.shutdown()` after `disconnect()` the process hangs (every capture/drive command
+   took ~2 min via timeout). `Vnc.close()` now calls `api.shutdown()`.
+
+**Honest limits / next refinements:**
+- The PASS criterion is "drove the sequence + captured + clean shutdown" — it does **not yet parse
+  the score**. The PR/CPU numbers are in `benchmark-result.png` (human/OCR readable). True
+  perf-regression gating needs OCR of the result (or reading Speedometer's "Machine Records" file).
+- The drive still uses a few fixed `sleep`s for the within-Speedometer dialog transitions (splash→
+  registration→disk-dialog), which are fast and consistent once Speedometer is up; only the
+  variable boot/launch is signal-gated.
+- The benchmark disk is a writable copy-per-run (instant clonefile); the `extfs` host-FS mount is
+  disabled in the prefs so only the one Mac disk is present (unambiguous disk-select, no host
+  exposure).

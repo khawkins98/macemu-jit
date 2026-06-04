@@ -11,6 +11,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver] E2E harness — host→guest shutdown hook + ISO medium + Speedometer benchmark (A5)
+
+- **Host→guest shutdown hook.** `SIGUSR1` → the emulator's idle hook injects the ADB Power key
+  (with dwell) → waits for the Shut Down dialog → Return (confirms) → real OS shutdown → clean
+  exit. Replaces VNC menu-clicking; verified on Mac OS 8.6 and 9.0.4. (`emul_op.cpp`,
+  `runner.request_shutdown()`.)
+- **Read-only ISO is the default medium** — can't get dirty (no repair-prompt/dialog
+  false-positives, no pristine-copy), reproducible. Disk-boot retained (`SS_E2E_MEDIUM=disk`,
+  instant APFS clonefile copy) for the benchmark.
+- **`make e2e-bench` — Speedometer benchmark automation.** Boots a small stripped Mac OS 9.0.4 +
+  Speedometer disk, drives the full suite over VNC (gated on a new `[APP] frontApp` change signal
+  so it doesn't race the variable app launch), captures the results image (PR/CPU) + emulator log,
+  and shuts down via the hook. Verified PASS (PR 29.375). Score *parsing* (OCR) is the next step.
+- **Fixes found building it:** `Vnc.close()` calls `api.shutdown()` (vncdotool's reactor otherwise
+  hung every capture ~2 min); host-FS (`extfs`) mount disabled in the test prefs; verbose `pytest`.
+- Run guide: `SheepShaver/e2e/README.md`; design: `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`
+  (§12–§15).
+
 ### [docs] Silicon Sheep — Tauri v2 launcher scaffolded + plan expanded
 
 - **Framework pivot:** Desktop integration plan (`DESKTOP_INTEGRATION_PLAN.md`) revised from

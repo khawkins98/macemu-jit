@@ -89,6 +89,11 @@ make e2e                       # build-ss + run the smoke; exit 0 = PASS, non-ze
 cd e2e
 .venv/bin/python run_smoke.py                      # ISO medium (default)
 SS_E2E_MEDIUM=disk .venv/bin/python run_smoke.py   # disk medium (macos9_mini.dsk)
+
+# Benchmark: boot the Mac OS 9 + Speedometer disk, run the full suite, capture results:
+make e2e-bench                                     # from SheepShaver/
+# or: cd e2e && .venv/bin/python run_benchmark.py
+# Artifacts: e2e/artifacts/benchmark-result.png (PR/CPU numbers) + benchmark-emulator.log
 ```
 
 A run takes ~1 min on the default ISO path (boot ~5 s, shutdown flush ~20–30 s; no per-run disk
@@ -138,12 +143,12 @@ fixtures, no emulator required.
 
 ## Status & roadmap
 
-P1 lifecycle smoke — boot → clean shutdown → assert — **complete**. Both boot detection and
-shutdown are proper host→guest hooks (no VNC GUI driving); read-only ISO is the default medium.
-Open (ROADMAP A5):
-- **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
+P1 lifecycle smoke (`make e2e`) and P2 benchmark automation (`make e2e-bench`) both **complete**.
+Boot detection and shutdown are host→guest hooks; the benchmark drives Speedometer over VNC. Open
+(ROADMAP A5):
+- **Benchmark score parsing** — OCR the PR/CPU from `benchmark-result.png` (or read Speedometer's
+  "Machine Records" file) to turn the captured image into an automated perf-regression number.
+- **P2 (visual)** — golden-image screenshot diff (masked perceptual hash) for the smoke.
 - **P3** — declarative scenario DSL.
-- **Slim custom benchmark ISO** — a small read-only bootable ISO with a minimal System + benchmark
-  tools (MacBench/Speedometer); the ideal canonical medium (spec §13).
 - **CI integration** — needs a self-hosted macOS runner with a GUI session + asset provisioning;
   see ROADMAP A5 for the full complication list.

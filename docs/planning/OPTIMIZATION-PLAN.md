@@ -13,7 +13,7 @@
 | Dhrystones/sec | 1,348K | **1,475K** | **+9.4%** |
 | CPU score | 62.7 | **64.2** | +2.2% |
 | Math score | 11,539 | **12,354** | +7.1% |
-| Harness | 235/235 | 262/262 (2026-06-04; count via `make harness-count`) | +FP, AltiVec (full vmrg* merge family + vpkuhum), carry-wrap, mullwo vectors |
+| Harness | 235/235 | 264/264 (2026-06-04; count via `make harness-count`) | +FP, AltiVec (full ev_mixed class: merges, vpkuhum, byte mults), carry-wrap, mullwo |
 
 Target: **3-5x** over interpreter, approaching G4/1.8GHz class.
 
@@ -100,11 +100,13 @@ on it.
    RA reg (`hR`) is live per emitted op; the address and loaded value ride in
    `RTMP0`/`RTMP1`.
 
-### P1b. AltiVec element-order correctness (ev_mixed) — MOSTLY FIXED (2026-06-04)
+### P1b. AltiVec element-order correctness (ev_mixed) — TESTED CLASS FIXED (2026-06-04)
 
-**Status**: real correctness bug; splats + the entire merge family fixed. Only the
-pack + even/odd multiplies remain (parked + signposted in code at `emit_load_vr` /
-the `case 12` block in ppc-jit.cpp, and CHANGELOG). Live tracker: ROADMAP A2.
+**Status**: real correctness bug; the entire *tested* element-order class is fixed +
+promoted (splats, merges, pack `vpkuhum`, byte multiplies `vmulo/eub`) — harness 264/100,
+quarantine empty. Boot-pending for pack+multiplies (new NEON ops); real-AltiVec validation
+→ A3. Untested siblings remain (halfword multiplies, `vpkuwum`, signed byte multiplies) —
+signposted in code + ROADMAP A2. Live tracker: ROADMAP A2.
 
 VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed within
 each 32-bit word, word order preserved — `ppc-operands.hpp` `byte_element`/
@@ -121,17 +123,21 @@ or rearranges sub-word elements with raw NEON lanes is wrong.
 - ✅ **Fixed — `vpkuhum`** (2026-06-04, boot-pending): pack low bytes = `UZP2.16B` on the
   `REV32.16B`-normalized inputs (reuses `emit_vmrg`). It had ignored vA entirely. Promoted
   261→262.
-- 🟡 **Still broken** (repro/quarantine in `jit-test/gen-altivec-vectors.py`):
-  even/odd multiplies (`vmulo*`/`vmule*` — these also emit the *wrong* NEON op, e.g. vmuloub
-  emits `MUL.8B` not `UMULL.8H`). Also `vpkuwum` (word pack) shares the ignore-vA bug, un-vectored.
+- ✅ **Fixed — byte multiplies `vmuloub`/`vmuleub`** (2026-06-04, boot-pending): two bugs —
+  non-widening `MUL.8B` and no ev_mixed even/odd select. `emit_vmul_byte`: REV32.16B → UZP1
+  (even)/UZP2(odd).16B → UMULL.8H → REV32.8H. Promoted 262→264; quarantine now empty.
+- 🟡 **Still broken / untested** (no test vector): halfword multiplies `vmul{o,e}{u,s}h` (need the
+  hw→word analogue: UZP on `.8H` + `[SU]MULL.4S`, word_element identity so no output rev), the
+  word pack `vpkuwum` (ignores vA), and signed byte multiplies `vmulosb`/`vmulesb` (share
+  `emit_vmul_byte` w/ SMULL — emitted as *prospective*, no signed test vector).
 
 **Fix approach — settled: per-op (approach B).** Make each op's codegen ev_mixed-aware
 locally (the merges proved it: a *local* `REV32.16B` normalize works). The *global*
 load/store `REV32.16B` variant (old approach 1) was **empirically ruled out** — it
 changes the in-JIT VR convention for every op at once and re-breaks correct ones
-(ROADMAP A2). Remaining per-op work: the even/odd byte multiplies (need `UMULL.8H`/`UMULL2`
-+ ev_mixed even/odd deinterleave) — `vpkuhum` is done (normalize + `UZP2.16B` + back).
-Final sign-off still needs a real-AltiVec boot under `SS_JIT_VERIFY=1`
+(ROADMAP A2). All *tested* ops are done; remaining per-op work is the untested siblings
+(halfword multiplies need UZP on `.8H` + `[SU]MULL.4S`; `vpkuwum`; signed byte mults need a
+signed test vector). Final sign-off still needs a real-AltiVec boot under `SS_JIT_VERIFY=1`
 (e.g. a LAME MP3 encoder — see TESTING.md / ROADMAP A3).
 **Effort**: medium (per remaining op). **Reachability**: AltiVec is live (emulator
 advertises a G4), so the remaining ops corrupt real AltiVec software today.
@@ -354,9 +360,9 @@ this round-trip.
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 
 Tracked as **P1b** in the "Open — Hardening" section above (single source of
-truth). Summary: `vspltb`/`vsplth`, the entire `vmrg*` merge family, **and `vpkuhum`**
-fixed (per-op `REV32.16B` normalize); only the even-odd multiplies remain (they also
-emit the wrong NEON op). Per-op approach settled; repro vectors documented there.
+truth). Summary: the entire *tested* ev_mixed class — `vspltb`/`vsplth`, the `vmrg*` merge
+family, `vpkuhum`, and the byte multiplies `vmulo/eub` — is fixed (per-op normalize: ZIP/UZP
++ widening). Only untested siblings remain (halfword mults, `vpkuwum`, signed byte mults).
 
 ### P6: Instruction Scheduling
 

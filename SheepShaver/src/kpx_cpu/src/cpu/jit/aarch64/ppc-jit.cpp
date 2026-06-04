@@ -900,6 +900,32 @@ static void emit_vmrg(int va, int vb, int vd, uint32_t zip)
 	emit_store_vr(0, vd);
 }
 
+/* AltiVec even/odd BYTE multiply (vmul{o,e}{u,s}b) -- ev_mixed-aware widening.
+ * Two bugs the old codegen had: it emitted a non-widening MUL.8B (must widen 8x8->16),
+ * and it ignored ev_mixed even/odd element selection. Fix, on REV32.16B-normalized
+ * inputs (PPC byte k -> natural lane k):
+ *   1. REV32.16B both loads.
+ *   2. select the even (UZP1.16B, PPC bytes 0,2,..14) or odd (UZP2.16B, 1,3,..15)
+ *      lane of each pair into the low 8 lanes of each operand. (UZP2 selecting the
+ *      odd lane is the same mapping vpkuhum verified.)
+ *   3. [SU]MULL.8H -> 8 halfword products in natural halfword order.
+ *   4. REV32.8H -> ev_mixed halfword storage (half_element swaps halfwords within
+ *      each 32-bit word). `mull` is UMULL.8H (0x2E20C000) or SMULL.8H (0x0E20C000),
+ *      which is the file's signed widening encoding + the U bit. */
+static void emit_vmul_byte(int va, int vb, int vd, bool odd, uint32_t mull)
+{
+	uint32_t uzp = odd ? 0x4E005800 : 0x4E001800;   /* UZP2.16B : UZP1.16B */
+	emit_load_vr(0, va);
+	emit_load_vr(1, vb);
+	emit32(0x6E200800 | (0 << 5) | 0);          /* REV32.16B v0, v0 */
+	emit32(0x6E200800 | (1 << 5) | 1);          /* REV32.16B v1, v1 */
+	emit32(uzp | (0 << 16) | (0 << 5) | 0);     /* UZP1/2.16B v0, v0, v0 -> A even/odd in low 8 */
+	emit32(uzp | (1 << 16) | (1 << 5) | 1);     /* UZP1/2.16B v1, v1, v1 -> B even/odd in low 8 */
+	emit32(mull | (1 << 16) | (0 << 5) | 0);    /* [SU]MULL.8H v0, v0.8B, v1.8B */
+	emit32(0x6E600800 | (0 << 5) | 0);          /* REV32.8H v0, v0 (ev_mixed halfword order) */
+	emit_store_vr(0, vd);
+}
+
 /* AltiVec field extraction */
 static inline uint32_t VR_VD(uint32_t op) { return (op >> 21) & 0x1F; }
 static inline uint32_t VR_VA(uint32_t op) { return (op >> 16) & 0x1F; }
@@ -3378,14 +3404,24 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		 * emit_load_vr). A correct fix needs UMULL/UMULL2 + an ev_mixed-aware
 		 * deinterleave. Confirmed broken by differential test (vmuloub 5*3: want
 		 * 0x000F per halfword, got 0x0F per byte). Repro: gen-altivec-vectors.py. */
-		case 8: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E209C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuloub — BROKEN (emits MUL.8B; see FIXME) */
-		case 72: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulouh UMULL.4S */
-		case 264: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E20A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuleub UMULL2.8H */
-		case 328: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuleuh UMULL2.4S */
-		case 776: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E209C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulosb SMULL.8H */
-		case 840: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulosh SMULL.4S */
-		case 520: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E20C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulesb SMULL2.8H */
-		case 584: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulesh SMULL2.4S */
+		/* Even/odd multiplies. XO->op map (the old comments here were SCRAMBLED):
+		 *   8=vmuloub 72=vmulouh 264=vmulosb 328=vmulosh
+		 *   520=vmuleub 584=vmuleuh 776=vmulesb 840=vmulesh
+		 * BYTE variants (8/264/520/776) use emit_vmul_byte (ev_mixed even/odd select +
+		 * widening + REV32.8H output). FIXED + tested: vmuloub/vmuleub. vmulosb/vmulesb
+		 * use the same helper (SMULL) but lack a signed test vector — prospective.
+		 * HALFWORD variants (72/328/584/840) are STILL BROKEN: they neither widen-select
+		 * correctly nor apply the ev_mixed halfword-element selection; a correct fix needs
+		 * the hw->word analogue (UZP on .8H + [SU]MULL.4S; word_element is identity so no
+		 * output rev). Untested/unvectored — ROADMAP A2. Left as-is (no worse than before). */
+		case 8:   emit_vmul_byte(va, vb, vd, true,  0x2E20C000); return true; /* vmuloub: odd  unsigned byte, UMULL.8H */
+		case 520: emit_vmul_byte(va, vb, vd, false, 0x2E20C000); return true; /* vmuleub: even unsigned byte, UMULL.8H */
+		case 264: emit_vmul_byte(va, vb, vd, true,  0x0E20C000); return true; /* vmulosb: odd  signed byte, SMULL.8H (prospective: no signed test vector) */
+		case 776: emit_vmul_byte(va, vb, vd, false, 0x0E20C000); return true; /* vmulesb: even signed byte, SMULL.8H (prospective: no signed test vector) */
+		case 72: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulouh: odd  unsigned hw — BROKEN (no ev_mixed select; ROADMAP A2) */
+		case 328: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulosh: odd  signed hw — BROKEN (ROADMAP A2) */
+		case 584: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuleuh: even unsigned hw — BROKEN (ROADMAP A2) */
+		case 840: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulesh: even signed hw — BROKEN (ROADMAP A2) */
 		/* vpkuhum: pack 8+8 halfwords to their LOW bytes (modulo, no saturation). The
 		 * old codegen was doubly wrong — it ignored vA (loaded only vb) and used the
 		 * wrong op. PPC keeps PPC byte 2i+1 of each halfword = the ODD byte lane in

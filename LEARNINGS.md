@@ -2027,11 +2027,22 @@ normalized inputs it's `UZP2.16B` (reuses emit_vmrg). It had *also* ignored vA
 (loaded only vB) — a second bug the harness caught once operands were distinct.
 The non-saturating word pack `vpkuwum` has the identical ignore-vA bug, un-vectored.
 
-**Still broken** (quarantined xfail, signposted in code): even/odd byte multiplies
-(which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
-`vspltw`/`vsldoi`/element-symmetric ops are unaffected. Fix path = per-op
-ev_mixed-aware codegen (same as the merges); the global load/store REV32 approach
-is ruled out (above).
+**Even/odd byte multiplies fixed (2026-06-04, 262→264) — the ev_mixed class is now
+complete.** `vmuloub`/`vmuleub` had TWO bugs: a non-widening `MUL.8B` (must widen
+8×8→16) and no ev_mixed even/odd select. `emit_vmul_byte`: REV32.16B normalize ->
+UZP1 (even bytes 0,2,..) / UZP2 (odd 1,3,..) select into low 8 lanes -> `UMULL.8H`
+widen -> `REV32.8H` (output is halfwords, so the OUTPUT normalize is `.8H`, matching
+`half_element`, not `.16B`). Distinct operands caught both: even-lane products like
+0x0A×0x1A=260 exceed 255, so a non-widening op truncates visibly. Encoding tip:
+`UMULL.8H` = the file's signed widening encoding + the U bit (`0x0E20C000 | 0x20000000`),
+more reliable than reciting the bitfield. The whole AltiVec ev_mixed element-order
+class (splats, merges, pack, byte multiplies) is fixed + scored; the quarantine lane
+is empty.
+
+**Still untested (no test vector, signposted in code):** halfword multiplies `vmul*h`
+(need the hw→word analogue), word pack `vpkuwum`, signed byte mults `vmulosb`/`vmulesb`.
+Fix path = per-op ev_mixed-aware codegen (same as above); the global load/store REV32
+approach is ruled out (above).
 
 ### VX-form XO is UNSHIFTED
 

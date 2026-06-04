@@ -37,6 +37,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   ⏸ blocked/deferred · ☐ todo). Created dates recovered from git history (following renames);
   existing rich intros (ROADMAP, NEW-WORLD plan) harmonized, not clobbered.
 
+### [SheepShaver] AltiVec even/odd byte multiplies fix — ev_mixed class complete (vmuloub/vmuleub)
+
+- **Bug fix.** `vmuloub`/`vmuleub` (odd/even unsigned byte multiply → halfword products) had two
+  bugs: they emitted a **non-widening `MUL.8B`** (must widen 8×8→16) and ignored the `ev_mixed`
+  even/odd element selection. Fix (`emit_vmul_byte`): `REV32.16B` normalize → `UZP1`(even)/
+  `UZP2`(odd)`.16B` select into the low 8 lanes → `UMULL.8H` widen → `REV32.8H` to ev_mixed
+  halfword storage. Test vectors strengthened to distinct operands (vA=00..0F, vB=10..1F), which
+  exercise **both** bugs at once — even-lane products like 0x0A×0x1A=260 exceed 255, so a
+  non-widening op truncates visibly. `xfail→xpass`, promoted (**262→264, score=100**). **This
+  empties the AltiVec ev_mixed quarantine lane** — the whole element-order class (splats, merges,
+  pack, byte multiplies) is now fixed and scored.
+- **Also corrected the scrambled multiply XO→op comment labels** (e.g. case 520 was labelled
+  `vmulesb` but is `vmuleub`). Remaining, untested (no test vector, flagged in code + ROADMAP A2):
+  halfword multiplies `vmul*h`, word pack `vpkuwum`, signed byte multiplies `vmulosb`/`vmulesb`
+  (the latter share `emit_vmul_byte` with `SMULL` — emitted as *prospective*).
+- Boot verification PENDING for the pack + multiplies (new `UMULL.8H`/`REV32.8H`/`UZP` paths).
+
 ### [SheepShaver] AltiVec vpkuhum pack fix (ev_mixed)
 
 - **Bug fix.** `vpkuhum` (pack 8+8 halfwords to their low bytes, modulo) was doubly wrong: it

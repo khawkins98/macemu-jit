@@ -44,6 +44,9 @@ def grab(): return [li(3,OFF), stvx(2,1,3), lwz(5,OFF,1)]  # set r3=OFF, store v
                                                             # (li here makes grab self-contained — do NOT
                                                             # rely on a prior li, or arith kernels stvx to
                                                             # the wrong address and go vacuous)
+# Two-distinct-operand vector op: vA=v1=00..0F, vB=v3=10..1F, vD=v2 (grab stores v2).
+# Distinct lanes so a wrong element-select / A<->B swap can't pass coincidentally.
+def merge2(xo): return load_pattern(1,0x00)+load_pattern(3,0x10)+[vx(2,1,3,xo)]+grab()
 
 PASS=[]   # vectors that pass make test-jit (committed to run.sh)
 BUG=[]    # vectors that expose a CONFIRMED JIT divergence (NOT committed; kept as repro)
@@ -74,15 +77,16 @@ p("av_vmaxsw",  two(386),  "vmaxsw: signed-word max=0x05050505")
 p("av_vminsw",  two(898),  "vminsw: signed-word min=0x03030303")
 p("av_vcmpequw",[vspltisb(0,5),vx(2,0,0,134)]+grab(), "vcmpequw v2,v0,v0: equal -> 0xFFFFFFFF")
 
-# --- CONFIRMED JIT BUG (2026-06-04): even/odd byte MULTIPLIES select the wrong
-# elements (same ev_mixed root cause; vspltb/vsplth were FIXED, multiplies pending).
-# Correct encodings (verified), distinct-lane source. The JIT diverges from the
-# interpreter (the reference): e.g. vspltb idx 3 -> interp 0x03030303, JIT
-# 0x00000000 (byte 0); vsplth idx 3 -> interp 0x06070607, JIT 0x04050405 (hw 2).
-# vspltw is correct. Codegen: ppc-jit.cpp:3146-3148 (DUP element). imm5 looks
-# right, so suspect an element-order/endianness interaction. Re-add once fixed.
-b("av_vmuloub",  [vspltisb(0,5),vspltisb(1,3),vx(2,0,1,8)]+grab(), "vmuloub: odd-byte select diverges (same element-order class)")
-b("av_vmuleub",  load_distinct(1)+[vx(2,1,1,520)]+grab(), "vmuleub: even-byte select diverges with DISTINCT operands (interp 0x00000004, JIT 0x00040009) — the uniform-operand version was a MASKING pass")
+# --- even/odd unsigned BYTE multiplies (vmuloub/vmuleub) FIXED 2026-06-04: the old
+# codegen emitted a non-widening MUL.8B and ignored ev_mixed even/odd selection.
+# Fix (ppc-jit.cpp emit_vmul_byte): REV32.16B normalize -> UZP1/UZP2.16B select even/
+# odd byte -> [U]MULL.8H widen -> REV32.8H output. DISTINCT operands (vA=00..0F,
+# vB=10..1F) test BOTH the selection AND the widening: even-lane products like
+# 0x0A*0x1A=260 (>255) would truncate under the old MUL.8B, so a non-widening op
+# diverges visibly. (Signed vmulosb/vmulesb share the helper but have no signed test
+# vector yet; halfword vmul*h still broken — ROADMAP A2.)
+p("av_vmuloub", merge2(8),   "vmuloub v2,v1,v3: odd  unsigned byte multiply -> halfword products")
+p("av_vmuleub", merge2(520), "vmuleub v2,v1,v3: even unsigned byte multiply -> halfword products")
 
 # --- ev_mixed element-order class: byte/halfword/word MERGES and the PACK.
 # DISTINCT operands (vA=v1=00..0F, vB=v3=10..1F) so every output byte uniquely
@@ -90,7 +94,6 @@ b("av_vmuleub",  load_distinct(1)+[vx(2,1,1,520)]+grab(), "vmuleub: even-byte se
 # (v1,v1) can rubber-stamp a wrong ZIP1<->ZIP2 / A<->B swap. The full 128-bit result
 # (v2) is compared via the REGDUMP VR dump, so one all-distinct pattern is complete
 # positional coverage for a permute.
-def merge2(xo): return load_pattern(1,0x00)+load_pattern(3,0x10)+[vx(2,1,3,xo)]+grab()
 # Byte/halfword merges FIXED 2026-06-04: ev_mixed-aware codegen (REV32.16B normalize ->
 # ZIP1/ZIP2.{16B,8H} -> REV32.16B back; ppc-jit.cpp emit_vmrg). Verified xpass with
 # distinct operands; promoted from quarantine to the scored gate.

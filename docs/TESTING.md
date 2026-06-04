@@ -113,10 +113,11 @@ semantics depend on sub-word byte position is suspect.** Status (2026-06-04):
    - **Correct/fixed:** `vspltw`, `vsldoi`, `vspltb`/`vsplth` (remapped), the full
      `vmrgh*`/`vmrgl*` merge family (byte/halfword via the per-op `REV32.16B`
      normalize in `emit_vmrg`; words are plain `ZIP.4S`), `vpkuhum` (same normalize
-     + `UZP2.16B`), and all element-symmetric ops (`vand`/`vor`/`vadduwm`/…).
-   - **Confirmed BROKEN (parked):** `vmulo*`/`vmule*` (even/odd multiplies — also
-     emit the wrong NEON op). `vpkuwum` (word pack) shares `vpkuhum`'s old ignore-vA
-     bug, un-vectored.
+     + `UZP2.16B`), the even/odd unsigned byte multiplies `vmulo/eub` (`emit_vmul_byte`:
+     UZP1/UZP2 select + `UMULL.8H` widen + `REV32.8H`), and all element-symmetric ops.
+   - **Untested / still suspect (no test vector):** halfword multiplies `vmul*h`, the
+     word pack `vpkuwum`, signed byte multiplies `vmulosb`/`vmulesb` (prospective). Same
+     ev_mixed class; need test vectors then a per-op fix. ROADMAP A2.
    See the `case 12` / `emit_vmrg` note in ppc-jit.cpp; the global load/store REV32
    approach is ruled out (per-op is the path). Live tracker: ROADMAP A2.
 

@@ -1,9 +1,13 @@
 # Design Brief: SheepShaver End-to-End VNC Test Harness
 
-**Date:** 2026-06-04
-**Status:** Approved design — pending implementation plan (writing-plans)
-**Roadmap home:** Track **A1 — Testing infrastructure** (`docs/planning/ROADMAP.md`). This is the
-GUI/boot-level complement to the existing instruction-level gates (`make test-jit`, `SS_JIT_VERIFY`).
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Why this doc exists:** Design for an automated boot/run/shutdown E2E harness (ROADMAP A5) —
+> the system-level complement to the instruction-level gates, and the unlock for agents to
+> self-validate their own JIT changes end-to-end.
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo._
+
+**Roadmap home:** Track **A5** (`docs/planning/ROADMAP.md`), complementing A1's instruction-level
+gates (`make test-jit`, `SS_JIT_VERIFY`).
 
 ---
 
@@ -139,12 +143,14 @@ agent concurrently — avoid clobbering in-flight work):
    `"Shutdown complete."` (emul_op.cpp:510) → the `PPC-JIT-A64: session …` atexit block
    (`blocks=… complete=… (100.0%)`, coverage) → process **exit 0**. A crash/kill produces none
    of it. This is the primary pass gate. (Confirmed against a real 43 s boot→shutdown log.)
-2. **Boot-complete signal — heuristic, no explicit line.** There is *no* "reached Finder" log
-   line. The implicit signal is the heartbeat **block-rate collapse + CPU drop** as the desktop
-   goes idle (observed 42M/s\@10s → 1.8M/s\@30s, cpu 97%→26%). Plan: P1 waits for rate-below-
-   threshold-for-N-seconds (note: the current heartbeat *mislabels* this idle as a `WARN` — the
-   A4 issue; the harness must not treat that WARN as failure). P2 replaces the heuristic with a
-   `wait_for_image` of the menu bar (the robust signal).
+2. **Boot-complete signal — SOLVED via a small ROM-patch enrichment (see §11).** There is no
+   "reached Finder" log line today, and the heuristic alternatives (block-rate collapse / `comp=`
+   plateau) **cannot distinguish "idle at the desktop" from "idle on a blocking modal dialog"**
+   (disk-repair prompt, etc.) — they look identical. The chosen signal is the **already-trapped
+   guest idle path**: `OP_IDLE_TIME` (emul_op.cpp, patched into `SynchIdleTime` ROM trap `0xABF7`,
+   gated on the `idlewait` pref) fires exactly when the Process Manager idles. A ~15-line
+   enrichment emits a one-shot line carrying guest state to disambiguate. Full design + the
+   dialog-false-positive defense in **§11**.
 3. **Shutdown trigger — must drive the menu over VNC; no shortcut.** SheepShaver sets
    `signal(SIGINT/SIGTERM, SIG_DFL)` (main_unix.cpp:796) so SIGTERM just *kills* it. Clean exit
    only comes from the guest Special ▸ Shut Down. The VNC framebuffer **is** the Mac framebuffer
@@ -164,3 +170,52 @@ agent concurrently — avoid clobbering in-flight work):
    `Pillow` 12.2.0 already installed (`imagehash` for P2 still to add). Pristine-image decision
    for the plan: start by **copy-per-run of a small dedicated test disk** (smaller = faster copy);
    snapshotting `macos86_fresh.dsk` is the fallback if building a minimal disk is too costly.
+
+## 11. Boot-ready signal — the `OP_IDLE_TIME` enrichment + dialog defense
+
+The single emulator-side code change in this feature. Everything else is the external Python
+harness; this is the one ~15-line touch to `SheepShaver/src/emul_op.cpp`.
+
+**Why this signal.** `OP_IDLE_TIME` already fires when the guest Process Manager idles
+(`SynchIdleTime`, ROM trap `0xABF7`). The first sustained idle ≈ "desktop up, waiting for input."
+Crucially, unlike the rate/`comp=` heuristics, the patch sits at a point where it can **read guest
+state**, which is what makes the dialog false-positive solvable.
+
+**The false-positive (caught in review).** Any modal blocker idles too — disk-repair prompt,
+"no startup disk", extension-conflict alert, system error. A bare "idle = ready" line would fire
+while boot is *blocked on a dialog the harness can't answer*. This is **self-inflicted**: our own
+force-kill failure path dirties the volume → next boot prompts for repair → false ready → click
+into a non-Finder dialog → fail → loop.
+
+**Three-layer defense:**
+
+1. **Prevent (structural).** Pristine-disk-per-run: each run copies a clean master, so a
+   force-killed dirty working copy is discarded, never carried forward — the dirty→repair loop is
+   broken by construction. **Asset requirement:** the master image must be created via a real
+   Special ▸ Shut Down (volume flushed / "properly put away") so it is never flagged dirty.
+2. **Disambiguate (the enriched signal).** Emit a one-shot line carrying guest state:
+   ```
+   [BOOT] idle — frontApp='Finder' modal=0 at 12.3s
+   ```
+   - `frontApp` = `CurApName` (classic low-mem global `0x910`, `Str31`). At the real desktop this
+     is `Finder`; during a pre-Finder blocker it is empty/other.
+   - `modal` = whether the front window is a dialog (`WindowRecord.windowKind == dialogKind (2)`,
+     via `FrontWindow`/the `WindowList` head `0x9D6`). Catches "Finder up but showing an alert."
+   - **Exact globals to be confirmed in implementation** (`CurApName 0x910` is well-known; the
+     window-kind read needs a quick verify against a live boot).
+   The harness passes only on `frontApp=='Finder' && modal==0`. Any other idle → it reports
+   **`boot blocked on dialog`** as an explicit FAILURE (a genuinely useful regression — a change
+   that makes boot prompt is exactly what should fail CI), not a hang.
+3. **Backstop (watchdog).** Hard timeout: no valid ready-line within N seconds → FAIL and save the
+   last VNC frame as an artifact.
+
+**Constraints / notes:**
+- Requires `idlewait true` in the isolated test prefs (else the `SynchIdleTime` patch isn't
+  installed and `OP_IDLE_TIME` never fires). The harness config sets it.
+- The log line lives in the hot idle path → guard with a `static bool` one-shot so the steady-state
+  cost is a single bool test.
+- **Coordinate with ROADMAP A4** (heartbeat-warning recalibration): it reads the *same* idle
+  condition from the other side; the A4 idle-`WARN` must not be treated by the harness as failure.
+- This is the v1 boot gate. The general "semantic telemetry for every guest event" (app launch via
+  `CheckLoad`, app quit, dialog shown via new trap-table patches) is a **P3 stretch** — larger and
+  uneven in difficulty; out of v1 scope.

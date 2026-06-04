@@ -1130,12 +1130,25 @@ static void k_loadstore(uint8_t *p, int n) {  /* lwz/stw r3,8(r1) — D-form mem
 	for (int i = 0; i < n; i++)
 		write_be32(p + i*4, (i & 1) ? enc_d(36,3,1,8) : enc_d(32,3,1,8));
 }
+/* FP kernels operate only on FPRs (no guest memory), so they run anywhere the
+ * integer kernels do.  seed_regs zeroes the FPRs, so these compute 0.0 each
+ * iteration — fine: FP unit timing does not depend on the operand value, and the
+ * dependency chain (each op reads the previous result in f1) makes this a
+ * latency measurement.  Encodings are fixed 32-bit big-endian PPC words. */
+static void k_fp_add(uint8_t *p, int n) {     /* fadd f1,f1,f2  (FP add latency chain) */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, 0xFC21102Au);
+}
+static void k_fp_fma(uint8_t *p, int n) {     /* fmadd f1,f1,f1,f1  (FMA latency recurrence) */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, 0xFC21183Au);
+}
 
 struct BenchKernel { const char *name; const char *desc; void (*emit)(uint8_t*,int); };
 static const BenchKernel BENCH_KERNELS[] = {
 	{ "carry-chain", "adde r3,r3,r4  (0b/0f carry ops)", k_carry     },
 	{ "rc1",         "add. r3,r3,r4  (0g lazy-CR0)",     k_rc1       },
 	{ "alu",         "add/or/xor     (RA throughput)",   k_alu       },
+	{ "fp-add",      "fadd f1,f1,f2  (FP add latency)",  k_fp_add    },
+	{ "fp-fma",      "fmadd recurrence (FMA latency)",   k_fp_fma    },
 	/* load-store (k_loadstore) deferred to v2: guest data access goes through
 	 * RMEMBASE, which on macOS needs the DIRECT_ADDRESSING base set up so EAs land
 	 * in `mem` (low 4 GB is unmappable here). The emitter is kept for that work. */

@@ -74,7 +74,9 @@ cancels in `(call_big − call_small) / (144 − 16)`. Reported values are the m
 of 5 runs after a warm-up; run-to-run noise is typically <1%.
 
 Kernels target specific optimizations: `carry-chain` (adde — 0b/0f), `rc1`
-(add. — 0g lazy-CR0), `alu` (RA throughput).
+(add. — 0g lazy-CR0), `alu` (RA throughput), `fp-add`/`fp-fma` (FP latency —
+these run ~30× slower per insn than integer ALU because the JIT has no FP
+register allocator yet; every FP op round-trips the FPRs through the regs struct).
 
 ### Maintenance (per `docs/TESTING.md`)
 - **Baselines are per-machine** (ns depends on the host CPU) — **do not commit

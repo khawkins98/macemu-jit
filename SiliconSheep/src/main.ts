@@ -92,6 +92,7 @@ function renderVmCard(vm: VmProfile): string {
             : `<button class="btn btn-primary btn-sm" data-action="launch" data-id="${escapeAttr(vm.id)}">▶ Start</button>`
           }
           <button class="btn btn-secondary btn-sm" data-action="settings" data-id="${escapeAttr(vm.id)}">⚙</button>
+          <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}">⎘</button>
           <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}">✕</button>
         </div>
         ${isRunning ? '<span class="status running">Running</span>' : ""}
@@ -111,12 +112,18 @@ function renderEmptyState(): string {
   `;
 }
 
+function renderErrorBanner(): string {
+  if (!errorBanner) return "";
+  return `<div class="error-banner">${escapeHtml(errorBanner)}</div>`;
+}
+
 function renderLibrary(): string {
   if (vms.length === 0) {
-    return `${renderTitlebar()}${renderEmptyState()}`;
+    return `${renderTitlebar()}${renderErrorBanner()}${renderEmptyState()}`;
   }
   return `
     ${renderTitlebar()}
+    ${renderErrorBanner()}
     <div class="header">
       <h1>Virtual Machines</h1>
       <button class="btn btn-primary" data-action="wizard">+ New VM</button>
@@ -308,9 +315,95 @@ function renderWizardStep(): string {
   `;
 }
 
+let settingsSection = "general";
+
 function renderSettings(): string {
   const vm = vms.find((v) => v.id === selectedVmId);
   if (!vm) return renderLibrary();
+  const isRunning = vm.id === runningVmId;
+
+  const sections: Record<string, string> = {
+    general: `
+      <div class="form-group">
+        <label>VM Name</label>
+        <input type="text" class="input" id="setting-name" value="${escapeAttr(vm.name)}" />
+      </div>
+      <div class="form-group">
+        <label>ROM File</label>
+        <div class="file-input">
+          <span class="file-path">${escapeHtml(vm.rom_path || "Not set")}</span>
+          <button class="btn btn-secondary btn-sm" data-action="pick-setting-rom">Browse</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>RAM <span class="hot-reload-badge restart">Requires restart</span></label>
+        <select class="input" id="setting-ram" ${isRunning ? "disabled" : ""}>
+          ${[64, 128, 256, 512]
+            .map((m) => `<option value="${m}" ${vm.ram_mb === m ? "selected" : ""}>${m} MB</option>`)
+            .join("")}
+        </select>
+      </div>
+    `,
+    display: `
+      <div class="form-group">
+        <label>Window Size <span class="hot-reload-badge restart">Requires restart</span></label>
+        <select class="input" id="setting-screen" ${isRunning ? "disabled" : ""}>
+          ${["win/640/480", "win/800/600", "win/1024/768", "win/1280/1024"]
+            .map((s) => `<option value="${s}" ${vm.screen === s ? "selected" : ""}>${s.replace("win/", "").replace("/", "×")}</option>`)
+            .join("")}
+        </select>
+      </div>
+    `,
+    storage: `
+      <div class="form-group">
+        <label>Disk Images</label>
+        ${vm.disk_paths.length === 0
+          ? '<p class="text-muted">No disks attached.</p>'
+          : vm.disk_paths.map((d) => `
+            <div class="file-input" style="margin-bottom: 8px;">
+              <span class="file-path">${escapeHtml(d)}</span>
+            </div>
+          `).join("")
+        }
+        <button class="btn btn-secondary btn-sm" data-action="pick-setting-disk" style="margin-top: 8px;">+ Add Disk</button>
+      </div>
+      <div class="form-group">
+        <label>CD-ROM</label>
+        <div class="file-input">
+          <span class="file-path">${escapeHtml(vm.cd_path || "None")}</span>
+          <button class="btn btn-secondary btn-sm" data-action="pick-setting-cd">Browse</button>
+        </div>
+      </div>
+    `,
+    network: `
+      <div class="form-group">
+        <label>Networking</label>
+        <select class="input" id="setting-ether">
+          <option value="slirp" selected>slirp (NAT — outbound only)</option>
+          <option value="">None</option>
+        </select>
+        <p class="text-muted" style="margin-top: 8px;">In the guest, open TCP/IP in Control Panels and set Configure to "Using DHCP Server".</p>
+      </div>
+    `,
+    advanced: `
+      <div class="form-group">
+        <label>Sound</label>
+        <select class="input" id="setting-nosound">
+          <option value="true" ${vm.screen ? "selected" : ""}>Disabled</option>
+          <option value="false">Enabled</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>JIT Cache Size <span class="hot-reload-badge restart">Requires restart</span></label>
+        <select class="input" id="setting-jitcache" ${isRunning ? "disabled" : ""}>
+          <option value="64M">64 MB</option>
+          <option value="128M">128 MB</option>
+          <option value="256M" selected>256 MB</option>
+          <option value="512M">512 MB</option>
+        </select>
+      </div>
+    `,
+  };
 
   return `
     ${renderTitlebar()}
@@ -318,39 +411,20 @@ function renderSettings(): string {
       <div class="settings-header">
         <button class="btn btn-secondary" data-action="back-to-library">← Back</button>
         <h2>${escapeHtml(vm.name)}</h2>
+        <div style="flex:1"></div>
+        <button class="btn btn-primary" data-action="save-settings">Save</button>
       </div>
       <div class="settings-body">
         <div class="settings-sidebar">
-          <button class="settings-nav-item active" data-section="general">General</button>
-          <button class="settings-nav-item" data-section="display">Display</button>
-          <button class="settings-nav-item" data-section="storage">Storage</button>
-          <button class="settings-nav-item" data-section="network">Network</button>
-          <button class="settings-nav-item" data-section="advanced">Advanced</button>
+          ${Object.keys(sections).map((s) => `
+            <button class="settings-nav-item ${s === settingsSection ? "active" : ""}"
+                    data-action="switch-section" data-section="${s}">
+              ${s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          `).join("")}
         </div>
         <div class="settings-content">
-          <div class="form-group">
-            <label>VM Name</label>
-            <input type="text" class="input" value="${escapeAttr(vm.name)}" />
-          </div>
-          <div class="form-group">
-            <label>ROM File</label>
-            <div class="file-input">
-              <span class="file-path">${escapeHtml(vm.rom_path || "Not set")}</span>
-              <button class="btn btn-secondary btn-sm">Browse</button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>RAM <span class="hot-reload-badge restart">Requires restart</span></label>
-            <select class="input">
-              ${[64, 128, 256, 512]
-                .map((m) => `<option ${vm.ram_mb === m ? "selected" : ""}>${m} MB</option>`)
-                .join("")}
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Display Resolution <span class="hot-reload-badge instant">Applies instantly</span></label>
-            <input type="text" class="input" value="${escapeAttr(vm.screen.replace("win/", "").replace("/", "×"))}" />
-          </div>
+          ${sections[settingsSection] || ""}
         </div>
       </div>
     </div>
@@ -552,6 +626,19 @@ async function handleAction(e: Event) {
       }
       break;
 
+    case "duplicate":
+      if (id) {
+        const name = target.dataset.name || "Copy";
+        try {
+          await invoke("duplicate_vm", { id, newName: `${name} (Copy)` });
+          vms = await loadVms();
+          render();
+        } catch (err) {
+          alert(`Failed to duplicate: ${err}`);
+        }
+      }
+      break;
+
     case "delete":
       if (id && confirm("Remove this virtual machine and its files?")) {
         try {
@@ -563,13 +650,100 @@ async function handleAction(e: Event) {
         }
       }
       break;
+
+    case "switch-section":
+      settingsSection = target.dataset.section || "general";
+      render();
+      break;
+
+    case "save-settings":
+      if (selectedVmId) {
+        const nameEl = document.getElementById("setting-name") as HTMLInputElement;
+        const ramEl = document.getElementById("setting-ram") as HTMLSelectElement;
+        const screenEl = document.getElementById("setting-screen") as HTMLSelectElement;
+
+        if (nameEl) {
+          await invoke("update_vm_setting", { id: selectedVmId, key: "name", value: nameEl.value }).catch(() => {});
+        }
+        if (ramEl) {
+          await invoke("update_vm_setting", { id: selectedVmId, key: "ramsize", value: ramEl.value + "M" }).catch(() => {});
+        }
+        if (screenEl) {
+          await invoke("update_vm_setting", { id: selectedVmId, key: "screen", value: screenEl.value }).catch(() => {});
+        }
+        vms = await loadVms();
+        render();
+      }
+      break;
+
+    case "pick-setting-rom": {
+      const path = await pickFile("Select ROM File");
+      if (path && selectedVmId) {
+        await invoke("update_vm_setting", { id: selectedVmId, key: "rom", value: path });
+        vms = await loadVms();
+        render();
+      }
+      break;
+    }
+
+    case "pick-setting-disk": {
+      const path = await pickFile("Select Disk Image", [
+        { name: "Disk Images", extensions: ["dsk", "img", "hfv"] },
+      ]);
+      if (path && selectedVmId) {
+        const vm_dir = (await invoke("get_vm", { id: selectedVmId }) as VmProfile);
+        const currentDisks = vm_dir.disk_paths;
+        if (!currentDisks.includes(path)) {
+          // For now, add via a direct prefs append — TODO: proper multi-value support
+          console.log("Would add disk:", path);
+        }
+        render();
+      }
+      break;
+    }
+
+    case "pick-setting-cd": {
+      const path = await pickFile("Select CD Image", [
+        { name: "CD Images", extensions: ["iso", "toast", "cdr", "dmg"] },
+      ]);
+      if (path && selectedVmId) {
+        await invoke("update_vm_setting", { id: selectedVmId, key: "cdrom", value: path });
+        vms = await loadVms();
+        render();
+      }
+      break;
+    }
+  }
+}
+
+// Error banner state
+let errorBanner: string | null = null;
+
+let statusPollInterval: ReturnType<typeof setInterval> | null = null;
+
+async function pollRunningStatus() {
+  const newRunningId = await checkRunning();
+  if (newRunningId !== runningVmId) {
+    runningVmId = newRunningId;
+    if (currentView === "library") render();
   }
 }
 
 async function init() {
   vms = await loadVms();
   runningVmId = await checkRunning();
+
+  try {
+    const status = (await invoke("check_emulator_status")) as { found: boolean; path: string };
+    if (!status.found) {
+      errorBanner = "SheepShaver binary not found. Build it first: cd SheepShaver && make build-ss";
+    }
+  } catch {
+    // Not fatal — may be running in browser preview
+  }
+
   render();
+  statusPollInterval = setInterval(pollRunningStatus, 2000);
 }
 
 init();

@@ -9,7 +9,6 @@ use vm::{CreateVmRequest, VmProfile};
 
 struct RunningVm {
     id: String,
-    #[allow(dead_code)]
     pid: u32,
 }
 
@@ -38,8 +37,40 @@ fn get_vm(id: String) -> Result<VmProfile, String> {
 }
 
 #[tauri::command]
+fn duplicate_vm(id: String, new_name: String) -> Result<VmProfile, String> {
+    vm::duplicate_profile(&id, &new_name)
+}
+
+#[tauri::command]
 fn verify_rom(path: String) -> Result<vm::RomInfo, String> {
     vm::verify_rom(&path)
+}
+
+#[tauri::command]
+fn get_vm_prefs(id: String) -> Result<Vec<prefs::PrefEntry>, String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let prefs_path = vm_dir.join("prefs");
+    let pf = prefs::load_prefs(&prefs_path)?;
+    Ok(pf.entries)
+}
+
+#[tauri::command]
+fn save_vm_prefs(id: String, entries: Vec<prefs::PrefEntry>) -> Result<(), String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let prefs_path = vm_dir.join("prefs");
+    let pf = prefs::PrefsFile::from_entries(entries);
+    prefs::save_prefs(&prefs_path, &pf)?;
+    vm::sync_profile_from_prefs(&id)
+}
+
+#[tauri::command]
+fn update_vm_setting(id: String, key: String, value: String) -> Result<(), String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let prefs_path = vm_dir.join("prefs");
+    let mut pf = prefs::load_prefs(&prefs_path)?;
+    pf.set(&key, &value);
+    prefs::save_prefs(&prefs_path, &pf)?;
+    vm::sync_profile_from_prefs(&id)
 }
 
 #[tauri::command]
@@ -49,7 +80,7 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
         return Err(format!("VM '{}' is already running", r.id));
     }
 
-    let profile = vm::get_profile(&id)?;
+    let _profile = vm::get_profile(&id)?;
     let vm_dir = vm::vm_dir_for(&id);
 
     let child = std::process::Command::new("../SheepShaver/src/Unix/SheepShaver")
@@ -59,7 +90,7 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
         .map_err(|e| format!("Failed to launch SheepShaver: {}", e))?;
 
     let pid = child.id();
-    *running = Some(RunningVm { id: profile.id, pid });
+    *running = Some(RunningVm { id, pid });
 
     Ok(())
 }
@@ -69,12 +100,12 @@ fn stop_vm(state: State<AppState>) -> Result<(), String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
     if let Some(ref r) = *running {
         #[cfg(unix)]
+        unsafe {
+            libc::kill(r.pid as i32, libc::SIGUSR1);
+        }
+        #[cfg(not(unix))]
         {
-            use std::process::Command;
-            Command::new("kill")
-                .args(["-SIGUSR1", &r.pid.to_string()])
-                .output()
-                .ok();
+            let _ = r.pid;
         }
         *running = None;
         Ok(())
@@ -85,8 +116,47 @@ fn stop_vm(state: State<AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn is_vm_running(state: State<AppState>) -> Option<String> {
-    let running = state.running.lock().ok()?;
-    running.as_ref().map(|r| r.id.clone())
+    let mut running = state.running.lock().ok()?;
+    if let Some(ref r) = *running {
+        #[cfg(unix)]
+        {
+            let alive = unsafe { libc::kill(r.pid as i32, 0) } == 0;
+            if !alive {
+                *running = None;
+                return None;
+            }
+        }
+        Some(r.id.clone())
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+fn check_emulator_status() -> Result<EmulatorStatus, String> {
+    let paths = [
+        "../SheepShaver/src/Unix/SheepShaver",
+        "/usr/local/bin/SheepShaver",
+    ];
+    for path in &paths {
+        let p = std::path::Path::new(path);
+        if p.exists() {
+            return Ok(EmulatorStatus {
+                found: true,
+                path: p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string(),
+            });
+        }
+    }
+    Ok(EmulatorStatus {
+        found: false,
+        path: String::new(),
+    })
+}
+
+#[derive(serde::Serialize)]
+struct EmulatorStatus {
+    found: bool,
+    path: String,
 }
 
 fn main() {
@@ -100,11 +170,16 @@ fn main() {
             list_vms,
             create_vm,
             delete_vm,
+            duplicate_vm,
             get_vm,
             verify_rom,
+            get_vm_prefs,
+            save_vm_prefs,
+            update_vm_setting,
             launch_vm,
             stop_vm,
             is_vm_running,
+            check_emulator_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Silicon Sheep");

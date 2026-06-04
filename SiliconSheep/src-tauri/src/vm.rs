@@ -4,6 +4,15 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn clonefile(
+        src: *const std::os::raw::c_char,
+        dst: *const std::os::raw::c_char,
+        flags: u32,
+    ) -> std::os::raw::c_int;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmProfile {
     pub id: String,
@@ -187,6 +196,97 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
     save_manifest(&vms);
 
     Ok(profile)
+}
+
+pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> {
+    let source = get_profile(id)?;
+    let mut vms = load_manifest();
+
+    let new_id = format!(
+        "{}-{:08x}",
+        new_name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u32
+    );
+
+    let source_dir = vm_library_dir().join(id);
+    let dest_dir = vm_library_dir().join(&new_id);
+
+    copy_dir_recursive(&source_dir, &dest_dir)
+        .map_err(|e| format!("Failed to copy VM: {}", e))?;
+
+    let new_profile = VmProfile {
+        id: new_id,
+        name: new_name.to_string(),
+        rom_path: source.rom_path,
+        ram_mb: source.ram_mb,
+        disk_paths: source.disk_paths,
+        cd_path: source.cd_path,
+        screen: source.screen,
+    };
+
+    vms.push(new_profile.clone());
+    save_manifest(&vms);
+    Ok(new_profile)
+}
+
+pub fn sync_profile_from_prefs(id: &str) -> Result<(), String> {
+    let vm_dir = vm_dir_for(id);
+    let prefs_path = vm_dir.join("prefs");
+    let pf = crate::prefs::load_prefs(&prefs_path)?;
+
+    let mut vms = load_manifest();
+    if let Some(vm) = vms.iter_mut().find(|v| v.id == id) {
+        if let Some(v) = pf.get("rom") {
+            vm.rom_path = v.to_string();
+        }
+        if let Some(v) = pf.get_int("ramsize") {
+            vm.ram_mb = (v / (1024 * 1024)) as u32;
+        }
+        if let Some(v) = pf.get("screen") {
+            vm.screen = v.to_string();
+        }
+        vm.disk_paths = pf.get_all("disk").iter().map(|s| s.to_string()).collect();
+        vm.cd_path = pf.get("cdrom").unwrap_or("").to_string();
+        save_manifest(&vms);
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            #[cfg(target_os = "macos")]
+            {
+                use std::ffi::CString;
+                let src_c = CString::new(src_path.to_str().unwrap()).unwrap();
+                let dst_c = CString::new(dst_path.to_str().unwrap()).unwrap();
+                let ret = unsafe {
+                    clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0)
+                };
+                if ret != 0 {
+                    fs::copy(&src_path, &dst_path)?;
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                fs::copy(&src_path, &dst_path)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn delete_profile(id: &str) -> Result<(), String> {

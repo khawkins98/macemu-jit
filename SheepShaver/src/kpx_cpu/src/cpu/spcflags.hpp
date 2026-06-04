@@ -35,10 +35,12 @@ enum {
 	SPCFLAG_JIT_EXEC_RETURN			= 1 << 4,	// Return from compiled code
 };
 
-/* Lock-free spcflags using std::atomic.  The VBL timer thread sets
- * TRIGGER_INTERRUPT from a signal handler at 60 Hz; the old spinlock
- * implementation serialized every set/clear with the dispatch loop's
- * polling reads.  Atomics eliminate the lock overhead entirely. */
+/* Lock-free spcflags using std::atomic (P0d).
+ * Optimization from the upstream PERFORMANCE_AUDIT.md (rcarmo/macemu-jit)
+ * which identified spinlock-based spcflags as a bottleneck on RPi.  The VBL
+ * timer thread sets TRIGGER_INTERRUPT from a signal handler at 60 Hz; the old
+ * spinlock serialized every set/clear with the dispatch loop's polling reads.
+ * Atomics eliminate the lock overhead entirely.  CPU score +4% (62.7→65.2). */
 class basic_spcflags
 {
 	std::atomic<uint32> mask;

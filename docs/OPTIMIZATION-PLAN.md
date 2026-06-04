@@ -372,10 +372,18 @@ JIT uses a similar technique for `blr` fastpath.
 Compile-time link stack infrastructure added (bl pushes, blr pops+compares).
 **Finding:** bl is always a block terminator, so the compile-time stack is empty
 by the time the callee's blr compiles.  The fast-path never fires.
-**Next step:** runtime link stack — emit ARM64 push/pop instructions that operate
-on a small stack in the regs struct, persisting across block boundaries.  This
-is the Dolphin/RPCS3 approach and requires adding ~16 bytes to the regs struct.
-Effort: ~1 day (incremental on existing infrastructure).  Risk: low.
+
+**R1b. Runtime link stack** (follow-up to R1)
+The Dolphin/RPCS3 approach uses a **runtime** stack: `bl` emits ARM64 instructions
+that push the return PC onto a small stack in the regs struct; `blr` emits
+instructions that pop+compare and branch directly on match.  This persists across
+block boundaries (the stack lives in memory, not compile-time state).  Requires:
+1. Add `link_stack[8]` + `link_stack_top` fields to the regs struct (or a global)
+2. At `bl`: emit `LDR W(top), [RSTATE, #LS_TOP]; STR W(pc+4), [RSTATE, #LS_BASE + top*4]; ADD top, top, #1; STR W(top), [RSTATE, #LS_TOP]` (~4 insns)
+3. At unconditional `blr`: emit `LDR W(top), [RSTATE, #LS_TOP]; SUB top, top, #1; LDR W(pred), [RSTATE, #LS_BASE + top*4]; CMP W(LR), W(pred); B.NE miss; B chain_entry` (~6 insns)
+4. Miss path: standard store-PC-and-return-to-dispatcher (existing code)
+Effort: ~1 day.  Risk: low (miss fallback = current behavior).
+**Source:** Dolphin `JitArm64_Branch.cpp` return address stack; RPCS3 SPU `spu_runtime`.
 
 **R2. Inline direct-mapped cache at indirect branch sites** (Dolphin JitArm64)
 Emit 2-instruction probe (load cached PC, compare) before falling back to hash

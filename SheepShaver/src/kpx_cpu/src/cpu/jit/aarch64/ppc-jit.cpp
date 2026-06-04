@@ -433,10 +433,19 @@ static inline uint32_t PPC_XO(uint32_t op)   { return (op >> 1) & 0x3FF; }
 
 /* ---- Emit helpers ---- */
 
-/* ---- Register allocator ----
+/* ---- Register allocator (P1) ----
  * Maps PPC GPRs to ARM64 callee-saved registers x21–x28 (8 slots).
  * Eliminates redundant LDR/STR when the same GPR is used across
- * consecutive instructions within a block.
+ * consecutive instructions within a block.  LRU eviction on pressure.
+ *
+ * Design informed by Dolphin JitArm64_RegCache.cpp (same host register
+ * set, same callee-saved approach) and RPCS3's GHC calling convention.
+ * Key difference: Dolphin uses a per-block analysis pass to pre-allocate;
+ * we allocate on-demand with LRU eviction (simpler, no analysis pass).
+ *
+ * INVARIANT: RA_NUM_REGS (8) >= max simultaneously-live RA operands in a
+ * single emitted instruction (<=3, e.g. ADD hD,hA,hB).  lmw touches 12
+ * GPRs but only one RA reg is live per emitted op — safe via eviction.
  */
 #define RA_NUM_REGS  8
 #define RA_FIRST_REG 21  /* x21 */
@@ -677,7 +686,10 @@ static void emit_load_imm32(int rd, int32_t imm) {
 }
 
 /* AND Wd, Wn, #mask — try ARM64 bitmask-immediate first (1 insn), fall back
- * to emit_load_imm32 + AND-register (2-3 insns) for non-encodable masks. */
+ * to emit_load_imm32 + AND-register (2-3 insns) for non-encodable masks.
+ * Technique: ARM64 logical-immediate encoding (B2, inspired by Dolphin's
+ * JitArm64 and VIXL's LogicalImmediate).  992/1024 PPC masks are encodable.
+ * Encoder in ppc-logical-imm.hpp. */
 static void emit_and_imm32(int wd, int wn, uint32_t mask, int scratch) {
 	uint32_t enc;
 	if (a64_encode_logical_imm(mask, false, &enc)) {
@@ -703,8 +715,12 @@ static void emit_or_xer_so_into_cr_nibble(int reg) {
 }
 
 static void emit_update_cr0(int result_reg) {
-	/* Optimized: build CR0 nibble with CSET + shifted ADD, merge with BFI.
-	 * CR0 nibble = {LT, GT, EQ, SO} in bits 3:0.
+	/* Optimized CR0 construction (B1): CSET + shifted ADD + BFI.
+	 * Technique inspired by Dolphin JitArm64_SystemRegisters.cpp which avoids
+	 * loading constants for LT/GT/EQ by using CSET (0/1 from condition flags)
+	 * and building the nibble arithmetically: 8*LT + 4*GT + 2*EQ + SO.
+	 * BFI inserts the 4-bit nibble into bits 31:28 of CR in one instruction,
+	 * replacing the old LSL + load-mask + AND + ORR sequence.
 	 * All intermediate ops use ADD (not ADDS) to preserve NZCV from the CMP.
 	 * 11 instructions total (was 19). */
 
@@ -1410,7 +1426,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(hA);
 			return true;
 		}
-		case 747: /* mullwo rD,rA,rB (OE=1: multiply with overflow detection) */
+		case 747: /* mullwo rD,rA,rB (OE=1: multiply with overflow detection)
+		         * Backlog A3 fix: was case 715 (wrong XO), never matched.
+		         * Overflow: SMULL to 64 bits, compare high word with sign
+		         * extension of low word (same technique as Dolphin/MAME). */
 		{	int hA = ra_load(ra); int hB = ra_load(rb); int hD = ra_store(rd);
 			/* SMULL X0, W(hA), W(hB) — 64-bit signed product */
 			emit32(0x9B207C00 | (hB << 16) | (hA << 5) | RTMP0);
@@ -1697,10 +1716,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 		}
 		case 136: /* subfe rD,rA,rB (rD = ~rA + rB + CA; CA = carry-out) */
-		{	/* ADCS approach: materialize CA into host C flag, then one ADCS
-			 * computes ~rA + rB + CA with correct carry-out.  Fixes the old
-			 * 64-bit-sum bug where the non-flag ADD of CA dropped the carry
-			 * when ~rA + rB + CA wraps (backlog A2). */
+		{	/* ADCS approach (P0b): materialize CA into host C flag via CMP,
+			 * then one ADCS computes ~rA + rB + CA with correct carry-out.
+			 * Technique from Dolphin JitArm64_Integer.cpp (carry-in via ADCS)
+			 * and IMPLEMENTATION-BACKLOG.md A2.  Fixes the old 64-bit-sum bug
+			 * where the non-flag ADD of CA dropped the carry when wrapping. */
 			int hA = ra_load(ra); int hB = ra_load(rb);
 			emit_read_xer_ca(RTMP2);
 			emit32(0x7100041F | (RTMP2 << 5)); /* CMP W(RTMP2), #1 → C = CA_in */
@@ -1786,10 +1806,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		return false; /* nested OE switch fell through (unreachable) */
 
 		case 138: /* adde rD,rA,rB (rD = rA + rB + CA; CA = carry-out) */
-		{	/* ADCS approach: materialize CA into host C flag, then ADCS
-			 * computes rA + rB + CA with correct carry-out.  Fixes the old
-			 * 64-bit-sum bug where the non-flag ADD of CA dropped the carry
-			 * when rA + rB + CA wraps (backlog A1). */
+		{	/* ADCS approach (P0b): same technique as subfe above — CMP to
+			 * set host C = CA_in, then ADCS for correct three-operand carry.
+			 * Fixes backlog A1 (carry-wrap bug). */
 			int hA = ra_load(ra); int hB = ra_load(rb);
 			emit_read_xer_ca(RTMP2);
 			emit32(0x7100041F | (RTMP2 << 5)); /* CMP W(RTMP2), #1 → C = CA_in */

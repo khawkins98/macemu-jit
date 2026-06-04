@@ -36,10 +36,20 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   `emit_load_vr` (ppc-jit.cpp:779) loads it raw via `LDR Q`; the JIT then indexed
   NEON lanes with the raw PPC element. **Fixed** `vspltb`/`vsplth` by applying the
   `ev_mixed` remap to the DUP index (verified across indices 0/3/15 and 0/3/7).
-  `vspltw` was already correct (word order preserved). The even/odd multiplies
-  share the root cause but need a different fix (NEON UMULL/UMULL2 lane selection)
-  — still in the bug-repro set, along with the untested likely-affected sub-word
-  ops (`vmrgh*`/`vmrgl*`, `vpk*`/`vupk*`, `vsldoi`, `vperm`).
+  `vspltw` was already correct (word order preserved).
+
+  **Blast radius mapped (differential probes, 2026-06-04):** the same ev_mixed
+  mismatch breaks most sub-word-rearranging ops — CONFIRMED broken:
+  `vmrghb`/`vmrglb`/`vmrghw`/`vmrglw` (merges), `vpkuhum` (pack), and the even/odd
+  multiplies (`vmuloub`/`vmuleub`). CONFIRMED correct: `vsldoi` (shift), splats
+  (now fixed), and the element-symmetric arith/logical/compare ops. The multiplies
+  have an ADDITIONAL bug: `vmuloub` (case 8) emits `MUL.8B` (a non-widening byte
+  multiply) instead of `UMULL.8H` — the comment lied. **Fix strategy** for the rest:
+  a systematic option is `emit_load_vr`/`emit_store_vr` doing `LDR Q`+`REV32.16B` /
+  `REV32.16B`+`STR Q` (converts ev_mixed↔natural so raw lanes work, but adds 2 ops
+  per AltiVec op, requires reverting the splat remap, and re-verifying every op +
+  a boot); the multiplies need that PLUS the correct widening instruction. Deep
+  Phase-2 work. Repro vectors are in `gen-altivec-vectors.py`.
 
 - **Harness integrity preflight added**: the SheepShaver `jit-test/run.sh` had NO
   self-validation (unlike BasiliskII's). Added a preflight that aborts on a

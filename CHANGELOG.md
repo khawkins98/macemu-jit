@@ -11,6 +11,21 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-04
 
+### [docs] Doc hygiene sweep — stale-claim fixes, /workspace paths, archive
+
+- **Corrected misleading status claims.** SheepShaver `AARCH64_JIT_GOLDEN_WORKLOADS.md`
+  Workload 3 said the JIT only "reaches the Mac OS Welcome splash" — updated to the verified
+  reality (boots Mac OS 8.6 to Finder with the full native JIT, 2026-06-04), plus the
+  Speedometer/blocker rows. Added Linux-lineage caveats to the BasiliskII
+  `AARCH64_JIT_GOLDEN_WORKLOADS.md` and `AARCH64_JIT_BRINGUP.md` (their `301/301` figures are
+  Linux history; B2 does not build on macOS arm64).
+- **Fixed stale `/workspace/projects/macemu` paths** in both GOLDEN_WORKLOADS docs → `<repo>`.
+- **Archived three one-off artifacts** into `docs/archive/` (with an index):
+  `0x50467E00-CODEGEN-BUG-ANALYSIS.md`, `PR-SUBFE-FIX-DRAFT.md`, `JIT-OPCODE-TABLE.md` — their
+  conclusions live in LEARNINGS/CHANGELOG / `make harness-count`.
+- Added `docs/superpowers/README.md` namespace index; fixed OPTIMIZATION-PLAN reference links
+  to point at local copies (`PERFORMANCE_AUDIT.md`, `JIT-FPU-PLAN.md`).
+
 ### [docs] Documentation lifecycle convention + status/provenance headers
 
 - **New `CONTRIBUTING.md` → "Documentation Lifecycle" section**: how to keep docs honest when

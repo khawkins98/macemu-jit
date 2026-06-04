@@ -15,6 +15,12 @@ The codebase is a fork of the Koenig/cebix/aranym JIT originally written for x86
 
 ## Current status (2026-05-17)
 
+> ⚠️ **Linux/upstream history.** The status below (incl. `301/301`, ROM coverage, dispatch
+> figures) reflects the **Linux** bringup line, not macOS arm64. **BasiliskII does not currently
+> build on macOS arm64** — the 68K JIT backend is unported. For the macOS build state + pick-up
+> plan see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`; current cross-emulator status is
+> in `JIT-STATUS.md`.
+
 ### Interpreter and JIT baselines
 
 The pure interpreter (`jit false`) and JIT-enabled interpreter/dispatch modes remain the comparison baselines. The optlev=2 AArch64 JIT has moved beyond the April frontier: the opcode/vector harness is green (`301/301`, score 100), current ROM smoke windows run without the earlier `bad pc_p`/bus-error regressions, stable ROM edge profiling is repaired, and the mid-block branch side-exit fallthrough corruption has been fixed.

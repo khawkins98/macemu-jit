@@ -1,5 +1,11 @@
 # AArch64 JIT Golden Workloads
 
+> **Lineage note (macOS arm64 fork):** this is the **upstream/Linux** BasiliskII JIT workload
+> spec — run-commands and the `301/301` harness figures are historical Linux/pre-regression
+> numbers. **BasiliskII does not currently build on macOS arm64** (the 68K JIT backend is
+> unported); see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md` for the pick-up plan.
+> `<repo>` = your macemu-jit checkout. (SheepShaver is the emulator that boots on macOS today.)
+
 ## Purpose
 
 This document defines the canonical workloads that validate the BasiliskII AArch64 JIT.
@@ -41,7 +47,7 @@ Must remain mandatory.
 **How to run**:
 
 ```bash
-cd /workspace/projects/macemu
+cd <repo>
 ./jit-test/run.sh
 ```
 
@@ -68,7 +74,7 @@ It is not sufficient on its own for whole-runtime correctness.
 **How to run**:
 
 ```bash
-cd /workspace/projects/macemu
+cd <repo>
 ./jit-test/rom-harness.sh
 # or, through the QA matrix wrapper:
 BasiliskII/qa/scripts/run-matrix.sh --case optlev2-rom-smoke --timeout 30
@@ -171,7 +177,7 @@ This is the canonical probe for “almost correct but still poisonous” JIT beh
 **How to run**:
 
 ```bash
-cd /workspace/projects/macemu
+cd <repo>
 qa/tests/vnc/run.js \
   --emulator basiliskii \
   --features qa/tests/vnc/stories \

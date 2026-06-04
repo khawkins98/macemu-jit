@@ -1,5 +1,12 @@
 # SheepShaver AArch64 JIT — Golden Workloads
 
+> **Lineage note (macOS arm64 fork):** the run-commands below are the **upstream Linux dev
+> harness** (`make run-tmux` / `run-jit-tmux`, Xvfb). On macOS arm64 those targets don't apply —
+> launch the binary directly (see `CLAUDE.md` → Running) — but the *workloads and pass-conditions*
+> still hold. `<repo>` = your macemu-jit checkout. **Boot status is current as of 2026-06-04:**
+> SheepShaver boots Mac OS 8.6 to the Finder desktop with the **full native JIT** (ROM=0x500000,
+> chaining on, no containment gates) — see `JIT-STATUS.md` / `CHANGELOG.md`.
+
 ## Purpose
 
 This document defines the canonical workloads that validate the SheepShaver PPC JIT.
@@ -15,7 +22,7 @@ A JIT change is good if it improves or preserves these workloads.
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 SS_USE_JIT=1 make test-opcodes
 ```
 
@@ -35,7 +42,7 @@ Validates: EMUL_OP handling, interrupt dispatch, block boundaries, memory model.
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 make run-tmux TMUX_SESSION=ss-boot-interp PREFS_DIR=/tmp/ss-boot-interp VNC_PORT=5999
 # Wait ~12s, connect VNC, verify desktop visible
 ```
@@ -53,14 +60,16 @@ Additionally validates: JIT dispatch loop, PPCR_PC after JIT call, spcflag handl
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 make run-jit-tmux TMUX_SESSION=ss-boot-jit PREFS_DIR=/tmp/ss-boot-jit VNC_PORT=5999
 # Wait ~12s, connect VNC, verify desktop visible
 ```
 
 **Pass condition**: Mac OS desktop visible via VNC. No SIGSEGV. Crash log clean.
 
-**Status**: ⚠️ JIT reaches the Mac OS Welcome splash with current containment gates. Interpreter desktop remains the stable full-boot lane; continue using this workload for JIT boot-progress validation.
+**Status**: ✅ Stable (2026-06-04). The full native JIT boots Mac OS 8.6 to the Finder desktop —
+ROM=0x500000, chaining on, no containment gates, no skip list. Use this workload for JIT
+boot-**regression** validation.
 
 ---
 
@@ -71,7 +80,7 @@ Validates: arithmetic, branches, memory ops, FPU basics across wide input range.
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 make test-rom
 ```
 
@@ -88,12 +97,12 @@ Validates: threading, ADB injection, SDL event drain, VNC framebuffer update.
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 make run-tmux
 # Connect VNC, click desktop icons, type text
 
 # Shared CI/story validation from the repository root:
-cd /workspace/projects/macemu
+cd <repo>
 qa/tests/vnc/run.js \
   --emulator sheepshaver \
   --features qa/tests/vnc/stories \
@@ -113,7 +122,7 @@ across CPU-intensive code paths (arithmetic, FPU, string, graphics primitives).
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 make run-tmux PREFS_DIR=/tmp/ss-bench
 # Connect VNC
 # Navigate Benchmark.hda → Speedometer 4.02
@@ -128,7 +137,9 @@ make run-tmux PREFS_DIR=/tmp/ss-bench
 - JIT with block cache/chaining: expected speedup on hot native PPC loops; tight-loop microbench is ~737 MIPS
 - Revalidated lazy CR0/register allocation: target for future optimization phases
 
-**Status**: ⚠️ Block cache/chaining is implemented, but full benchmark validation still requires a stable JIT boot to desktop and repeatable MacBench run.
+**Status**: ✅ JIT boot-to-desktop is stable and a Speedometer 4.02 baseline is recorded
+(1.88× over interpreter, 2026-06-04 — see `docs/BENCHMARKS.md`). A repeatable full MacBench run
+is still outstanding.
 
 ---
 
@@ -139,7 +150,7 @@ Validates: EMUL_OP dispatch, resource manager, 68K→PPC context switches.
 
 **How to run**:
 ```bash
-cd /workspace/projects/macemu/SheepShaver
+cd <repo>/SheepShaver
 make run-tmux PREFS_DIR=/tmp/ss-bench
 # Connect VNC, launch Prince of Persia from Benchmark.hda
 ```
@@ -185,9 +196,9 @@ Do not report performance numbers until the workload's maturity level is declare
 
 | Workload | Blocker |
 |----------|---------|
-| 3 (JIT boot) | Remaining full-desktop JIT boot stability beyond Welcome splash |
-| 6 (Speedometer) | Stable JIT boot-to-desktop plus repeatable benchmark run |
-| 7 (PoP) | PatchNativeResourceManager crash in ROM path |
+| 3 (JIT boot) | ✅ Cleared 2026-06-04 — boots to Finder with full native JIT |
+| 6 (Speedometer) | Baseline recorded (1.88×); repeatable full MacBench run still outstanding |
+| 7 (PoP) | PatchNativeResourceManager crash in ROM path (unverified on macOS) |
 
 ---
 

@@ -11,6 +11,22 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-04
 
+### [SheepShaver] AltiVec word-merge codegen fix (vmrghw/vmrglw)
+
+- **Bug fix.** The JIT's AltiVec merge cases (`vmrgh*/vmrgl*`) emitted `0x..C400`/
+  `0x..C800` — bit 15 set makes those three-same *arithmetic* encodings, not the
+  ZIP1/ZIP2 permutes the inline comments claimed. Merges silently produced wrong
+  results. Corrected all six cases to the real ZIP1/ZIP2 `{16B,8H,4S}` encodings.
+  The word-granular `vmrghw`/`vmrglw` are now fully correct (word order is preserved
+  under the interpreter's `ev_mixed` VR layout, so `ZIP.4S` needs no byte remap):
+  verified by the differential harness (xfail→xpass) and an `SS_JIT_VERIFY` boot
+  (zero VR divergence), then promoted from the quarantine lane to the scored gate
+  (255→257, score=100). The byte/halfword merges, packs, and even/odd multiplies
+  remain quarantined (`ev_mixed` byte-within-word reordering — see `ROADMAP` A2 and
+  the in-code note above `case 12` in `ppc-jit.cpp`). The harness gained a
+  quarantine lane (xfail/xpass, not scored) so known-diverging vectors are tracked
+  as regressions-in-waiting rather than silently dropped.
+
 ### [SheepShaver] Wayland detection (upstream backport)
 
 - **Wayland detection without GTK** (backport of kanjitalk755/macemu `91d58b12`, Dave

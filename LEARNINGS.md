@@ -1995,8 +1995,22 @@ VRs are stored in the interpreter's `ev_mixed` order (ppc-operands.hpp):
 word order preserved**. `emit_load_vr` is a plain `LDR Q` that loads this raw, so
 NEON lane `i` holds PPC element `byte_element(i)`, not `i`. Every op that depends
 on sub-word byte position is wrong. **Fixed** vspltb/vsplth (remap the DUP index).
-**Still broken** (parked, signposted in code): vmrgh*/vmrgl* merges, vpk* packs,
-even/odd multiplies (which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
+
+**The merge encodings also LIED (2026-06-04).** Separate from ev_mixed: the
+vmrgh*/vmrgl* cases emitted `0x..C400`/`0x..C800` — bit15 set makes those
+three-same *arithmetic* ops, NOT the ZIP1/ZIP2 permutes the inline comments
+claimed. So merges produced garbage regardless of byte order. Corrected to real
+ZIP1/ZIP2 {16B,8H,4S}. With the right encoding, **vmrghw/vmrglw (word-granular)
+are now fully correct** — word order is preserved under ev_mixed, so ZIP.4S needs
+no byte remap. Verified xpass + boot-clean (zero VR divergence), promoted to the
+scored gate (255→257). Lesson: a wrong-but-plausible encoding hidden behind a
+correct-sounding comment passes a *vacuous* harness silently — distrust the
+comment, decode the hex.
+
+**Still broken** (quarantined xfail, signposted in code): byte/halfword merges
+vmrgh/l b,h (correct ZIP encoding now, but ev_mixed swaps the word pairs — needs a
+trailing REV64.4S, verified with DISTINCT operands), vpk* packs, even/odd
+multiplies (which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
 `vspltw`/`vsldoi`/element-symmetric ops are unaffected. Two fix paths documented
 on `emit_load_vr`: systematic REV32 in load/store (simple, +2 ops/op perf hit) vs
 per-op ev_mixed-aware codegen (perf-neutral, more work).

@@ -93,9 +93,10 @@ harness that can't catch mistakes just produces the next silent bug.
 (media codecs, AltiVec-era apps) — latent, not a boot-blocker, but the worst failure mode.
 
 **Status:** splats (`vspltb`/`vsplth`) FIXED + merged; `vspltw`/`vsldoi` were already correct.
-✅ **word merges `vmrghw`/`vmrglw` FIXED** (branch `feat/altivec-ev-mixed-fix`, commit `b1bb6b52`,
-**boot-pending**): all 6 `vmrgh*`/`vmrgl*` encodings were garbage (`0x..C400`/`0x..C800` — not
-permute ops); replaced with correct `ZIP1`/`ZIP2`. Word merges flipped `xfail→xpass`, 255 green.
+✅ **word merges `vmrghw`/`vmrglw` FIXED, merged + promoted** (merged to `macos-arm64`,
+**boot-verified** via `SS_JIT_VERIFY` — zero VR divergence): all 6 `vmrgh*`/`vmrgl*` encodings
+were garbage (`0x..C400`/`0x..C800` — not permute ops); replaced with correct `ZIP1`/`ZIP2`.
+Word merges flipped `xfail→xpass` and were **promoted to the scored gate (255→257, score=100)**.
 **Still wrong (7):** byte/halfword merges (`vmrgh{b,h}`/`vmrgl{b,h}`), pack (`vpkuhum`), even/odd
 byte multiplies (`vmuleub`/`vmuloub` — latter also needs `UMULL.8H` not `MUL.8B`).
 **Byte-merge mechanism (data, 2026-06-04):** with the correct `ZIP1.16B`, `vmrghb v2,v1,v1` gives

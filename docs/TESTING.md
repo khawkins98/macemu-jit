@@ -112,10 +112,11 @@ so NEON lane `i` holds PPC element `byte_element(i)`, not `i`. **Any op whose
 semantics depend on sub-word byte position is suspect.** Status (2026-06-04):
    - **Correct/fixed:** `vspltw`, `vsldoi`, `vspltb`/`vsplth` (remapped), the full
      `vmrgh*`/`vmrgl*` merge family (byte/halfword via the per-op `REV32.16B`
-     normalize in `emit_vmrg`; words are plain `ZIP.4S`), and all element-symmetric
-     ops (`vand`/`vor`/`vadduwm`/`vcmpequw`/…).
-   - **Confirmed BROKEN (parked):** `vpk*` (packs), `vmulo*`/`vmule*` (even/odd
-     multiplies — also emit the wrong NEON op).
+     normalize in `emit_vmrg`; words are plain `ZIP.4S`), `vpkuhum` (same normalize
+     + `UZP2.16B`), and all element-symmetric ops (`vand`/`vor`/`vadduwm`/…).
+   - **Confirmed BROKEN (parked):** `vmulo*`/`vmule*` (even/odd multiplies — also
+     emit the wrong NEON op). `vpkuwum` (word pack) shares `vpkuhum`'s old ignore-vA
+     bug, un-vectored.
    See the `case 12` / `emit_vmrg` note in ppc-jit.cpp; the global load/store REV32
    approach is ruled out (per-op is the path). Live tracker: ROADMAP A2.
 

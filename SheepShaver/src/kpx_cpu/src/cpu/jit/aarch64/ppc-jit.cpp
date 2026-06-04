@@ -840,13 +840,14 @@ static void emit_load_ea_base(int ra_num) {
  * This raw `LDR Q` therefore puts PPC element `i` in NEON lane byte_element(i), NOT
  * lane `i`. Any op whose semantics depend on sub-word *position* sees the wrong
  * lanes. Confirmed by differential vectors (gen-altivec-vectors.py):
- *   STILL BROKEN: vpkuhum (pack), vmuloub/vmuleub (even/odd byte multiplies — these
- *           ALSO emit the wrong NEON op: case 8 below emits MUL.8B, not the widening
- *           UMULL.8H). Quarantined (xfail) in the harness; ROADMAP A2.
+ *   STILL BROKEN: vmuloub/vmuleub (even/odd byte multiplies — these ALSO emit the
+ *           wrong NEON op: case 8 below emits MUL.8B, not the widening UMULL.8H).
+ *           Quarantined (xfail) in the harness; ROADMAP A2. (vpkuwum/case 78 also
+ *           ignores vA — same class, not yet vectored.)
  *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops.
  *   FIXED:  vspltb/vsplth (case 524/588 remap the DUP index via byte/half_element);
- *           vmrghw/vmrglw (cases 140/396, plain ZIP.4S); vmrgh/l {b,h} (emit_vmrg:
- *           REV32.16B normalize -> ZIP1/2.{16B,8H} -> REV32.16B back).
+ *           vmrghw/vmrglw (cases 140/396, plain ZIP.4S); vmrgh/l {b,h} and vpkuhum
+ *           (emit_vmrg: REV32.16B normalize -> ZIP/UZP.{16B,8H} -> REV32.16B back).
  *
  * TWO FIX APPROACHES (neither done — needs a boot to verify real AltiVec software):
  *   (A) Systematic: make this LDR Q + REV32.16B (and store = REV32.16B + STR Q) so
@@ -873,7 +874,9 @@ static void emit_store_vr(int qs, int vr_num) {
 	emit32(0x3D800000 | ((off / 16) << 10) | (RSTATE << 5) | qs);
 }
 
-/* AltiVec byte/halfword merge (vmrgh/l {b,h}) -- ev_mixed-aware codegen.
+/* AltiVec byte/halfword permute (vmrgh/l {b,h}, vpkuhum) -- ev_mixed-aware codegen.
+ * Generic: `zip` is any ARM64 three-register byte/halfword permute (ZIP1/ZIP2 for
+ * the merges, UZP2.16B for the vpkuhum low-byte pack). Mechanism below.
  * The VR is stored ev_mixed: bytes reversed WITHIN each 32-bit word (see the
  * emit_load_vr note). At the byte level that is exactly REV32.16B relative to
  * natural PPC element order, so:
@@ -3351,8 +3354,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		 *   element order. emit_vmrg() normalizes both inputs with REV32.16B, merges
 		 *   with ZIP1/ZIP2.{16B,8H}, then REV32.16B back. Verified xpass against the
 		 *   interpreter with DISTINCT operands (vA=00..0F, vB=10..1F), promoted to the
-		 *   scored harness gate. (Only vpkuhum / the even-odd multiplies remain in the
-		 *   ev_mixed class -- still quarantined; ROADMAP A2, repro gen-altivec-vectors.py.) */
+		 *   scored harness gate. vpkuhum (case 14) reuses emit_vmrg with UZP2.16B.
+		 *   (Only the even/odd byte multiplies remain in the ev_mixed class -- still
+		 *   quarantined; ROADMAP A2, repro gen-altivec-vectors.py.) */
 		case 12:  emit_vmrg(va, vb, vd, 0x4E003800); return true; /* vmrghb ZIP1.16B (ev_mixed-normalized) */
 		case 76:  emit_vmrg(va, vb, vd, 0x4E403800); return true; /* vmrghh ZIP1.8H  (ev_mixed-normalized) */
 		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E803800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S (word_element identity: no rev) */
@@ -3382,8 +3386,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 840: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulosh SMULL.4S */
 		case 520: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E20C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulesb SMULL2.8H */
 		case 584: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60C000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulesh SMULL2.4S */
-		case 14: emit_load_vr(0,vb); emit32(0x0E212800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuhum UZP1.8H (narrow) */
-		case 78: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwum UZP1.4S */
+		/* vpkuhum: pack 8+8 halfwords to their LOW bytes (modulo, no saturation). The
+		 * old codegen was doubly wrong — it ignored vA (loaded only vb) and used the
+		 * wrong op. PPC keeps PPC byte 2i+1 of each halfword = the ODD byte lane in
+		 * natural order, so on the REV32.16B-normalized inputs that is UZP2.16B
+		 * (odd-lane deinterleave; vA -> result high half). Same ev_mixed normalize as
+		 * emit_vmrg. (vpkuwum/case 78 has the same ignore-vA bug — see ROADMAP A2.) */
+		case 14: emit_vmrg(va, vb, vd, 0x4E005800); return true; /* vpkuhum UZP2.16B (ev_mixed-normalized) */
+		case 78: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwum UZP1.4S — BROKEN: ignores vA (ROADMAP A2) */
 		case 398: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E216800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkshus SQXTUN.8B */
 		case 462: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E616800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswus SQXTUN.4H */
 		case 270: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E214800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkshss SQXTN.8B */

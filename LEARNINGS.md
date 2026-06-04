@@ -2021,8 +2021,14 @@ distrust the hypothesis, derive it.) Verified xpass with DISTINCT operands
 (vA=00..0F, vB=10..1F) so a ZIP1↔ZIP2 / A↔B swap can't pass coincidentally;
 boot-clean under SS_JIT_VERIFY.
 
-**Still broken** (quarantined xfail, signposted in code): vpk* packs, even/odd
-multiplies (which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
+**vpkuhum fixed the same way (2026-06-04, 261→262).** Pack keeps each halfword's
+LOW byte = PPC byte 2i+1 = the ODD lane in natural order, so on the REV32.16B-
+normalized inputs it's `UZP2.16B` (reuses emit_vmrg). It had *also* ignored vA
+(loaded only vB) — a second bug the harness caught once operands were distinct.
+The non-saturating word pack `vpkuwum` has the identical ignore-vA bug, un-vectored.
+
+**Still broken** (quarantined xfail, signposted in code): even/odd byte multiplies
+(which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
 `vspltw`/`vsldoi`/element-symmetric ops are unaffected. Fix path = per-op
 ev_mixed-aware codegen (same as the merges); the global load/store REV32 approach
 is ruled out (above).

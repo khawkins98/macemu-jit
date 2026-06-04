@@ -37,6 +37,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   ⏸ blocked/deferred · ☐ todo). Created dates recovered from git history (following renames);
   existing rich intros (ROADMAP, NEW-WORLD plan) harmonized, not clobbered.
 
+### [SheepShaver] AltiVec vpkuhum pack fix (ev_mixed)
+
+- **Bug fix.** `vpkuhum` (pack 8+8 halfwords to their low bytes, modulo) was doubly wrong: it
+  **ignored vA entirely** (loaded only vB) and used the wrong NEON op. PPC keeps each halfword's
+  low byte = PPC byte 2i+1 = the odd byte lane in natural order, so on `REV32.16B`-normalized
+  inputs that is **`UZP2.16B`** (odd-lane deinterleave; vA → result high half). Reuses the merge
+  family's `emit_vmrg` helper (`REV32.16B` → permute → `REV32.16B`). Verified `xfail→xpass` with
+  distinct operands, promoted to the scored gate (**261→262, score=100**). Sibling `vpkuwum`
+  (word→halfword modulo pack, case 78) has the same ignore-vA bug — flagged in code + ROADMAP A2,
+  not yet vectored. Remaining in the `ev_mixed` class: the even/odd byte multiplies
+  (`vmuleub`/`vmuloub`).
+
 ### [SheepShaver] AltiVec byte/halfword merge fix (vmrgh/l b,h) + distinct-operand test strengthening
 
 - **Bug fix — completes the merge family.** Following the word-merge fix below, the byte and

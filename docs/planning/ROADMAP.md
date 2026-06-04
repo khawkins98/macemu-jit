@@ -54,8 +54,8 @@ otherwise-unobservable results.
 ✅ **Quarantine lane added + widened to the full worklist** (commits `4f5825bd`, `aef9fb34`):
 `QUARANTINE_ORDER` vectors run in JIT mode but don't count toward score, so `score=100` stays
 meaningful while confirmed bugs are *tracked*. Originally held **all 9** `ev_mixed` divergences;
-the 6 merges (`vmrgh{b,h,w}`/`vmrgl{b,h,w}`) have since been fixed and promoted, leaving **3**:
-multiplies (`vmuloub`/`vmuleub`) + pack (`vpkuhum`). When an A2 fix lands its vector flips
+the 6 merges (`vmrgh{b,h,w}`/`vmrgl{b,h,w}`) + the pack (`vpkuhum`) have since been fixed and
+promoted, leaving **2**: the even/odd byte multiplies (`vmuloub`/`vmuleub`). When an A2 fix lands its vector flips
 `xfail`→`xpass` and `make test-jit` prints "promote to TEST_ORDER". **A2's worklist stays
 concrete + visible** (this mechanism was also used to rule out approach A — see A2).
 ✅ **`SS_JIT_VERIFY` now compares FPR + VR** (commit `6837f642`): the boot-time oracle catches
@@ -115,8 +115,14 @@ harness that can't catch mistakes just produces the next silent bug.
   scored gate (**255→261, score=100**), and boot-verified under `SS_JIT_VERIFY` (zero VR/FPR
   divergence; the lone GPR/LR/PC divergence is the documented `blr`-boundary false positive).
 
-**Still wrong (3, quarantined `xfail`):** pack (`vpkuhum`) and the even/odd byte multiplies
-(`vmuleub`/`vmuloub` — these also emit the wrong NEON op: `MUL.8B`, need `UMULL.8H`/`UMULL2`).
+✅ **pack `vpkuhum` FIXED + promoted (2026-06-04, boot-pending):** it ignored vA *and* used the
+wrong op; the low-byte modulo pack is `UZP2.16B` on the `REV32.16B`-normalized inputs (reuses
+`emit_vmrg`). xfail→xpass with distinct operands, scored gate 261→262. (Sibling `vpkuwum` has the
+same ignore-vA bug — not yet vectored; flagged in code + below.)
+
+**Still wrong (2, quarantined `xfail`):** the even/odd byte multiplies (`vmuleub`/`vmuloub` —
+these also emit the wrong NEON op: `MUL.8B`, need `UMULL.8H`/`UMULL2`). Plus the un-vectored
+`vpkuwum` (word→halfword modulo pack) which ignores vA the same way `vpkuhum` did.
 
 **Root cause:** VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed
 within each word). `emit_load_vr` loads raw via `LDR Q`; the JIT then indexes NEON lanes with
@@ -134,10 +140,11 @@ sequence locally. The merges proved the technique: a **per-op, local** `REV32.16
 (`emit_vmrg`) is exactly approach A applied *inside one op*, and it works — the global version
 failed only because it was global. Remaining targets, same method (derive against the
 interpreter, flip the quarantine vector `xfail→xpass`):
-- **`vpkuhum`** (halfword→byte pack): likely the `REV32.16B` normalize + a `UZP1`/`XTN`-style
-  narrowing, then `REV32.16B` back. *Next up — simplest of the three.*
+- ✅ **`vpkuhum`** (halfword→byte pack): DONE — `REV32.16B` normalize + `UZP2.16B` + `REV32.16B`
+  back (low byte = odd lane). `vpkuwum` (word→halfword) is the same shape, un-vectored.
 - **`vmuleub`/`vmuloub`** (even/odd byte multiply): two bugs at once — wrong NEON op (`MUL.8B`,
-  must be `UMULL.8H`/`UMULL2.8H`) **and** even/odd element select under `ev_mixed`. Hardest.
+  must be `UMULL.8H`/`UMULL2.8H`) **and** even/odd element select under `ev_mixed`. *Next up —
+  the last and hardest of the class.*
 
 **⚠️ Testing gap found (A1 follow-up):** the scored word-op vectors (`av_vadduwm`/`vsubuwm`/
 `vmaxsw`/…) use **uniform operands** (`0x05050505`/`0x03030303`) which are byteswap-palindromes,
@@ -146,11 +153,11 @@ them with **distinct AND carry-inducing** operands (small-distinct like `00..0F`
 masks it — sums don't carry across byte boundaries, so byteswap stays invisible; use values that
 force inter-byte carries). Only matters for *broad* VR-codegen changes, not per-op approach B.
 
-**Order of attack (simplest → hardest):** ✅ word merges → ✅ byte/halfword merges → **🔜 pack
-(`vpkuhum`)** → multiplies (`vmuleub`/`vmuloub`, + `UMULL.8H`). Fix one, watch its quarantine
+**Order of attack (simplest → hardest):** ✅ word merges → ✅ byte/halfword merges → ✅ pack
+(`vpkuhum`) → **🔜 multiplies (`vmuleub`/`vmuloub`, + `UMULL.8H`)**. Fix one, watch its quarantine
 vector flip `xfail`→`xpass`, keep the scored count green.
 
-**Done when:** the remaining 3 quarantine vectors `xpass` (promote to TEST_ORDER) **and**
+**Done when:** the remaining 2 quarantine vectors `xpass` (promote to TEST_ORDER) **and**
 boot-verified against real AltiVec software under `SS_JIT_VERIFY=1` (→ A3 "AltiVec under real
 software"). The harness flip is necessary but not sufficient — its input coverage is one pattern
 per op (now on distinct operands, so positionally complete for permutes; multiplies will also
@@ -308,9 +315,10 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 ---
 
 ## ✅ Done (recent — for context, newest first)
-- AltiVec `ev_mixed` merges: **full `vmrgh/l {b,h,w}` family fixed** + boot-verified + promoted
-  to the scored gate (261/100). Byte/hw via the per-op `REV32.16B` normalize (`emit_vmrg`);
-  merge test vectors strengthened to distinct operands. Remaining ev_mixed: `vpkuhum` + 2 mults.
+- AltiVec `ev_mixed`: **full `vmrgh/l {b,h,w}` merge family + `vpkuhum` pack fixed** + promoted
+  to the scored gate (262/100; merges boot-verified, pack boot-pending). Per-op `REV32.16B`
+  normalize (`emit_vmrg`): merges = ZIP1/ZIP2, pack = UZP2; merge vectors strengthened to distinct
+  operands. Remaining ev_mixed: even/odd byte multiplies (+ un-vectored `vpkuwum`).
 - Doc hygiene: fork-wide `CHANGELOG.md`, `docs/ARCHITECTURE.md` extracted, handoff docs retired
   (durables → DIAGNOSTICS/LEARNINGS), harness counts de-hardcoded, memories pruned.
 - Upstream backports: **VDE networking**, **SDL3 default backend** (boot-verified), **Wayland

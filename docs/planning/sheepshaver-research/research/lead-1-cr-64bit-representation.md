@@ -1,7 +1,7 @@
 # Lead 1 — CR fields as 64-bit values (Dolphin's `cr_val` trick)
 
 Deep-dive study for the SheepShaver PPC→ARM64 JIT. Compiled 2026-06-02.
-Companion to `SheepShaver/docs/EMULATOR-RESEARCH-LEADS.md` (Lead 1).
+Companion to `docs/planning/sheepshaver-research/EMULATOR-RESEARCH-LEADS.md` (Lead 1).
 
 **No code was changed by this study. This is analysis only.**
 
@@ -435,6 +435,6 @@ project; without it the encoding alone yields only the ~18→3 win and a slower 
    justifies it) stands. If ever attempted, the **CR-in-registers cache is the real prize**,
    not the encoding by itself.
 
-This matches the repo's stated philosophy (`JIT-STYLE-DECISION.md`): immediate writeback by
+This matches the repo's stated philosophy (`docs/planning/JIT-STYLE-DECISION.md`): immediate writeback by
 default, lazy state *within a block only* and always flushed at exits — *simple by default,
 complexity by proof, performance by earned sophistication.*

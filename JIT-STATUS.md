@@ -209,7 +209,7 @@ All JIT access uses byte-level LDRB/STRB at individual field offsets:
 > fix (`c71100d0`) now selects the AArch64 path, but the AArch64 JIT backend
 > (`compemu_support_arm.cpp`) is unported to macOS (Linux `uc_mcontext`, undeclared
 > `uae_vm_jit_write_protect`/`uae_vm_page_size`, `_XOPEN_SOURCE`). See
-> **`BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`**. The ✅ status lines below are
+> **`docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`**. The ✅ status lines below are
 > **historical (Linux / pre-regression)**, not a current macOS arm64 build.
 
 **Build:** ✅ *(historical — see caveat above)*

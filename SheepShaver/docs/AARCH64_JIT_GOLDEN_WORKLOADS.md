@@ -193,8 +193,8 @@ Do not report performance numbers until the workload's maturity level is declare
 
 ## Related plans
 
-- [`COMPATIBILITY-TESTING-PLAN.md`](COMPATIBILITY-TESTING-PLAN.md) — how these workloads grow
+- [`COMPATIBILITY-TESTING-PLAN.md`](../../docs/planning/sheepshaver-research/COMPATIBILITY-TESTING-PLAN.md) — how these workloads grow
   into full compatibility measurement (x86-JIT oracle, OS boot matrix, TestFloat FP vectors,
   app compatibility rings)
-- [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) — JIT work items
+- [`research/IMPLEMENTATION-BACKLOG.md`](../../docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md) — JIT work items
   from the 2026-06 research effort (C1 residency fix gates several workloads above)

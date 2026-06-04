@@ -7,7 +7,7 @@ Entries are tagged by component: **[SheepShaver]**, **[BasiliskII]**, **[shared]
 used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries before
 2026-06-04 predate this fork-wide reorganization and are SheepShaver-scoped unless noted
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
-`BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`).
+`docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
 ## 2026-06-04
 
@@ -71,7 +71,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   code in `main_unix.cpp` guarded (`2f967f4b`), but the B2 AArch64 JIT backend
   (`compemu_support_arm.cpp`) is still unported — **BasiliskII does not yet build on macOS
   arm64.** Full detail, remaining errors, and the pick-up plan are in
-  **`BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`**.
+  **`docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`**.
 
 ### [SheepShaver] JIT correctness
 

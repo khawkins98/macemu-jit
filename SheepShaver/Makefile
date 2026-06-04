@@ -49,7 +49,7 @@ help:
 	@echo "    SS_JIT_VERIFY=1 ./src/Unix/SheepShaver           Differential JIT verification"
 	@echo "    ./src/Unix/SheepShaver 2>/tmp/jit.log            Capture JIT miss report on exit"
 	@echo ""
-	@echo "  See also: CONTRIBUTING.md, docs/OPTIMIZATION-PLAN.md, docs/TESTING.md"
+	@echo "  See also: CONTRIBUTING.md, docs/planning/OPTIMIZATION-PLAN.md, docs/TESTING.md"
 
 build: build-ss build-rom-harness
 

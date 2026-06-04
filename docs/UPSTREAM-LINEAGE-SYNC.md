@@ -147,7 +147,7 @@ The SLiRP buffer-overflow hardening (`d26ae37e` on cebix) is **already in HEAD**
 2. **SDL3 default + `e596e215` — ✅ MERGED.** SDL3 is now the **default** SheepShaver video
    backend (links `libSDL3.0.dylib`; `--with-sdl2` opts back). **Boot-verified to Finder
    2026-06-04.** BasiliskII stays on SDL2 — its SDL3 path needs extra porting
-   (`SDL_HINT_GRAB_KEYBOARD` etc.; see `BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`).
+   (`SDL_HINT_GRAB_KEYBOARD` etc.; see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
 3. **Wayland-detection fix (`91d58b12`) — ✅ MERGED (inert on macOS, unvalidated).** Gated
    `#if REAL_ADDRESSING && defined(__linux__)`, so it **compiles out on this macOS build**:

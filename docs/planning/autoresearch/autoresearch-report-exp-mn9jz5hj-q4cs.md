@@ -64,8 +64,8 @@ Notes:
 - `BasiliskII/src/uae_cpu_2026/compiler/compemu_arm.h`
 - `BasiliskII/src/uae_cpu_2026/compiler/compemu_legacy_arm64_compat.cpp`
 - `autoresearch.sh`
-- `autoresearch.md`
-- `autoresearch.ideas.md`
+- `docs/planning/autoresearch/autoresearch.md`
+- `docs/planning/autoresearch/autoresearch.ideas.md`
 
 ## Constraints
 - Keep incremental make flow.

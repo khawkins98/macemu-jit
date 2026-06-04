@@ -599,7 +599,7 @@ static void emit_store_gpr(int rs, int n) {
  * opcodes.  Fixing now = changing a hot helper with no test able to catch a
  * slip.  Deferred to whenever a G5/PPC64 guest path is added — at that point it
  * becomes BOTH reachable AND verifiable (SS_JIT_VERIFY=1 diffs every JIT block
- * against the interpreter).  Tracked: docs/OPTIMIZATION-PLAN.md, item P1a #3.
+ * against the interpreter).  Tracked: docs/planning/OPTIMIZATION-PLAN.md, item P1a #3.
  *
  * FOR THE FUTURE IMPLEMENTER — the obvious fix has a trap.  You CANNOT simply
  * route the low word through emit_load_gpr/emit_store_gpr: their cached path

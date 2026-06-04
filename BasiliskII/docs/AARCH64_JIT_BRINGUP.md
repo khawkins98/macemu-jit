@@ -2,7 +2,7 @@
 
 > For the concise cross-emulator architecture overview (both JITs + macOS arm64 constraints),
 > see [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md). This doc is the detailed BasiliskII
-> bringup history. Current macOS build status: [`MACOS-AARCH64-JIT-PORT.md`](MACOS-AARCH64-JIT-PORT.md).
+> bringup history. Current macOS build status: [`MACOS-AARCH64-JIT-PORT.md`](../../docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md).
 
 ## Overview
 

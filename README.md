@@ -317,7 +317,7 @@ The AArch64 JIT backend is under active development.
 - ✅ Signal handler crash dumps fixed (stack overflow + missing arg + register shift)
 - ✅ Unix layer hardened: slirp pipe framing, XPRAM I/O, `strdup` null check, 17 bounds fixes
 - See [JIT-STATUS.md](JIT-STATUS.md), [BasiliskII/qa/README.md](BasiliskII/qa/README.md),
-[qa/README.md](qa/README.md), and [SheepShaver/AARCH64_JIT_PLAN.md](SheepShaver/AARCH64_JIT_PLAN.md) for details
+[qa/README.md](qa/README.md), and [docs/planning/SheepShaver-AARCH64_JIT_PLAN.md](docs/planning/SheepShaver-AARCH64_JIT_PLAN.md) for details
 
 ### End-to-end QA and reporting
 

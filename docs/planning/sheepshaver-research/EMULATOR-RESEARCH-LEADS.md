@@ -141,7 +141,7 @@ Toolbox math) currently do LDRB/STRB on our XER struct (`ca` at offset 902) per 
 Within a block this collapses to pure register/flag operations.
 
 **How it maps to our code:** This is a *deliberate* contrast with our immediate-writeback
-style (see `JIT-STYLE-DECISION.md`). The contained version: keep immediate writeback as the
+style (see `docs/planning/JIT-STYLE-DECISION.md`). The contained version: keep immediate writeback as the
 default, allow lazy carry **within a block only**, always flushed at block exit — preserving
 our "no lazy state across block boundaries" rule.
 

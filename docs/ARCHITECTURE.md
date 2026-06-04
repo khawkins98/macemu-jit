@@ -27,7 +27,7 @@ clang/gcc considers dead code.
 
 See also `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` (bringup history + bug fixes),
 `BasiliskII/docs/AARCH64_JIT_RUNTIME_CONTRACT.md` (register/state ownership), and
-`BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md` (the unfinished macOS build port).
+`docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md` (the unfinished macOS build port).
 
 ## SheepShaver JIT (PPC → ARM64)
 
@@ -48,7 +48,7 @@ becomes available.
 XER is a struct `{uint8 so, ov, ca, byte_count}` — **NOT** a packed uint32. All JIT access uses
 LDRB/STRB at individual byte offsets (so=900, ca=902).
 
-See also `SheepShaver/AARCH64_JIT_PLAN.md` (plan + status).
+See also `docs/planning/SheepShaver-AARCH64_JIT_PLAN.md` (plan + status).
 
 ## macOS arm64 Constraints
 
@@ -66,7 +66,7 @@ These apply on the `macos-arm64` branch and are not present in the upstream Linu
 
 3. **configure.ac host detection** — on macOS, `config.guess` reports `arm-apple-darwin*`
    (not `aarch64-*`). The AArch64 JIT path is guarded by a `case $host_cpu` that matches both
-   `aarch64` and `arm` on Darwin. (See also `BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md` — the
+   `aarch64` and `arm` on Darwin. (See also `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md` — the
    BasiliskII configure had a related arm-vs-arm64 routing bug.)
 
 4. **K&R / C23 slirp** — Homebrew autoconf bakes `-std=gnu23` into `$(CC)`. Slirp's vendored

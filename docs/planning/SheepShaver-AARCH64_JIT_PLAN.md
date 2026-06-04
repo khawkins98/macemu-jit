@@ -1,8 +1,8 @@
 # SheepShaver AArch64 JIT — Project Plan
 
 > For the concise cross-emulator architecture overview (both JITs + macOS arm64 constraints),
-> see [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md). Current pass/fail status:
-> [`JIT-STATUS.md`](../JIT-STATUS.md).
+> see [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md). Current pass/fail status:
+> [`JIT-STATUS.md`](../../JIT-STATUS.md).
 
 ## Goal
 
@@ -31,9 +31,9 @@ starting with an optimized interpreter and progressing to a direct-codegen JIT.
 
 | Stage | Screenshot |
 |-------|-----------|
-| ROM boot (no disk) | ![](doc/aarch64-boot-nodisk.png) |
-| Mac OS boot (interpreter) | ![](doc/aarch64-macos-boot.png) |
-| JIT-enabled boot | ![](doc/aarch64-jit-macos-welcome.png) |
+| ROM boot (no disk) | ![](../../SheepShaver/doc/aarch64-boot-nodisk.png) |
+| Mac OS boot (interpreter) | ![](../../SheepShaver/doc/aarch64-macos-boot.png) |
+| JIT-enabled boot | ![](../../SheepShaver/doc/aarch64-jit-macos-welcome.png) |
 
 ### ROM Harness
 

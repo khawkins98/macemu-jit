@@ -211,7 +211,7 @@ unresolved truncation-epilogue exposure.
 
 ## 3. Within-block lazy carry design for SheepShaver
 
-Respecting JIT-STYLE-DECISION.md: lazy state **never crosses a block boundary**.
+Respecting docs/planning/JIT-STYLE-DECISION.md: lazy state **never crosses a block boundary**.
 Mirror `lazy_cr0`'s shape with a compile-time-only state variable:
 
 ```c
@@ -317,7 +317,7 @@ and removes the clobber-tracking burden.
    are hot, prototype within-block lazy CA **behind a compile flag**, gated on the
    rom-harness differential (`--min-insns=4`), never on single-opcode vectors.
 
-This honors the immediate-writeback default (JIT-STYLE-DECISION.md): lazy carry
+This honors the immediate-writeback default (docs/planning/JIT-STYLE-DECISION.md): lazy carry
 becomes "performance by earned sophistication," earned only after the truncation
 bug is closed and profiling justifies it. Net order vs the other leads: Lead 2
 (W^X counter) and the `adde` fix first; Lead 3 lazy carry stays last among the

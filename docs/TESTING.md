@@ -332,5 +332,5 @@ verify it; where it can't, *date* it so staleness is visible.
 | JIT correctness gate | `jit-test/run.sh` + `make test-jit` | per-change checklist #1–2 |
 | Microbench + kernels | `rom-harness/` (`jit-bench`) | checklist #3 + baseline self-check |
 | Perf numbers | `docs/BENCHMARKS.md` | re-baseline on perf changes |
-| Optimization status | `docs/OPTIMIZATION-PLAN.md` | checklist #4 + dated items |
+| Optimization status | `docs/planning/OPTIMIZATION-PLAN.md` | checklist #4 + dated items |
 | This strategy | `docs/TESTING.md` | review when a tier is added/changed |

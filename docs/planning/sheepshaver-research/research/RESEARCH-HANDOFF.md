@@ -36,7 +36,7 @@
 - **Boot verification** for anything touching block compilation, dispatch, or epilogues:
   `make run-jit` (VNC port 5999), confirm boot to desktop, then `make kill`.
 - One item per commit, message format: `fix:`/`feat:`/`perf:` + what + which backlog item.
-- Follow `JIT-STYLE-DECISION.md`: immediate architectural writeback, no lazy state across
+- Follow `docs/planning/JIT-STYLE-DECISION.md`: immediate architectural writeback, no lazy state across
   block boundaries. Several research items were *rejected* for violating this — don't
   reintroduce them (see backlog "Rejected leads" table).
 - If a research doc's line numbers don't match the file, trust the `case` labels / function

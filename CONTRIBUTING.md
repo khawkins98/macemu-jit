@@ -6,8 +6,8 @@ Guide for humans and AI agents working on the SheepShaver/BasiliskII AArch64 JIT
 
 1. Read `CLAUDE.md` — build commands, test commands, asset locations, architecture overview
 2. Read `LEARNINGS.md` — non-obvious findings that will save you from repeating mistakes
-3. Check `docs/OPTIMIZATION-PLAN.md` — what's done, what's open, what was tried and deferred
-4. Check `SheepShaver/docs/research/IMPLEMENTATION-BACKLOG.md` — ready-to-implement items
+3. Check `docs/planning/OPTIMIZATION-PLAN.md` — what's done, what's open, what was tried and deferred
+4. Check `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` — ready-to-implement items
 
 ## Commit Style
 
@@ -80,7 +80,7 @@ don't imply a clean win.
 - [ ] Add harness test vector for the affected instruction if one doesn't exist
 - [ ] Add/update inline ARM64 mnemonic comments on emit32() calls
 - [ ] Credit any borrowed technique in an inline comment — see **Crediting Borrowed Techniques** below
-- [ ] Update `docs/OPTIMIZATION-PLAN.md` if completing or investigating a plan item
+- [ ] Update `docs/planning/OPTIMIZATION-PLAN.md` if completing or investigating a plan item
 - [ ] Update `CHANGELOG.md` for user-visible changes
 - [ ] Update `LEARNINGS.md` if the change reveals a non-obvious finding
 
@@ -167,7 +167,7 @@ codegen comparisons.
 | Harness (`jit-test/run.sh`) | nothing — the count is derived (`make harness-count`); docs are de-hardcoded |
 | Build system (`Makefile`, `configure.ac`) | `CLAUDE.md` build commands |
 | Env vars (any `getenv()` call) | `USER-HANDBOOK.md` env var table, `CLAUDE.md` |
-| Research findings | `docs/OPTIMIZATION-PLAN.md`, `research/IMPLEMENTATION-BACKLOG.md` |
+| Research findings | `docs/planning/OPTIMIZATION-PLAN.md`, `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` |
 | Benchmark results | `docs/BENCHMARKS.md` |
 
 ## Project Structure (key files)
@@ -176,12 +176,13 @@ codegen comparisons.
 CLAUDE.md                          # build/test/debug reference (gitignored, local)
 CONTRIBUTING.md                    # this file
 LEARNINGS.md                       # session-by-session non-obvious findings
-docs/OPTIMIZATION-PLAN.md          # perf roadmap: done, open, deferred
+docs/planning/OPTIMIZATION-PLAN.md          # perf roadmap: done, open, deferred
 docs/BENCHMARKS.md                 # Speedometer/boot timing data
 docs/TESTING.md                    # test strategy, maintenance contract
 CHANGELOG.md           # user-visible changes
 SheepShaver/docs/USER-HANDBOOK.md  # user guide
-SheepShaver/docs/research/         # Dolphin/RPCS3/MAME research + backlog
+docs/planning/                     # all forward-looking plans (roadmap, optimization, desktop, research)
+docs/planning/sheepshaver-research/  # Dolphin/RPCS3/MAME research + backlog
 SheepShaver/src/kpx_cpu/.../ppc-jit.cpp  # THE JIT (4500+ lines)
 SheepShaver/jit-test/run.sh        # opcode test harness (count: make harness-count)
 SheepShaver/rom-harness/           # standalone JIT exerciser + microbench

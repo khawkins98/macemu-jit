@@ -8,16 +8,16 @@ Drafted 2026-06-02.
 
 | Existing asset | Role in this plan |
 |---|---|
-| [`AARCH64_JIT_GOLDEN_WORKLOADS.md`](AARCH64_JIT_GOLDEN_WORKLOADS.md) (7 workloads) | The canonical gate. New tiers below feed into it. |
-| [`jit-test/run.sh`](../jit-test/run.sh) ([README](../jit-test/README.md)) (209 vectors, interp-vs-JIT diff) | Tier 1 foundation |
-| [`rom-harness/`](../rom-harness/README.md) (random ROM block exerciser) | Tier 2 foundation |
-| [`qa/tests/vnc/`](../../qa/tests/vnc/README.md) (shared repo-level VNC/Gherkin runner, stories, [SheepShaver profile](../../qa/tests/vnc/profiles/sheepshaver.json)) | **The automation layer to use** — per [Golden Workloads §"Shared QA/reporting layer"](AARCH64_JIT_GOLDEN_WORKLOADS.md), do NOT grow a separate story tree |
-| [`BasiliskII/qa/`](../../BasiliskII/qa/README.md) ([matrix](../../BasiliskII/qa/matrix.md)) | The matrix-document format to mirror for the OS boot matrix (Tier 2) |
-| [`JIT-STATUS.md`](../../JIT-STATUS.md) | Where summary results land |
-| [`JIT-FPU-PLAN.md`](../../JIT-FPU-PLAN.md) | Tier 3 (FP) integrates with this |
+| [`AARCH64_JIT_GOLDEN_WORKLOADS.md`](../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md) (7 workloads) | The canonical gate. New tiers below feed into it. |
+| [`jit-test/run.sh`](../../../SheepShaver/jit-test/run.sh) ([README](../../../SheepShaver/jit-test/README.md)) (209 vectors, interp-vs-JIT diff) | Tier 1 foundation |
+| [`rom-harness/`](../../../SheepShaver/rom-harness/README.md) (random ROM block exerciser) | Tier 2 foundation |
+| [`qa/tests/vnc/`](../../../qa/tests/vnc/README.md) (shared repo-level VNC/Gherkin runner, stories, [SheepShaver profile](../../../qa/tests/vnc/profiles/sheepshaver.json)) | **The automation layer to use** — per [Golden Workloads §"Shared QA/reporting layer"](../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md), do NOT grow a separate story tree |
+| [`BasiliskII/qa/`](../../../BasiliskII/qa/README.md) ([matrix](../../../BasiliskII/qa/matrix.md)) | The matrix-document format to mirror for the OS boot matrix (Tier 2) |
+| [`JIT-STATUS.md`](../../../JIT-STATUS.md) | Where summary results land |
+| [`docs/planning/JIT-FPU-PLAN.md`](../JIT-FPU-PLAN.md) | Tier 3 (FP) integrates with this |
 | [`docs/research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) | C1 gates Phase 2 of this plan; see also [`RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md) |
-| [`AARCH64_JIT_PLAN.md`](../AARCH64_JIT_PLAN.md) / [`JIT-NEXT-PHASE.md`](../JIT-NEXT-PHASE.md) | Overall JIT plan this testing supports |
-| [`src/kpx_cpu/src/test/test-powerpc.cpp`](../src/kpx_cpu/src/test/test-powerpc.cpp) ([original docs](../doc/PowerPC-Testsuite.txt)) | **The original maintainer's PowerPC Emulator Tester** — dormant in-tree, see Tier 1.4 |
+| [`AARCH64_JIT_PLAN.md`](../SheepShaver-AARCH64_JIT_PLAN.md) / [`JIT-NEXT-PHASE.md`](../../../SheepShaver/JIT-NEXT-PHASE.md) | Overall JIT plan this testing supports |
+| [`src/kpx_cpu/src/test/test-powerpc.cpp`](../../../SheepShaver/src/kpx_cpu/src/test/test-powerpc.cpp) ([original docs](../../../SheepShaver/doc/PowerPC-Testsuite.txt)) | **The original maintainer's PowerPC Emulator Tester** — dormant in-tree, see Tier 1.4 |
 
 ---
 
@@ -74,8 +74,8 @@ REGDUMPs diffed. Gate: score=100.
 
 4. **Revive the original maintainer's PowerPC Emulator Tester.** Gwenolé Beauchesne's
    self-contained test suite is dormant in our tree at
-   [`src/kpx_cpu/src/test/test-powerpc.cpp`](../src/kpx_cpu/src/test/test-powerpc.cpp)
-   (2,242 lines; documented in [`doc/PowerPC-Testsuite.txt`](../doc/PowerPC-Testsuite.txt)).
+   [`src/kpx_cpu/src/test/test-powerpc.cpp`](../../../SheepShaver/src/kpx_cpu/src/test/test-powerpc.cpp)
+   (2,242 lines; documented in [`doc/PowerPC-Testsuite.txt`](../../../SheepShaver/doc/PowerPC-Testsuite.txt)).
    It is the closest thing to an *established* SheepShaver compatibility tool in existence:
    - Generates **2M+ tests** with operand values specifically chosen to exercise condition
      code changes — per-instruction-form generators for add/sub/mul/div, shifts, rotates
@@ -85,8 +85,8 @@ REGDUMPs diffed. Gate: score=100.
      PowerPC 7410 (PowerBook G4) — including architecturally *unspecified* result behavior
    - Terminates blocks with EMUL_OP `0x18000000`, which our CPU core already supports
    - **The golden results file is recovered and in-tree**:
-     [`ppc-testresults.dat.bz2`](../src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
-     ([provenance](../src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md)) — recorded on a real
+     [`ppc-testresults.dat.bz2`](../../../SheepShaver/src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
+     ([provenance](../../../SheepShaver/src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md)) — recorded on a real
      PowerBook G4 (PPC 7410), verified bit-for-bit against the md5 in `test-powerpc.cpp:21`.
    - **Usage plan — three validation stages, in order:**
 
@@ -132,7 +132,7 @@ REGDUMPs diffed. Gate: score=100.
    as failure even if it boots (the >180s JIT boot finding shows timing IS a compat signal —
    timeouts in guest drivers can turn slowness into hangs).
 
-## Tier 3 — FP/FPSCR correctness (new, integrates with JIT-FPU-PLAN.md)
+## Tier 3 — FP/FPSCR correctness (new, integrates with docs/planning/JIT-FPU-PLAN.md)
 
 1. **TestFloat-derived vectors.** Berkeley TestFloat is the established IEEE-754 compliance
    suite. We don't run it in the guest (no PPC build needed); instead, use `testfloat_gen` on
@@ -203,8 +203,8 @@ Operationally:
   (2026-06-02): recovered from the Wayback Machine and verified bit-for-bit** (decompressed
   md5 `3e29432abb6e21e625a2eef8cf2f0840` matches both `test-powerpc.cpp:21` and the wiki doc).
   Now preserved in-tree:
-  [`src/kpx_cpu/src/test/ppc-testresults.dat.bz2`](../src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
-  with [provenance](../src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md). Tier 1.4 has
+  [`src/kpx_cpu/src/test/ppc-testresults.dat.bz2`](../../../SheepShaver/src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
+  with [provenance](../../../SheepShaver/src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md). Tier 1.4 has
   real-hardware ground truth available from day one.
 - Does `test-powerpc.cpp` still compile against the current kpx_cpu core (it predates years
   of changes)? Budget for bit-rot fixes.

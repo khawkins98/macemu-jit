@@ -14,8 +14,8 @@ implementation prep). **Start here.**
 Related plans outside this directory:
 [`../COMPATIBILITY-TESTING-PLAN.md`](../COMPATIBILITY-TESTING-PLAN.md) (how we'll measure
 correctness vs the x86 JIT and real apps) ·
-[`../AARCH64_JIT_GOLDEN_WORKLOADS.md`](../AARCH64_JIT_GOLDEN_WORKLOADS.md) (canonical test
-gate) · [`../../../LEARNINGS.md`](../../../LEARNINGS.md) and [`../../../CHANGELOG.md`](../../../CHANGELOG.md)
+[`../AARCH64_JIT_GOLDEN_WORKLOADS.md`](../../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md) (canonical test
+gate) · [`../../../LEARNINGS.md`](../../../../LEARNINGS.md) and [`../../../CHANGELOG.md`](../../../../CHANGELOG.md)
 (the JIT work's durable findings + change log — the dated session handoff docs were retired 2026-06-04).
 
 ## Reference studies (read when working the related backlog item)
@@ -35,7 +35,7 @@ gate) · [`../../../LEARNINGS.md`](../../../LEARNINGS.md) and [`../../../CHANGEL
 
 | Doc | Backlog item | Deliverable |
 |-----|-------------|-------------|
-| [`b2-logical-imm-prep.md`](b2-logical-imm-prep.md) | **B2** | Tested encoder ready to integrate: [`../../src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp`](../../src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp) + test in `../../spikes/logical-imm/`. |
+| [`b2-logical-imm-prep.md`](b2-logical-imm-prep.md) | **B2** | Tested encoder ready to integrate: [`../../src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp`](../../../../SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp) + test in `../../spikes/logical-imm/`. |
 
 ### Dolphin deep-dives (first research round — verdicts now in the backlog)
 

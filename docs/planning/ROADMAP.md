@@ -17,8 +17,8 @@ not by order. The only hard sequencing is *within* a track (noted per item).
 | # | Track | What it buys | State | Lead doc |
 |---|-------|--------------|-------|----------|
 | **A** | **Correctness & verification** | Trust that the booting emulator isn't silently wrong | 🔜 active front | `docs/TESTING.md` |
-| **B** | **Performance / JIT optimization** | Faster guest execution | 🟡 cheap wins landed; big levers open | `docs/OPTIMIZATION-PLAN.md` |
-| **C** | **Desktop integration ("Silicon Sheep")** | A Parallels-like, first-class macOS app experience | ⏸ researched, not started | `DESKTOP_INTEGRATION_PLAN.md` |
+| **B** | **Performance / JIT optimization** | Faster guest execution | 🟡 cheap wins landed; big levers open | `docs/planning/OPTIMIZATION-PLAN.md` |
+| **C** | **Desktop integration ("Silicon Sheep")** | A Parallels-like, first-class macOS app experience | ⏸ researched, not started | `docs/planning/DESKTOP_INTEGRATION_PLAN.md` |
 | **D** | **Platform breadth** | BasiliskII/68K on macOS; Linux/ARM re-convergence | ⏸ optional | per-item below |
 
 > **Cross-cutting theme — verification is the bottleneck, not the fix.** The `vsel` bug, the
@@ -28,7 +28,7 @@ not by order. The only hard sequencing is *within* a track (noted per item).
 > corrupts state must be caught, not shipped.
 
 > **⚠️ Cross-cutting decision (gates C *and* D) — do we hard-fork?** Track C's
-> `DESKTOP_INTEGRATION_PLAN.md` proposes a pruned, Apple-Silicon-only hard fork ("Silicon
+> `docs/planning/DESKTOP_INTEGRATION_PLAN.md` proposes a pruned, Apple-Silicon-only hard fork ("Silicon
 > Sheep") that *removes* BeOS/AmigaOS/Windows/SDL1 and tracks upstream by cherry-pick only.
 > That premise is **in direct tension with Track D**: a pruned macOS-only fork is unlikely to
 > invest in D1 (68K BasiliskII) or D2 (Linux/ARM re-convergence + VDE test rig). Decide the
@@ -97,7 +97,7 @@ once (vs. per-op remapping = whack-a-mole the harness can't police). Cost: 2 NEO
 load/store + revert the splat remap + re-verify every op. Do **after A1**; measure perf.
 
 **Depends on:** A1. **Needs boot verification** (yours).
-**Detail:** `docs/OPTIMIZATION-PLAN.md` §P1b/P5c; `CHANGELOG.md` [SheepShaver] 2026-06-04; `ppc-jit.cpp`.
+**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P1b/P5c; `CHANGELOG.md` [SheepShaver] 2026-06-04; `ppc-jit.cpp`.
 
 ---
 
@@ -116,8 +116,8 @@ Shipped as build/boot-verified, **not exercised**:
 # Track B — Performance / JIT optimization
 
 Full plan, with per-lever effort/payoff and measured baselines, lives in
-**`docs/OPTIMIZATION-PLAN.md`** (and the Dolphin/RPCS3/Box64/FEX survey items therein +
-`SheepShaver/docs/research/IMPLEMENTATION-BACKLOG.md`). The cheap, ready wins from the first
+**`docs/planning/OPTIMIZATION-PLAN.md`** (and the Dolphin/RPCS3/Box64/FEX survey items therein +
+`docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md`). The cheap, ready wins from the first
 pass have largely **landed** (subfe/adde via ADCS, mullwo, CR0 cleanup/B1, LogicalImm/B2, code-cache
 sizing, atomic spcflags). What remains is the bigger, measurement-gated work. Tracked here as
 buckets so they don't fall off the map:
@@ -126,7 +126,7 @@ buckets so they don't fall off the map:
 
 **Why:** prioritize the remaining levers by *real* hot-block / instruction-mix data instead of
 guessing. Nothing else in Track B should be tuned blind. **Unblocks B2–B4.**
-**Detail:** `docs/OPTIMIZATION-PLAN.md` §P0.
+**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P0.
 
 ## B2. 🟡 Medium levers — fallback & branch handling
 
@@ -134,20 +134,20 @@ guessing. Nothing else in Track B should be tuned blind. **Unblocks B2–B4.**
 - **Reduce interpreter fallbacks** (`lwarx`/`stwcx`/`mftb`/`isync` native) — ~5–10%.
 - **`isync` inline BLR** (0c), **lazy CR0 re-enable** (0g — was disabled after a boot regression;
   needs A1's boot verify first).
-**Detail:** `docs/OPTIMIZATION-PLAN.md` §P2/P3/0c/0g.
+**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P2/P3/0c/0g.
 
 ## B3. 🟡 High-effort levers
 
 Constant folding, FP register allocator, instruction scheduling, byte-swap opt, **cross-block
 register pinning** (r1/SP, r2/RTOC — P8), **bclr indirect-branch chaining** (P9).
-**Detail:** `docs/OPTIMIZATION-PLAN.md` §P5–P9.
+**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P5–P9.
 
 ## B4. 🟡 Strategic / from-research levers
 
 Runtime link stack (R1b), **dual W^X mapping** (R8 — ~27% compile speedup measured), async
 background JIT compilation (R9, Cemu model), Metal framebuffer compositing (R10), JIT-residency
 gate restructure (C1), selective HLE of hot routines.
-**Detail:** `docs/OPTIMIZATION-PLAN.md` (research section + HLE) + `IMPLEMENTATION-BACKLOG.md` Tier C.
+**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` (research section + HLE) + `IMPLEMENTATION-BACKLOG.md` Tier C.
 
 **Regression tracking:** baselines + how to A/B → `docs/BENCHMARKS.md` (Speedometer baseline
 recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still TODO) and
@@ -162,7 +162,7 @@ first-class macOS app — guided first-run, VM library, hot-reloading prefs, mul
 volumes, and (research-grade) coherence/seamless windows. This is a **large, JIT-independent
 work stream**; it can proceed in parallel with Tracks A/B once someone picks it up.
 
-**Tiers (full detail in `DESKTOP_INTEGRATION_PLAN.md`):**
+**Tiers (full detail in `docs/planning/DESKTOP_INTEGRATION_PLAN.md`):**
 - **C1. Tier 1 — First-run & VM management:** ROM picker + SHA verify, disk creation wizard, OS
   selector, **VM profile library**, **prefs hot-reload** (kill the quit/relaunch cycle),
   fullscreen-escape affordance, dark mode, Gatekeeper signing/notarization.
@@ -177,7 +177,7 @@ work stream**; it can proceed in parallel with Tracks A/B once someone picks it 
 Tauri/Qt/SwiftUI/Electron. **Repo strategy:** the plan also proposes a pruned hard-fork
 ("Silicon Sheep") tracking `kanjitalk755` + `rcarmo` as cherry-pick remotes — revisit whether
 that fork happens or this branch *is* it before starting Tier 1.
-**Detail:** `DESKTOP_INTEGRATION_PLAN.md`.
+**Detail:** `docs/planning/DESKTOP_INTEGRATION_PLAN.md`.
 
 ---
 
@@ -198,7 +198,7 @@ the 68K JIT backend (`compemu_support_arm.cpp`) is unported (Linux `uc_mcontext`
 - **D1b. JIT-backend port** — optional perf; mirror SheepShaver's *proven* macOS W^X
   (`jit-target-cache.hpp`). Higher effort + heavy boot verification.
 
-**Detail:** `BasiliskII/docs/MACOS-AARCH64-JIT-PORT.md`.
+**Detail:** `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`.
 
 ## D2. ⏸ Linux / ARM re-convergence (deferred backlog)
 
@@ -217,5 +217,5 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
   detection** — all from kanjitalk755 (`docs/UPSTREAM-LINEAGE-SYNC.md`).
 - JIT correctness: AltiVec `vsel` + splat fixes; subfe/adde carry-out; mullwo.
 - JIT perf (cheap wins): CR0 cleanup, LogicalImm encoder, code-cache sizing, atomic spcflags,
-  trailing-MOV elimination, register allocator (P1). See `docs/OPTIMIZATION-PLAN.md` §Completed.
+  trailing-MOV elimination, register allocator (P1). See `docs/planning/OPTIMIZATION-PLAN.md` §Completed.
 - BasiliskII: configure host-routing fix + `main_unix.cpp` guards (partial — see D1).

@@ -95,6 +95,33 @@ on it.
    RA reg (`hR`) is live per emitted op; the address and loaded value ride in
    `RTMP0`/`RTMP1`.
 
+### P1b. AltiVec element-order correctness (ev_mixed) — PARTIALLY FIXED (2026-06-04)
+
+**Status**: real correctness bug, partially fixed; the rest is parked + signposted
+in code (`emit_load_vr` in ppc-jit.cpp) and CHANGELOG.
+
+VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed within
+each 32-bit word, word order preserved — `ppc-operands.hpp` `byte_element`/
+`half_element`). `emit_load_vr` loads that raw via `LDR Q`, so any op that selects
+or rearranges sub-word elements with raw NEON lanes is wrong.
+- **Fixed**: `vspltb`/`vsplth` (remap the DUP index through `byte_element`/
+  `half_element`). `vspltw`/`vsldoi`/element-symmetric ops were already correct.
+- **Still broken** (repro vectors in `jit-test/gen-altivec-vectors.py`): `vmrgh*`/
+  `vmrgl*` merges, `vpk*` packs, even/odd multiplies (`vmulo*`/`vmule*` — these
+  also emit the *wrong* NEON op, e.g. vmuloub emits `MUL.8B` not `UMULL.8H`).
+
+**Two fix approaches** (neither done; both need a boot to verify real AltiVec
+software, e.g. a LAME MP3 encoder under `SS_JIT_VERIFY=1` — see TESTING.md):
+1. **Systematic**: `emit_load_vr` = `LDR Q`+`REV32.16B`, `emit_store_vr` =
+   `REV32.16B`+`STR Q`, so NEON sees natural order and every op uses raw lanes
+   (then revert the splat remap). Simplest, but +2 NEON ops per AltiVec op (perf
+   hit) and must re-verify every op + lvx/stvx interop.
+2. **Per-op**: make each broken op's codegen ev_mixed-aware (like the splat remap).
+   Perf-neutral, but a careful derivation per op; multiplies also need UMULL/UMULL2
+   + a deinterleave.
+**Effort**: medium-high. **Reachability**: AltiVec is live (emulator advertises a
+G4), so this corrupts real AltiVec software today.
+
 ---
 
 ## Open — Quick Wins (Priority 0)

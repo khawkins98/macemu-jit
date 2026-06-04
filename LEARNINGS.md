@@ -1943,3 +1943,62 @@ poisoned register state and reports a false divergence too.
 Fix: skip verifying blocks ending with link-setting branches, and suppress
 further checks after any divergence until a clean block is found.  Reduces
 false positives from 20+ to 1.
+
+## 2026-06-04 — FP/AltiVec test-vector audit: vacuousness, ev_mixed byte order, harness integrity
+
+A "just add FP/AltiVec test vectors" task turned into a multi-round audit (two
+adversarial-subagent reviews) that found the entire FP/AltiVec test suite was
+fake and uncovered a pervasive AltiVec correctness bug. The non-obvious findings:
+
+### "Passes make test-jit" ≠ "tests something" — the vacuousness trap
+
+The harness REGDUMP captures **GPRs/CR/LR/CTR/XER only — NOT FPRs or VRs**
+(sheepshaver_glue.cpp). So any FP/AltiVec vector that leaves its result in an
+FPR/VR/memory and never `lwz`s it into a GPR produces an identical REGDUMP whether
+the op is right or wrong → the JIT-vs-interpreter diff passes **trivially**. ALL
+9 pre-existing `fp_*` vectors and ALL 12 pre-existing `vec_*` vectors were vacuous
+(verified: r4=r5=r6=0). FP/AltiVec arithmetic was *effectively untested* despite
+the green score. Rule: a vector must `op -> stvx/stfd -> lwz result into a GPR`.
+
+### "Reaches a GPR" still isn't enough — the masking trap
+
+`vmuleub` with byte-uniform operands (0x05×0x03) passed, but even/odd byte
+selection gives the same product, so it couldn't test the op's defining property.
+Position-dependent ops need **distinct per-lane operands** (lvx a `00 01 … 0F`
+pattern), not `vspltisb` uniform splats.
+
+### AltiVec ev_mixed byte order (the real bug)
+
+VRs are stored in the interpreter's `ev_mixed` order (ppc-operands.hpp):
+`byte_element(i) = (i&~3)+(3-(i&3))` — **bytes reversed within each 32-bit word,
+word order preserved**. `emit_load_vr` is a plain `LDR Q` that loads this raw, so
+NEON lane `i` holds PPC element `byte_element(i)`, not `i`. Every op that depends
+on sub-word byte position is wrong. **Fixed** vspltb/vsplth (remap the DUP index).
+**Still broken** (parked, signposted in code): vmrgh*/vmrgl* merges, vpk* packs,
+even/odd multiplies (which ALSO emit the wrong NEON op — MUL.8B not UMULL.8H).
+`vspltw`/`vsldoi`/element-symmetric ops are unaffected. Two fix paths documented
+on `emit_load_vr`: systematic REV32 in load/store (simple, +2 ops/op perf hit) vs
+per-op ev_mixed-aware codegen (perf-neutral, more work).
+
+### VX-form XO is UNSHIFTED
+
+Unlike X/A-form (XO at bits 21-30, emitted `xo<<1`), VX-form AltiVec ops put an
+11-bit XO at bits 21-31 with **no shift**. Shifting it (the natural mistake) gives
+an illegal no-op → another vacuous pass. (vsel is VA-form, 6-bit XO — encoded ok.)
+
+### The SheepShaver harness had NO integrity self-validation (BasiliskII does)
+
+The PPC harness lacked the duplicate/format/sentinel checks the 68k harness has.
+Adding a preflight immediately caught 3 real pre-existing **duplicate vector
+names** (crand_basic/mcrf_basic/orc_basic) where the 2nd `T_<name>` shadowed the
+1st in bash var lookup, so one vector of each pair **never ran** — silent lost
+coverage. Note: the preflight catches malformed/duplicate, NOT vacuousness (a
+vacuous vector still touches scratch GPRs, so a "changed nothing" guard misses it;
+the real defense is the gen-*-vectors.py generators).
+
+### Process: adversarial review caught what the gate didn't
+
+Both adversarial-subagent rounds found real defects (vacuous vectors, wrong fmadd
+frB/frC field order, a masking vector, the duplicate names) that a green
+`make test-jit` hid. Generators (`gen-fp-vectors.py`, `gen-altivec-vectors.py`)
+now encode correctly and document the traps — use them, don't hand-encode.

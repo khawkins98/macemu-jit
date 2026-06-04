@@ -476,8 +476,8 @@ TEST_ORDER+=(rlwnm_basic)
 # cmpwi cr0,r3,0; cmpwi cr1,r4,0; crand 0,0,4 (AND cr0.lt with cr1.lt)
 # cmpwi cr0,r3,0 = 0x2C030000; cmpwi cr1,r4,0 = 0x2C840000
 # crand 0,0,4 = 0x4C000202
-T_crand_basic="3860ffff 3880ffff 2C030000 2C840000 4C000202"
-TEST_ORDER+=(crand_basic)
+T_crand_basic2="3860ffff 3880ffff 2C030000 2C840000 4C000202"
+TEST_ORDER+=(crand_basic2)
 
 # crxor 0,0,0 (clear CR bit 0) then cror 0,0,4 (OR)
 # crxor 0,0,0 = 0x4C000182; cror 0,0,4 = 0x4C000382
@@ -488,9 +488,6 @@ TEST_ORDER+=(crxor_cror)
 # fadd: load 2.0 and 3.0 via lis/stw/lfs, add them
 # This is complex in hex. Use simpler approach: stfd a known pattern.
 # li r3,0x4000; stw r3,0x100(r1); li r3,0; stw r3,0x104(r1); lfd f1,0x100(r1)
-# That stores 0x40000000_00000000 as a double = 2.0
-T_fp_add="3C604000 90610100 38600000 90610104 C8210100 FC200890 FC211028 D8210108"
-TEST_ORDER+=(fp_add)
 
 # --- Load/store indexed ---
 # lwzx: li r3,0xBEEF; stw r3,0(r1); li r4,0; lwzx r5,r1,r4
@@ -557,13 +554,7 @@ TEST_ORDER+=(extsb_positive)
 
 # --- FP operations ---
 # fneg: store 2.0 as double, negate it, check sign
-# 2.0 double = 0x40000000_00000000
-T_fp_neg="3C604000 90610100 38600000 90610104 C8210100 FC2000D0 D8210108"
-TEST_ORDER+=(fp_neg)
 
-# fabs: store -2.0 (0xC0000000_00000000), take abs
-T_fp_abs="3C60C000 90610100 38600000 90610104 C8210100 FC200210 D8210108"
-TEST_ORDER+=(fp_abs)
 
 # --- Branch ---
 # bl +8; nop; mfspr r5,LR → r5 should equal address of nop
@@ -610,8 +601,8 @@ TEST_ORDER+=(subfe_carry_wrap)
 # --- mcrf ---
 # cmpwi cr0,r3,0 (r3=-1 → LT); mcrf cr1,cr0; then check cr1 has LT
 # cmpwi cr0,r3,0 = 0x2C030000; mcrf cr1,cr0 = 0x4C840000
-T_mcrf_basic="3860ffff 2C030000 4C840000"
-TEST_ORDER+=(mcrf_basic)
+T_mcrf_basic2="3860ffff 2C030000 4C840000"
+TEST_ORDER+=(mcrf_basic2)
 
 # --- subfe (simplified) ---
 # li r3,5; li r4,10; subfe r5,r3,r4 → r5 = r4 + ~r3 + CA ≈ 4 (simplified as subf)
@@ -643,9 +634,6 @@ T_fcmpu_basic="3C603F80 90610100 38600000 90610104 C0010100 3C604000 90610108 C0
 TEST_ORDER+=(fcmpu_basic)
 
 # --- FP mul ---
-# Store 3.0 (0x40080000) and 4.0 (0x40100000), multiply → 12.0
-T_fp_mul="3C604008 90610100 38600000 90610104 C8010100 3C604010 90610108 90610104 C8210108 FC000072 D8010110"
-TEST_ORDER+=(fp_mul)
 
 # --- isync (should be NOP) ---
 T_isync_basic="4C00012C 60000000"
@@ -856,26 +844,11 @@ TEST_ORDER+=(fuzz_xor_same)
 # ============================================================
 
 # --- FP single precision ---
-# fadds: 2.0f + 3.0f via stw/lfs pattern
-T_fp_fadds="3C604000 90610100 38600000 90610104 C0010100 3C604040 90610108 C0210108 EC211028 D0010110"
-TEST_ORDER+=(fp_fadds)
 
 # --- FP fused multiply-add ---
-# fmadd f0,f1,f2,f3 = f1*f2+f3
-T_fp_fmadd="3C604000 90610100 38600000 90610104 C8210100 FC00083A D8010108"
-TEST_ORDER+=(fp_fmadd)
 
-# --- frsp (round to single) ---
-T_fp_frsp="3C604000 90610100 38600000 90610104 C8210100 FC000018 D8010108"
-TEST_ORDER+=(fp_frsp)
 
-# --- fsel (select) ---
-T_fp_fsel="3C604000 90610100 38600000 90610104 C8010100 C8210100 FC00082E D8010108"
-TEST_ORDER+=(fp_fsel)
 
-# --- mffs/mtfsf ---
-T_fp_mffs="FC00048E D8010100"
-TEST_ORDER+=(fp_mffs)
 
 # --- Indexed load/store ---
 # stwx: li r3,0xDEAD; li r4,0; stwx r3,r1,r4; lwzx r5,r1,r4
@@ -983,8 +956,8 @@ T_bclr_cond="3860FFFF 2C030000 4D820020"
 TEST_ORDER+=(bclr_cond)
 
 # --- orc ---
-T_orc_basic="38600000 388000FF 7C652338"
-TEST_ORDER+=(orc_basic)
+T_orc_basic2="38600000 388000FF 7C652338"
+TEST_ORDER+=(orc_basic2)
 
 # --- eqv ---
 T_eqv_basic2="386000FF 388000FF 7C652238"
@@ -1092,41 +1065,17 @@ TEST_ORDER+=(twi_basic)
 # ALTIVEC VECTORS — verify NEON-backed vector operations
 # ============================================================
 
-T_vec_vadduwm="10050718 10230718 10400880 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vadduwm)
 
-T_vec_vsubuwm="10050718 10230718 10400C80 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vsubuwm)
 
-T_vec_vand="100F0718 10250718 10400C04 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vand)
 
-T_vec_vor="100A0718 10250718 10400C84 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vor)
 
-T_vec_vxor="100F0718 102F0718 10400CC4 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vxor)
 
-T_vec_vnor="10000718 10200718 10400D04 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vnor)
 
-T_vec_vmaxsw="10050718 103D0718 10400982 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vmaxsw)
 
-T_vec_vminsw="10050718 103D0718 10400B82 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vminsw)
 
-T_vec_vcmpequw="10050718 10250718 10400886 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vcmpequw)
 
-T_vec_vcmpequw_ne="10050718 10230718 10400886 38600600 7C4119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vcmpequw_ne)
 
-T_vec_vxor_self="10070718 100004C4 38600600 7C0119CE 80A10600 80C10604"
-TEST_ORDER+=(vec_vxor_self)
 
-T_vec_lvx_stvx="100C0718 38600600 7C0119CE 10210CC4 7C2118CE 38600700 7C2119CE 80A10700 80C10704"
-TEST_ORDER+=(vec_lvx_stvx)
 
 
 # --- FP load/store coverage ---
@@ -1362,12 +1311,99 @@ TEST_ORDER+=(fp_fdivs_real)
 T_fp_fmadds_real="3C604000 90610100 C0210100 3C604040 90610110 C0410110 3C604080 90610120 C0610120 EC2110FA D0210130 80810130"
 TEST_ORDER+=(fp_fmadds_real)
 
+# (probe block)
+
+
+# --- repro for the confirmed vspltb/vsplth JIT bug (NOT in TEST_ORDER) ---
+
+# ==== AltiVec coverage (generated by gen-altivec-vectors.py) =================
+# vspltw v2,v1,0 -> 0x00010203
+T_av_vspltw_0="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10400A8C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vspltw_0)
+# vspltw v2,v1,2 -> 0x08090A0B
+T_av_vspltw_2="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10420A8C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vspltw_2)
+# vspltb v2,v1,0  -> 0x00000000 (ev_mixed remap)
+T_av_vspltb_0="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10400A0C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vspltb_0)
+# vspltb v2,v1,3  -> 0x03030303
+T_av_vspltb_3="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10430A0C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vspltb_3)
+# vspltb v2,v1,15 -> 0x0F0F0F0F
+T_av_vspltb_15="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 104F0A0C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vspltb_15)
+# vsplth v2,v1,0  -> 0x00010001
+T_av_vsplth_0="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10400A4C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vsplth_0)
+# vsplth v2,v1,3  -> 0x06070607
+T_av_vsplth_3="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10430A4C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vsplth_3)
+# vsplth v2,v1,7  -> 0x0E0F0E0F
+T_av_vsplth_7="3C600001 60630203 90610600 3C600405 60630607 90610604 3C600809 60630A0B 90610608 3C600C0D 60630E0F 9061060C 38600600 7C2118CE 10470A4C 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vsplth_7)
+# vadduwm: 0x05050505+0x03030303=0x08080808
+T_av_vadduwm="1005030C 1023030C 10400880 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vadduwm)
+# vsubuwm: 0x05..-0x03..=0x02020202
+T_av_vsubuwm="1005030C 1023030C 10400C80 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vsubuwm)
+# vand: 0x05&0x03=0x01010101
+T_av_vand="1005030C 1023030C 10400C04 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vand)
+# vor: 0x05|0x03=0x07070707
+T_av_vor="1005030C 1023030C 10400C84 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vor)
+# vxor: 0x05^0x03=0x06060606
+T_av_vxor="1005030C 1023030C 10400CC4 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vxor)
+# vnor: ~(0x05|0x03)=0xF8F8F8F8
+T_av_vnor="1005030C 1023030C 10400D04 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vnor)
+# vmaxsw: signed-word max=0x05050505
+T_av_vmaxsw="1005030C 1023030C 10400982 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vmaxsw)
+# vminsw: signed-word min=0x03030303
+T_av_vminsw="1005030C 1023030C 10400B82 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vminsw)
+# vcmpequw v2,v0,v0: equal -> 0xFFFFFFFF
+T_av_vcmpequw="1005030C 10400086 38600600 7C4119CE 80A10600"
+TEST_ORDER+=(av_vcmpequw)
+# --- repro for the confirmed vspltb/vsplth JIT bug (NOT in TEST_ORDER) ---
+
 # ---- Execute all tests -------------------------------------------------------
 PASS=0
 FAIL=0
 TOTAL=${#TEST_ORDER[@]}
 
 echo "HARNESS mode=$SS_HARNESS_MODE" >&2
+
+# ---- Harness integrity preflight ---------------------------------------------
+# The SheepShaver harness previously had NO self-validation (unlike BasiliskII's).
+# Validate the vector table before trusting any result: every TEST_ORDER entry has
+# a definition, tokens are well-formed (8 hex chars), and no name/hex is duplicated.
+# NOTE: this does NOT catch vacuous vectors (whose result hides in an FPR/VR/memory
+# the REGDUMP can't see) — that defense lives in the gen-*-vectors.py generators,
+# which construct the result into a GPR with distinct operands. A harness-side
+# vacuousness guard needs a sentinel/mutation redesign (see CHANGELOG, deferred).
+_seen_name=""; _seen_hex=""; infra_fail=0
+for name in "${TEST_ORDER[@]}"; do
+    eval "hex=\"\${T_${name}:-}\""
+    if [ -z "$hex" ]; then echo "INFRA: $name is in TEST_ORDER but has no T_$name" >&2; infra_fail=1; continue; fi
+    for tok in $hex; do
+        case "$tok" in
+            [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+            *) echo "INFRA: $name has malformed token '$tok' (need exactly 8 hex chars)" >&2; infra_fail=1 ;;
+        esac
+    done
+    # Duplicate NAME is a real bug: the 2nd T_<name> shadows the 1st in bash var
+    # lookup, so one of the two vectors never runs (lost coverage). Hard fail.
+    case " $_seen_name " in *" $name "*) echo "INFRA: duplicate vector name '$name' (shadows an earlier vector — one never runs)" >&2; infra_fail=1 ;; esac
+    # Duplicate HEX is redundancy (same test twice under different names) — warn only.
+    case "$_seen_hex" in *"|$hex|"*) echo "INFRA-WARN: '$name' duplicates the hex of an earlier vector (redundant)" >&2 ;; esac
+    _seen_name="$_seen_name $name"; _seen_hex="$_seen_hex|$hex|"
+done
+if [ "$infra_fail" = "1" ]; then echo "METRIC infra_fail=1"; echo "ABORT: harness integrity check failed before running any vector" >&2; exit 1; fi
+echo "METRIC infra_fail=0"
 
 for name in "${TEST_ORDER[@]}"; do
     eval "hex=\"\${T_${name}}\""

@@ -38,11 +38,16 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   Repro vectors preserved in `gen-altivec-vectors.py`; fix deferred (needs care
   across all AltiVec ops + the interpreter's VR byte order).
 
-- **Harness has no vacuousness/integrity guard (known gap)**: the SheepShaver
-  `jit-test/run.sh` lacks the self-validation the BasiliskII harness has, and its
-  diff (interp vs JIT) passes any vector whose result is trivially equal — which is
-  why three rounds of vacuous/masking vectors slipped through. The generators now
-  enforce non-vacuous construction; a harness-side guard is the next structural fix.
+- **Harness integrity preflight added**: the SheepShaver `jit-test/run.sh` had NO
+  self-validation (unlike BasiliskII's). Added a preflight that aborts on a
+  malformed/missing/duplicate-name vector before running. On its first run it
+  caught real pre-existing bugs — three **duplicate vector names** (`crand_basic`,
+  `mcrf_basic`, `orc_basic`) where the second `T_` definition shadowed the first,
+  so one vector of each pair never ran (silent lost coverage); fixed by renaming
+  the shadowed ones (recovers the lost tests). Duplicate-hex vectors are warned
+  (redundant, non-fatal). A true **vacuousness** guard (catching a vector whose
+  result hides in an FPR/VR/memory) is still deferred — it needs a sentinel/
+  mutation redesign; the gen-*-vectors.py generators are the practical defense.
 
 ### Testing & Benchmarking
 

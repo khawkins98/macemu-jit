@@ -3313,12 +3313,12 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		 * (see emit_load_vr), so the merged result has the wrong byte positions.
 		 * Confirmed by differential test. Fix per the two approaches documented on
 		 * emit_load_vr. Repro: jit-test/gen-altivec-vectors.py. */
-		case 12: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E20C400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghb ZIP1.16B */
-		case 76: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E60C400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghh ZIP1.8H */
-		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA0C400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S */
-		case 268: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E20C800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglb ZIP2.16B */
-		case 332: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E60C800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglh ZIP2.8H */
-		case 396: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA0C800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglw ZIP2.4S */
+		case 12: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E003800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghb ZIP1.16B */
+		case 76: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E403800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghh ZIP1.8H */
+		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E803800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S */
+		case 268: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E007800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglb ZIP2.16B */
+		case 332: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E407800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglh ZIP2.8H */
+		case 396: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E807800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglw ZIP2.4S */
 
 		case 846: { emit_load_vr(0,vb); emit32(0x4E21C800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vcfsx SCVTF.4S */
 		case 910: { emit_load_vr(0,vb); emit32(0x6E21C800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vcfux UCVTF.4S */

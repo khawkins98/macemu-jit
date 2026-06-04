@@ -14,8 +14,8 @@ implementation prep). **Start here.**
 Related plans outside this directory:
 [`../COMPATIBILITY-TESTING-PLAN.md`](../COMPATIBILITY-TESTING-PLAN.md) (how we'll measure
 correctness vs the x86 JIT and real apps) ·
-[`../AARCH64_JIT_GOLDEN_WORKLOADS.md`](../../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md) (canonical test
-gate) · [`../../../LEARNINGS.md`](../../../../LEARNINGS.md) and [`../../../CHANGELOG.md`](../../../../CHANGELOG.md)
+[`SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md`](../../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md) (canonical test
+gate) · [`LEARNINGS.md`](../../../../LEARNINGS.md) and [`CHANGELOG.md`](../../../../CHANGELOG.md)
 (the JIT work's durable findings + change log — the dated session handoff docs were retired 2026-06-04).
 
 ## Reference studies (read when working the related backlog item)
@@ -27,7 +27,7 @@ gate) · [`../../../LEARNINGS.md`](../../../../LEARNINGS.md) and [`../../../CHAN
 | [`c1-residency-root-cause.md`](c1-residency-root-cause.md) | **C1** | Dual-cache trap: interpreter never consults JIT cache once warm. Fix = gate restructure, not AOT. |
 | [`c2-mame-ppc-drc-study.md`](c2-mame-ppc-drc-study.md) | **C2** | MAME PPC DRC is BSD-3-Clause and confirms our bug fixes; wholesale adoption not viable. |
 | [`b5-c3-video-implementation-prep.md`](b5-c3-video-implementation-prep.md) | **B5, C3** | Hardware cursor + QuickDraw accel already implemented in-tree; work is enable/extend. |
-| [`c4-wx-dual-mapping-spike.md`](c4-wx-dual-mapping-spike.md) | **C4** | Empirical YES: dual-mapping eliminates W^X toggling, ~27% faster. Runnable test in `../../spikes/wx-dual-mapping/`. |
+| [`c4-wx-dual-mapping-spike.md`](c4-wx-dual-mapping-spike.md) | **C4** | Empirical YES: dual-mapping eliminates W^X toggling, ~27% faster. Runnable test in `../../../../SheepShaver/spikes/wx-dual-mapping/`. |
 | [`c5-background-compilation-survey.md`](c5-background-compilation-survey.md) | **C5** | Cemu's compile-on-miss model is the design to copy; Ryujinx call-counter bolt-on. |
 | [`c5-background-compilation-feasibility.md`](c5-background-compilation-feasibility.md) | **C5** | Thread-safety audit: 2-4 days of work after C1+C4; races inventoried. |
 
@@ -35,7 +35,7 @@ gate) · [`../../../LEARNINGS.md`](../../../../LEARNINGS.md) and [`../../../CHAN
 
 | Doc | Backlog item | Deliverable |
 |-----|-------------|-------------|
-| [`b2-logical-imm-prep.md`](b2-logical-imm-prep.md) | **B2** | Tested encoder ready to integrate: [`../../src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp`](../../../../SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp) + test in `../../spikes/logical-imm/`. |
+| [`b2-logical-imm-prep.md`](b2-logical-imm-prep.md) | **B2** | Tested encoder ready to integrate: [`SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp`](../../../../SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-logical-imm.hpp) + test in `../../../../SheepShaver/spikes/logical-imm/`. |
 
 ### Dolphin deep-dives (first research round — verdicts now in the backlog)
 

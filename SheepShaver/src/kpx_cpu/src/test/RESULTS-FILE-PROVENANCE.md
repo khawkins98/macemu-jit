@@ -20,7 +20,7 @@ PPC 7410) with AltiVec tests enabled.
 This is **real-silicon ground truth** — including the results real hardware produces for
 architecturally *unspecified* cases. It is the strongest possible oracle for validating
 both the interpreter and the AArch64 JIT (see
-`../../../../docs/COMPATIBILITY-TESTING-PLAN.md`, Tier 1.4).
+`../../../../../docs/planning/sheepshaver-research/COMPATIBILITY-TESTING-PLAN.md`, Tier 1.4).
 
 ## Usage
 
@@ -42,7 +42,7 @@ The file is kept as `.bz2` in the repository deliberately:
 - **Decompression doubles as integrity verification**: `bunzip2 -k` + md5 check of the
   output against `3e29432abb6e21e625a2eef8cf2f0840` proves the file is intact — this should
   be the first step of any build wiring that uses it (see
-  `../../../../docs/COMPATIBILITY-TESTING-PLAN.md` Tier 1.4).
+  `../../../../../docs/planning/sheepshaver-research/COMPATIBILITY-TESTING-PLAN.md` Tier 1.4).
 
 Do not commit the decompressed `ppc-testresults.dat` — add it to `.gitignore` if build
 wiring produces it in-tree.

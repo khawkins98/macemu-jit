@@ -42,4 +42,4 @@ Verification: the decompressed file's md5sum is ''3e29432abb6e21e625a2eef8cf2f08
 
 To use: ''bunzip2 -k src/kpx_cpu/src/test/ppc-testresults.dat.bz2''
 
-See ''src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md'' for the full chain of custody, and ''docs/COMPATIBILITY-TESTING-PLAN.md'' (Tier 1.4) for the plan to revive the tester against this file.
+See ''src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md'' for the full chain of custody, and ''docs/planning/sheepshaver-research/COMPATIBILITY-TESTING-PLAN.md'' (Tier 1.4) for the plan to revive the tester against this file.

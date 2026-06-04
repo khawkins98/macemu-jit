@@ -46,9 +46,13 @@ not by order. The only hard sequencing is *within* a track (noted per item).
 (interp vs JIT). Still **255/255 score=100** — which now *proves* the current suite has no
 hidden FP/VR divergence (commit `9439666a`). Side effect: FP/VR results are no longer
 "vacuous" (they're captured), so the vacuousness-guard scope below narrows to memory-only /
-otherwise-unobservable results. **Next:** mirror the FPR/VR compare into `SS_JIT_VERIFY` (the
-boot-time oracle), then add the known-broken `ev_mixed` ops (`vmuleub`/`vmrgh*`/`vpkuhum`) as
-*quarantined* vectors to make A2's worklist concrete and visible.
+otherwise-unobservable results.
+✅ **Quarantine lane added** (commit `4f5825bd`): `QUARANTINE_ORDER` vectors run in JIT mode but
+don't count toward score, so `score=100` stays meaningful while confirmed bugs are *tracked*.
+Seeded with `av_vmuloub`/`av_vmuleub` (both `xfail`); when an A2 fix lands they flip to `xpass`
+and `make test-jit` prints "promote to TEST_ORDER". A2's worklist is now concrete + visible.
+**Next:** (a) extend `gen-altivec-vectors.py` to quarantine the merges (`vmrgh*`/`vmrgl*`) and
+pack (`vpkuhum`) too; (b) mirror the FPR/VR compare into `SS_JIT_VERIFY` (the boot-time oracle).
 
 **Why:** the recurring failure mode (above). Three rounds of vacuous/masking AltiVec vectors
 slipped the harness; FP vectors were vacuous for months. Fixing more codegen on top of a

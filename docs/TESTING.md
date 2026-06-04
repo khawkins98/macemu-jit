@@ -93,6 +93,29 @@ This is the strongest single recommendation: it directly tests the part of the
 JIT the automated harness covers least, and it gives a clear pass/fail without
 needing VERIFY.
 
+**Status (2026-06-04):** the in-harness FP gap is now partly closed *without* a
+boot — `jit-test/run.sh` has 18 real FP-arithmetic vectors (fadd/fsub/fmul/fdiv,
+the fma family, frsp/fctiwz/fneg/fabs/fmr, and the single-precision forms; run
+`make test-jit`). These check exact results against the interpreter. Paranoia
+adds what they can't: rounding-mode edge cases, guard-digit behaviour, and
+overflow/underflow corners.
+
+**How to run it** (manual — it needs a guest binary + a boot, so it is not a
+`make` target; agents can't boot, the user runs it):
+1. Get a Mac Paranoia build (Macintosh Garden / Repository — a PowerPC or FAT
+   binary; the C source also compiles under CodeWarrior/MPW in-guest).
+2. Copy it onto a mounted disk image (or the shared ExtFS folder).
+3. Boot SheepShaver normally (JIT on by default) and run Paranoia.
+4. **Pass = zero "serious defects" and zero "failures"** in its summary; "flaws"
+   on transcendental-ish ops can be acceptable, but compare JIT vs interpreter
+   (`SS_USE_JIT=0`) — any *difference* between the two runs is a JIT bug, since
+   the interpreter is the reference.
+
+**Automating it** (a `make test-paranoia` + CI) is deferred: it requires a
+prepared disk image with the binary and a headless boot harness, which is real
+infrastructure, not a quick win (the cycle-1 audit overestimated its ease). The
+18 in-harness FP vectors are the boot-free FP-correctness coverage for now.
+
 ### AltiVec
 
 There's no famous userland AltiVec conformance suite, but any AltiVec-accelerated

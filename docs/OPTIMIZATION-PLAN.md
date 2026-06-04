@@ -153,6 +153,28 @@ Uses ADD (not ADDS) to preserve NZCV from the initial CMP.
 to all 5 AND-mask sites: rlwinm, rlwimi (both mask and ~mask), rlwnm, andi.,
 andis.  992/1024 PPC masks are encodable.  Encoder from `ppc-logical-imm.hpp`.
 
+### 0b-extra4. SS_JIT_VERIFY: skip blr/bclr returns — OPEN (diagnostics, cosmetic)
+
+**Symptom**: a clean `SS_JIT_VERIFY=1` boot still reports exactly **one** residual
+divergence (e.g. block `100fc278`), down from the 20+ that the cascade fix removed.
+It is a **false positive, not a codegen bug**: the diverging block ends in `mtlr;
+blr` (a subroutine return into the Mixed Mode Manager), and the reported deltas are
+purely control-flow/stack — `LR`/`GPR0` differ by whole block addresses and `GPR1`
+differs by exactly the in-block `addi r1,r1,N` frame teardown. The interpreter
+replay follows the return into the callee (a different dispatch path) while the JIT
+treats the branch as a block terminator.
+
+**Why it survives the existing fix**: the cascade fix skips blocks ending in link-
+*setting* branches (`bl`/`bctrl`). A `blr`/`bclr` is link-*using* (a return), so it
+isn't skipped.
+
+**Fix**: extend the VERIFY skip filter to also skip blocks whose terminator is
+`blr`/`bclr` (the return into Mixed Mode is inherently a path divergence, never a
+codegen defect). Takes the residual 1 → 0.
+**Effort**: Low (one condition in the VERIFY gate). **Risk**: Low, but it slightly
+*reduces* oracle coverage (return blocks stop being checked) — only worth doing if
+the single residual is causing noise; otherwise leave it documented.
+
 ### 0c. isync: inline BLR instead of block break
 
 **Expected impact**: Minor per instance, but isync appears after every

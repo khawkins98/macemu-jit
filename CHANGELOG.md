@@ -100,6 +100,19 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   Mixed Mode Manager dispatch causes unavoidable interpreter/JIT path divergence
   that is not a codegen bug.
 
+- **Software link stack (R1, partial)**: Compile-time infrastructure for
+  Dolphin/RPCS3-style blr return prediction added.  Finding: `bl` always
+  terminates a block, so the compile-time stack is empty by the callee's `blr`
+  — the fast-path never fires.  Runtime variant (R1b) documented in the
+  optimization plan as a follow-up.
+
+### Code Quality
+
+- **Technique attribution**: Added source credits (Dolphin, RPCS3, MAME,
+  upstream PERFORMANCE_AUDIT) to all major JIT optimizations as inline code
+  comments — RA, CR0 cleanup, LogicalImm, ADCS carry, mullwo, atomic spcflags,
+  link stack.
+
 ### [SheepShaver] Testing & benchmarking
 
 - **18 real FP-arithmetic test vectors**: the pre-existing `fp_*` vectors were

@@ -7,7 +7,7 @@ port is deferred to a dedicated effort (boot verification required — see below
 > ⚠️ **CLAUDE.md's "BasiliskII … harness 301/301, score=100" is stale on macOS.** The B2
 > AArch64 JIT backend does not currently compile on macOS arm64 (see Remaining, below), so
 > that figure reflects a Linux/older build, not the current macOS arm64 tree. SheepShaver is
-> unaffected and fully working (SDL3 + VDE, harness 257/257).
+> unaffected and fully working (SDL3 + VDE, harness score=100 — count via `make harness-count`).
 
 ## Fixed (committed on `integration/upstream-backports`)
 

@@ -1,5 +1,9 @@
 # AArch64 JIT Bringup — BasiliskII on ARM64
 
+> For the concise cross-emulator architecture overview (both JITs + macOS arm64 constraints),
+> see [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md). This doc is the detailed BasiliskII
+> bringup history. Current macOS build status: [`MACOS-AARCH64-JIT-PORT.md`](MACOS-AARCH64-JIT-PORT.md).
+
 ## Overview
 
 This document describes the work done to bring up the experimental AArch64 (ARM64) JIT compiler in BasiliskII, enabling native ARM64 code generation for m68k emulation. The JIT translates 68040 instructions into ARM64 native code at runtime, with two optimization levels:

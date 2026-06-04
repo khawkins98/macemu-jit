@@ -4,8 +4,10 @@
 > verifications (8 confirmed, 6 refuted) → synthesis. Findings here are
 > *post-verification* (refuted claims dropped). Main-loop spot-checks noted inline.
 >
-> **Verified by main loop:** the harness is **238/238** (both `make test-jit` and
-> `make test-opcodes`, confirmed 2026-06-04) — docs citing 235/236 are stale.
+> **Verified by main loop:** the harness is green (score=100, both `make test-jit` and
+> `make test-opcodes`). The absolute vector count drifts as vectors are added/pruned (it was
+> 238 mid-cycle, 255 post-AltiVec-merge) — get the live number from `make harness-count`,
+> don't hardcode it. Score=100 is the invariant, not the count.
 
 ## Executive Summary
 

@@ -1,5 +1,9 @@
 # SheepShaver AArch64 JIT — Project Plan
 
+> For the concise cross-emulator architecture overview (both JITs + macOS arm64 constraints),
+> see [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md). Current pass/fail status:
+> [`JIT-STATUS.md`](../JIT-STATUS.md).
+
 ## Goal
 
 Bring SheepShaver's PPC emulation to full native performance on AArch64,

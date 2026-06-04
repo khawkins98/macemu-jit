@@ -141,8 +141,8 @@ The SLiRP buffer-overflow hardening (`d26ae37e` on cebix) is **already in HEAD**
 1. **VDE networking (`06d8bc02`) — ✅ MERGED.** Shared `ether_unix.cpp` + SheepShaver
    `configure.ac`/`main_unix.cpp`/`main.h`. Links `libvdeplug.3.dylib` (Homebrew `vde` 2.3.3);
    configurable via the `ether vde:` pref. Fixed two real bugs (packet length was
-   `sizeof(packet)` → trailing garbage; infinite send-retry). SheepShaver harness 257/257
-   score=100. Boot/packet-flow on real hardware still unverified.
+   `sizeof(packet)` → trailing garbage; infinite send-retry). SheepShaver harness score=100
+   (count via `make harness-count`). Boot/packet-flow on real hardware still unverified.
 
 2. **SDL3 default + `e596e215` — ✅ MERGED.** SDL3 is now the **default** SheepShaver video
    backend (links `libSDL3.0.dylib`; `--with-sdl2` opts back). **Boot-verified to Finder

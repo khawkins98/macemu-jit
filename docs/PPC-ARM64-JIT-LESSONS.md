@@ -184,8 +184,8 @@ Every bug was found using the same procedure:
    fetch-and-dump mechanism (the ROM is compressed; raw file reads don't work)
 3. **Read the JIT codegen** for each decoded instruction — compare against
    the PPC architecture manual
-4. **Fix and verify** — harness test (235/235) + boot test (VNC screenshot
-   at 20s and 90s)
+4. **Fix and verify** — harness test (`make test-jit`, score=100) + boot test (VNC
+   screenshot at 20s and 90s)
 
 This method is mechanical and repeatable. Each bug takes 1-4 hours to find
 once the binary search isolates the region. The hard part is recognizing
@@ -259,4 +259,4 @@ no workarounds. Both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably
 - **fmsub/fnmsub encoding**: FIXED — swapped to correct ARM64 sign conventions
 - **lwarx/stwcx./mftb fallback**: FIXED — interpreter fallback for CPU-object state
 - **bcctr conditional**: FIXED — interpreter fallback (was the last fix for HD boot)
-- **Configuration**: ROM=0x500000, chaining=1, harness 235/235 score=100
+- **Configuration**: ROM=0x500000, chaining=1, harness score=100 (count via `make harness-count`)

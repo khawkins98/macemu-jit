@@ -39,13 +39,13 @@ Two caveats:
 
 | Test | Command | Gate |
 |------|---------|------|
-| **JIT↔interp equivalence — THE codegen gate** | `cd SheepShaver && make test-jit` | 238/238, score=100 (2026-06-04) |
+| **JIT↔interp equivalence — THE codegen gate** | `cd SheepShaver && make test-jit` | 253/253, score=100 (2026-06-04) |
 | Interpreter determinism (default) | `cd SheepShaver && make test-opcodes` | score=100 — *but see note* |
 | Single opcode vector (JIT path) | `SS_TEST_HEX=<hex> SS_TEST_JIT=1 make test-opcodes` | — |
 | ROM harness (headless JIT exerciser) | `cd SheepShaver && make test-rom` | no failures |
 | Build | `cd SheepShaver && make build-ss` | clean |
 
-> **MODE MATTERS — the default does NOT test the JIT.** The same ~238 vectors run
+> **MODE MATTERS — the default does NOT test the JIT.** The same ~253 vectors run
 > two ways:
 > - `make test-opcodes` (default, `SS_HARNESS_MODE=interp`) runs each vector
 >   *twice through the interpreter* and diffs the REGDUMPs — it validates

@@ -316,6 +316,7 @@ function renderWizardStep(): string {
 }
 
 let settingsSection = "general";
+let pendingSettings: Record<string, string> = {};
 
 function renderSettings(): string {
   const vm = vms.find((v) => v.id === selectedVmId);
@@ -389,7 +390,7 @@ function renderSettings(): string {
       <div class="form-group">
         <label>Sound</label>
         <select class="input" id="setting-nosound">
-          <option value="true" ${vm.screen ? "selected" : ""}>Disabled</option>
+          <option value="true">Disabled</option>
           <option value="false">Enabled</option>
         </select>
       </div>
@@ -461,6 +462,23 @@ async function pickFile(
   if (typeof result === "string") return result;
   if (result && "path" in result) return (result as { path: string }).path;
   return null;
+}
+
+function captureCurrentSectionSettings() {
+  const fields: [string, string, (v: string) => string][] = [
+    ["setting-name", "name", (v) => v],
+    ["setting-ram", "ramsize", (v) => v + "M"],
+    ["setting-screen", "screen", (v) => v],
+    ["setting-ether", "ether", (v) => v],
+    ["setting-nosound", "nosound", (v) => v],
+    ["setting-jitcache", "jitcachesize", (v) => v],
+  ];
+  for (const [elId, key, transform] of fields) {
+    const el = document.getElementById(elId) as HTMLInputElement | HTMLSelectElement | null;
+    if (el) {
+      pendingSettings[key] = transform(el.value);
+    }
+  }
 }
 
 async function handleAction(e: Event) {
@@ -594,6 +612,8 @@ async function handleAction(e: Event) {
     case "settings":
       if (id) {
         selectedVmId = id;
+        settingsSection = "general";
+        pendingSettings = {};
         currentView = "settings";
         render();
       }
@@ -654,26 +674,19 @@ async function handleAction(e: Event) {
       break;
 
     case "switch-section":
+      captureCurrentSectionSettings();
       settingsSection = target.dataset.section || "general";
       render();
       break;
 
     case "save-settings":
       if (selectedVmId) {
+        captureCurrentSectionSettings();
         try {
-          const nameEl = document.getElementById("setting-name") as HTMLInputElement;
-          const ramEl = document.getElementById("setting-ram") as HTMLSelectElement;
-          const screenEl = document.getElementById("setting-screen") as HTMLSelectElement;
-
-          if (nameEl) {
-            await invoke("update_vm_setting", { id: selectedVmId, key: "name", value: nameEl.value });
+          for (const [key, value] of Object.entries(pendingSettings)) {
+            await invoke("update_vm_setting", { id: selectedVmId, key, value });
           }
-          if (ramEl) {
-            await invoke("update_vm_setting", { id: selectedVmId, key: "ramsize", value: ramEl.value + "M" });
-          }
-          if (screenEl) {
-            await invoke("update_vm_setting", { id: selectedVmId, key: "screen", value: screenEl.value });
-          }
+          pendingSettings = {};
           vms = await loadVms();
           showToast("Settings saved", "success");
           render();

@@ -3,13 +3,14 @@
 mod prefs;
 mod vm;
 
+use std::process::Child;
 use std::sync::Mutex;
 use tauri::State;
 use vm::{CreateVmRequest, VmProfile};
 
 struct RunningVm {
     id: String,
-    pid: u32,
+    child: Child,
 }
 
 struct AppState {
@@ -95,8 +96,7 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to launch SheepShaver: {}", e))?;
 
-    let pid = child.id();
-    *running = Some(RunningVm { id, pid });
+    *running = Some(RunningVm { id, child });
 
     Ok(())
 }
@@ -107,11 +107,7 @@ fn stop_vm(state: State<AppState>) -> Result<(), String> {
     if let Some(ref r) = *running {
         #[cfg(unix)]
         unsafe {
-            libc::kill(r.pid as i32, libc::SIGUSR1);
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = r.pid;
+            libc::kill(r.child.id() as i32, libc::SIGUSR1);
         }
         *running = None;
         Ok(())
@@ -123,16 +119,18 @@ fn stop_vm(state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 fn is_vm_running(state: State<AppState>) -> Option<String> {
     let mut running = state.running.lock().ok()?;
-    if let Some(ref r) = *running {
-        #[cfg(unix)]
-        {
-            let alive = unsafe { libc::kill(r.pid as i32, 0) } == 0;
-            if !alive {
+    if let Some(ref mut r) = *running {
+        match r.child.try_wait() {
+            Ok(Some(_)) => {
                 *running = None;
-                return None;
+                None
+            }
+            Ok(None) => Some(r.id.clone()),
+            Err(_) => {
+                *running = None;
+                None
             }
         }
-        Some(r.id.clone())
     } else {
         None
     }

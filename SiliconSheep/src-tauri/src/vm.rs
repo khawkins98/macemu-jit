@@ -232,13 +232,30 @@ pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> 
     copy_dir_recursive(&source_dir, &dest_dir)
         .map_err(|e| format!("Failed to copy VM: {}", e))?;
 
+    let source_dir_str = source_dir.to_string_lossy().to_string();
+    let dest_dir_str = dest_dir.to_string_lossy().to_string();
+
+    let new_disk_paths: Vec<String> = source
+        .disk_paths
+        .iter()
+        .map(|p| p.replace(&source_dir_str, &dest_dir_str))
+        .collect();
+
+    let new_cd_path = source.cd_path.replace(&source_dir_str, &dest_dir_str);
+
+    let prefs_path = dest_dir.join("prefs");
+    if let Ok(content) = fs::read_to_string(&prefs_path) {
+        let updated = content.replace(&source_dir_str, &dest_dir_str);
+        fs::write(&prefs_path, updated).ok();
+    }
+
     let new_profile = VmProfile {
         id: new_id,
         name: new_name.to_string(),
         rom_path: source.rom_path,
         ram_mb: source.ram_mb,
-        disk_paths: source.disk_paths,
-        cd_path: source.cd_path,
+        disk_paths: new_disk_paths,
+        cd_path: new_cd_path,
         screen: source.screen,
     };
 

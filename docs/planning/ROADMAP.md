@@ -93,8 +93,16 @@ harness that can't catch mistakes just produces the next silent bug.
 (media codecs, AltiVec-era apps) — latent, not a boot-blocker, but the worst failure mode.
 
 **Status:** splats (`vspltb`/`vsplth`) FIXED + merged; `vspltw`/`vsldoi` were already correct.
-**Still wrong:** merges (`vmrghb`/`vmrglb`/`vmrghw`/`vmrglw`), pack (`vpkuhum`), even/odd byte
-multiplies (`vmuleub`/`vmuloub`). `vmuloub` *also* emits non-widening `MUL.8B` instead of `UMULL.8H`.
+✅ **word merges `vmrghw`/`vmrglw` FIXED** (branch `feat/altivec-ev-mixed-fix`, commit `b1bb6b52`,
+**boot-pending**): all 6 `vmrgh*`/`vmrgl*` encodings were garbage (`0x..C400`/`0x..C800` — not
+permute ops); replaced with correct `ZIP1`/`ZIP2`. Word merges flipped `xfail→xpass`, 255 green.
+**Still wrong (7):** byte/halfword merges (`vmrgh{b,h}`/`vmrgl{b,h}`), pack (`vpkuhum`), even/odd
+byte multiplies (`vmuleub`/`vmuloub` — latter also needs `UMULL.8H` not `MUL.8B`).
+**Byte-merge mechanism (data, 2026-06-04):** with the correct `ZIP1.16B`, `vmrghb v2,v1,v1` gives
+the right byte *pairs* but **pairwise-swapped words** (`w0↔w1`, `w2↔w3`) vs interp — the
+`ev_mixed` within-word byte reversal. A trailing `REV64.4S` is the likely fix, BUT **verify with
+distinct operands** (the quarantine vectors are self-operand `v1,v1` → a fix can pass coincidentally).
+→ strengthen the byte/hw merge quarantine vectors to two distinct operands *before* fixing them.
 
 **Root cause:** VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed
 within each word). `emit_load_vr` loads raw via `LDR Q`; the JIT then indexes NEON lanes with

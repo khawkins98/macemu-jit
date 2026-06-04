@@ -4,6 +4,21 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 
 ## 2026-06-04
 
+### Upstream Backports
+
+- **Wayland detection without GTK** (backport of upstream `91d58b12`, Dave
+  Vasilevsky): `init_sdl()` previously forced `SDL_VIDEODRIVER=x11` only under
+  `#if REAL_ADDRESSING && defined(GDK_WINDOWING_WAYLAND)`, so a `--without-gtk`
+  SDL build never got the XWayland workaround that avoids a Wayland mmap/fixed-
+  low-address-mapping crash. The guard is now `#if REAL_ADDRESSING &&
+  defined(__linux__)` plus a runtime `getenv("WAYLAND_DISPLAY")` check, so the
+  workaround applies in non-GTK SDL builds. **Inert on macOS**: the block is
+  gated on `defined(__linux__)`, which is never defined on Darwin (only
+  `__APPLE__`/`__MACH__`), so it compiles out entirely on the macOS arm64 build
+  (which uses DIRECT_ADDRESSING regardless). Brought in for a future
+  Linux/Wayland target; runtime Wayland behavior is not verifiable on macOS.
+  Harness unaffected: `make test-jit` 257/257, score=100.
+
 ### JIT Correctness
 
 - **AltiVec `vsel` fix**: `vsel` (vector select) emitted ARM64 `BSL` with its two

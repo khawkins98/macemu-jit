@@ -54,9 +54,12 @@ multiplies (`vmuloub`/`vmuleub`), merges (`vmrgh{b,h,w}`/`vmrgl{b,h,w}`), pack (
 report `xfail`. When an A2 fix lands they flip `xfail`→`xpass` and `make test-jit` prints
 "promote to TEST_ORDER". **A2's worklist is now concrete + visible** (and was used to rule out
 approach A — see A2).
-**Remaining A1:** (a) regenerate the scored word-op vectors with distinct operands (masking gap
-found via the A2 experiment — see A2); (b) mirror the FPR/VR compare into `SS_JIT_VERIFY` (the
-boot-time oracle).
+✅ **`SS_JIT_VERIFY` now compares FPR + VR** (commit `6837f642`): the boot-time oracle catches
+FP/AltiVec divergence in real software (`SS_JIT_VERIFY=1 ./SheepShaver`), not just GPR/flags —
+the in-the-wild validation path for A2.
+**Remaining A1:** regenerate the scored word-op vectors with **distinct operands** (the masking
+gap found via the A2 experiment — see A2; uniform palindrome operands can't catch byteswap/lane
+bugs). Safe + here-verifiable; do before trusting any broad VR-codegen change.
 
 **Why:** the recurring failure mode (above). Three rounds of vacuous/masking AltiVec vectors
 slipped the harness; FP vectors were vacuous for months. Fixing more codegen on top of a

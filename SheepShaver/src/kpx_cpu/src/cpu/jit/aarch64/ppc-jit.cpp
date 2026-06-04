@@ -775,14 +775,42 @@ static void emit_load_ea_base(int ra_num) {
 /* VR[n] at offset 384 + n*16, each 128-bit (16 bytes) */
 #define PPCR_VR(n) ((uint32_t)(512 + (n) * 16))
 
-/* Load 128-bit vector register into ARM64 Q register (NEON) */
+/* Load 128-bit vector register into ARM64 Q register (NEON).
+ *
+ * ============================ KNOWN AltiVec BUG (PARKED) ============================
+ * The VR is stored in the interpreter's *ev_mixed* byte order (ppc-operands.hpp):
+ *     byte_element(i) = (i & ~3) + (3 - (i & 3))   // bytes reversed WITHIN each word
+ *     half_element(i) = (i & ~1) + (1 - (i & 1))   // halfwords swapped within pairs
+ *     word_element(i) = i                          // word order preserved
+ * This raw `LDR Q` therefore puts PPC element `i` in NEON lane byte_element(i), NOT
+ * lane `i`. Any op whose semantics depend on sub-word *position* sees the wrong
+ * lanes. Confirmed by differential vectors (gen-altivec-vectors.py):
+ *   BROKEN: vmrghb/vmrglb/vmrghw/vmrglw (merges), vpkuhum (pack), vmuloub/vmuleub
+ *           (even/odd byte multiplies — these ALSO emit the wrong NEON op: case 8
+ *           below emits MUL.8B, not the widening UMULL.8H).
+ *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops.
+ *   FIXED:  vspltb/vsplth (case 524/588 below remap the DUP index via byte/half_element).
+ *
+ * TWO FIX APPROACHES (neither done — needs a boot to verify real AltiVec software):
+ *   (A) Systematic: make this LDR Q + REV32.16B (and store = REV32.16B + STR Q) so
+ *       the NEON reg holds natural element order and every op can use raw lanes
+ *       (then REVERT the vspltb/vsplth remap). Simplest, but +2 NEON ops per AltiVec
+ *       op (a perf hit) and changes the in-JIT VR convention — re-verify everything,
+ *       and lvx/stvx (which must keep producing ev_mixed vr[] for the interpreter).
+ *   (B) Per-op: leave storage as-is and make each broken op's codegen ev_mixed-aware
+ *       (like the splat remap). Perf-neutral, but a careful derivation per op, and
+ *       the multiplies additionally need UMULL/UMULL2 + a deinterleave.
+ * Repro vectors live in jit-test/gen-altivec-vectors.py (the BUG[] list). ==============
+ */
 static void emit_load_vr(int qd, int vr_num) {
 	uint32_t off = PPCR_VR(vr_num);
-	/* LDR Qt, [Xn, #imm] — 128-bit vector load, unsigned offset scaled by 16 */
+	/* LDR Qt, [Xn, #imm] — 128-bit vector load, unsigned offset scaled by 16.
+	 * NOTE: loads ev_mixed byte order raw (see the KNOWN AltiVec BUG note above). */
 	emit32(0x3DC00000 | ((off / 16) << 10) | (RSTATE << 5) | qd);
 }
 
-/* Store ARM64 Q register into VR[n] */
+/* Store ARM64 Q register into VR[n]. See the ev_mixed byte-order note on
+ * emit_load_vr — a systematic fix would REV32.16B here before the STR Q. */
 static void emit_store_vr(int qs, int vr_num) {
 	uint32_t off = PPCR_VR(vr_num);
 	emit32(0x3D800000 | ((off / 16) << 10) | (RSTATE << 5) | qs);
@@ -3179,6 +3207,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 640: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA07C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsws SQADD.4S */
 		case 1536: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubsbs SQSUB.16B */
 		case 1600: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubshs SQSUB.8H */
+		/* FIXME(altivec-ev_mixed, PARKED): the vmrgh and vmrgl merges below are BROKEN.
+		 * ZIP1/ZIP2 interleave raw NEON lanes, but the VR is in ev_mixed byte order
+		 * (see emit_load_vr), so the merged result has the wrong byte positions.
+		 * Confirmed by differential test. Fix per the two approaches documented on
+		 * emit_load_vr. Repro: jit-test/gen-altivec-vectors.py. */
 		case 12: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E20C400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghb ZIP1.16B */
 		case 76: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E60C400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghh ZIP1.8H */
 		case 140: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA0C400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrghw ZIP1.4S */
@@ -3192,7 +3225,15 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 906: { emit_load_vr(0,vb); emit32(0x6EA1B800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vctuxs FCVTZU.4S */
 		case 354: { emit_load_vr(0,vb); emit32(0x4E21D800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vexptefp FRECPE (approx) */
 		case 418: { emit_load_vr(0,vb); emit32(0x4EA1D800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vlogefp (approx via FRECPE) */
-		case 8: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E209C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuloub UMULL.8H (odd bytes) */
+		/* FIXME(altivec-ev_mixed, PARKED): the even/odd byte/halfword multiplies below
+		 * are DOUBLY broken — (1) they emit MUL.8B/SMULL2 etc. that do NOT match PPC
+		 * even/odd semantics (vmuloub here emits MUL.8B = non-widening byte multiply,
+		 * NOT UMULL.8H despite the comment), and (2) even with the right widening op,
+		 * "even/odd PPC byte" maps to scattered NEON lanes under ev_mixed (see
+		 * emit_load_vr). A correct fix needs UMULL/UMULL2 + an ev_mixed-aware
+		 * deinterleave. Confirmed broken by differential test (vmuloub 5*3: want
+		 * 0x000F per halfword, got 0x0F per byte). Repro: gen-altivec-vectors.py. */
+		case 8: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E209C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuloub — BROKEN (emits MUL.8B; see FIXME) */
 		case 72: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmulouh UMULL.4S */
 		case 264: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E20A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuleub UMULL2.8H */
 		case 328: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E60A000|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmuleuh UMULL2.4S */

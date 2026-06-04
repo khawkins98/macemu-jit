@@ -175,6 +175,30 @@ the OTH rule, prune `/tmp` logs, quiet-mode env gate).
 
 ---
 
+## A5. 🔜 End-to-end VNC test harness — system-level boot/run/shutdown regression
+
+**Why:** A1/A2 verify the JIT *per instruction*; nothing automatically checks the emulator *as a
+running system* — "does it still boot to the Finder and shut down cleanly after a codegen
+change?" That's today a manual human-at-VNC step. This is the highest-leverage item for **agent
+autonomy in testing**: it turns the one check agents currently *can't* self-serve (boot/run) into
+a scriptable pass/fail, so an agent can validate its own JIT change end-to-end instead of handing
+every boot back to the user.
+
+**Approach:** spawn SheepShaver with an *isolated* config (own prefs + pristine-disk-per-run),
+drive it over the **built-in bidirectional VNC server** (`vnc_server.cpp` already wires
+kbd/ptr→ADB), and assert with **hybrid observability** — host-log signals as the deterministic
+spine (booted / exit 0 / atexit report) + masked perceptual-hash screenshots as a tolerant visual
+gate (exact frame-hash rejected as flaky). Canonical v1: `boot → Special ▸ Shut Down → assert
+clean exit` (also regression-tests the 2026-06-03 clean-shutdown feature).
+
+**Effort:** P1 (lifecycle smoke) ~1–2 days; P2 (golden-diff + app launch) +1–2 days; P3 (scenario
+framework) larger, only if earned. Needs a small pristine test disk image (asset) + `vncdotool`/
+`imagehash` deps. **Policy:** relaxes the no-boot rule to "ask the user first" (done in
+CONTRIBUTING + CLAUDE.md). **Complements** A1's boot-rig need (Paranoia FP conformance runner).
+**Detail:** `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`.
+
+---
+
 # Track B — Performance / JIT optimization
 
 Full plan, with per-lever effort/payoff and measured baselines, lives in

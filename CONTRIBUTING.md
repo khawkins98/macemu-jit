@@ -181,7 +181,9 @@ the low word. Safe today (PPC64 ops unreachable from 32-bit guests). Must fix be
 enabling G5/PPC64 paths.
 
 **One emulator instance at a time:** Instances share prefs, disk images, and SDL window.
-Kill strays with `pkill -9 -x SheepShaver`. Agents must not launch emulator instances.
+Kill strays with `pkill -9 -x SheepShaver`. Agents must not launch an emulator instance
+without asking the user first (the E2E harness — ROADMAP A5 — is the sanctioned, isolated
+exception: it uses its own prefs + a pristine per-run disk, never the user's config).
 
 ## Benchmarking
 

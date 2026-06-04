@@ -4,6 +4,21 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
 
 ## 2026-06-04
 
+### Networking
+
+- **VDE virtual networking** (backport of upstream `06d8bc02`): SheepShaver can now use
+  a VDE switch for Ethernet. The destination VDE link is configured directly in the
+  `ether` pref via a new `vde:` prefix (e.g.
+  `--ether 'vde:cmd://ssh root@server vde_plug tap://tap0'`), so it persists with the
+  rest of the prefs. Two correctness fixes in the shared `ether_unix.cpp` send path:
+  outgoing packets now send the actual frame length (was `sizeof(packet)`, which
+  appended trailing garbage), and the infinite `do {} while (len < 0)` send-retry was
+  replaced with a proper `excessCollsns` error return. SheepShaver's `configure` gains
+  `--with-vdeplug` (default yes) and an `AC_CHECK_LIB(vdeplug, vde_close)` probe that
+  defines `HAVE_LIBVDEPLUG` and links `-lvdeplug` when the library is present (Homebrew
+  `vde`, header `libvdeplug.h`). The bare `vde` ether pref (no destination) still works.
+  Boot/packet-flow on real hardware is unverified by this change.
+
 ### JIT Correctness
 
 - **AltiVec `vsel` fix**: `vsel` (vector select) emitted ARM64 `BSL` with its two
@@ -12,6 +27,22 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   silently corrupt any AltiVec software that uses `vsel` (the emulator advertises a
   G4, so AltiVec is live). One-token operand swap; caught and regression-tested by
   a new differential vector.
+
+- **AltiVec element-order bug (found + root-caused, fix pending)**: `vspltb`,
+  `vsplth`, and the even/odd byte multiplies (`vmuloub`/`vmuleub`) select the WRONG
+  element. Confirmed via differential vectors (e.g. `vspltb v2,v1,3` → interp
+  `0x03030303`, JIT `0x00000000`). Root cause: `emit_load_vr` (ppc-jit.cpp:779) is a
+  plain `LDR Q` that reverses byte order *within* each 32-bit word but preserves
+  word order — so word ops (`vspltw`) are correct while any sub-word-position op is
+  wrong. Likely blast radius: `vmrgh*`/`vmrgl*`, `vpk*`/`vupk*`, `vsldoi`, `vperm`.
+  Repro vectors preserved in `gen-altivec-vectors.py`; fix deferred (needs care
+  across all AltiVec ops + the interpreter's VR byte order).
+
+- **Harness has no vacuousness/integrity guard (known gap)**: the SheepShaver
+  `jit-test/run.sh` lacks the self-validation the BasiliskII harness has, and its
+  diff (interp vs JIT) passes any vector whose result is trivially equal — which is
+  why three rounds of vacuous/masking vectors slipped through. The generators now
+  enforce non-vacuous construction; a harness-side guard is the next structural fix.
 
 ### Testing & Benchmarking
 
@@ -23,12 +54,14 @@ Changes specific to the `macos-arm64` branch (fork of kanjitalk755/macemu).
   the fma family, frsp/fctiwz/fneg/fabs/fmr, and single-precision forms). Generated
   by `jit-test/gen-fp-vectors.py` (documented, reproducible).
 
-- **AltiVec coverage (corrected in review)**: an initial 15-vector AltiVec batch
-  was added, but adversarial review found 14 were vacuous — VX-form ops carried a
-  doubled XO field, decoding to no-ops, so their results never reached the checked
-  GPRs. Those were removed; the one correctly-encoded vector (`vsel`) is kept. A
-  correctly-encoded `vspltb` probe exposed a *separate* hidden interp-vs-JIT
-  divergence, flagged for follow-up. A proper VX-form AltiVec batch is pending.
+- **AltiVec test coverage was almost entirely fake**: an initial 15-vector batch
+  (14 vacuous, doubled-XO no-ops) *and* all 12 pre-existing `vec_*` vectors were
+  found vacuous — confirmed empirically (result GPRs read 0 in both modes). The
+  cycle-1 "13/207 AltiVec covered" was illusory. Replaced with 13 correctly-encoded,
+  verified-non-vacuous vectors (vsel, vspltw, the vand/vor/vxor/vnor/vadduwm/
+  vsubuwm/vmaxsw/vminsw/vcmpequw arith-logical-compare set), via the documented
+  `jit-test/gen-altivec-vectors.py`. Three rounds of vacuous/masking vectors slipped
+  the harness — see the "no integrity guard" note in JIT Correctness below.
 
 - **`make harness-count`**: single source of truth for the harness vector count,
   derived from `jit-test/run.sh` (the count had drifted across several docs). The

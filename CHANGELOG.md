@@ -82,6 +82,17 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   G4, so AltiVec is live). One-token operand swap; caught and regression-tested by
   a new differential vector.
 
+- **AltiVec `vspltb`/`vsplth` element-order fix (ev_mixed)**: byte/halfword splats
+  selected the WRONG element. VRs are stored in the interpreter's `ev_mixed` byte
+  order (`byte_element(i)=(i&~3)+(3-(i&3))` — bytes reversed *within* each 32-bit
+  word, word order preserved), but `emit_load_vr` loads it raw via `LDR Q`, so the
+  JIT indexed NEON lanes with the raw PPC element. Fixed by remapping the DUP index
+  through `ev_mixed` (verified across indices 0/3/15 and 0/3/7); `vspltw`/`vsldoi`/
+  element-symmetric ops were already correct. The same mismatch still affects
+  `vmrg*`/`vpk*`/even-odd multiplies — parked and signposted in code (`emit_load_vr`)
+  and tracked as **P1b** in OPTIMIZATION-PLAN.md (two fix approaches documented).
+  Repro vectors in `jit-test/gen-altivec-vectors.py`.
+
 - **`emit_update_cr0` cleanup (B1)**: CR0 field construction reduced from 19 to
   11 ARM64 instructions.  Replaced 3x `emit_load_imm32` + 3x CSEL + LSL + AND +
   ORR with 3x CSET + 3x shifted ADD + BFI.  Every Rc=1 instruction benefits.
@@ -121,14 +132,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   the JIT-vs-interpreter diff passed trivially. FP arithmetic was effectively
   untested. The new vectors load the result back into a GPR (fadd/fsub/fmul/fdiv,
   the fma family, frsp/fctiwz/fneg/fabs/fmr, and single-precision forms). Generated
-  by `jit-test/gen-fp-vectors.py` (documented, reproducible).
+  by `jit-test/gen-fp-vectors.py` (documented, reproducible). The 9 vacuous `fp_*`
+  originals were then removed (kept `fp_lfd_stfd`/`fp_lfs_stfs` — those *do* round-
+  trip the value back into a GPR, so they are real load/store tests).
 
-- **AltiVec coverage (corrected in review)**: an initial 15-vector AltiVec batch
-  was added, but adversarial review found 14 were vacuous — VX-form ops carried a
-  doubled XO field, decoding to no-ops, so their results never reached the checked
-  GPRs. Those were removed; the one correctly-encoded vector (`vsel`) is kept. A
-  correctly-encoded `vspltb` probe exposed a *separate* hidden interp-vs-JIT
-  divergence, flagged for follow-up. A proper VX-form AltiVec batch is pending.
+- **AltiVec coverage rebuilt (corrected over several review rounds)**: an initial
+  15-vector batch (14 vacuous — VX-form doubled-XO no-ops) *and* all 12 pre-existing
+  `vec_*` vectors were found vacuous (results never reached a checked GPR). Replaced
+  with correctly-encoded, verified-non-vacuous vectors via the documented
+  `jit-test/gen-altivec-vectors.py` (VX-form XO is unshifted; operands must be
+  distinct per-lane to avoid the masking trap). The `vspltb`/`vsplth` probe that
+  exposed the ev_mixed divergence was **fixed** (see JIT correctness above), not
+  merely flagged; the still-broken `vmrg*`/`vpk*`/multiply ops have repro vectors
+  parked in the generator's bug set.
+
+- **Harness integrity preflight**: the SheepShaver `jit-test/run.sh` had no
+  self-validation (unlike BasiliskII's). Added a preflight that aborts on a
+  malformed/missing/duplicate-name vector before the run. It immediately caught
+  three real pre-existing **duplicate vector names** (`crand_basic`/`mcrf_basic`/
+  `orc_basic`) where the second `T_` definition shadowed the first, so one vector of
+  each pair never ran (silent lost coverage); fixed by renaming the shadowed ones.
+  Vacuousness itself is not caught (a vacuous vector still touches scratch GPRs) —
+  the `gen-*-vectors.py` generators are the practical defense there.
 
 - **`make harness-count`**: single source of truth for the harness vector count,
   derived from `jit-test/run.sh` (the count had drifted across several docs). The

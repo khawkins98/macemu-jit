@@ -37,6 +37,38 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 - `SS_JIT_VERIFY=1` status for RA/CR/flag changes
 - What was tried and reverted, if applicable
 
+## Crediting Borrowed Techniques
+
+This JIT borrows codegen and optimization ideas from other emulators (Dolphin, RPCS3,
+MAME), from upstream macemu, and from CPU-architecture references. **When you contribute
+code that applies a non-obvious technique, leave a comment that says where it came from,
+what the technique is, and why it works** — not just *what* the code does. The next person
+should be able to evaluate the idea without reverse-engineering it from the emitted
+instructions.
+
+A good attribution comment answers three questions:
+1. **Source** — where the idea came from (project + a specific anchor: a file, a function,
+   an upstream commit SHA, or a doc like `PERFORMANCE_AUDIT`). For straight backports, cite
+   the upstream SHA (see the backport-hygiene rule below).
+2. **Technique** — the name of the trick, so it's searchable (e.g. "ARM64 bitmask-immediate
+   encoding", "software link-stack return prediction", "two-step ADDS carry capture").
+3. **Why it works / why it's safe** — the property that makes it correct or faster, and any
+   precondition (e.g. "992/1024 PPC masks are encodable; falls back to MOV+AND otherwise").
+
+Example (from the LogicalImm encoder):
+```cpp
+// Technique: ARM64 bitmask-immediate encoding (Dolphin's Arm64Emitter::TryEncodeLogicalImm,
+// also RPCS3). Many PPC rlwinm/andi. masks are expressible as a single AND immediate, so we
+// skip the MOV-imm + AND pair. Why safe: encoder returns false for the 32/1024 non-encodable
+// masks and we fall back to the materialized path. See ppc-logical-imm.hpp.
+```
+
+For pure upstream backports, also follow the existing **backport-hygiene** rule: cite the
+upstream SHA in the code comment, and mark prospective/untestable code as such in both the
+comment and the CHANGELOG. Keep attributions honest — if a technique was tried and only
+*partially* works (e.g. the compile-time link stack), say so in the comment and the plan,
+don't imply a clean win.
+
 ## Change Checklists
 
 ### JIT codegen change (ppc-jit.cpp)
@@ -47,6 +79,7 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 - [ ] `make bench` before/after if the change affects codegen performance
 - [ ] Add harness test vector for the affected instruction if one doesn't exist
 - [ ] Add/update inline ARM64 mnemonic comments on emit32() calls
+- [ ] Credit any borrowed technique in an inline comment — see **Crediting Borrowed Techniques** below
 - [ ] Update `docs/OPTIMIZATION-PLAN.md` if completing or investigating a plan item
 - [ ] Update `CHANGELOG.md` for user-visible changes
 - [ ] Update `LEARNINGS.md` if the change reveals a non-obvious finding

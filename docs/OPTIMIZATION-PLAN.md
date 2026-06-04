@@ -8,7 +8,7 @@
 | Dhrystones/sec | 1,348K | **1,475K** | **+9.4%** |
 | CPU score | 62.7 | **64.2** | +2.2% |
 | Math score | 11,539 | **12,354** | +7.1% |
-| Harness | 235/235 | 257/257 (2026-06-04) | +FP, AltiVec, carry-wrap vectors |
+| Harness | 235/235 | 255/255 (2026-06-04, post-merge) | +FP, AltiVec, carry-wrap, mullwo vectors (count via `make harness-count`) |
 
 Target: **3-5x** over interpreter, approaching G4/1.8GHz class.
 
@@ -317,17 +317,10 @@ this round-trip.
 
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 
-**Status**: Partially done (2026-06-04).  `vspltb`/`vsplth` fixed by remapping
-the DUP index through the interpreter's `ev_mixed` byte order.  `vspltw` was
-already correct (word order preserved).
-
-**Remaining**: `vmrghb`/`vmrglb`/`vmrghw`/`vmrglw` (merges), `vpkuhum` (pack),
-and `vmuloub`/`vmuleub` (even/odd multiplies — these have an ADDITIONAL bug:
-`MUL.8B` instead of `UMULL.8H`).  Systematic fix option: `emit_load_vr`/
-`emit_store_vr` do `REV32.16B` to convert ev_mixed↔natural lane order, at the
-cost of 2 extra NEON ops per AltiVec instruction.  Repro vectors in
-`gen-altivec-vectors.py`.
-**Effort**: Medium.  **Risk**: Medium (must re-verify every AltiVec op + boot).
+Tracked as **P1b** in the "Open — Hardening" section above (single source of
+truth). Summary: `vspltb`/`vsplth` fixed; `vmrg*`/`vpk*`/even-odd multiplies
+still broken (multiplies also emit the wrong NEON op). Two fix approaches and
+repro vectors documented there.
 
 ### P6: Instruction Scheduling
 

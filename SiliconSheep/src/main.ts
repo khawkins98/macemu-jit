@@ -711,13 +711,14 @@ async function handleAction(e: Event) {
         { name: "Disk Images", extensions: ["dsk", "img", "hfv"] },
       ]);
       if (path && selectedVmId) {
-        const vm_dir = (await invoke("get_vm", { id: selectedVmId }) as VmProfile);
-        const currentDisks = vm_dir.disk_paths;
-        if (!currentDisks.includes(path)) {
-          // For now, add via a direct prefs append — TODO: proper multi-value support
-          console.log("Would add disk:", path);
+        try {
+          await invoke("add_vm_disk", { id: selectedVmId, path, isCdrom: false });
+          vms = await loadVms();
+          showToast("Disk added", "success");
+          render();
+        } catch (err) {
+          showToast(`Failed to add disk: ${err}`, "error");
         }
-        render();
       }
       break;
     }

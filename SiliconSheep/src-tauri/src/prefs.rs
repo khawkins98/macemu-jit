@@ -134,6 +134,18 @@ impl PrefsFile {
         parse_size_value(val)
     }
 
+    pub fn add(&mut self, key: &str, value: &str) {
+        self.entries.push(PrefEntry {
+            key: key.to_string(),
+            value: value.to_string(),
+            comment: None,
+        });
+    }
+
+    pub fn remove_all(&mut self, key: &str) {
+        self.entries.retain(|e| e.key != key);
+    }
+
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         let val = self.get(key)?;
         match val.to_lowercase().as_str() {

@@ -65,6 +65,17 @@ fn save_vm_prefs(id: String, entries: Vec<prefs::PrefEntry>) -> Result<(), Strin
 }
 
 #[tauri::command]
+fn add_vm_disk(id: String, path: String, is_cdrom: bool) -> Result<(), String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let prefs_path = vm_dir.join("prefs");
+    let mut pf = prefs::load_prefs(&prefs_path)?;
+    let key = if is_cdrom { "cdrom" } else { "disk" };
+    pf.add(key, &path);
+    prefs::save_prefs(&prefs_path, &pf)?;
+    vm::sync_profile_from_prefs(&id)
+}
+
+#[tauri::command]
 fn update_vm_setting(id: String, key: String, value: String) -> Result<(), String> {
     if key == "name" {
         return vm::rename_profile(&id, &value);
@@ -190,6 +201,7 @@ fn main() {
             get_vm_prefs,
             save_vm_prefs,
             update_vm_setting,
+            add_vm_disk,
             launch_vm,
             stop_vm,
             is_vm_running,

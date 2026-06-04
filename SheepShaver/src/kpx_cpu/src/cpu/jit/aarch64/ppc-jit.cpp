@@ -3143,8 +3143,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 4: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E205400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrlb USHL.16B (rotate=shift by variable amount) */
 		case 68: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E605400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrlh USHL.8H */
 		case 132: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA05400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrlw USHL.4S */
-		case 524: { uint32_t idx=va; emit_load_vr(0,vb); emit32(0x4E010400|((idx*2+1)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vspltb DUP.16B */
-		case 588: { uint32_t idx=va; emit_load_vr(0,vb); emit32(0x4E020400|((idx*4+2)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vsplth DUP.8H */
+		/* The VR is stored with the interpreter's ev_mixed byte order (LDR Q here
+		 * loads it raw): bytes are reversed WITHIN each 32-bit word, words kept in
+		 * order (see ppc-operands.hpp byte_element/half_element). So the NEON lane
+		 * holding PPC element `va` is byte_element(va)/half_element(va), not `va`.
+		 * Word splat is unaffected (word order preserved) — only vspltb/vsplth need
+		 * the remap. Was: used `va` directly -> selected the wrong sub-word element. */
+		case 524: { uint32_t idx=(va&~3u)+(3-(va&3u)); emit_load_vr(0,vb); emit32(0x4E010400|((idx*2+1)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vspltb DUP.16B (ev_mixed byte_element) */
+		case 588: { uint32_t idx=(va&~1u)+(1-(va&1u)); emit_load_vr(0,vb); emit32(0x4E020400|((idx*4+2)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vsplth DUP.8H (ev_mixed half_element) */
 		case 652: { uint32_t idx=va; emit_load_vr(0,vb); emit32(0x4E040400|((idx*8+4)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vspltw DUP.4S */
 		case 522: emit_load_vr(0,vb); emit32(0x4EA18800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfip FRINTP */
 		case 586: emit_load_vr(0,vb); emit32(0x4E219800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfim FRINTM */

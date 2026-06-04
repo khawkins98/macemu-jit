@@ -50,6 +50,12 @@ def b(n,w,c): BUG.append((n," ".join(H(x) for x in w),c))
 # --- passing: word splat + integer multiplies ---
 p("av_vspltw_0", load_distinct(1)+[vx(2,0,1,652)]+grab(), "vspltw v2,v1,0 -> 0x00010203")
 p("av_vspltw_2", load_distinct(1)+[vx(2,2,1,652)]+grab(), "vspltw v2,v1,2 -> 0x08090A0B")
+p("av_vspltb_0",  load_distinct(1)+[vx(2,0,1,524)] +grab(), "vspltb v2,v1,0  -> 0x00000000 (ev_mixed remap)")
+p("av_vspltb_3",  load_distinct(1)+[vx(2,3,1,524)] +grab(), "vspltb v2,v1,3  -> 0x03030303")
+p("av_vspltb_15", load_distinct(1)+[vx(2,15,1,524)]+grab(), "vspltb v2,v1,15 -> 0x0F0F0F0F")
+p("av_vsplth_0",  load_distinct(1)+[vx(2,0,1,588)] +grab(), "vsplth v2,v1,0  -> 0x00010001")
+p("av_vsplth_3",  load_distinct(1)+[vx(2,3,1,588)] +grab(), "vsplth v2,v1,3  -> 0x06070607")
+p("av_vsplth_7",  load_distinct(1)+[vx(2,7,1,588)] +grab(), "vsplth v2,v1,7  -> 0x0E0F0E0F")
 
 # --- arithmetic / logical / compare: two splat-immediate operands (v0=0x05.., v1=0x03..).
 # These REPLACE 12 pre-existing vec_* vectors that were confirmed VACUOUS (r5=r6=0,
@@ -65,14 +71,13 @@ p("av_vmaxsw",  two(386),  "vmaxsw: signed-word max=0x05050505")
 p("av_vminsw",  two(898),  "vminsw: signed-word min=0x03030303")
 p("av_vcmpequw",[vspltisb(0,5),vx(2,0,0,134)]+grab(), "vcmpequw v2,v0,v0: equal -> 0xFFFFFFFF")
 
-# --- CONFIRMED JIT BUG (2026-06-04): vspltb/vsplth select the WRONG element.
+# --- CONFIRMED JIT BUG (2026-06-04): even/odd byte MULTIPLIES select the wrong
+# elements (same ev_mixed root cause; vspltb/vsplth were FIXED, multiplies pending).
 # Correct encodings (verified), distinct-lane source. The JIT diverges from the
 # interpreter (the reference): e.g. vspltb idx 3 -> interp 0x03030303, JIT
 # 0x00000000 (byte 0); vsplth idx 3 -> interp 0x06070607, JIT 0x04050405 (hw 2).
 # vspltw is correct. Codegen: ppc-jit.cpp:3146-3148 (DUP element). imm5 looks
 # right, so suspect an element-order/endianness interaction. Re-add once fixed.
-b("av_vspltb_3",  load_distinct(1)+[vx(2,3,1,524)] +grab(), "vspltb v2,v1,3  WANT 0x03030303 (JIT gives 0)")
-b("av_vsplth_3",  load_distinct(1)+[vx(2,3,1,588)] +grab(), "vsplth v2,v1,3  WANT 0x06070607 (JIT gives 0x04050405)")
 b("av_vmuloub",  [vspltisb(0,5),vspltisb(1,3),vx(2,0,1,8)]+grab(), "vmuloub: odd-byte select diverges (same element-order class)")
 b("av_vmuleub",  load_distinct(1)+[vx(2,1,1,520)]+grab(), "vmuleub: even-byte select diverges with DISTINCT operands (interp 0x00000004, JIT 0x00040009) — the uniform-operand version was a MASKING pass")
 

@@ -2843,12 +2843,29 @@ static inline void do_video_refresh(void)
 	// Update display
 	video_refresh();
 
-	// NOTE: the live-JIT-stats window-title update was removed here. do_video_refresh()
-	// runs on the "Redraw Thread" (see redraw_func), and SDL_SetWindowTitle calls into
-	// Cocoa, which asserts "NSWindow ... should only be modified on the main thread!" and
-	// aborts on macOS (and stalls the redraw thread → VBL stops → guest boot hangs). The
-	// ppc_jit_aarch64_get_stats() API and set_window_name()'s status_suffix param are kept
-	// for a future reimplementation that applies the title on the main thread.
+	// Periodically update window title with JIT stats (~every 2s at 60 Hz).
+	// SDL_SetWindowTitle must run on the main thread (Cocoa NSWindow constraint);
+	// SDL_RunOnMainThread dispatches it safely from this redraw thread.
+#if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	{
+		static int title_counter = 0;
+		if (++title_counter >= 120) {
+			title_counter = 0;
+			int blocks = 0;
+			size_t cache_used = 0, cache_total = 0;
+			ppc_jit_aarch64_get_stats(&blocks, NULL, &cache_used, &cache_total);
+			if (cache_total > 0) {
+				static char title_buf[128];
+				snprintf(title_buf, sizeof(title_buf), " — JIT: %d blocks, cache %zuK/%zuK (%d%%)",
+				         blocks, cache_used / 1024, cache_total / 1024,
+				         (int)(cache_used * 100 / cache_total));
+				SDL_RunOnMainThread([](void *userdata) {
+					set_window_name((const char *)userdata);
+				}, title_buf, false);
+			}
+		}
+	}
+#endif
 
 	// Set new palette if it was changed
 	handle_palette_changes();

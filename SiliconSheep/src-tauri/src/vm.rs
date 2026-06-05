@@ -22,6 +22,8 @@ pub struct VmProfile {
     pub disk_paths: Vec<String>,
     pub cd_path: String,
     pub screen: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_disk_warning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +193,7 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
         disk_paths,
         cd_path: req.cd_path.clone(),
         screen: req.screen.clone(),
+        shared_disk_warning: None,
     };
 
     vms.push(profile.clone());
@@ -224,10 +227,19 @@ pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> 
     let source_dir_str = source_dir.to_string_lossy().to_string();
     let dest_dir_str = dest_dir.to_string_lossy().to_string();
 
+    let mut shared_external_disks = Vec::new();
     let new_disk_paths: Vec<String> = source
         .disk_paths
         .iter()
-        .map(|p| p.replace(&source_dir_str, &dest_dir_str))
+        .map(|p| {
+            let rewritten = p.replace(&source_dir_str, &dest_dir_str);
+            if rewritten == *p {
+                // Path wasn't inside the source bundle — both VMs will point at the same file.
+                // This is a data-corruption risk if both run simultaneously.
+                shared_external_disks.push(p.clone());
+            }
+            rewritten
+        })
         .collect();
 
     let new_cd_path = source.cd_path.replace(&source_dir_str, &dest_dir_str);
@@ -246,6 +258,15 @@ pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> 
         disk_paths: new_disk_paths,
         cd_path: new_cd_path,
         screen: source.screen,
+        shared_disk_warning: if shared_external_disks.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "Warning: {} disk(s) live outside the VM bundle and are shared with the original. Running both VMs simultaneously risks data corruption: {}",
+                shared_external_disks.len(),
+                shared_external_disks.join(", ")
+            ))
+        },
     };
 
     vms.push(new_profile.clone());

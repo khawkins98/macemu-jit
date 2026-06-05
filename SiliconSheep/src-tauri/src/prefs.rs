@@ -1,3 +1,11 @@
+// SheepShaver prefs parser with round-trip comment preservation.
+//
+// CAVEAT: SheepShaver's own SavePrefs() (prefs.cpp) rewrites the prefs file on
+// exit WITHOUT preserving comments. So any #-comments we carefully round-trip
+// here will be stripped the next time the emulator shuts down. This parser is
+// still valuable for reading commented prefs and for edits between runs, but
+// don't promise users that comments survive an emulator session.
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;

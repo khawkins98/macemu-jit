@@ -885,9 +885,13 @@ async function handleAction(e: Event) {
       if (id) {
         const vmName = target.dataset.name || "Copy";
         try {
-          await invoke("duplicate_vm", { id, newName: `${vmName} (Copy)` });
+          const dupResult = (await invoke("duplicate_vm", { id, newName: `${vmName} (Copy)` })) as VmProfile;
           vms = await loadVms();
-          showToast("VM duplicated", "success");
+          if (dupResult.shared_disk_warning) {
+            showToast(dupResult.shared_disk_warning, "error", 10000);
+          } else {
+            showToast("VM duplicated", "success");
+          }
           render();
         } catch (err) {
           showToast(`Failed to duplicate: ${err}`, "error");

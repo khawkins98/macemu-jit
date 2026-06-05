@@ -121,8 +121,10 @@ harness that can't catch mistakes just produces the next silent bug.
     marker), `SS_JIT_VERIFY_BUDGET`, `SS_JIT_VERIFY_PC=LO:HI` (targeted scope), and a
     **SUSPECT/ARTIFACT-PC classifier** on each divergence (PC-match ⇒ real-bug candidate;
     PC-mismatch ⇒ structural) so the log is triagable (`grep '[VERIFY] SUSPECT'`) without
-    waiting on fix (i). These make the *existing* confounded oracle usable; (i)+(ii) still
-    needed to make it *clean*.
+    waiting on fix (i). ✅ **Classifier + PC-scope boot-validated (2026-06-05)** against this
+    session's ground truth: 7 structural blocks → `ARTIFACT-PC` (20/20), memory-RMW `100fd0e0` →
+    `SUSPECT` (200/200, GPR10 stepping by 2). These make the *existing* confounded oracle usable;
+    (i)+(ii) still needed to make it *clean*.
 
 **Verifiable here** (harness/build, no boot needed). **Unblocks A2 and de-risks all of Track B.**
 **Detail:** `docs/TESTING.md`; harness `SheepShaver/jit-test/run.sh`; generators `gen-*-vectors.py`.

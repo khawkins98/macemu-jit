@@ -184,6 +184,24 @@ struct EmulatorStatus {
     path: String,
 }
 
+#[tauri::command]
+fn reveal_vm_in_finder(id: String) -> Result<(), String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    if !vm_dir.exists() {
+        return Err("VM directory not found".to_string());
+    }
+    std::process::Command::new("open")
+        .arg(&vm_dir)
+        .spawn()
+        .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn backup_vm_disk(id: String) -> Result<String, String> {
+    vm::backup_disk(&id)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -206,6 +224,8 @@ fn main() {
             stop_vm,
             is_vm_running,
             check_emulator_status,
+            reveal_vm_in_finder,
+            backup_vm_disk,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Silicon Sheep");

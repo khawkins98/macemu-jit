@@ -317,6 +317,52 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     Ok(())
 }
 
+pub fn backup_disk(id: &str) -> Result<String, String> {
+    let profile = get_profile(id)?;
+    if profile.disk_paths.is_empty() {
+        return Err("No disks to back up".to_string());
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut backed_up = Vec::new();
+    for disk_path in &profile.disk_paths {
+        let src = std::path::Path::new(disk_path);
+        if !src.exists() {
+            continue;
+        }
+        let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+        let ext = src.extension().unwrap_or_default().to_string_lossy();
+        let backup_name = format!("{}-backup-{}.{}", stem, timestamp, ext);
+        let dst = src.with_file_name(&backup_name);
+
+        #[cfg(target_os = "macos")]
+        {
+            use std::ffi::CString;
+            let src_c = CString::new(src.to_str().unwrap()).map_err(|e| e.to_string())?;
+            let dst_c = CString::new(dst.to_str().unwrap()).map_err(|e| e.to_string())?;
+            let ret = unsafe { clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0) };
+            if ret != 0 {
+                fs::copy(src, &dst).map_err(|e| format!("Backup failed: {}", e))?;
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            fs::copy(src, &dst).map_err(|e| format!("Backup failed: {}", e))?;
+        }
+        backed_up.push(backup_name);
+    }
+
+    if backed_up.is_empty() {
+        return Err("No disk files found to back up".to_string());
+    }
+
+    Ok(format!("Backed up: {}", backed_up.join(", ")))
+}
+
 pub fn delete_profile(id: &str) -> Result<(), String> {
     let mut vms = load_manifest();
     let initial_len = vms.len();

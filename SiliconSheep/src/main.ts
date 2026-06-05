@@ -92,8 +92,9 @@ function renderVmCard(vm: VmProfile): string {
             : `<button class="btn btn-primary btn-sm" data-action="launch" data-id="${escapeAttr(vm.id)}">▶ Start</button>`
           }
           <button class="btn btn-secondary btn-sm" data-action="settings" data-id="${escapeAttr(vm.id)}">⚙</button>
-          <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}">⎘</button>
-          <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}">✕</button>
+          <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">⎘</button>
+          <button class="btn btn-secondary btn-sm" data-action="reveal" data-id="${escapeAttr(vm.id)}" title="Reveal in Finder">📂</button>
+          <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">✕</button>
         </div>
         ${isRunning ? '<span class="status running">Running</span>' : ""}
       </div>
@@ -366,7 +367,10 @@ function renderSettings(): string {
             </div>
           `).join("")
         }
-        <button class="btn btn-secondary btn-sm" data-action="pick-setting-disk" style="margin-top: 8px;">+ Add Disk</button>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button class="btn btn-secondary btn-sm" data-action="pick-setting-disk">+ Add Disk</button>
+          <button class="btn btn-secondary btn-sm" data-action="backup-disk" ${isRunning ? "disabled" : ""}>Backup Disks</button>
+        </div>
       </div>
       <div class="form-group">
         <label>CD-ROM</label>
@@ -644,6 +648,25 @@ async function handleAction(e: Event) {
         render();
       } catch (err) {
         console.error("Failed to stop VM:", err);
+      }
+      break;
+
+    case "reveal":
+      if (id) {
+        invoke("reveal_vm_in_finder", { id }).catch((err) =>
+          showToast(`Failed: ${err}`, "error")
+        );
+      }
+      break;
+
+    case "backup-disk":
+      if (selectedVmId) {
+        try {
+          const result = (await invoke("backup_vm_disk", { id: selectedVmId })) as string;
+          showToast(result, "success");
+        } catch (err) {
+          showToast(`Backup failed: ${err}`, "error");
+        }
       }
       break;
 

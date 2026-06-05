@@ -79,7 +79,7 @@ function fileName(path: string): string {
 }
 
 function renderTitlebar(): string {
-  return `<div class="titlebar">SiliconSheep</div>`;
+  return "";
 }
 
 function formatLastBooted(ts: string | null | undefined): string {

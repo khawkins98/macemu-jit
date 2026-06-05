@@ -276,8 +276,31 @@ behaviour.
   framebuffer into per-window regions using guest WindowList bounds, composite each into a
   separate host `NSWindow`. Unprecedented for classic Mac OS. Parallels/VMware do this via
   guest agents + custom display drivers — neither exists for Mac OS 9.
-- [ ] **Full execution-state save/restore**: Serialize all CPU/JIT/device state for
-  DOSBox-X-style save slots. Very high effort.
+- [ ] **Suspend / Resume (execution-state save/restore)**: Parallels-style suspend — serialize
+  the full VM state to disk and restore it later, resuming exactly where you left off. Prior art:
+  DOSBox-X has 100-slot save states; Parallels/VMware serialize the full hardware abstraction.
+  **Effort: 2–3 weeks for a working prototype. High complexity.**
+
+  What needs serializing:
+  - **CPU registers** (`powerpc_registers` struct) — easy, one struct
+  - **Guest RAM** (up to 512 MB) — easy, contiguous mmap dump to disk
+  - **JIT state** — flush code cache + block address cache; rebuild on resume (not serialized)
+  - **Device state** — every subsystem (disk, audio, video, network, timers, ADB, interrupt
+    flags, spcflags) needs a `Serialize()`/`Deserialize()` pair; none exist today
+  - **Host OS resources** — file descriptors (disk images, sockets, VNC) can't be serialized;
+    must reopen on resume and reconnect to the restored device state
+
+  The hard part is device state — SheepShaver's subsystems don't have serialization interfaces.
+  Each one (disk.cpp, audio_sdl.cpp, video_sdl3.cpp, ether_unix.cpp, timer.cpp, adb.cpp) would
+  need explicit save/load functions.
+
+  **Cheaper 80% alternative (already available):** disk-image snapshots (APFS `clonefile`, Tier 1)
+  + fast boot (~10s with JIT). "Resume from snapshot" = boot fresh with disk state preserved. Not
+  instant, but the JIT makes it fast enough that the gap is tolerable for most use cases.
+
+  **Recommended approach if pursued:** start with CPU + RAM only (produces a "warm reboot from
+  saved state" that skips the ROM init), defer device state to later iterations. Study DOSBox-X's
+  `SaveState`/`LoadState` architecture for the subsystem serialization pattern.
 
 ### Tier 4 — Automation & Scripting (drive the guest without screenshots)
 

@@ -340,6 +340,7 @@ function renderWizardStep(): string {
 
 let settingsSection = "general";
 let pendingSettings: Record<string, string> = {};
+let debugEnvVars: Record<string, string> = {};
 
 interface PrefEntry {
   key: string;
@@ -647,6 +648,69 @@ function renderSettings(): string {
         </div>
       </details>
     `,
+    debug: `
+      <p class="ss-text-muted" style="margin-bottom: 16px;">Set environment variables for the next launch. These control JIT diagnostics, verification, and tracing. Changes take effect on the next Start — they don't modify the prefs file.</p>
+      <div class="form-group">
+        <label>JIT Verify Mode</label>
+        <select class="input" id="debug-SS_JIT_VERIFY">
+          <option value="" selected>Off</option>
+          <option value="1">On — differential interp-vs-JIT check (VERY SLOW)</option>
+        </select>
+        <p class="ss-text-muted">Runs every block in both interpreter and JIT, compares results. Catches codegen bugs. Expect ~100x slowdown.</p>
+      </div>
+      <div class="form-group">
+        <label>Disable Block Chaining</label>
+        <select class="input" id="debug-SS_JIT_NO_CHAIN">
+          <option value="" selected>Off (chaining enabled)</option>
+          <option value="1">On — disable block chaining</option>
+        </select>
+        <p class="ss-text-muted">Forces every block to return to the dispatcher. Useful for isolating chaining-related bugs.</p>
+      </div>
+      <div class="form-group">
+        <label>Disable ROM JIT</label>
+        <select class="input" id="debug-SS_JIT_NO_ROM">
+          <option value="" selected>Off (ROM JIT enabled)</option>
+          <option value="1">On — interpret ROM code only</option>
+        </select>
+        <p class="ss-text-muted">Interpret ROM regions instead of JIT-compiling them. Isolates ROM vs RAM codegen bugs.</p>
+      </div>
+      <div class="form-group">
+        <label>Force Interpreter</label>
+        <select class="input" id="debug-SS_USE_JIT">
+          <option value="" selected>JIT enabled (default)</option>
+          <option value="0">Force interpreter (SS_USE_JIT=0)</option>
+        </select>
+        <p class="ss-text-muted">Completely disables the JIT. The emulator runs in pure interpreter mode.</p>
+      </div>
+      <div class="form-group">
+        <label>Trace Ring</label>
+        <select class="input" id="debug-SS_JIT_TRACE_RING">
+          <option value="" selected>Off</option>
+          <option value="1">On — circular trace buffer</option>
+        </select>
+        <p class="ss-text-muted">Records recent PCs in a ring buffer. Dumped on crash or stall. Helps diagnose infinite loops.</p>
+      </div>
+      <div class="form-group">
+        <label>Diagnostic Log Path</label>
+        <input type="text" class="input" id="debug-SS_JIT_DIAG_LOG" value="" placeholder="/tmp/jit_diag.log" />
+        <p class="ss-text-muted">Write JIT heartbeat diagnostics to this file instead of stderr.</p>
+      </div>
+      <div class="form-group">
+        <label>Watch Address (decimal, comma-separated)</label>
+        <input type="text" class="input" id="debug-SS_JIT_WATCH_ADDR" value="" placeholder="e.g. 273866508" />
+        <p class="ss-text-muted">Break when these guest addresses are written. For tracking down memory corruption.</p>
+      </div>
+      <div class="form-group">
+        <label>Skip Opcode (decimal primary opcode)</label>
+        <input type="text" class="input" id="debug-SS_JIT_SKIP_OPC" value="" placeholder="e.g. 31" />
+        <p class="ss-text-muted">Force a specific primary opcode to fall back to the interpreter. For isolating a broken handler.</p>
+      </div>
+      <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ss-border);">
+        <label>Run Logs</label>
+        <button class="btn btn-secondary btn-sm" data-action="view-logs">View Logs</button>
+        <p class="ss-text-muted">Last 10 run logs are kept in the VM's logs/ directory.</p>
+      </div>
+    `,
   };
 
   return `
@@ -759,6 +823,20 @@ function captureCurrentSectionSettings() {
     const el = document.getElementById(elId) as HTMLInputElement | HTMLSelectElement | null;
     if (el) {
       pendingSettings[key] = transform(el.value);
+    }
+  }
+
+  // Capture debug env vars from the Debug section
+  const debugIds = [
+    "SS_JIT_VERIFY", "SS_JIT_NO_CHAIN", "SS_JIT_NO_ROM", "SS_USE_JIT",
+    "SS_JIT_TRACE_RING", "SS_JIT_DIAG_LOG", "SS_JIT_WATCH_ADDR", "SS_JIT_SKIP_OPC",
+  ];
+  for (const envKey of debugIds) {
+    const el = document.getElementById(`debug-${envKey}`) as HTMLInputElement | HTMLSelectElement | null;
+    if (el && el.value) {
+      debugEnvVars[envKey] = el.value;
+    } else if (el) {
+      delete debugEnvVars[envKey];
     }
   }
 }
@@ -897,7 +975,7 @@ async function handleAction(e: Event) {
         vms = await loadVms();
 
         try {
-          await invoke("launch_vm", { id: vm.id });
+          await invoke("launch_vm", { id: vm.id, envVars: null });
           runningVmId = vm.id;
         } catch (err) {
           console.error("Created VM but failed to launch:", err);
@@ -931,7 +1009,8 @@ async function handleAction(e: Event) {
     case "launch":
       if (id) {
         try {
-          await invoke("launch_vm", { id });
+          const envVars = Object.keys(debugEnvVars).length > 0 ? debugEnvVars : null;
+          await invoke("launch_vm", { id, envVars });
           runningVmId = id;
           showToast("Virtual machine started. Click inside the classic desktop to capture the mouse. Press Ctrl-F5 to release.", "info", 8000);
           render();
@@ -1050,6 +1129,24 @@ async function handleAction(e: Event) {
       }
       break;
     }
+
+    case "view-logs":
+      if (selectedVmId) {
+        try {
+          const logs = (await invoke("list_vm_logs", { id: selectedVmId })) as string[];
+          if (logs.length === 0) {
+            showToast("No run logs yet — start the VM first", "info");
+          } else {
+            const latest = logs[0];
+            const content = (await invoke("read_vm_log", { id: selectedVmId, logName: latest })) as string;
+            const lines = content.split("\n").slice(-50).join("\n");
+            alert(`Last 50 lines of ${latest}:\n\n${lines}`);
+          }
+        } catch (err) {
+          showToast(`Failed to read logs: ${err}`, "error");
+        }
+      }
+      break;
 
     case "pick-setting-extfs": {
       const folderResult = await open({ title: "Select Shared Folder", directory: true, multiple: false });

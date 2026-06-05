@@ -94,7 +94,7 @@ fn update_vm_setting(id: String, key: String, value: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
+fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, String>>, state: State<AppState>) -> Result<(), String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
     if let Some(ref r) = *running {
         return Err(format!("VM '{}' is already running", r.id));
@@ -106,11 +106,20 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
     let emu_path = find_emulator_binary()
         .ok_or("SheepShaver binary not found. Build it first: cd SheepShaver && make build-ss")?;
 
-    let mut child = std::process::Command::new(&emu_path)
-        .arg(vm_dir.to_str().unwrap_or("."))
+    let mut cmd = std::process::Command::new(&emu_path);
+    cmd.arg(vm_dir.to_str().unwrap_or("."))
         .current_dir(&vm_dir)
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+
+    if let Some(ref vars) = env_vars {
+        for (k, v) in vars {
+            if !v.is_empty() {
+                cmd.env(k, v);
+            }
+        }
+    }
+
+    let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to launch SheepShaver: {}", e))?;
 
     // Read VNC port from prefs (for screenshot capture)
@@ -129,7 +138,32 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
     if let Some(stderr) = stderr {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            let mut log_file = std::fs::File::create(vm_dir_clone.join("last_run.log")).ok();
+
+            // Timestamped log: logs/<timestamp>.log, plus symlink last_run.log → latest
+            let logs_dir = vm_dir_clone.join("logs");
+            std::fs::create_dir_all(&logs_dir).ok();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let log_name = format!("{}.log", ts);
+            let log_path = logs_dir.join(&log_name);
+            let mut log_file = std::fs::File::create(&log_path).ok();
+
+            // Symlink last_run.log → latest timestamped log
+            let symlink_path = vm_dir_clone.join("last_run.log");
+            std::fs::remove_file(&symlink_path).ok();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&log_path, &symlink_path).ok();
+
+            // Prune old logs (keep last 10)
+            if let Ok(entries) = std::fs::read_dir(&logs_dir) {
+                let mut logs: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+                logs.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+                for old in logs.into_iter().skip(10) {
+                    std::fs::remove_file(old.path()).ok();
+                }
+            }
             for line in reader.lines() {
                 if let Ok(line) = line {
                     // Write to log file in the .sheepvm bundle
@@ -222,6 +256,30 @@ fn find_vncdotool() -> Option<String> {
         }
     }
     None
+}
+
+#[tauri::command]
+fn list_vm_logs(id: String) -> Result<Vec<String>, String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let logs_dir = vm_dir.join("logs");
+    if !logs_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut logs: Vec<String> = std::fs::read_dir(&logs_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".log"))
+        .collect();
+    logs.sort_by(|a, b| b.cmp(a));
+    Ok(logs)
+}
+
+#[tauri::command]
+fn read_vm_log(id: String, log_name: String) -> Result<String, String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let log_path = vm_dir.join("logs").join(&log_name);
+    std::fs::read_to_string(&log_path).map_err(|e| format!("Cannot read log: {}", e))
 }
 
 fn find_capture_script() -> Option<std::path::PathBuf> {
@@ -450,6 +508,8 @@ fn main() {
             import_from_prefs,
             get_vm_screenshot,
             capture_vm_screenshot,
+            list_vm_logs,
+            read_vm_log,
             reveal_vm_in_finder,
             backup_vm_disk,
         ])

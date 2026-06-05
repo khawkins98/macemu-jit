@@ -19,6 +19,13 @@ VNCPORT = 5950
 
 def main() -> int:
     assets = config.resolve_assets()
+    # Fail fast with a clear, doc-pointing message if an asset is missing (vs a cryptic boot failure).
+    try:
+        config.require_asset(assets.rom, "rom")
+        config.require_asset(assets.disk, "disk")
+    except FileNotFoundError as e:
+        print(f"FAIL: {e}")
+        return 1
     # Pre-flight: kill+reap strays and confirm the disk master is free, so a stray instance holding
     # it can't make this run boot to the "?" no-boot-disk icon.
     problem = runner.preflight(assets.disk)

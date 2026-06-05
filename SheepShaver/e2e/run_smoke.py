@@ -22,11 +22,18 @@ VNCPORT = 5950
 def main() -> int:
     assets = config.resolve_assets()
     medium = os.environ.get("SS_E2E_MEDIUM", "iso")  # "iso" (read-only, default) or "disk"
+    boot_image, kind = (assets.disk, "disk") if medium == "disk" else (assets.iso, "iso")
+    # Fail fast with a clear, doc-pointing message if an asset is missing (vs a cryptic boot failure).
+    try:
+        config.require_asset(assets.rom, "rom")
+        config.require_asset(boot_image, kind)
+    except FileNotFoundError as e:
+        print(f"FAIL: {e}")
+        return 1
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-"))
     if medium == "disk":
         # Writable disk boot: copy the pristine master per run (instant APFS clonefile) so the
         # master is never dirtied. Used for the benchmark medium (Mac OS 9 + Speedometer).
-        boot_image = assets.disk
         run_disk = disk.copy_pristine(Path(assets.disk), work)
         prefs = disk.render_prefs(
             HERE / "config" / "test.prefs.template",
@@ -38,7 +45,6 @@ def main() -> int:
     else:
         # Read-only ISO boot (default): no pristine-copy — the ISO can't be dirtied, so it's
         # stable and reproducible.
-        boot_image = assets.iso
         prefs = disk.render_prefs(
             HERE / "config" / "test.prefs.iso.template",
             work / "test.prefs",

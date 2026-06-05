@@ -69,18 +69,19 @@ degradation from many prior launches.
 2. **SheepShaver built** — `SheepShaver/src/Unix/SheepShaver` exists (see build below).
 3. **Python 3** — the harness venv (`vncdotool`, `pytest`, `Pillow`, `imagehash`) auto-installs on
    first `make e2e`; no manual setup.
-4. **Two assets** (large, not in git), resolved by env var or local-dev default:
-   - **ROM** — an OldWorld PPC ROM. `SS_E2E_ROM` (default
-     `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom`).
-   - **A bootable ISO** (the default, preferred medium) — a read-only Mac OS 8.x CD that boots to a
-     Finder. `SS_E2E_ISO` (default `/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso`). Because
-     a CD is **read-only it can never get dirty** — no disk-repair prompts, no pristine-copy per run,
-     fully reproducible. This is why ISO boot is the default.
-   - *(Disk medium)* a **writable disk image** — `SS_E2E_DISK` (default
-     `/Users/Shared/macemu/macos9_mini.dsk`, a small stripped Mac OS 9.0.4 + Speedometer used for
-     benchmarks). Selected with `SS_E2E_MEDIUM=disk`; it boots `config/test.prefs.template` with
-     copy-per-run isolation (instant APFS clonefile, so logical image size is irrelevant). The
-     default ISO path uses `config/test.prefs.iso.template` and needs no copy.
+4. **Three assets** (large, not redistributable) — a ROM + boot media. They live in the gitignored
+   **`assets/`** directory; drop a **symlink or copy** there and the harness finds them. See
+   **[`assets/README.md`](assets/README.md)** for what each is and a one-line symlink setup. Missing
+   asset → `make e2e` fails fast with a message pointing back there.
+   - **`assets/rom.rom`** — an OldWorld PowerPC Mac ROM (boots the emulated Mac).
+   - **`assets/smoke.iso`** — a read-only bootable Mac OS 8.x CD (the smoke medium; read-only ⇒ can't
+     get dirty ⇒ reproducible). Used by `make e2e`.
+   - **`assets/bench.dsk`** — a writable Mac OS 9 + Speedometer disk (copied per-run). Used by
+     `make e2e-bench`, or the smoke with `SS_E2E_MEDIUM=disk`.
+
+   Resolution order per asset: env var (`SS_E2E_ROM` / `SS_E2E_ISO` / `SS_E2E_DISK`) → `assets/` →
+   a legacy `/Users/Shared/macemu/` default. The *prefs* are NOT an asset — they're rendered per-run
+   from the tracked `config/*.template` files.
 
 ---
 

@@ -1,0 +1,6 @@
+# The E2E assets (ROM / ISO / disk) are large and not redistributable, so the binaries are NOT
+# committed — but this directory and its docs ARE, so the project is self-describing about what it
+# needs and where each file goes. Ignore everything here except this file and the README.
+*
+!.gitignore
+!README.md

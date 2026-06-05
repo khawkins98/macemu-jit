@@ -59,6 +59,9 @@
 
 #include <cpu_emulation.h>
 #include "main.h"
+#if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
+#include "cpu/jit/aarch64/ppc-jit.h"
+#endif
 #include "adb.h"
 #include "macos_util.h"
 #include "prefs.h"
@@ -543,7 +546,7 @@ static void set_mac_frame_buffer(SDL_monitor_desc &monitor, int depth, bool nati
 }
 
 // Set window name and class
-static void set_window_name() {
+static void set_window_name(const char *status_suffix = NULL) {
 	if (!sdl_window) return;
 	const char *title = PrefsFindString("title");
 	std::string s = title ? title : GetString(STR_WINDOW_TITLE);
@@ -557,6 +560,8 @@ static void set_window_name() {
         if (hotkey & 4) s += GetString(STR_WINDOW_TITLE_GRABBED4);
         s += GetString(STR_WINDOW_TITLE_GRABBED_POST);
 	}
+	if (status_suffix)
+		s += status_suffix;
 	SDL_SetWindowTitle(sdl_window, s.c_str());
 }
 
@@ -2814,6 +2819,25 @@ static inline void do_video_refresh(void)
 	// Update display
 	video_refresh();
 
+	// Periodically update window title with JIT stats (~every 2s at 60 Hz)
+#if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	{
+		static int title_counter = 0;
+		if (++title_counter >= 120) {
+			title_counter = 0;
+			int blocks = 0;
+			size_t cache_used = 0, cache_total = 0;
+			ppc_jit_aarch64_get_stats(&blocks, NULL, &cache_used, &cache_total);
+			if (cache_total > 0) {
+				char buf[128];
+				snprintf(buf, sizeof(buf), " — JIT: %d blocks, cache %zuK/%zuK (%d%%)",
+				         blocks, cache_used / 1024, cache_total / 1024,
+				         (int)(cache_used * 100 / cache_total));
+				set_window_name(buf);
+			}
+		}
+	}
+#endif
 
 	// Set new palette if it was changed
 	handle_palette_changes();

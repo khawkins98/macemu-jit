@@ -46,6 +46,9 @@ void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uin
 
 /* Compilation stats for heartbeat logging */
 uint32_t ppc_jit_aarch64_blocks_compiled(void);
+/* Live stats for status bar display */
+void ppc_jit_aarch64_get_stats(int *out_blocks, int *out_pool_size,
+                               size_t *out_cache_used, size_t *out_cache_total);
 
 bool ppc_jit_aarch64_compile(
 	uint32_t pc,

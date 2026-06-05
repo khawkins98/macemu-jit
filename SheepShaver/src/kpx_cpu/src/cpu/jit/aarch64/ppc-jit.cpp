@@ -4359,6 +4359,16 @@ void ppc_jit_aarch64_exit(void)
 	}
 }
 
+void ppc_jit_aarch64_get_stats(int *out_blocks, int *out_pool_size,
+                               size_t *out_cache_used, size_t *out_cache_total)
+{
+	if (out_blocks)     *out_blocks     = jit_bc_pool_next;
+	if (out_pool_size)  *out_pool_size  = JIT_BC_POOL;
+	if (out_cache_used) *out_cache_used = jit_cache_wp
+	    ? (size_t)((uint8_t *)jit_cache_wp - jit_cache_base) : 0;
+	if (out_cache_total) *out_cache_total = jit_cache_size;
+}
+
 void ppc_jit_aarch64_flush(void)
 {
 	/* Reset code cache write pointer and invalidate block address cache.

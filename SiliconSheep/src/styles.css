@@ -1,57 +1,64 @@
 /* ===================================================================
    SiliconSheep — Design Tokens
+   Lightly inspired by Mac OS 9 Platinum HIG: warm greys, subtle bevels,
+   compact spacing, system-font feel. Not a clone — the DNA, not the skin.
    =================================================================== */
 
 :root {
-  /* Surfaces */
-  --ss-bg: #1a1a2e;
-  --ss-surface: #16213e;
-  --ss-surface-hover: #1a2744;
-  --ss-surface-alt: #1e2d4a;
-  --ss-border: #2a3a5c;
+  /* Surfaces — Platinum warm greys */
+  --ss-bg: #2c2c2c;
+  --ss-surface: #3a3a3a;
+  --ss-surface-hover: #444444;
+  --ss-surface-alt: #333333;
+  --ss-border: #555555;
+  --ss-bevel-light: rgba(255, 255, 255, 0.08);
+  --ss-bevel-dark: rgba(0, 0, 0, 0.2);
 
   /* Text */
-  --ss-text: #e0e0e0;
-  --ss-text-muted: #8892a4;
-  --ss-text-dim: #5a6478;
+  --ss-text: #e8e8e8;
+  --ss-text-muted: #999999;
+  --ss-text-dim: #666666;
 
-  /* Accent */
-  --ss-accent: #4a9eff;
-  --ss-accent-hover: #6bb3ff;
-  --ss-accent-dim: rgba(74, 158, 255, 0.1);
+  /* Accent — Platinum highlight blue */
+  --ss-accent: #3366cc;
+  --ss-accent-hover: #4477dd;
+  --ss-accent-dim: rgba(51, 102, 204, 0.15);
 
   /* Semantic */
-  --ss-success: #4caf50;
-  --ss-warning: #ff9800;
-  --ss-danger: #f44336;
+  --ss-success: #339933;
+  --ss-warning: #cc9933;
+  --ss-danger: #cc3333;
 
-  /* Radii */
-  --ss-radius-lg: 12px;
-  --ss-radius: 8px;
-  --ss-radius-sm: 4px;
+  /* Radii — Platinum used very subtle rounding */
+  --ss-radius-lg: 4px;
+  --ss-radius: 3px;
+  --ss-radius-sm: 2px;
 
-  /* Spacing scale */
-  --ss-space-xs: 4px;
-  --ss-space-sm: 8px;
-  --ss-space-md: 16px;
-  --ss-space-lg: 24px;
-  --ss-space-xl: 32px;
-  --ss-space-2xl: 48px;
+  /* Spacing — Platinum was compact */
+  --ss-space-xs: 3px;
+  --ss-space-sm: 6px;
+  --ss-space-md: 12px;
+  --ss-space-lg: 18px;
+  --ss-space-xl: 24px;
+  --ss-space-2xl: 36px;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
-    --ss-bg: #f0f2f5;
-    --ss-surface: #ffffff;
-    --ss-surface-hover: #f5f7fa;
-    --ss-surface-alt: #f8f9fb;
-    --ss-border: #d8dee6;
-    --ss-text: #1a1a2e;
-    --ss-text-muted: #6b7280;
-    --ss-text-dim: #9ca3af;
-    --ss-accent: #2563eb;
-    --ss-accent-hover: #1d4ed8;
-    --ss-accent-dim: rgba(37, 99, 235, 0.08);
+    /* Classic Platinum palette — warm grey, not cool blue-grey */
+    --ss-bg: #dddddd;
+    --ss-surface: #eeeeee;
+    --ss-surface-hover: #e4e4e4;
+    --ss-surface-alt: #e8e8e8;
+    --ss-border: #999999;
+    --ss-bevel-light: rgba(255, 255, 255, 0.6);
+    --ss-bevel-dark: rgba(0, 0, 0, 0.15);
+    --ss-text: #000000;
+    --ss-text-muted: #555555;
+    --ss-text-dim: #888888;
+    --ss-accent: #3366cc;
+    --ss-accent-hover: #2255bb;
+    --ss-accent-dim: rgba(51, 102, 204, 0.1);
   }
 }
 
@@ -62,13 +69,14 @@
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  /* Geneva was the Mac OS 9 UI font; Charcoal for menus. System sans-serif
+     with slightly compact sizing echoes that era without requiring custom fonts. */
+  font-family: Geneva, "Lucida Grande", -apple-system, sans-serif;
   background: var(--ss-bg);
   color: var(--ss-text);
   min-height: 100vh;
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 #app {
@@ -122,23 +130,27 @@ body {
    Buttons
    =================================================================== */
 
+/* Buttons — Platinum-style: subtle bevel, compact padding */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border: 1px solid transparent;
+  gap: 5px;
+  padding: 4px 12px;
+  border: 1px solid var(--ss-border);
   border-radius: var(--ss-radius);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.05s, opacity 0.15s;
+  transition: background 0.1s, border-color 0.1s;
   font-family: inherit;
   white-space: nowrap;
+  box-shadow: inset 0 1px 0 var(--ss-bevel-light), 0 1px 0 var(--ss-bevel-dark);
 }
 
-.btn:active { transform: scale(0.97); }
+.btn:active {
+  box-shadow: inset 0 1px 2px var(--ss-bevel-dark);
+}
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-primary {
@@ -146,12 +158,11 @@ body {
   color: white;
   border-color: var(--ss-accent);
 }
-.btn-primary:hover:not(:disabled) { background: var(--ss-accent-hover); border-color: var(--ss-accent-hover); }
+.btn-primary:hover:not(:disabled) { background: var(--ss-accent-hover); }
 
 .btn-secondary {
   background: var(--ss-surface);
   color: var(--ss-text);
-  border-color: var(--ss-border);
 }
 .btn-secondary:hover:not(:disabled) { background: var(--ss-surface-hover); }
 
@@ -182,10 +193,10 @@ body {
 
 .cc-footer {
   display: flex;
-  justify-content: flex-end;
   gap: var(--ss-space-xs);
-  padding: var(--ss-space-sm) var(--ss-space-md);
+  padding: var(--ss-space-xs) var(--ss-space-sm);
   border-top: 1px solid var(--ss-border);
+  box-shadow: inset 0 1px 0 var(--ss-bevel-light);
 }
 
 .vm-row {
@@ -202,8 +213,8 @@ body {
 .vm-row--running { background: var(--ss-surface-alt); }
 
 .vm-row__thumb {
-  width: 80px;
-  height: 60px;
+  width: 72px;
+  height: 54px;
   border-radius: var(--ss-radius);
   overflow: hidden;
   background: var(--ss-bg);
@@ -212,6 +223,8 @@ body {
   justify-content: center;
   flex-shrink: 0;
   position: relative;
+  border: 1px solid var(--ss-border);
+  box-shadow: inset 0 1px 2px var(--ss-bevel-dark);
 }
 
 .vm-row__thumb-img { width: 100%; height: 100%; object-fit: cover; }
@@ -289,31 +302,34 @@ body {
   vertical-align: middle;
 }
 
-/* Context menu */
+/* Context menu — Platinum menu style: highlight bar, compact */
 .context-menu {
   position: fixed;
   z-index: 999;
   background: var(--ss-surface);
   border: 1px solid var(--ss-border);
   border-radius: var(--ss-radius);
-  padding: var(--ss-space-xs) 0;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-  min-width: 180px;
+  padding: 2px 0;
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.25);
+  min-width: 170px;
 }
 
 .context-menu__item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   text-align: left;
-  padding: 6px 16px;
+  padding: 3px 14px;
   border: none;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--ss-text);
   cursor: pointer;
 }
 
+/* Platinum-style highlight: solid blue bar with white text */
 .context-menu__item:hover { background: var(--ss-accent); color: white; }
 .context-menu__item--danger { color: var(--ss-danger); }
 .context-menu__item--danger:hover { background: var(--ss-danger); color: white; }
@@ -592,18 +608,20 @@ body {
 }
 .optional { font-weight: 400; color: var(--ss-text-muted); }
 
+/* Inputs — Platinum inset field style */
 .input, select.input {
   width: 100%;
-  padding: 8px 12px;
+  padding: 4px 8px;
   border: 1px solid var(--ss-border);
   border-radius: var(--ss-radius);
   background: var(--ss-surface);
   color: var(--ss-text);
   font-family: inherit;
-  font-size: 14px;
-  transition: border-color 0.15s;
+  font-size: 12px;
+  box-shadow: inset 0 1px 2px var(--ss-bevel-dark);
+  transition: border-color 0.1s;
 }
-.input:focus { outline: none; border-color: var(--ss-accent); box-shadow: 0 0 0 2px var(--ss-accent-dim); }
+.input:focus { outline: none; border-color: var(--ss-accent); }
 
 .input-inline {
   padding: 4px 8px;
@@ -695,21 +713,21 @@ body {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 8px 12px;
+  padding: 5px 10px;
   border: none;
   background: none;
   border-radius: var(--ss-radius);
-  font-size: 13px;
+  font-size: 12px;
   font-family: inherit;
   cursor: pointer;
-  margin-bottom: 2px;
+  margin-bottom: 1px;
   color: var(--ss-text-muted);
   transition: all 0.1s;
 }
 .settings-nav-item:hover { background: var(--ss-surface-hover); color: var(--ss-text); }
 .settings-nav-item.active {
-  background: var(--ss-accent-dim);
-  color: var(--ss-accent);
+  background: var(--ss-accent);
+  color: white;
   font-weight: 600;
 }
 

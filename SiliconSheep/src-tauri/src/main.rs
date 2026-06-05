@@ -213,21 +213,57 @@ fn find_vncdotool() -> Option<String> {
     None
 }
 
+fn find_capture_script() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // Dev mode
+            let p = exe_dir.join("../../../../SiliconSheep/src-tauri/scripts/vnc_capture.py");
+            if p.exists() { return Some(p); }
+            // Also try relative to repo root
+            let p = exe_dir.join("../scripts/vnc_capture.py");
+            if p.exists() { return Some(p); }
+        }
+    }
+    let p = std::path::Path::new("SiliconSheep/src-tauri/scripts/vnc_capture.py");
+    if p.exists() { return Some(p.to_path_buf()); }
+    None
+}
+
+fn find_e2e_python() -> Option<String> {
+    let candidates = [
+        "../SheepShaver/e2e/.venv/bin/python3",
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let p = exe_dir.join("../../../../SheepShaver/e2e/.venv/bin/python3");
+            if p.exists() { return Some(p.to_string_lossy().to_string()); }
+        }
+    }
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
 fn capture_vnc_screenshot(vncport: u16, output_path: &std::path::Path) -> Result<(), String> {
-    let vncdotool = find_vncdotool()
-        .ok_or("vncdotool not found (install via: pip install vncdotool)")?;
+    let script = find_capture_script()
+        .ok_or("vnc_capture.py not found")?;
+    let python = find_e2e_python()
+        .ok_or("E2E Python venv not found (run: cd SheepShaver/e2e && python3 -m venv .venv && pip install vncdotool Pillow)")?;
 
     let server = format!("localhost::{}", vncport);
-    let result = std::process::Command::new(&vncdotool)
-        .args(["-s", &server, "capture", output_path.to_str().unwrap_or("screenshot.png")])
+    let result = std::process::Command::new(&python)
+        .args([script.to_str().unwrap(), &server, output_path.to_str().unwrap_or("screenshot.png")])
         .output()
-        .map_err(|e| format!("Failed to run vncdotool: {}", e))?;
+        .map_err(|e| format!("Failed to run capture script: {}", e))?;
 
     if result.status.success() {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("vncdotool capture failed: {}", stderr.trim()))
+        Err(format!("Screenshot capture failed: {}", stderr.trim()))
     }
 }
 

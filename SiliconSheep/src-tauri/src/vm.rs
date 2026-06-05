@@ -274,9 +274,33 @@ pub fn update_last_booted(id: &str) -> Result<(), String> {
             .unwrap_or_default()
             .as_secs();
         vm.last_booted = Some(format!("{}", now));
+
+        // Try to detect OS version from disk image names if not already set
+        if vm.os_version.is_none() {
+            vm.os_version = detect_os_version_from_disks(&vm.disk_paths);
+        }
         save_manifest(&vms);
     }
     Ok(())
+}
+
+fn detect_os_version_from_disks(disk_paths: &[String]) -> Option<String> {
+    for path in disk_paths {
+        let lower = path.to_lowercase();
+        if lower.contains("macos86") || lower.contains("mac os 8.6") || lower.contains("8.6") {
+            return Some("Mac OS 8.6".to_string());
+        }
+        if lower.contains("macos9") || lower.contains("mac os 9") || lower.contains("9.0") {
+            return Some("Mac OS 9".to_string());
+        }
+        if lower.contains("macos8") || lower.contains("mac os 8") || lower.contains("8.1") || lower.contains("8.5") {
+            return Some("Mac OS 8".to_string());
+        }
+        if lower.contains("os 7") || lower.contains("system 7") {
+            return Some("System 7".to_string());
+        }
+    }
+    None
 }
 
 pub fn rename_profile(id: &str, new_name: &str) -> Result<(), String> {

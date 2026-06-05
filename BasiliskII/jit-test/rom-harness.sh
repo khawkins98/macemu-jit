@@ -4,11 +4,11 @@
 # No display server needed.
 #
 # Usage:
-#   ./jit-test/rom-harness.sh                      # 2 min smoke test
-#   B2_TIMEOUT=600 ./jit-test/rom-harness.sh       # 10 min full boot
+#   ./BasiliskII/jit-test/rom-harness.sh                 # 2 min smoke test
+#   B2_TIMEOUT=600 ./BasiliskII/jit-test/rom-harness.sh  # 10 min full boot
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$DIR/BasiliskII/src/Unix/BasiliskII"
+BIN="$DIR/src/Unix/BasiliskII"
 ROM="${B2_ROM:-/workspace/projects/rpi-basilisk2-sdl2-nox/Quadra800.ROM}"
 SECS="${B2_TIMEOUT:-120}"
 

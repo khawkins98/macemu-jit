@@ -222,16 +222,17 @@ See `BasiliskII/src/uae_cpu_2026/compiler/` for the 68K → AArch64 JIT.
 
 ### BasiliskII QA status
 
-BasiliskII now has a repository-visible end-to-end QA scaffold in `BasiliskII/qa/` plus shared emulator-neutral VNC story tooling in `qa/tests/vnc/`. The intended post-JIT validation path is:
+The intended post-JIT validation path is:
 
-1. `jit-test/run.sh` opcode/vector preflight (`301/301`, score 100).
-2. `jit-test/rom-harness.sh` / `BasiliskII/qa/scripts/run-matrix.sh` ROM smoke.
-3. VNC/Xvfb desktop reachability with a known-good System 7 disk.
-4. Deterministic screenshot assertions in CI: PNG metrics, non-blank checks, hashes, optional Tesseract OCR, optional OpenCV templates.
-5. Hardware coverage evidence for safe user-mode networking (`ether slirp` first), dummy/real audio, disk persistence, PRAM/time, display modes, and optional CD/extfs/clipboard assets.
-6. Markdown and PDF reports generated from run artifacts.
+1. `BasiliskII/jit-test/run.sh` opcode/vector preflight (`301/301`, score 100).
+2. `BasiliskII/jit-test/rom-harness.sh` ROM smoke.
+3. Desktop reachability + deterministic screenshot assertions over VNC.
 
-The shared VNC runner currently defaults to the `noop` driver so both BasiliskII and SheepShaver profiles can validate user stories and reporting in CI without requiring a live desktop. A real VNC capture/input backend is the next automation gap.
+> **Note (2026-06-05):** the old repo-level VNC/Gherkin QA scaffold (`qa/` and
+> `BasiliskII/qa/`) was **removed** — it was Xvfb/Linux-oriented and is superseded by the
+> macOS VNC E2E harness at `SheepShaver/e2e/`. When the BasiliskII macOS build is restored,
+> desktop QA should follow the `SheepShaver/e2e/` pattern (isolated prefs + pristine disk),
+> not a revived Linux story tree.
 
 ### Test Harness (68K)
 

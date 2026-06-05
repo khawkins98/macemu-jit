@@ -101,17 +101,14 @@ cd <repo>/SheepShaver
 make run-tmux
 # Connect VNC, click desktop icons, type text
 
-# Shared CI/story validation from the repository root:
-cd <repo>
-qa/tests/vnc/run.js \
-  --emulator sheepshaver \
-  --features qa/tests/vnc/stories \
-  --artifacts /tmp/sheepshaver-vnc-noop
+# Automated boot + capture (isolated prefs + pristine disk):
+cd <repo>/SheepShaver && make e2e
+# see SheepShaver/e2e/README.md
 ```
 
-**Pass condition**: Clicks and keystrokes reach Mac OS. No crash on input events. Shared VNC stories produce structured artifacts and can be converted to PDF reports.
+**Pass condition**: Clicks and keystrokes reach Mac OS. No crash on input events. The E2E harness drives a boot, waits for the `[BOOT]`/`[READY]` signals, and captures VNC screenshots.
 
-**Status**: ✅ Stable after VNC threading fix (commit a0f4cc7c). The shared runner defaults to `noop`; a real backend should reuse the same `qa/tests/vnc/lib/vnc-driver.js` contract.
+**Status**: ✅ Stable after VNC threading fix (commit a0f4cc7c). Automated coverage is the `SheepShaver/e2e/` harness (the older repo-level `qa/tests/vnc/` Gherkin runner was removed 2026-06-05 — Xvfb/Linux-oriented).
 
 ---
 
@@ -163,16 +160,16 @@ Fix: those two hooks disabled (commit fbb716a0). Residual crash is in Mac ROM/68
 
 ---
 
-## Shared QA/reporting layer
+## Automated E2E layer
 
-SheepShaver should reuse the repository-level VNC/Gherkin tooling rather than growing a separate story tree:
+Automated boot/desktop coverage runs through the `SheepShaver/e2e/` harness — see
+[`SheepShaver/e2e/README.md`](../e2e/README.md). It boots in an isolated config (its own prefs
++ a pristine per-run disk image, never the user's), waits for the `[BOOT]`/`[READY]` boot
+signals, and captures VNC screenshots; `make e2e` is the entry point.
 
-- Shared stories: `qa/tests/vnc/stories/`
-- SheepShaver profile: `qa/tests/vnc/profiles/sheepshaver.json`
-- Deterministic screenshot assertions: `qa/tests/vnc/tools/screenshot-read.js`
-- PDF report generator: `qa/tests/vnc/tools/generate-pdf-report.mjs`
-
-The same user stories should cover desktop reachability, app/control-panel launch, typing, network panel inspection, desktop soak, screenshot assertions, diagnostics, and report generation. SheepShaver-specific launch details belong in the profile, Makefile targets, or a matrix wrapper, not in duplicated Gherkin stories.
+> The older repository-level VNC/Gherkin story tree (`qa/tests/vnc/` + `BasiliskII/qa/`) was
+> **removed 2026-06-05** — it was Xvfb/Linux-oriented and superseded by `SheepShaver/e2e/`.
+> Extend the E2E harness for new desktop/app flows rather than reviving a separate story tree.
 
 ---
 

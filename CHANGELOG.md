@@ -11,6 +11,27 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [shared] Repository tidy-up — relocate the BasiliskII harness, remove the superseded VNC-QA scaffold, document `cxmon/`
+
+- **Moved `jit-test/` → `BasiliskII/jit-test/`.** The root `jit-test/` was the *BasiliskII*
+  68K opcode harness (distinct from `SheepShaver/jit-test/`, the PPC one — they only shared a
+  name). Relocating it gives clean per-emulator symmetry. Fixed the scripts' internal relative
+  paths (`run.sh`: `../BasiliskII/src/Unix` → `../src/Unix`; `rom-harness.sh`:
+  `$DIR/BasiliskII/src/Unix` → `$DIR/src/Unix`) and repointed `Makefile` (`make test-jit`),
+  `autoresearch.sh`, `JIT-STATUS.md`, and `docs/planning/BasiliskII-next-phase-plan.md`.
+  SheepShaver-context `jit-test/` references (run from `SheepShaver/`) are unchanged.
+- **Removed the repo-level VNC/Gherkin QA scaffold** (`qa/` and `BasiliskII/qa/`). It was an
+  Xvfb/Linux-oriented story-runner experiment, superseded by the macOS VNC E2E harness at
+  `SheepShaver/e2e/` (isolated prefs + pristine disk, `[BOOT]`/`[READY]` signals). `BasiliskII/qa/`
+  depended on root `qa/tests/vnc/`, so the two were one system and went together; BasiliskII also
+  doesn't build on macOS. Repointed the surviving references (`JIT-STATUS.md`, both
+  `*/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md`, `BasiliskII/docs/AARCH64_JIT_BRINGUP.md`,
+  `docs/planning/sheepshaver-research/COMPATIBILITY-TESTING-PLAN.md`) at `SheepShaver/e2e/`.
+- **Documented `cxmon/`** with `cxmon/README.macemu.md`: it's vendored upstream source (cxmon 3.2,
+  the optional `mon` debugger), pinned at the repo root because all three `configure.ac` files
+  hard-code `../../../cxmon/src` for `--with-mon`; currently compiled **off** (`config.h` →
+  `/* #undef ENABLE_MON */`); frozen upstream (last change 2017) — keep as-is, don't relocate.
+
 ### [SheepShaver] SDL3 is now the genuinely-built default backend (+ the bugs that surfaced)
 
 - **The build had been silently linking SDL2.** `configure.ac` defaults to SDL3, but the *generated*

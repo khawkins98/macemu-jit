@@ -48,7 +48,7 @@ Must remain mandatory.
 
 ```bash
 cd <repo>
-./jit-test/run.sh
+./BasiliskII/jit-test/run.sh
 ```
 
 **Pass condition**:
@@ -75,9 +75,7 @@ It is not sufficient on its own for whole-runtime correctness.
 
 ```bash
 cd <repo>
-./jit-test/rom-harness.sh
-# or, through the QA matrix wrapper:
-BasiliskII/qa/scripts/run-matrix.sh --case optlev2-rom-smoke --timeout 30
+./BasiliskII/jit-test/rom-harness.sh
 ```
 
 **Pass condition**:
@@ -176,20 +174,16 @@ This is the canonical probe for “almost correct but still poisonous” JIT beh
 
 **How to run**:
 
-```bash
-cd <repo>
-qa/tests/vnc/run.js \
-  --emulator basiliskii \
-  --features qa/tests/vnc/stories \
-  --artifacts BasiliskII/qa/artifacts/reports/vnc-noop
-```
-
-The default driver is `noop`, which is useful for CI story/report validation. Real desktop validation requires a future non-noop VNC backend behind `qa/tests/vnc/lib/vnc-driver.js`.
+> The repo-level VNC/Gherkin QA scaffold (`qa/tests/vnc/`, `BasiliskII/qa/`) was **removed
+> 2026-06-05** — Xvfb/Linux-oriented and superseded by the macOS E2E harness at
+> `SheepShaver/e2e/`. Once the BasiliskII macOS build is restored, desktop QA should follow
+> that harness's pattern (isolated prefs + pristine disk, `[BOOT]`/`[READY]` boot signals,
+> VNC screenshots) rather than reviving the old story tree.
 
 **Pass condition**:
 
-- Story runner succeeds for the BasiliskII profile.
-- With a real backend, screenshot assertions confirm a non-blank display, expected dimensions, and committed OCR/template anchors where available.
+- A real automated desktop boot reaches the Mac desktop and captures a non-blank display at
+  expected dimensions with committed OCR/template anchors where available.
 - Failures classify emulator bugs separately from missing guest assets, host permissions, or automation gaps.
 
 ---
@@ -300,15 +294,12 @@ This file exists to make the validation loop explicit.
 
 Until refined further, the working canonical set should be:
 
-1. `jit-test/run.sh` opcode equivalence harness
-2. `jit-test/rom-harness.sh` or `BasiliskII/qa/scripts/run-matrix.sh --case optlev2-rom-smoke`
-3. `BasiliskII/qa/scripts/run-matrix.sh --case optlev2-desktop-vnc --dry-run` for prefs/manifest generation, then the real desktop run once the VNC backend is wired in
-4. `qa/tests/vnc/run.js --emulator basiliskii --features qa/tests/vnc/stories --artifacts BasiliskII/qa/artifacts/reports/vnc-noop` for shared story validation
-5. screenshot assertions with `qa/tests/vnc/tools/screenshot-read.js` for dimensions/non-blank/OCR/template checks
-6. PDF reporting with `qa/tests/vnc/tools/generate-pdf-report.mjs`
-7. one canonical graphics-corruption repro preset
-8. one canonical low-memory/allocator-sensitive repro preset
-9. one canonical performance benchmark preset
+1. `BasiliskII/jit-test/run.sh` opcode equivalence harness
+2. `BasiliskII/jit-test/rom-harness.sh` ROM smoke
+3. automated desktop boot + VNC screenshot capture (follow the `SheepShaver/e2e/` harness pattern once the BasiliskII macOS build is restored)
+4. one canonical graphics-corruption repro preset
+5. one canonical low-memory/allocator-sensitive repro preset
+6. one canonical performance benchmark preset
 
 The exact real-VNC launch profile and committed UI templates should be frozen after the first captured desktop run.
 

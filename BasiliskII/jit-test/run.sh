@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-UNIX_DIR="$(cd "$SCRIPT_DIR/../BasiliskII/src/Unix" && pwd)"
+UNIX_DIR="$(cd "$SCRIPT_DIR/../src/Unix" && pwd)"
 ROM="${B2_TEST_ROM:-/workspace/projects/rpi-basilisk2-sdl2-nox/Quadra800.ROM}"
 DISK="${B2_TEST_DISK:-/workspace/fixtures/basilisk/images/HD200MB}"
 RUN_DIR="$(mktemp -d /tmp/ar-jit-opcodes-XXXXXX)"

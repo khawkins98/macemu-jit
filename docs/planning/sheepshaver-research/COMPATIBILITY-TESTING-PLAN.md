@@ -1,6 +1,6 @@
 # SheepShaver Compatibility Testing Plan
 
-> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-05
 > **Why this doc exists:** Tiered plan for measuring SheepShaver compatibility (JIT vs interpreter, real apps).
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -16,8 +16,7 @@ Drafted 2026-06-02.
 | [`AARCH64_JIT_GOLDEN_WORKLOADS.md`](../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md) (7 workloads) | The canonical gate. New tiers below feed into it. |
 | [`jit-test/run.sh`](../../../SheepShaver/jit-test/run.sh) ([README](../../../SheepShaver/jit-test/README.md)) (209 vectors, interp-vs-JIT diff) | Tier 1 foundation |
 | [`rom-harness/`](../../../SheepShaver/rom-harness/README.md) (random ROM block exerciser) | Tier 2 foundation |
-| [`qa/tests/vnc/`](../../../qa/tests/vnc/README.md) (shared repo-level VNC/Gherkin runner, stories, [SheepShaver profile](../../../qa/tests/vnc/profiles/sheepshaver.json)) | **The automation layer to use** — per [Golden Workloads §"Shared QA/reporting layer"](../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md), do NOT grow a separate story tree |
-| [`BasiliskII/qa/`](../../../BasiliskII/qa/README.md) ([matrix](../../../BasiliskII/qa/matrix.md)) | The matrix-document format to mirror for the OS boot matrix (Tier 2) |
+| [`SheepShaver/e2e/`](../../../SheepShaver/e2e/README.md) (macOS VNC E2E harness — isolated prefs + pristine disk, `[BOOT]`/`[READY]` boot signals) | **The automation layer to use.** (Superseded the old repo-level `qa/tests/vnc/` Gherkin runner + `BasiliskII/qa/`, both removed 2026-06-05 — Xvfb/Linux-oriented.) |
 | [`JIT-STATUS.md`](../../../JIT-STATUS.md) | Where summary results land |
 | [`docs/planning/JIT-FPU-PLAN.md`](../JIT-FPU-PLAN.md) | Tier 3 (FP) integrates with this |
 | [`docs/research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) | C1 gates Phase 2 of this plan; see also [`RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md) |
@@ -131,7 +130,7 @@ REGDUMPs diffed. Gate: score=100.
    | Mac OS 9.0.4 | Most-used SheepShaver target |
    | Mac OS 9.2.2 | Latest supported; most demanding |
    Record per cell: boots? time-to-desktop? errors in console? Store results as a table in
-   `JIT-STATUS.md`. Mirror `BasiliskII/qa/matrix.md`'s format and runner-script pattern.
+   `JIT-STATUS.md` as a boot matrix (boots? / time-to-desktop? / console errors per cell).
 
 2. **Boot-time metric as a compatibility canary.** Time-to-desktop regression >20% = treat
    as failure even if it boots (the >180s JIT boot finding shows timing IS a compat signal —
@@ -162,10 +161,9 @@ The community-established measure (E-Maculation forum lists) made systematic:
 2. **Per-app record:** launches? / basic use OK? / known crash signature? Compare columns:
    interpreter, ARM64 JIT, x86 JIT (Rosetta). **An app that works under interpreter + x86 JIT
    but not ours = our bug, by definition.** That column comparison is the whole point.
-3. **Automation:** use the shared repo-level `qa/tests/vnc/` tooling (stories, the
-   `sheepshaver.json` profile, screenshot assertions, PDF reports) — per the Golden Workloads
-   doc, SheepShaver-specific details belong in the profile/Makefile/matrix wrapper, NOT in a
-   duplicated Gherkin story tree.
+3. **Automation:** drive boots and capture through the `SheepShaver/e2e/` harness (isolated
+   prefs + pristine per-run disk, `[BOOT]`/`[READY]` boot signals, VNC screenshots). Extend it
+   for app-launch flows rather than standing up a separate story tree.
 4. **Crash triage protocol:** app crashes under JIT → capture guest PC → `rom-harness
    --entry=<PC>` the failing block → extract the instruction sequence into a Tier 1 vector →
    now it's a regression test forever.
@@ -216,7 +214,7 @@ Operationally:
 - Does upstream x86 SheepShaver build cleanly on current macOS under Rosetta? (configure
   age, SDL versions). If not, an x86 Linux VM/container is the fallback host for the x86 lane.
 - Harness FPR seeding (`SS_TEST_INIT` covers GPRs only) — needed for Tier 3.
-- ROM/OS image licensing — test assets stay local, paths via env vars (existing
-  `BasiliskII/qa` pattern).
-- Where do nightly results live? Proposal: `JIT-STATUS.md` summary table + `qa/reports/`
-  directory with per-run artifacts, mirroring BasiliskII.
+- ROM/OS image licensing — test assets stay local, paths via env vars (as `SheepShaver/e2e/`
+  already does — assets in-project but gitignored).
+- Where do nightly results live? Proposal: `JIT-STATUS.md` summary table + the
+  `SheepShaver/e2e/artifacts/` per-run directory.

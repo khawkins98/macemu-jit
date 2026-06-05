@@ -71,8 +71,8 @@ What is still missing:
 Run:
 
 ```bash
-cd /workspace/projects/macemu
-./jit-test/run.sh
+cd <repo>
+./BasiliskII/jit-test/run.sh
 ```
 
 Required result:
@@ -93,8 +93,8 @@ This is the primary proof for:
 Run:
 
 ```bash
-cd /workspace/projects/macemu
-./jit-test/rom-harness.sh
+cd <repo>
+./BasiliskII/jit-test/rom-harness.sh
 ```
 
 This is the primary proof for:
@@ -182,7 +182,7 @@ The validation loop also got stronger:
 
 - the opcode harness now forces rebuild of key JIT glue objects so clean runs do not silently use stale code
 - `B2_TEST_NAMES=...` allows focused opcode-subset loops while preserving the normal metrics contract
-- Xvfb startup in `jit-test/run.sh` now ensures display `:99` actually exists instead of assuming any Xvfb process is sufficient
+- Xvfb startup in `BasiliskII/jit-test/run.sh` now ensures display `:99` actually exists instead of assuming any Xvfb process is sufficient
 
 This is still intentionally conservative: it gives us real runtime edge data and a reliable harness loop without changing invalidation semantics or enabling broad trace formation yet.
 

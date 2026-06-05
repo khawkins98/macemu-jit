@@ -29,21 +29,18 @@ The next work is no longer "make any JIT path reach boot progress". It is system
 
 ### QA status
 
-The active QA scaffold is documented in:
+> The old repo-level VNC/Gherkin QA scaffold (`qa/`, `BasiliskII/qa/`) was **removed
+> 2026-06-05** — Xvfb/Linux-oriented and superseded by the macOS E2E harness at
+> `SheepShaver/e2e/`. The ladder below is the target shape; its desktop tiers should follow the
+> `SheepShaver/e2e/` pattern once the BasiliskII macOS build is restored.
 
-- `BasiliskII/qa/README.md`
-- `BasiliskII/qa/matrix.md`
-- `qa/README.md`
-- `qa/tests/vnc/README.md`
+The validation ladder is:
 
-The validation ladder is now:
-
-1. `jit-test/run.sh` opcode/vector preflight.
-2. `jit-test/rom-harness.sh` or `BasiliskII/qa/scripts/run-matrix.sh` ROM smoke.
-3. VNC/Xvfb desktop reachability using a known-good disk image.
+1. `BasiliskII/jit-test/run.sh` opcode/vector preflight.
+2. `BasiliskII/jit-test/rom-harness.sh` ROM smoke.
+3. Desktop reachability over VNC using a known-good disk image.
 4. Deterministic screenshot assertions: PNG metrics, hashes, non-blank checks, optional Tesseract OCR, optional OpenCV template matching.
-5. User-story VNC flows shared with SheepShaver via `qa/tests/vnc/`.
-6. Hardware/network/audio coverage evidence and Markdown/PDF reports.
+5. Hardware/network/audio coverage evidence.
 
 ### Historical April L2 coverage
 
@@ -95,9 +92,9 @@ The April MAXRUN/register-propagation frontier is historical. The active remaini
 1. Boot BasiliskII headless/VNC to the Mac desktop from a known-good disk image with optlev=2 enabled.
 2. Capture screenshots at boot, desktop, app launch, soak, and shutdown/restart milestones.
 3. Run deterministic screenshot assertions without model vision.
-4. Implement a real VNC capture/input backend behind `qa/tests/vnc/lib/vnc-driver.js` while keeping the existing `noop` CI mode.
+4. Wire automated desktop boot + VNC capture following the `SheepShaver/e2e/` harness pattern.
 5. Inventory and test safe network/audio/device coverage, starting with `ether slirp` and SDL dummy audio.
-6. Generate Markdown/PDF reports from structured artifacts and keep emulator fixes separate from QA-only observations until a reproducible bug is isolated.
+6. Keep emulator fixes separate from QA-only observations until a reproducible bug is isolated.
 
 ### Architecture
 

@@ -42,10 +42,16 @@ def run_lifecycle(
                 runner.log_text(),
             )
 
-        # 2. Request a clean shutdown via the host->guest hook (SIGUSR1 -> the emulator injects
+        # 2. Wait for the SETTLED-desktop signal ([READY]) before shutting down — more robust than the
+        #    first [BOOT] idle, which can fire while the Finder is still drawing / startup items launch.
+        #    Fall back to a short blind settle if [READY] doesn't arrive (e.g. a medium that never
+        #    fully settles), so the smoke can't hang waiting on it.
+        if not _await_ready(runner, READY_TIMEOUT):
+            time.sleep(2.0)
+
+        # 3. Request a clean shutdown via the host->guest hook (SIGUSR1 -> the emulator injects
         #    the ADB Power key + Return; the guest runs its real shutdown from its own event loop).
         #    No VNC menu-clicking — the only VNC use is an optional, best-effort boot screenshot.
-        time.sleep(2.0)  # small settle margin after idle
         if artifact_dir:
             try:
                 v = Vnc(port=vncport)
@@ -79,6 +85,12 @@ def run_lifecycle(
         runner.terminate()
 
 
+# Max wait for the settled-desktop [READY] signal before falling back to a blind settle. Generous
+# because it waits out startup-items/extension churn (the benchmark disk settled at ~21 s); it
+# returns the instant [READY] appears, so it adds no delay in the common case.
+READY_TIMEOUT = 45.0
+
+
 def _await_boot_ready(runner: Runner, timeout: float) -> observe.BootReady | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -88,6 +100,17 @@ def _await_boot_ready(runner: Runner, timeout: float) -> observe.BootReady | Non
                 return ev
         time.sleep(0.5)
     return None
+
+
+def _await_ready(runner: Runner, timeout: float) -> bool:
+    """Wait for the emulator's settled-desktop `[READY]` signal (Finder frontmost + non-modal for a
+    dwell). Returns True if it arrived, False on timeout (caller falls back to a blind settle)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if observe.saw_desktop_ready(runner.log_text()):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 # --- Benchmark scenario (Speedometer) -------------------------------------------------

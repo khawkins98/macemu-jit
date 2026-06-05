@@ -152,14 +152,17 @@ static void e2e_emit_idle_signals(void)
 	char title[64];
 	bool title_valid = e2e_front_window_title(front, title, sizeof(title));
 	uint32 ticks = ReadMacInt32(0x16a);	// Ticks since boot (60/s)
+	uint16 mbar = ReadMacInt16(0x0baa);	// MBarHeight (menu-bar height; non-zero once Finder drew it)
 
 	// [BOOT]: one-shot at the FIRST idle (boot-ready). Kept as a diagnostic; it can fire before the
 	// Finder finishes drawing the desktop, so prefer [READY] (below) for "desktop actually usable".
+	// menubar= is included here too so its first-idle value can be compared with [READY]'s — if it's
+	// already non-zero at first idle, MBarHeight isn't a useful extra readiness discriminator.
 	static bool boot_emitted = false;
 	if (!boot_emitted) {
 		boot_emitted = true;
-		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' ticks=%u (%.1fs)\n",
-		        app, modal, front, title, ticks, ticks / 60.0);
+		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' menubar=%u ticks=%u (%.1fs)\n",
+		        app, modal, front, title, mbar, ticks, ticks / 60.0);
 		fflush(stderr);
 	}
 
@@ -182,7 +185,6 @@ static void e2e_emit_idle_signals(void)
 		settled_since = ticks;
 	if (!ready_emitted && settled && settled_since != 0 && (ticks - settled_since) >= 120) {
 		ready_emitted = true;
-		uint16 mbar = ReadMacInt16(0x0baa);	// MBarHeight
 		fprintf(stderr, "[READY] desktop settled frontApp='%s' menubar=%u modal=%d ticks=%u (%.1fs)\n",
 		        app, mbar, modal, ticks, ticks / 60.0);
 		fflush(stderr);

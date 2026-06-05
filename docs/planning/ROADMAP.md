@@ -419,6 +419,15 @@ and Tauri architecture all researched; findings synthesized into the plan.
   (A0 → `STATUS` → CLI → MCP) also unblocks **A5** (E2E in CI) and **A5-V** (SS_JIT_VERIFY-under-E2E).
   Feeds Track A's verification work; shares one idle-hook command-mailbox spine.
 
+- **C5. 🟡 Multi-VM support.** SiliconSheep currently enforces one running VM at a time
+  (`AppState.running: Option<RunningVm>`). Each VM already launches as a separate OS process
+  with its own `.sheepvm` prefs and random VNC port, so concurrent execution is architecturally
+  supported — the restriction is in the launcher, not the emulator. Change `Option` to a
+  `HashMap<String, RunningVm>`, update Start/Stop/screenshot to target by ID, and guard against
+  two VMs sharing a disk image (data corruption). Low effort (~30 min), high user-perception
+  impact. Gated only on the P0 window-management bugs (unsaved-changes confirmation, orphaned
+  settings window on delete).
+
 **Framework:** Tauri v2 (Rust + pnpm + TypeScript). **Repo strategy:** hard-fork decision
 deferred but recognized as increasingly inevitable with Track C divergence.
 **Detail:** `docs/planning/DESKTOP_INTEGRATION_PLAN.md`, `docs/planning/HOST-GUEST-CHANNELS.md`.

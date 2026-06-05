@@ -140,14 +140,16 @@ function formatElapsed(launchTs: number): string {
 
 function renderVmRow(vm: VmProfile): string {
   const isRunning = runningVmIds.has(vm.id);
+  const isSelected = vm.id === selectedVmId;
   const screenshotSrc = vmScreenshots.get(vm.id);
   const osLabel = vm.os_version ? escapeHtml(vm.os_version) : `${vm.ram_mb} MB`;
   const launchTs = vmLaunchTimestamps.get(vm.id);
   const elapsed = isRunning && launchTs ? formatElapsed(launchTs) : "";
   return `
-    <div class="vm-row ${isRunning ? "vm-row--running" : ""}"
+    <div class="vm-row ${isRunning ? "vm-row--running" : ""} ${isSelected ? "vm-row--selected" : ""}"
          data-id="${escapeAttr(vm.id)}"
-         data-name="${escapeAttr(vm.name)}">
+         data-name="${escapeAttr(vm.name)}"
+         data-action="select-vm">
       <div class="vm-row__thumb">
         ${screenshotSrc
           ? `<img src="${screenshotSrc}" alt="" class="vm-row__thumb-img" />`
@@ -200,20 +202,87 @@ function renderLibrary(): string {
   if (vms.length === 0) {
     return `${renderTitlebar()}${renderErrorBanner()}${renderEmptyState()}`;
   }
+
+  // Auto-select first VM if none selected
+  if (!selectedVmId || !vms.find((v) => v.id === selectedVmId)) {
+    selectedVmId = vms[0].id;
+  }
+
   return `
     ${renderTitlebar()}
     ${renderErrorBanner()}
-    <div class="cc-list">
-      ${vms.map(renderVmRow).join("")}
-    </div>
-    <div class="cc-footer">
-      <button class="vm-row__btn" data-action="show-help" title="Help & Resources">${ICON_HELP()}</button>
-      <button class="vm-row__btn" data-action="toggle-labels" title="Toggle icon labels">${showIconLabels ? "Aa" : "Aa"}</button>
-      <div style="flex:1"></div>
-      <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">${ICON_IMPORT()}</button>
-      <button class="vm-row__btn" data-action="wizard" title="New VM">${ICON_PLUS()}</button>
+    <div class="cc-master-detail">
+      <div class="cc-sidebar">
+        <div class="cc-list">
+          ${vms.map(renderVmRow).join("")}
+        </div>
+        <div class="cc-footer">
+          <button class="vm-row__btn" data-action="show-help" title="Help & Resources">${ICON_HELP()}</button>
+          <button class="vm-row__btn" data-action="toggle-labels" title="Toggle icon labels">Aa</button>
+          <div style="flex:1"></div>
+          <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">${ICON_IMPORT()}</button>
+          <button class="vm-row__btn" data-action="wizard" title="New VM">${ICON_PLUS()}</button>
+        </div>
+      </div>
+      <div class="cc-detail">
+        ${selectedVmId ? renderDetailPane() : '<div class="cc-detail__empty">Select a VM</div>'}
+      </div>
     </div>
   `;
+}
+
+function renderDetailPane(): string {
+  const vm = vms.find((v) => v.id === selectedVmId);
+  if (!vm) return '<div class="cc-detail__empty">Select a VM</div>';
+  const isRunning = runningVmIds.has(vm.id);
+  const screenshotSrc = vmScreenshots.get(vm.id);
+  const launchTs = vmLaunchTimestamps.get(vm.id);
+  const elapsed = isRunning && launchTs ? formatElapsed(launchTs) : "";
+
+  return `
+    <div class="detail-header">
+      <div class="detail-header__info">
+        <h2>${escapeHtml(vm.name)}</h2>
+        <span class="detail-header__meta">${vm.os_version ? escapeHtml(vm.os_version) + " · " : ""}${vm.ram_mb} MB RAM${elapsed ? " · " + elapsed : ""}</span>
+      </div>
+      <div class="detail-header__actions">
+        ${isRunning
+          ? `<button class="btn btn-secondary" data-action="stop" data-id="${escapeAttr(vm.id)}">${ICON_POWER_ON()} </button>`
+          : `<button class="btn btn-primary" data-action="launch" data-id="${escapeAttr(vm.id)}">${ICON_POWER_OFF()} </button>`
+        }
+        <button class="btn btn-secondary" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}">${ICON_DUPLICATE()}</button>
+        <button class="btn btn-secondary" data-action="reveal" data-id="${escapeAttr(vm.id)}">${ICON_FOLDER()}</button>
+        <button class="btn btn-secondary btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}">${ICON_TRASH()}</button>
+      </div>
+    </div>
+    ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
+    <div class="detail-screenshot">
+      ${screenshotSrc
+        ? `<img src="${screenshotSrc}" alt="VM screenshot" class="detail-screenshot__img" />`
+        : `<div class="detail-screenshot__placeholder">🖥 ${isRunning ? "Capturing..." : "No screenshot yet"}</div>`
+      }
+    </div>
+    <div class="detail-config">
+      <div class="detail-tabs">
+        ${["general", "display", "storage", "network", "input", "advanced", "debug"]
+          .map((s) => `<button class="detail-tab ${s === settingsSection ? "detail-tab--active" : ""}"
+                        data-action="switch-section" data-section="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}</button>`)
+          .join("")}
+      </div>
+      <div class="detail-tab-content">
+        ${renderSettingsSection(vm, isRunning)}
+      </div>
+      <div class="detail-save-bar">
+        <button class="btn btn-primary" data-action="save-settings">Save</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSettingsSection(vm: VmProfile, isRunning: boolean): string {
+  // Delegates to renderSettings' sections object — shared between
+  // the integrated detail pane and the separate settings window
+  return renderSettingsSectionContent(vm, isRunning, settingsSection);
 }
 
 function renderWizardStep(): string {
@@ -466,11 +535,7 @@ function getPrefs(key: string): string[] {
   return vmPrefs.filter((e) => e.key === key).map((e) => e.value);
 }
 
-function renderSettings(): string {
-  const vm = vms.find((v) => v.id === selectedVmId);
-  if (!vm) return renderLibrary();
-  const isRunning = runningVmIds.has(vm.id);
-
+function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section: string): string {
   const sections: Record<string, string> = {
     general: `
       <div class="form-group">
@@ -812,31 +877,33 @@ function renderSettings(): string {
     `,
   };
 
+  return sections[section] || "";
+}
+
+// Separate settings window (used when opened via ?settings=<id> URL param)
+function renderSettings(): string {
+  const vm = vms.find((v) => v.id === selectedVmId);
+  if (!vm) return "";
+  const isRunning = runningVmIds.has(vm.id);
+
   return `
-    ${renderTitlebar()}
-    <div class="settings">
-      <div class="settings-header">
-        <h2>${escapeHtml(vm.name)} Configuration</h2>
-        <div style="flex:1"></div>
-        <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">${ICON_DUPLICATE()}</button>
-        <button class="btn btn-secondary btn-sm" data-action="reveal" data-id="${escapeAttr(vm.id)}" title="Reveal in Finder">${ICON_FOLDER()}</button>
-        <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">${ICON_TRASH()}</button>
-        <button class="btn btn-primary" data-action="save-settings">Save</button>
-      </div>
-      ${isRunning ? '<div class="settings-running-banner">This VM is running. Hardware settings are disabled — stop the VM to change them.</div>' : ""}
-      <div class="settings-body">
-        <div class="settings-sidebar">
-          ${Object.keys(sections).map((s) => `
+    ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
+    <div class="settings-body">
+      <div class="settings-sidebar">
+        ${["general", "display", "storage", "network", "input", "advanced", "debug"]
+          .map((s) => `
             <button class="settings-nav-item ${s === settingsSection ? "active" : ""}"
                     data-action="switch-section" data-section="${s}">
               ${s.charAt(0).toUpperCase() + s.slice(1)}
             </button>
           `).join("")}
-        </div>
-        <div class="settings-content">
-          ${sections[settingsSection] || ""}
-        </div>
       </div>
+      <div class="settings-content">
+        ${renderSettingsSectionContent(vm, isRunning, settingsSection)}
+      </div>
+    </div>
+    <div class="detail-save-bar">
+      <button class="btn btn-primary" data-action="save-settings">Save</button>
     </div>
   `;
 }
@@ -974,6 +1041,17 @@ async function handleAction(e: Event) {
   const id = target.dataset.id;
 
   switch (action) {
+    case "select-vm":
+      if (id && id !== selectedVmId) {
+        captureCurrentSectionSettings();
+        selectedVmId = id;
+        settingsSection = "general";
+        pendingSettings = {};
+        await loadVmPrefs(id);
+        render();
+      }
+      break;
+
     case "toggle-labels":
       toggleIconLabels();
       break;
@@ -1125,7 +1203,16 @@ async function handleAction(e: Event) {
 
     case "settings":
       if (id) {
-        await openSettingsWindow(id);
+        if (isSettingsWindow) {
+          // Already in a settings window — this shouldn't happen, but handle gracefully
+          break;
+        }
+        // Select the VM and show its detail pane (integrated mode)
+        selectedVmId = id;
+        settingsSection = "general";
+        pendingSettings = {};
+        await loadVmPrefs(id);
+        render();
       }
       break;
 

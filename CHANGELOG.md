@@ -11,7 +11,32 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
-### [SheepShaver] P1a register-allocator eviction validated; SS_JIT_VERIFY oracle confounds mapped
+### [SheepShaver] SS_JIT_VERIFY oracle — X1 fix (i): replay mirrors the JIT single-block exit
+
+The differential oracle's interp replay used "stop when pc leaves [start,end)", which
+re-iterated intra-block loops, followed blr returns, and ran into post-bc dead code — the
+structural false-positive classes 2/4/5 (OPTIMIZATION-PLAN §0b-extra4). Root cause (from the
+compiler): a JIT block runs LINEARLY until the first conditional branch (`bc`, opcode 16 —
+**both** arms `emit_epilogue_with_pc` to the dispatcher, taken or not) or an unconditional
+terminator/taken branch; `bc` is not a terminator, so the compiler emits dead code past it
+that inflates `n_insns`.
+
+- **Replay now mirrors the JIT's single-block exit** (`ppc-cpu.cpp`): execute each insn, stop
+  when PC left the sequential path (`pc != cur+4`) OR the insn was a `bc` (opcode 16). Plus a
+  no-op-skip guard (`memcmp(jit_state, pre_state)` for the entry-spcflags-poll bail) and a
+  one-time warning when `SS_JIT_NO_CHAIN=1` isn't set. **Boot-validated** (`SS_JIT_NO_CHAIN=1`):
+  the 7 known control-structural blocks now verify **clean boot-wide** (ARTIFACT-PC count 0,
+  was 7); design adversarially challenged by a sub-agent across two rounds (it caught the
+  not-taken-`bc`/opcode-16 case).
+- **Per-block report dedup**: a memory-RMW block (e.g. `100fd0e0`, a `lwz/addi/stw` counter)
+  diverges every visit and previously consumed the whole report budget, blinding the oracle to
+  the rest of boot. Now each distinct block is reported once. The oracle now sees past it; the
+  newly surfaced divergences are **all memory-contamination, no codegen bug**: SUSPECT
+  `10106b50` (`lhz/addi/sth`), `1011e734` (stw to a just-loaded pointer slot), `1018b04c`
+  (`lwzx/stwx`), plus memory-dependent-`bc` ARTIFACT-PC blocks.
+- **Remaining**: only the memory-RMW confound (class 6) is left — the replay reads guest memory
+  `fn()` already wrote. Fix (ii) (memory snapshot/restore, verify-gated) is the next step; it
+  also doubles as the proof of "no real bug" (if it cleans them all, they were artifacts).
 
 - **P1a substantially strengthened — RA eviction path validated (targeted surfaces).** The
   >8-live-GPR `ra_evict` path (never hit by the harness's small vectors) is validated on

@@ -221,34 +221,44 @@ Uses ADD (not ADDS) to preserve NZCV from the initial CMP.
 to all 5 AND-mask sites: rlwinm, rlwimi (both mask and ~mask), rlwnm, andi.,
 andis.  992/1024 PPC masks are encodable.  Encoder from `ppc-logical-imm.hpp`.
 
-### 0b-extra4. SS_JIT_VERIFY oracle confound taxonomy — OPEN (tooling; supersedes the old "skip blr" note)
+### 0b-extra4. SS_JIT_VERIFY oracle confound taxonomy — 5/6 classes FIXED (2026-06-05); class 6 (memory RMW) open
 
 The differential oracle re-runs the interpreter for one block and diffs it against the JIT's
-post-block state. It is **not a clean gate**: the P1a whole-boot sweeps (2026-06-05) showed
-its divergences are *all* false positives in **six structural classes**. None is a codegen
-bug, but together they make a literally-clean boot unachievable. The root causes are two
-design shortcuts in the replay (`ppc-cpu.cpp`): the interp re-run **(a)** stops on "PC left
+post-block state. The P1a whole-boot sweeps (2026-06-05) showed its divergences are *all* false
+positives in **six structural classes** (none a codegen bug). The root causes were two design
+shortcuts in the replay (`ppc-cpu.cpp`): the interp re-run **(a)** stopped on "PC left
 `[start,end)`" instead of mirroring the JIT block's actual path/exit, and **(b)** restores
 *registers only — never guest memory* — so the JIT's stores are still live when the interp
-replays.
+replays. **Fix (i) (commit `5ac5e676`) addressed (a)**; **(b) is the remaining work (fix ii)**.
 
-| # | Class | Tell | Root cause |
-|---|-------|------|------------|
-| 1 | **Block chaining** | `jit_state` is end-of-chain (e.g. `li r4,1` → jit r4=0x80); jit PC in ROM dispatcher | `fn()` runs the whole chain; oracle compares 1 interp block. Use `SS_JIT_NO_CHAIN=1`. |
-| 2 | **blr/bclr return** | `GPR1` off by the in-block `addi r1,r1,N`; `LR`/`PC` = block-addr vs return-addr | interp follows the return; JIT terminates the block |
-| 3 | **Intra-block loop** | exact off-by-one-iteration; jit PC = loop-back target | backward branch target is in `[start,end)`, so replay keeps iterating |
-| 4 | **Mid-block conditional path** | PC mismatch + path-dependent regs | replay and JIT take different arms of an inline `bc` |
-| 5 | **PC bookkeeping** | PC-only divergence, zero data | block-boundary/branch-target accounting |
-| 6 | **Memory RMW (no restore)** | **PC matches**, one GPR off by a constant; value **steps by 2** across visits | replay sees memory the JIT's `stw` already wrote; `100fd0e0` (`lwz;addi;stw` counter) is the type case |
+| # | Class | Tell | Status |
+|---|-------|------|--------|
+| 1 | **Block chaining** | `jit_state` is end-of-chain (e.g. `li r4,1` → jit r4=0x80); jit PC in ROM dispatcher | ✅ workaround: `SS_JIT_NO_CHAIN=1` (now warns if unset) |
+| 2 | **blr/bclr return** | `GPR1` off by the in-block `addi r1,r1,N`; `LR`/`PC` = block-addr vs return-addr | ✅ **fixed (i)** — replay stops at the JIT's real exit |
+| 3 | **Intra-block loop** | exact off-by-one-iteration; jit PC = loop-back target | ✅ **fixed (i)** — replay stops at the first `bc`/branch (one iteration) |
+| 4 | **Mid-block conditional path** | PC mismatch + path-dependent regs | ✅ **fixed (i)** — replay stops at the `bc` (opcode 16), both arms |
+| 5 | **PC bookkeeping** | PC-only divergence, zero data | ✅ **fixed (i)** |
+| 6 | **Memory RMW (no restore)** | **PC matches**, one GPR off by a constant; value **steps by 2** across visits | 🟡 **open (fix ii)** — `100fd0e0`/`10106b50`/`1011e734`/`1018b04c` |
+
+**Fix (i) landed (2026-06-05, `5ac5e676`):** the replay now mirrors the JIT's single-block
+control flow — execute each insn, stop when PC left the sequential path (`pc != cur+4`) OR the
+insn was a `bc` (opcode 16; **both** arms `emit_epilogue_with_pc` to the dispatcher, so `bc`
+ends the block taken-or-not, and the compiler emits `n_insns`-inflating dead code past it).
+Plus a no-op-skip guard (`memcmp(jit_state,pre_state)` for the spcflags-poll bail) and a
+`SS_JIT_NO_CHAIN` warning. Boot-validated: classes 2/4/5 (and 3) are **clean boot-wide**
+(ARTIFACT-PC count 0). A **per-block report dedup** (`7314bc9c`) stops a memory-RMW block from
+consuming the whole budget. **Only class 6 remains.**
 
 **Class 6 is the dangerous one** — it passes a naive "PC-match ⇒ real bug" filter. Discriminator:
 a *real* missing-`addi` bug steps the counter by 1; the double-apply artifact steps by **2**
 (JIT store + replay store), proving the JIT op executed. The rigorous filter is per-record
 (a record with a GPR line but no PC line), not block-level set difference.
 
-**The proper fix is the X1 verify/bisection tooling (ROADMAP A1):** make the replay mirror the
-JIT block's path and stop at its real terminator (kills 2/3/4/5), and snapshot+restore the
-touched guest memory around the replay (kills 6). Also note the **budget/timing trap**: the
+**The proper fix is the X1 verify/bisection tooling (ROADMAP A1):** ✅ make the replay mirror the
+JIT block's path and stop at its real terminator (kills 2/3/4/5) — **done, fix (i)**; 🟡
+snapshot+restore the touched guest memory around the replay (kills 6) — **fix (ii), open** (the
+design under review is an interp-first reorder + RAM-write journal, gated entirely behind
+`SS_JIT_VERIFY` so normal boots are untouched). Also note the **budget/timing trap**: the
 report budget gates *entry*, so a low budget makes the oracle go dark mid-boot, while a high
 budget (`SS_JIT_VERIFY_BUDGET`) makes verify-every-block starve the guest timer into an
 early-boot ROM spin — neither reaches Finder with full coverage. A targeted/sampled verify

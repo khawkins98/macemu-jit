@@ -234,9 +234,21 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
   Speedometer disk (`macos9_mini.dsk`, ~142 MB sparse, copy-per-run = instant clonefile), drives the
   full Speedometer 4.02 suite over VNC (splash→registration→Cmd+A→choose-disk, gated on a new `[APP]
   frontApp` signal so it doesn't race the variable launch), captures `benchmark-result.png` (PR/CPU),
-  and shuts down via the hook. Verified PASS (PR 29.375, CPU 66.976). **Remaining:** score *parsing*
-  — OCR the result image (or read Speedometer's "Machine Records" file) for an automated perf number.
-  See spec §15.
+  and shuts down via the hook. Verified PASS (PR 29.375, CPU 66.976). See spec §15.
+- ✅ **Benchmark-finished hook + `[APP]` debounce — DONE (2026-06-05, spec §17).** The idle hook's
+  `[APP]` signal now also fires on a front-window **modal change**, so Speedometer's "tests are done!"
+  dialog is a deterministic finish signal — `run_benchmark` waits for it (no fixed sleep) and reports
+  the measured suite duration (non-OCR perf proxy). App-change emits debounced ~0.5 s.
+- ⚠️ **Boot-breaking regression fixed (2026-06-05, commit `5d87d713`).** The live-JIT-stats
+  window-title feature called `SDL_SetWindowTitle` from the Redraw Thread (Cocoa main-thread-only) →
+  abort/VBL-stall/boot-hang. Removed from both backends; see LEARNINGS.
+- ☐ **Score parsing (the one open item, now unblocked).** Boot works, so drive Speedometer's
+  File/Analysis menus over VNC to **export results as text**, read + parse the file off the disk for
+  an exact PR/CPU number (OCR excluded; "Machine Records" resource fork is not cleanly parseable).
+- ☐ **Reconfigure to SDL3 (config hygiene).** The harness has been validating **SDL2**, not the
+  intended SDL3 default — the generated `configure` is stale (predates the `configure.ac` SDL3 flip).
+  Re-bootstrap (`NO_CONFIGURE=1 ./autogen.sh && ./configure …`, no `--with-sdl2`) + re-verify
+  `make e2e` boots on SDL3. See LEARNINGS 2026-06-05.
 - **P3** — declarative scenario DSL ("Playwright-for-VNC").
 - *(deferred)* **Bootable benchmark ISO** — a read-only bootable HFS CD version of the above
   (harder: needs blessing + HFS mastering on modern macOS). The writable small disk covers the need

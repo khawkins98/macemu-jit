@@ -3,6 +3,23 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-05 — The `make build-ss` binary links SDL2, not SDL3 (stale generated `configure`)
+
+Despite `configure.ac` and the docs defaulting to **SDL3**, the built SheepShaver links
+`libSDL2-2.0.0.dylib` (`otool -L SheepShaver/src/Unix/SheepShaver | grep -i sdl`). Root cause: the
+**generated `configure` is stale** — it was generated *before* `configure.ac` flipped the default to
+SDL3 (mtimes: `configure` Jun 4 09:28 < `configure.ac` Jun 4 11:34), so the on-disk `configure` still
+defaults to SDL2 and never runs the sdl3 pkg-config check. sdl3 *is* installed (pkg-config 3.4.10).
+Fix: re-bootstrap — `cd SheepShaver/src/Unix && NO_CONFIGURE=1 ./autogen.sh && ./configure …` (no
+`--with-sdl2`), then `make build-ss`.
+
+**Debugging lesson (cost me a wrong conclusion):** a revert/edit of `video_sdl3.cpp` is a **no-op**
+for this build — only `video_sdl2.cpp` is compiled in. I reverted the SDL3 file to test the
+title-bar boot-hang hypothesis, it "still hung," and I wrongly inferred *environmental*. The crash
+backtrace naming `libSDL2-2.0.0.dylib` was the authoritative backend signal all along. **Always
+`otool -L` to confirm the linked backend before debugging/reverting SDL/video code.** The E2E
+harness has therefore been validating SDL2, not SDL3.
+
 ## 2026-06-05 — SDL_SetWindowTitle is main-thread-only on macOS
 
 `SDL_SetWindowTitle` calls into Cocoa (`NSWindow setTitle:`), which asserts "should only be

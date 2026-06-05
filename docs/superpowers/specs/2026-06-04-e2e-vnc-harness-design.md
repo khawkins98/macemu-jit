@@ -380,11 +380,39 @@ automated perf-regression *number* from the Speedometer run. Findings:
   non-OCR. For now the PR/CPU live in `benchmark-result.png` (human-readable).
 
 **Deferred (with reason):**
-- **`[APP]` signal debounce** — `CurApName` oscillates among background extensions under cooperative
-  multitasking, so the benchmark log gets hundreds of `[APP]` lines. Harmless (detection greps for
-  the app) but spammy; a rate-limit needs an emulator rebuild + boot to verify, so left for a
-  session that's already booting.
 - **P3 scenario DSL** — generalizing `run_lifecycle`/`run_benchmark` into declarative steps. The two
   scenarios work; only worth it when adding more.
 - **Spec relocation** (`docs/superpowers/specs/` → `docs/planning/specs/`) — cross-file ref churn
   while other agents edit docs; deferred to avoid conflicts.
+
+## 17. Update (2026-06-05 pt 2) — benchmark-finished hook landed; boot fix; SDL2/SDL3 finding; PARKED
+
+This pass closed two of the §16 deferrals and fixed a boot-breaking regression, then parked the
+feature (work moved to Silicon Sheep). State at park:
+
+**Done (commits `2dcddbb1`, `5d87d713`):**
+- **Benchmark-finished hook + `[APP]` debounce (was §16 path (c) + the deferred debounce).** The
+  idle hook's `[APP]` signal now also fires on a front-window **modal change**, so Speedometer's
+  "tests are done!" dialog (modal 0→1) is a deterministic finish signal. `run_benchmark` waits for
+  that dialog instead of a fixed 105 s sleep and reports the measured suite duration (a coarse,
+  non-OCR perf proxy — e.g. **39 s** on the verifying run). App-change emits are debounced to ~0.5 s.
+  (`emul_op.cpp`, `observe.is_app_dialog()`, `scenario.run_benchmark` + unit tests.) Verified
+  end-to-end: captured the real "tests are done!" dialog (PR 28.644) — see `benchmark-result.png`.
+- **Boot-breaking regression fixed.** The live-JIT-stats window-title feature called
+  `SDL_SetWindowTitle` from `do_video_refresh()` (the **Redraw Thread**); on macOS that Cocoa call
+  is main-thread-only — it aborts (SDL2) or stalls the redraw thread so the 60 Hz VBL stops and the
+  guest hangs in early disk/SCSI boot. Removed the periodic update from both backends; getter +
+  `status_suffix` retained for a main-thread reimpl. (See LEARNINGS 2026-06-05.)
+
+**Finding — the harness has been validating SDL2, not SDL3.** `otool -L` shows the `make build-ss`
+binary links `libSDL2-2.0.0.dylib`, although `configure.ac` (and the docs) default to **SDL3**. Root
+cause: the *generated* `configure` is stale (generated Jun 4 09:28; `configure.ac` flipped the
+default to SDL3 at Jun 4 11:34) and still defaults to SDL2, so it never runs the sdl3 check.
+sdl3 pkg-config **is** available (3.4.10). One-command fix when desired:
+`cd SheepShaver/src/Unix && NO_CONFIGURE=1 ./autogen.sh && ./configure …` (no `--with-sdl2`), then
+`make build-ss` — re-verify `make e2e` boots on SDL3 (the title fix covers both backends).
+
+**Parked next step (the one real open item): score parsing via Speedometer text export (§16 path
+(b)).** Boot now works, so this is unblocked: drive Speedometer's File/Analysis menus over VNC to
+find a "Save as text"/export action, write it to the disk, read + parse the file on the host for an
+exact PR/CPU number. Until then the duration proxy + `benchmark-result.png` cover the perf signal.

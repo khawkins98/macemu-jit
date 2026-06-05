@@ -89,14 +89,18 @@ degradation from many prior launches.
 
 ```bash
 cd SheepShaver
+make e2e-setup    # FIRST TIME: guided check — venv, build, Homebrew libs, assets (offers to link them)
 make e2e          # smoke: build, boot, clean-shutdown, assert exit 0   (PASS / non-zero FAIL)
 make e2e-bench    # benchmark: boot Mac OS 9 + Speedometer, drive the suite, capture results
 make e2e-test     # offline unit tests (no emulator / assets / GUI)
 ```
 
-**That's the whole setup.** The Python venv **auto-installs on first run** (cached after, like
-`npm install`) — no manual `venv`/`pip`. `make e2e` builds the emulator for you. Other targets:
-`make e2e-setup` ((re)create the venv), `make e2e-clean` (remove it).
+**That's the whole setup.** `make e2e-setup` is the friendly front door: it verifies the build, the
+Homebrew libs (`sdl3`/`vde`/`libvncserver`), and the three assets, prints a ✓/✗ report with the exact
+fix for any gap, and — in a terminal — **offers to symlink ROM/ISO/disk files it finds** (e.g. under
+`/Users/Shared/macemu` or `~/Downloads`) into `assets/`. The Python venv **auto-installs on first
+run** (cached, like `npm install`) — no manual `venv`/`pip`; `make e2e` builds the emulator for you.
+`make e2e-clean` removes the venv.
 
 > First-ever build also needs a one-time `configure` — see the SheepShaver build commands in
 > `CLAUDE.md` / the repo build docs. After that, `make e2e` is incremental.

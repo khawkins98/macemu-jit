@@ -148,7 +148,8 @@ test-jit: build-ss
 #   make e2e         boot -> clean-shutdown smoke (the system-level regression gate)
 #   make e2e-bench   boot Mac OS 9 + Speedometer, drive the suite over VNC, capture results
 #   make e2e-test    offline unit tests (no emulator, no assets, no GUI)
-#   make e2e-setup   (re)create the Python venv explicitly;  make e2e-clean  removes it
+#   make e2e-setup   guided setup check — venv, build, Homebrew libs, assets (offers to link them)
+#   make e2e-clean   remove the venv
 # The venv auto-bootstraps on first use (cached, like `npm install`) — no manual setup.
 # e2e / e2e-bench need a logged-in macOS GUI session (SDL opens a real window). See e2e/README.md.
 
@@ -161,6 +162,7 @@ e2e/.venv/.installed: e2e/requirements.txt
 	@touch $@
 
 e2e-setup: e2e/.venv/.installed
+	cd e2e && .venv/bin/python doctor.py
 
 e2e: build-ss e2e/.venv/.installed
 	cd e2e && .venv/bin/python run_smoke.py

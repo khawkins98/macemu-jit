@@ -1418,6 +1418,19 @@ void powerpc_cpu::execute(uint32 entry)
 							}
 
 							if (!match) {
+								/* Per-block report dedup (X1): a block that diverges on EVERY visit (e.g. a
+								 * memory-RMW counter like 100fd0e0) would otherwise consume the whole report
+								 * budget and blind the oracle to the rest of boot. Report each distinct block
+								 * PC once, then suppress further reports so the budget covers many distinct
+								 * blocks. (Per-process; reset only by restart.) */
+								static uint32 reported_pcs[1024];
+								static int reported_n = 0;
+								bool already_reported = false;
+								for (int k = 0; k < reported_n; k++)
+									if (reported_pcs[k] == jit_block_start_pc) { already_reported = true; break; }
+								if (!already_reported) {
+									if (reported_n < 1024) reported_pcs[reported_n++] = jit_block_start_pc;
+
 								/* Classify the record so the log is triagable instead of a wall
 								 * of noise (OPTIMIZATION-PLAN 0b-extra4). If interp and JIT agree
 								 * on the exit PC, they took the SAME control flow, so a register
@@ -1460,6 +1473,7 @@ void powerpc_cpu::execute(uint32 entry)
 									fprintf(stderr, "[VERIFY] Budget exhausted — further divergences suppressed\n");
 							}
 
+								}
 							}
 							/* Restore JIT state so execution continues correctly */
 							memcpy(regs_ptr(), &jit_state, sizeof(powerpc_registers));

@@ -64,10 +64,17 @@ def main() -> int:
             ts = time.strftime("%Y-%m-%dT%H-%M-%S")
             raw = bench_export.extract_report(str(run_disk))
             if raw is None:
-                why = ("hfsutils missing — `make e2e-setup`"
-                       if not bench_export.hfsutils_available()
-                       else f"no '{bench_export.REPORT_NAME}' on the disk (Cmd-T save may not have taken)")
-                print(f"  history: report not extracted ({why})")
+                if not bench_export.hfsutils_available():
+                    print("  history: report not extracted (hfsutils missing — `make e2e-setup`)")
+                else:
+                    print(f"  history: report not extracted (no '{bench_export.REPORT_NAME}' on the disk "
+                          "— Cmd-T save may not have taken)")
+                    # Diagnostic: show what DID land, so a mangled save name vs no-save is obvious.
+                    files = bench_export.list_files(str(run_disk))
+                    hits = [f for f in files if bench_export.REPORT_NAME in f.lower()
+                            or "report" in f.lower()]
+                    if hits:
+                        print(f"           files that look related: {hits}")
             else:
                 rep = bench_export.parse_report(raw)
                 hist_root = artifacts / "benchmark-history"

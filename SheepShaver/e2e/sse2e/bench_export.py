@@ -39,11 +39,11 @@ def _run(args, home):
     return subprocess.run(args, env=env, capture_output=True, encoding="mac_roman")
 
 
-def _find_in_listing(listing: str, name: str) -> str | None:
-    """Return the colon-path folder containing `name` in `hls -R -F` output, or None.
+def _walk_listing(listing: str):
+    """Yield (folder, filename) for every *file* entry in `hls -R -F` output.
 
-    Root-level files return "" (empty folder path). Folder *entries* (trailing ':') and
-    the ':Folder:' headers themselves are never matched as files.
+    The root listing has no header (folder == ""); subfolders appear as ':Folder:' (or nested
+    ':Folder:Sub:') headers. Folder *entries* (trailing ':') and the headers are not files.
     """
     folder = ""  # current directory context; "" == volume root
     for line in listing.splitlines():
@@ -56,6 +56,12 @@ def _find_in_listing(listing: str, name: str) -> str | None:
         entry = line.rstrip("*").rstrip()
         if entry.endswith(":"):
             continue  # a subfolder entry within a listing, not a file
+        yield folder, entry
+
+
+def _find_in_listing(listing: str, name: str) -> str | None:
+    """Return the colon-path folder containing file `name`, or None (root files give "")."""
+    for folder, entry in _walk_listing(listing):
         if entry == name:
             return folder
     return None
@@ -83,11 +89,36 @@ def extract_report(disk_path: str, name: str = REPORT_NAME) -> str | None:
             out = Path(home) / "report.txt"
             if _run([_HCOPY, "-t", src, str(out)], home).returncode != 0 or not out.exists():
                 return None
-            return out.read_text(errors="replace")
+            # Decode as MacRoman to match the listing (and faithfully archive classic-Mac text).
+            # An empty extraction means the data fork was empty (e.g. a binary resource-fork file
+            # like "Machine Records") — treat that as "not a real text report", not a blank row.
+            text = out.read_text(encoding="mac_roman")
+            return text or None
         finally:
             _run([_HUMOUNT], home)
     finally:
         shutil.rmtree(home, ignore_errors=True)
+
+
+def list_files(disk_path: str) -> list[str]:
+    """Diagnostic: the non-folder file entries on an HFS image (as 'folder:name'), or [].
+
+    Used to enrich the "report not extracted" message so the first verification boot reveals
+    at a glance whether the save name got mangled vs. the report never saved at all.
+    """
+    if not hfsutils_available():
+        return []
+    home = tempfile.mkdtemp(prefix="hfs-home-")
+    try:
+        if _run([_HMOUNT, disk_path], home).returncode != 0:
+            return []
+        try:
+            listing = _run([_HLS, "-R", "-F"], home).stdout
+        finally:
+            _run([_HUMOUNT], home)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    return [f"{folder}:{name}" if folder else name for folder, name in _walk_listing(listing)]
 
 
 # Speedometer score label -> normalized column. Exact label match so "Nominal CPU" can't be

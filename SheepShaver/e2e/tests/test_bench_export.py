@@ -41,6 +41,16 @@ def test_find_in_listing_ignores_folder_entries_named_like_target():
     assert bench_export._find_in_listing(listing, "e2ereport") is None
 
 
+def test_walk_listing_yields_files_with_folders_skipping_subdir_entries():
+    # Shared walk behind both _find_in_listing and list_files: files only, with their folder.
+    got = list(bench_export._walk_listing(_LISTING))
+    assert ("Desktop Folder", "e2ereport") in got
+    assert ("Desktop Folder", "Machine Records") in got
+    assert ("System Folder", "Finder") in got
+    # "Preferences:" is a subfolder entry, not a file — must be excluded.
+    assert all(name != "Preferences" for _, name in got)
+
+
 # --- parse_report ---
 
 # Representative Speedometer 4.02 "Save Text Report" content. The five score lines are the

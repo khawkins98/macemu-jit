@@ -27,6 +27,7 @@ pub struct VmProfile {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateVmRequest {
     pub name: String,
     pub rom_path: String,
@@ -53,7 +54,7 @@ struct KnownRom {
 
 const KNOWN_ROMS: &[KnownRom] = &[
     KnownRom {
-        sha256: "ecfa2a80e3e6b89c3f975e4e8b63acadcb285e39eb2b2f7e2caad857e39a8e8a",
+        sha256: "d439f412c5dda7e2a498bb7b40a9ffd7bb542cf003586c45a7b5d7e24304cb09",
         name: "Mac OS ROM 1.1 (1998-07-21)",
     },
 ];

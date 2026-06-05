@@ -116,6 +116,11 @@ report is archived verbatim regardless, so no data is lost while the parser is t
 
 ## 3. Pipeline
 
+> ⚠️ **Superseded in part — see §0.** This section's deterministic typed name (`e2e-report`) was
+> NOT what shipped: typing proved unreliable, so we accept Speedometer's default name ("Power
+> Macintosh Report") and match it by `REPORT_MATCH` substring host-side. The hfsutils extraction
+> mechanics below are accurate.
+
 ```
 guest  (after "All Done!" dismiss, before vnc.close()):
         Cmd-T  →  the name field is pre-selected, so type a deterministic name
@@ -183,6 +188,10 @@ trivially, and full history is essentially free).
 ---
 
 ## 6. Comparison / reporting
+
+> ⚠️ **Superseded in part — see §0.** The example below leads with a `PR` row, but `PR` is
+> **deliberately not trended** (disk-weighted, panel-only). The shipped delta covers
+> CPU/Graphics/Disk/Math; `SS_E2E_RUNS=N` adds a median ± CV% batch summary.
 
 `format_delta` reads the last two `history.csv` rows and prints a one-block summary at the
 end of `make e2e-bench`, e.g.:

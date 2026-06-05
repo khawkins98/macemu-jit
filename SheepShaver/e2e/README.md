@@ -163,7 +163,17 @@ Variants:
 
 ```bash
 SS_E2E_MEDIUM=disk make e2e     # run the smoke on the writable Mac OS 9 disk instead of the ISO
+SS_E2E_RUNS=5 make e2e-bench    # 5 benchmark runs -> a median ± CV% summary (less-noisy trend)
 ```
+
+### Environment variables
+
+| Variable | Default | Effect | Used by |
+|----------|---------|--------|---------|
+| `SS_E2E_ROM` / `SS_E2E_ISO` / `SS_E2E_DISK` | resolve via `assets/` then a legacy path | Point at a specific ROM / smoke ISO / benchmark disk without editing tracked files | both |
+| `SS_E2E_MEDIUM` | `iso` | `iso` (read-only, default) or `disk` for the **smoke** boot medium | `make e2e` only (the benchmark is always the disk) |
+| `SS_E2E_RUNS` | `1` | Run the benchmark N times and print a median ± per-metric CV% batch summary | `make e2e-bench` |
+| `SS_E2E_SHUTDOWN_TIMEOUT` | `60` | Seconds to wait for the post-benchmark shutdown before force-killing (raise it to watch a stuck shutdown on screen) | `make e2e-bench` |
 
 A smoke run is ~1 min (boot ~5 s, shutdown flush ~20–30 s). The SDL window appears on your screen and
 **VNC is served on port 5950** if you want to watch live. On failure, `artifacts/fail.log` + any

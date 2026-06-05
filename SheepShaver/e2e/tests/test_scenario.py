@@ -14,10 +14,11 @@ from sse2e import scenario
 
 class FakeRunner:
     """Stand-in for runner.Runner — serves scripted log lines; records shutdown/terminate."""
-    def __init__(self, lines=None):
+    def __init__(self, lines=None, wait_code=0):
         self._lines = list(lines or [])
         self.shutdown_requested = False
         self.terminated = False
+        self._wait_code = wait_code   # scriptable: an int exit code, or None to model a kill/timeout
 
     def log_text(self):
         return "\n".join(self._lines)
@@ -29,7 +30,7 @@ class FakeRunner:
         self.shutdown_requested = True
 
     def wait(self, timeout=None):
-        return 0
+        return self._wait_code
 
     def terminate(self):
         self.terminated = True
@@ -40,6 +41,7 @@ class FakeVnc:
     'guest' reacts to input (open a dialog, quit, etc.)."""
     def __init__(self, on_key=None):
         self.keys = []
+        self.closed = False
         self._on_key = on_key
 
     def key(self, name):
@@ -54,7 +56,7 @@ class FakeVnc:
         pass
 
     def close(self):
-        pass
+        self.closed = True
 
 
 @pytest.fixture
@@ -210,3 +212,30 @@ def test_quit_to_finder_false_when_it_never_leaves_speedometer(fast_clock):
     vnc = FakeVnc(on_key=lambda n: r.add(app_line("Speedometer 4.02", modal=0, title="main")))
     assert scenario._quit_to_finder(r, vnc, timeout=0.5) is False
     assert vnc.keys[0] == "super-q"
+
+
+# --- _benchmark_verdict (the "honest PASS" decision) ---------------------------------------
+
+_CLEAN_LOG = "boot...\nShutdown complete.\nPPC-JIT-A64: session 1 ended\n"
+
+
+def test_benchmark_verdict_passes_on_clean_shutdown():
+    ok, _ = scenario._benchmark_verdict(0, _CLEAN_LOG)
+    assert ok is True
+
+
+def test_benchmark_verdict_fails_on_kill_timeout():
+    ok, reason = scenario._benchmark_verdict(None, _CLEAN_LOG)   # None == had to kill
+    assert ok is False and "timed out" in reason
+
+
+def test_benchmark_verdict_fails_on_exit0_without_shutdown_signatures():
+    # The honest-PASS gate: a 0 exit code alone must NOT pass — the guest's real shutdown
+    # signatures must be present. Here the atexit line is missing.
+    ok, reason = scenario._benchmark_verdict(0, "Shutdown complete.\n")
+    assert ok is False and "not clean" in reason
+
+
+def test_benchmark_verdict_fails_on_nonzero_exit():
+    ok, _ = scenario._benchmark_verdict(3, _CLEAN_LOG)
+    assert ok is False

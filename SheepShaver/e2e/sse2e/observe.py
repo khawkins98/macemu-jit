@@ -9,6 +9,9 @@ _BOOT_RE = re.compile(
     r"\[BOOT\] idle frontApp='(?P<app>[^']*)' modal=(?P<modal>\d+).*? ticks=\d+ \((?P<secs>[\d.]+)s\)"
 )
 # The clean-exit signature: "Shutdown complete." plus the atexit session block.
+# NOTE: the atexit line is emitted by the JIT, so saw_clean_shutdown is coupled to JIT mode. The
+# harness always runs the JIT (default), so both signatures appear; but a deliberate SS_USE_JIT=0
+# run would report a genuine clean shutdown as "unclean". Loosen this if a no-JIT mode is ever tested.
 _SHUTDOWN_RE = re.compile(r"Shutdown complete\.")
 _ATEXIT_RE = re.compile(r"PPC-JIT-A64: session ")
 

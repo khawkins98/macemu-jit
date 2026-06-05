@@ -333,4 +333,9 @@ def format_summary(summary: dict, label: str = "batch") -> str:
         flag = "  <- noisy, treat with caution" if s["cv_pct"] >= NOISY_CV_PCT else ""
         lines.append(f"  {name:<9} {s['median']:>11.3f}  ±{s['cv_pct']:>5.1f}%  "
                      f"[{s['min']:.3f}..{s['max']:.3f}] n={s['n']}{flag}")
+    # One-line legend so the numbers are self-explaining in the terminal (no README round-trip).
+    if any(s["cv_pct"] >= NOISY_CV_PCT for s in summary.values()):
+        lines.append(f"  (±% = run-to-run noise; >{NOISY_CV_PCT:.0f}% flagged. High CPU/Math noise "
+                     f"usually means the host was busy — re-run on an idle machine. Disk is noisy by "
+                     f"nature; trust CPU/Math for JIT trends. PR is not trended — see the README.)")
     return "\n".join(lines)

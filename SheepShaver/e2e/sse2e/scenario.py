@@ -204,7 +204,10 @@ def run_benchmark(
 
         time.sleep(1.0)                          # let the alert settle before the screenshot
         img = str(artifact_dir / "benchmark-result.png")
-        vnc.capture(img)                         # capture the results (with the "All Done!" alert up)
+        try:
+            vnc.capture(img)                     # capture the results (with the "All Done!" alert up)
+        except Exception:
+            pass                                 # the screenshot is a debugging artifact, not critical
         vnc.key("enter"); time.sleep(1.5)        # dismiss "All Done!" -> guest returns to idle
 
         # Save the text report onto the (throwaway) run-copy disk so the host can extract it after
@@ -225,27 +228,44 @@ def run_benchmark(
         code = runner.wait(timeout=shutdown_timeout)
         log = runner.log_text()
         gates = " ".join(f"{k}={v:.1f}s" for k, v in timings.items())
-        if code is None:
-            return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img, duration_s)
-        # Honest PASS: a clean *exit code alone* isn't enough — require the guest's real shutdown
-        # signatures ("Shutdown complete." + the atexit session line). This is what makes a green
-        # benchmark mean the automation genuinely drove an unattended shutdown, not that the process
-        # happened to exit (e.g. was helped along externally).
-        if code != 0 or not observe.saw_clean_shutdown(log):
-            return BenchResult(False,
-                               f"benchmark ran but the shutdown was not clean (exit={code}, "
-                               f"clean_signatures={observe.saw_clean_shutdown(log)})",
-                               log, img, duration_s, report_saved=report_saved)
+        ok, reason = _benchmark_verdict(code, log)   # honest PASS: requires a real clean shutdown
+        if not ok:
+            return BenchResult(False, reason, log, img, duration_s, report_saved=report_saved)
         return BenchResult(True,
                            f"benchmark complete in {duration_s:.0f}s (gates: {gates}); results + log captured",
                            log, img, duration_s, report_saved=report_saved)
     finally:
+        # ALWAYS tear down vncdotool's Twisted (non-daemon) reactor. A benchmark that returns early
+        # (a drive gate timed out) or raises mid-drive would otherwise leave the reactor thread alive
+        # and HANG the process after printing the result line — the exact trap vnc.py / run_smoke.py
+        # warn about. api.shutdown() is safe on every path (whether or not a Vnc was created / the
+        # reactor came up); the happy path already closed it, so this is the catch-all. (run_lifecycle
+        # does the same in its finally — keep them consistent.)
+        try:
+            from vncdotool import api
+            api.shutdown()
+        except Exception:
+            pass
         # Always save the emulator log (even on early failure) — terminal output for analysis.
         try:
             (artifact_dir / "benchmark-emulator.log").write_text(runner.log_text())
         except Exception:
             pass
         runner.terminate()
+
+
+def _benchmark_verdict(code: int | None, log: str) -> tuple[bool, str]:
+    """Decide PASS/FAIL from the emulator's exit code + log. HONEST PASS: a clean exit *code* alone
+    isn't enough — require the guest's real clean-shutdown signatures (`observe.saw_clean_shutdown`:
+    "Shutdown complete." + the atexit session line), so a green benchmark means the harness genuinely
+    drove an unattended shutdown, not that the process merely exited. Returns (ok, reason)."""
+    if code is None:
+        return False, "shutdown timed out after benchmark (had to kill)"
+    clean = observe.saw_clean_shutdown(log)
+    if code != 0 or not clean:
+        return False, (f"benchmark ran but the shutdown was not clean "
+                       f"(exit={code}, clean_signatures={clean})")
+    return True, "shutdown clean"
 
 
 def _nlines(runner: Runner) -> int:
@@ -318,6 +338,10 @@ def _await_front_app(runner: Runner, since: int, want: str, avoid: str,
     `avoid` to be ABSENT across a window of consecutive frames only succeeds once the app has really
     quit — those spurious frames are interleaved with `avoid` frames, so any `settle`-frame window
     that still contains the app fails the check. Returns elapsed seconds, or None on timeout.
+
+    Calibration: `settle=4` assumes the spurious non-`avoid` runs are <4 consecutive frames (true of
+    the one-off 'Finder' frames observed). If the front-app signal ever emits >=settle consecutive
+    non-`avoid` frames while `avoid` is still frontmost, raise `settle`.
     """
     t0 = time.monotonic()
     deadline = t0 + timeout

@@ -142,7 +142,10 @@ class Runner:
         guest runs its real shutdown (flush/unmount) from its own event loop. No VNC needed.
         """
         if self._proc and self._proc.poll() is None:
-            os.kill(self._proc.pid, signal.SIGUSR1)
+            try:
+                os.kill(self._proc.pid, signal.SIGUSR1)
+            except ProcessLookupError:
+                pass  # the guest exited between poll() and kill() — nothing to signal
 
     def wait(self, timeout: float) -> int | None:
         """Return exit code, or None if it did not exit within `timeout`."""

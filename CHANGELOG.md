@@ -168,7 +168,7 @@ Twisted reactor can't restart in-process) and prints a batch summary — the **m
 + each metric's **CV%** (run-to-run noise), flagging >5%. CV% is host-state dependent (quiet host:
 CPU/Math <1%, Disk noisy; under load: everything noisy) — the honest "is this batch trustworthy?"
 signal. `PR`/PowerRating is **deliberately not trended** (disk-weighted composite → inherits
-Disk's noise, misleads as a perf number; also panel-only). New `sse2e/bench_export.py` (+23 unit
+Disk's noise, misleads as a perf number; also panel-only). New `sse2e/bench_export.py` (+24 unit
 tests); throwaway run-copies are now cleaned up; `make e2e-setup` gains an optional hfsutils
 check. Design + plan:
 `docs/superpowers/specs/2026-06-05-benchmark-result-export-design.md`,

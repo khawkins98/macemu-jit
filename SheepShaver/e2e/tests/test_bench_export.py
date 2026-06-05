@@ -207,8 +207,8 @@ def test_format_summary_flags_noisy_metric():
     # Disk swings wildly (high CV), CPU steady (low CV).
     rows = [{"cpu": 64.0, "disk": 5.0}, {"cpu": 64.1, "disk": 15.0}]
     out = bench_export.format_summary(bench_export.summarize(rows))
-    assert "Disk" in out and "noisy" in out
-    assert "CPU" in out and out.count("noisy") == 1   # only Disk flagged
+    assert "Disk" in out and "<- noisy" in out
+    assert "CPU" in out and out.count("<- noisy") == 1   # only the Disk *row* is flagged
 
 
 def test_format_summary_empty():

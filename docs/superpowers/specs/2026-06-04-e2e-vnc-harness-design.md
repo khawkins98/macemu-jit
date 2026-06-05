@@ -343,3 +343,48 @@ Enter (dismiss splash) → Esc (dismiss registration) → Cmd+A (`super-a`; run 
 - The benchmark disk is a writable copy-per-run (instant clonefile); the `extfs` host-FS mount is
   disabled in the prefs so only the one Mac disk is present (unambiguous disk-select, no host
   exposure).
+
+## 16. Remaining work + the score-parsing investigation (2026-06-05)
+
+The harness is functionally complete (smoke + benchmark run end-to-end). This section records what
+was finished in the "do all the remaining items" pass and the honest state of the hard one.
+
+**Done in this pass:**
+- **Pre-flight stray-kill** — `runner.kill_strays()` (pkill) runs at the start of `run_smoke` /
+  `run_benchmark`, so a re-run never collides with a stray instance.
+- **Golden-image diff machinery** (`sse2e/imagecmp.py`, smoke P2) — masked perceptual hash
+  (`phash` + a Hamming threshold) with the menu-bar clock region blacked out, so visual/video
+  regressions are catchable without the flakiness of exact pixel diffs. Tested (synthetic images).
+  *To enable:* capture a known-good "golden" desktop once (a boot) and compare the smoke screenshot
+  against it; the function is ready, the golden image is a one-time boot-gated asset.
+- **CI workflow** — `.github/workflows/e2e.yml`: an offline `e2e-units` job (runs anywhere) + a
+  manual self-hosted-macOS `e2e-run` job, with the asset-fetch + logged-in-session requirements
+  documented inline.
+
+**Score parsing — investigated, NOT cleanly finishable without OCR (which is excluded).** Goal: an
+automated perf-regression *number* from the Speedometer run. Findings:
+- Speedometer writes results to a **"Machine Records" file** (type `MchT`, creator `sPd3`) on the
+  disk. The data is in the **resource fork** (~1947 bytes; data fork empty). Extractable on the host
+  with `hfsutils` (`hmount` + `hcopy -m` → MacBinary), which works.
+- But the **headline PR/CPU values are NOT stored as plain big-endian floats** at stable offsets.
+  A scan found a benchmark float cluster around resource-fork offset ~1654–1850, but the displayed
+  PR (e.g. 29.375) and CPU (66.976) don't match any single/double there — likely SANE 80-bit
+  extended or a scaled encoding. Parsing it reliably is real reverse-engineering of Speedometer's
+  proprietary resource format, and the PR also varies run-to-run (timing-based), so a single value
+  is a noisy gate.
+- **Recommended paths (any one):** (a) RE the `MchT`/`sPd3` resource format from a Speedometer build
+  with known inputs; (b) check whether Speedometer can **export results as text** (a File/Analysis
+  menu item) and drive that → read the text file off the disk; (c) a **duration proxy** — emit an
+  `[APP]`-style signal when the "tests are done!" modal appears (extend the idle hook to fire on
+  *modal* change, not just app change) and measure wall-clock from Cmd+A to done; coarse but
+  non-OCR. For now the PR/CPU live in `benchmark-result.png` (human-readable).
+
+**Deferred (with reason):**
+- **`[APP]` signal debounce** — `CurApName` oscillates among background extensions under cooperative
+  multitasking, so the benchmark log gets hundreds of `[APP]` lines. Harmless (detection greps for
+  the app) but spammy; a rate-limit needs an emulator rebuild + boot to verify, so left for a
+  session that's already booting.
+- **P3 scenario DSL** — generalizing `run_lifecycle`/`run_benchmark` into declarative steps. The two
+  scenarios work; only worth it when adding more.
+- **Spec relocation** (`docs/superpowers/specs/` → `docs/planning/specs/`) — cross-file ref churn
+  while other agents edit docs; deferred to avoid conflicts.

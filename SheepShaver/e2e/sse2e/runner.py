@@ -7,6 +7,16 @@ import subprocess
 import threading
 
 
+def kill_strays() -> None:
+    """Kill any stray SheepShaver before a run — only one instance can run at a time (shared
+    prefs/disk/SDL window). Safe no-op if none are running or `pkill` is absent."""
+    try:
+        subprocess.run(["pkill", "-9", "-x", "SheepShaver"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        pass
+
+
 class Runner:
     def __init__(self, argv: list[str]):
         self.argv = argv

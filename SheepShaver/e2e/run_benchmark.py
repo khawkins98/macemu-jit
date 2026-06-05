@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from sse2e import config, disk, scenario
+from sse2e import config, disk, runner, scenario
 
 HERE = Path(__file__).parent
 EMULATOR = HERE.parent / "src" / "Unix" / "SheepShaver"
@@ -17,6 +17,7 @@ VNCPORT = 5950
 
 
 def main() -> int:
+    runner.kill_strays()  # only one emulator instance at a time
     assets = config.resolve_assets()
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-bench-"))
     # Instant APFS clonefile copy so the master stays pristine.

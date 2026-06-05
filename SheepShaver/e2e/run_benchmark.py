@@ -6,6 +6,7 @@ full Speedometer suite over VNC, captures the results screenshot + the emulator 
 down cleanly via the host->guest hook. Requires a logged-in macOS GUI session (SDL window).
 """
 import sys
+import os
 import tempfile
 from pathlib import Path
 
@@ -45,4 +46,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # See run_smoke.py: vncdotool's non-daemon reactor thread blocks a normal interpreter exit if a
+    # VNC connect failed (close()/api.shutdown() skipped). Force a clean immediate exit.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

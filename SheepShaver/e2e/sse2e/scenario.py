@@ -48,9 +48,17 @@ def run_lifecycle(
             try:
                 v = Vnc(port=vncport)
                 v.capture(str(artifact_dir / "01-desktop.png"))
-                v.close()
             except Exception:
                 pass  # screenshot is a debugging artifact, not on the critical path
+            finally:
+                # ALWAYS stop vncdotool's reactor — even if connect/capture raised. Otherwise the
+                # orphaned non-daemon reactor thread blocks interpreter exit (process hangs after the
+                # PASS line). api.shutdown() is safe to call whether or not the reactor came up.
+                try:
+                    from vncdotool import api
+                    api.shutdown()
+                except Exception:
+                    pass
         runner.request_shutdown()
 
         # 3. Assert clean exit: process exits on its own, log shows both signatures.

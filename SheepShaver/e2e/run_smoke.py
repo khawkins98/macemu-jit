@@ -60,4 +60,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # vncdotool starts a NON-daemon Twisted reactor thread on first connect. If a VNC connect failed
+    # mid-run (so its close()/api.shutdown() was skipped), that thread blocks a normal interpreter
+    # exit — the process prints PASS then hangs forever, needing ^C, and leaves a lingering Python
+    # process. The emulator is already terminated by the scenario's finally, so nothing is left to
+    # flush/clean up here. Force an immediate, clean process exit.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

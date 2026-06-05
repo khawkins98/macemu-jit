@@ -114,8 +114,9 @@ isolated via a throwaway HOME), and archives each run under gitignored
 vs the previous run. Collect+report only — a save/extract failure never flips a PASS to FAIL.
 The benchmark now **shuts down unattended**: since the Power-key hook only fires at the
 Finder (not over a frontmost app), the harness quits Speedometer keyboard-only (Cmd-Q →
-Return through the save dialogs) to the Finder first. (VNC mouse *clicks* don't register in
-the guest — a separate open bug, see LEARNINGS.)
+Return through the save dialogs) to the Finder first — keyboard is reliable. (VNC *clicks*
+also work now: `Vnc.click` holds the button; an instant press was being coalesced by the guest.
+See LEARNINGS.)
 **Less-noisy measurement:** `SS_E2E_RUNS=N` runs N times (each in its own subprocess — vncdotool's
 Twisted reactor can't restart in-process) and prints a batch summary — the **median** per metric
 + each metric's **CV%** (run-to-run noise), flagging >5%. CV% is host-state dependent (quiet host:

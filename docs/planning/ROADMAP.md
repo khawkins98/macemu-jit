@@ -272,11 +272,22 @@ deterministic boot-ready signal, requests a clean shutdown via a signal, and ass
   were corrected by the dwell + dialog-confirm insight.
 - **Medium** — read-only ISO is the default (§13): can't get dirty → no repair-prompt/dialog
   false-positives, no pristine-copy-per-run, reproducible. Disk-boot retained for writable scenarios.
-Harness is Python + `vncdotool` (VNC only for optional screenshots now), checked-in config, 14
-offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
+Harness is Python + `vncdotool` (VNC only for optional screenshots now), checked-in config, **79
+offline unit tests** (the drive/gate/retry logic is now covered via a `FakeRunner`). Run it
+locally: `SheepShaver/e2e/README.md`.
+
+**Status update (2026-06-05): matured well past P1.** Benchmark + perf-trend history export,
+trustworthy gates (honest PASS + settle-based gate), and first-run onboarding (`make e2e-setup`
+doctor) all landed (itemized below). **The core system-level aim — "does it boot, run a real app,
+and shut down cleanly?" — is done and solid.** The genuinely-open work is **P2 visual regression
+(recommended next)**, CI, and the P3 DSL.
 
 **Open:**
-- **P2** — golden-image screenshot diff (masked perceptual hash) + scripted app-launch.
+- **▶ P2 (recommended next) — golden-image visual regression.** Perceptual-hash the booted desktop
+  (+ the benchmark result) against a known-good reference, masked for dynamic regions
+  (clock/cursor). This is the **one failure class the lifecycle/number gate is blind to** — a boot
+  that renders garbage / a video regression still PASSes today (the SDL3 port had exactly these
+  bugs). We already capture the screenshots; this just adds the gate. Pair with scripted app-launch.
 - ✅ **P2 (benchmark automation) — DONE (2026-06-05).** `make e2e-bench` boots the small Mac OS 9 +
   Speedometer disk (`macos9_mini.dsk`, ~142 MB sparse, copy-per-run = instant clonefile), drives the
   full Speedometer 4.02 suite over VNC (splash→registration→Cmd+A→choose-disk, gated on a new `[APP]
@@ -289,9 +300,29 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
 - ⚠️ **Boot-breaking regression fixed (2026-06-05, commit `5d87d713`).** The live-JIT-stats
   window-title feature called `SDL_SetWindowTitle` from the Redraw Thread (Cocoa main-thread-only) →
   abort/VBL-stall/boot-hang. Removed from both backends; see LEARNINGS.
-- ☐ **Score parsing (the one open item, now unblocked).** Boot works, so drive Speedometer's
-  File/Analysis menus over VNC to **export results as text**, read + parse the file off the disk for
-  an exact PR/CPU number (OCR excluded; "Machine Records" resource fork is not cleanly parseable).
+- ✅ **Score parsing + perf-trend history — DONE (2026-06-05).** The benchmark drives Cmd-T "Save
+  Text Report", then extracts that file off the run-copy HFS disk **host-side via hfsutils** (no
+  extra boot), parses CPU/Graphics/Disk/Math/FPU (MacRoman-decoded), and archives each run under
+  `artifacts/benchmark-history/` + an append-only `history.csv`, printing the delta vs the prior
+  run. `SS_E2E_RUNS=N` runs N times and reports the **median ± per-metric CV%** (a less-noisy
+  trend, flagging metrics whose CV% > 5). `PR` deliberately dropped — it's a disk-weighted
+  composite that inherits Disk's run-to-run noise. See `sse2e/bench_export.py` + the
+  benchmark-export spec (`docs/superpowers/specs/2026-06-05-benchmark-result-export-design.md`).
+- ✅ **Trustworthy gates + honest PASS — DONE (2026-06-05).** A green `e2e-bench` now requires the
+  guest's real clean-shutdown signatures (not just exit 0); the back-to-Finder gate keys off a
+  **settle window** (Speedometer absent across N consecutive frames), not the noisy one-off
+  `frontApp='Finder'` frame the idle hook spuriously emits; and the drive/gate/retry logic is
+  unit-tested via a `FakeRunner` (no boot). A reactor-leak hang on the benchmark failure path was
+  also fixed (`api.shutdown()` in the `finally`).
+- ✅ **First-run onboarding (DX) — DONE (2026-06-05).** `make e2e-setup` doctor gained a
+  GUI-session (Aqua) check + a "tree not configured" detection; a tracked README **"Building the
+  emulator"** section (the configure incantation no longer lives only in gitignored CLAUDE.md); an
+  env-var reference table; and `sse2e/harness.py` scaffolding (`check_preconditions` + reactor-safe
+  `hard_exit`) so a new scenario entry point is a thin, correct-by-construction wrapper.
+- ✅ **VNC-click "SDL3 regression" — RESOLVED as a misdiagnosis (2026-06-05).** Instant
+  `mousePress` works on **both** SDL2 and SDL3 (verified by menu-driving "About This Computer"); the
+  earlier "clicks don't register" was off-target clicks + a noisy frontApp signal, not a backend
+  bug. No SDL3 click regression exists. See LEARNINGS (2026-06-05).
 - ✅ **SDL3 is now the validated default backend (2026-06-05).** Re-bootstrapped the stale
   `configure` (`NO_CONFIGURE=1 ./autogen.sh`) so the build actually links SDL3 (it had silently
   built SDL2). Fixed the one SDL3-only shutdown crash this surfaced — a double-`SDL_DestroyMutex` in
@@ -316,17 +347,17 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
 *arithmetically* correct. Two items close that gap (and stop the shiny system harness from
 creating a false sense of coverage):
 
-- **A5-V. `SS_JIT_VERIFY`-under-E2E mode.** Add an opt-in harness mode (`make e2e-verify` / a
-  `--verify` flag) that boots the golden workload with `SS_JIT_VERIFY=1`, then parses the
-  divergence log and **fails the run on any divergence not on a known-false-positive allowlist**
-  (today: exactly the `blr`-boundary block — see LEARNINGS "SS_JIT_VERIFY false positives";
-  ideally fixed via OPTIMIZATION-PLAN 0b-extra4 so the allowlist is empty). This turns the
-  system harness into an *automatic per-instruction differential gate* across whatever real
-  software the workload exercises — catching the class of bug (vsel, ev_mixed, vacuous FP) that
-  only shows up in VRs/FPRs the screen never displays. Caveat: `SS_JIT_VERIFY` runs every block
-  twice through the interpreter — **very slow**, so this is a nightly/pre-merge gate, not the
-  every-run smoke test. **Depends on:** P1 (done). **Complements:** A1 (the boot-time oracle is
-  A1's "in-the-wild validation path"; this automates it). **Detail:** add to the E2E spec.
+- **A5-V. `SS_JIT_VERIFY`-under-E2E mode.** ⚠️ **Deprioritized (2026-06-05) — boot-time verify is
+  a trap.** The original idea: boot the golden workload with `SS_JIT_VERIFY=1`, parse the divergence
+  log, and **fail on any divergence not on a known-false-positive allowlist** (today: exactly the
+  `blr`-boundary block). The catch we now understand: verifying *every block twice through the
+  interpreter* starves the guest 60 Hz timer, so the early-boot ROM spin-wait never clears and the
+  run rarely reaches a workload — only a vanishingly small fraction of blocks ever get verified
+  before it stalls. The cheaper, deeper substitute is **offline differential coverage** —
+  `make test-jit` (interp-vs-JIT REGDUMP diff) and `rom-harness --passes/--seed/--count` (no timer
+  dependency, deterministic, runs in seconds). So the e2e harness's lane is **system-level**, not
+  per-instruction; this item stays a backlog idea, not a near-term build. **Complements:** A1 (the
+  per-op suite is the real backstop — see A5-C).
 
 - **A5-C. Don't let the system harness mask the per-instruction coverage holes.** `make e2e`
   passing is necessary, not sufficient — the open per-op gaps stay the real safety net and must

@@ -3,7 +3,7 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
-## 2026-06-05 — E2E benchmark auto-shutdown (keyboard quit-to-Finder); VNC clicks FIXED (hold the button)
+## 2026-06-05 — E2E benchmark auto-shutdown (keyboard quit-to-Finder); VNC clicks were never broken (misdiagnosis)
 
 Automating the Speedometer benchmark to shut down **unattended** hit two non-obvious walls. The
 fix that works is **keyboard-only**; the click rabbit hole below cost hours — read it before
@@ -16,31 +16,34 @@ first. Keyboard path that works: after saving the report, **Cmd-Q**, then answer
 "Save before quitting?" (Yes/No/Cancel) and the record-save dialog with **Return** (= Yes = save
 the Machine Record) until it quits to the Finder, where the hook shuts down. `scenario.py`.
 
-**2. VNC mouse CLICKS — SOLVED: the client must HOLD the button.** The harness's `vnc.click` fired
-vncdotool's `mousePress` (button down+up with *no gap*). The guest drains both pushed SDL events in
-a single ADB poll, so it never sees the button held → no click registers. The cursor moves but
-nothing is selected — which *looked* like "clicks are fundamentally broken" and sent us down a long
-rabbit hole. **Fix (`sse2e/vnc.py`): hold the button** — move → settle → `mouseDown` → ~0.2s hold
-→ `mouseUp` (≈0.2s spans several 60Hz ADB interrupts). Verified: a held VNC click visibly drops the
-Apple menu, and the harness `Vnc.click` drives a button-down that reaches `handle_events` →
-`ADBMouseDown(0)`.
+**2. VNC mouse CLICKS were never broken — the whole investigation was a MISDIAGNOSIS** (it cost ~a
+day across three wrong theories; this entry exists so nobody repeats it). The truth, finally pinned
+down by building **both SDL2 and SDL3** and driving a clean test: **instant VNC `mousePress` clicks
+work on both backends.** An instant click opens the Apple menu and drives a menu selection that
+opens the *named* "About This Computer" window — a title noise can't fabricate, reproduced on both.
+A second instant click also deactivates a front window. So the committed `SDL_PushEvent` injection
+path is correct, and the "hold the button" change I'd committed was **reverted** (unnecessary;
+`vnc.click` is back to a plain `mousePress`).
 
-How we got there (the dead-ends — don't repeat them):
-- **Verify synthetic injection from the emulator side, not by guessing.** Temp traces proved each
-  layer: `vnc_pointer_callback` logs `ADB: move`; `[VNC-PUSH]` showed `SDL_PushEvent` rc=1 for the
-  button; `[BTN-DRAIN]` in `handle_events` showed the pushed button **does** reach the drain →
-  `ADBMouseDown(0)` on the main thread. So delivery, thread, and position were all fine all along.
-- **A real-mouse test was the turning point:** a real click on the SDL window registers (Apple
-  menu opened / Finder opened a CD window) via the SAME `ADBMouseMoved`/`ADBMouseDown`/`MoveTo`
-  path. That ruled out two seductive dead-ends: (a) a `RawMouse`/`MoveTo` Toolbox theory, and (b) a
-  direct-ADB-from-libvncserver-thread rewrite — *neither was the problem*; the committed
-  `SDL_PushEvent` path is correct. The only difference that mattered was the client sending an
-  **instant** press vs a **held** one.
-- **Lesson:** when clicks "don't work" over a synthetic-input channel (VNC, scripted SDL events),
-  suspect **down/up coalescing first** — hold the button — before theorizing about deep emulator
-  internals. (And distinguish "click didn't register" from "clicked empty space" — a click on bare
-  desktop has no visible effect.)
-- Memory `e2e-vnc-click-injection` has the full trail.
+What actually happened: the harness's *desktop-click shutdown* didn't activate the Finder over
+Speedometer, and I read that as "VNC clicks don't register." From there I chased three deep theories
+in turn — a `RawMouse`/`MoveTo` Toolbox bug, a direct-ADB-from-the-libvncserver-thread rewrite, and
+finally down/up "coalescing" (hold the button). **None were real.** The actual cause of that one
+desktop-click failure was never confirmed (the click landing on a non-activating spot is plausible
+but untested) and is **moot** — the shutdown uses the keyboard quit-to-Finder (§1), which is
+reliable.
+
+Not established — do NOT cite as fact: there is **no proven behavioral click difference between
+SDL2 and SDL3**. `git 74886987` did change VNC injection from direct-ADB to `SDL_PushEvent` during
+the SDL3 port (a code-history fact), but my earlier "direct-ADB-fails-on-SDL3" test was judged by
+the *same* coordinate/empty-desktop confound, so it proves nothing. Both backends click fine with
+the current code.
+
+**Lesson (the expensive one): rule out the boring causes FIRST.** Wrong coordinates, clicking empty
+space (no visible effect), and reading a *noisy* signal (the `frontApp` frames, §3) — confirm or
+exclude these with one clean, unambiguous functional test (open a *named* window / read a `[APP]`
+title) BEFORE theorizing about emulator internals. Three successive "deep bug" theories all
+dissolved under one proper A/B.
 
 **3. The idle-hook `frontApp` signal LIES — spurious `'Finder' Desktop` frames appear ~every 300
 ticks even when Speedometer is really frontmost.** Gating on `"Finder" in e.app` gives false

@@ -27,12 +27,12 @@ The pipeline works end-to-end and shuts down **unattended** (verified: 3 consecu
   benchmark (Speedometer frontmost) hung. Fix: after saving, **Cmd-Q**, then answer
   Speedometer's "Save before quitting?" (Yes/No/Cancel) + any record-save dialog with **Return**
   until it quits to the Finder, where the existing hook shuts down. (`scenario.py`.)
-- **VNC clicks — SOLVED (`vnc.click` must hold the button).** The shutdown is keyboard-only
-  because that's reliable, but the earlier "VNC clicks don't register" was *not* a deep bug: the
-  harness fired an instant `mousePress` (down+up, no gap), which the guest drains in one ADB poll
-  so it never sees the button held. Fix: `Vnc.click` holds the button ~0.2s. Verified (a held VNC
-  click opens the Apple menu). The committed `SDL_PushEvent` injection path was correct. Full
-  trail: `LEARNINGS.md` (2026-06-05) and memory `e2e-vnc-click-injection`.
+- **VNC clicks — there was never a click bug (misdiagnosis).** The shutdown is keyboard-only
+  because that's reliable. The earlier "VNC clicks don't register" was wrong: building **both
+  SDL2 and SDL3** and driving an **instant** `mousePress` click works on both (it opens the Apple
+  menu and selects a menu item that opens the named "About This Computer" window). The committed
+  `SDL_PushEvent` injection path is correct; the "hold the button" change was reverted. No proven
+  SDL2-vs-SDL3 click difference. Full trail: `LEARNINGS.md` and memory `e2e-vnc-click-injection`.
 
 **Data decisions & remaining gaps:**
 - **`PR` (PowerRating) is deliberately NOT trended.** It's a disk-weighted composite, so it

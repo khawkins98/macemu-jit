@@ -85,9 +85,9 @@ disk, so nothing accumulates on the master image. Needs `brew install hfsutils` 
 **How the unattended shutdown works** (non-obvious): the Power-key shutdown hook only raises the
 Shut Down dialog at the **Finder**, not over a frontmost app — so after saving, the harness
 quits Speedometer **keyboard-only** (Cmd-Q → Return through "Save before quitting?" / record-save
-dialogs) back to the Finder, where the hook shuts down. (We use the keyboard because it's reliable;
-VNC *clicks* also work now — `Vnc.click` holds the button, since an instant press is coalesced by
-the guest — see `LEARNINGS.md`.)
+dialogs) back to the Finder, where the hook shuts down. (We use the keyboard because it's reliable.
+VNC *clicks* work fine too — verified on both SDL2 and SDL3; an earlier "clicks don't register"
+scare was a misdiagnosis, see `LEARNINGS.md`.)
 
 **Less-noisy measurement — `SS_E2E_RUNS=N`.** A single run is host-load sensitive, so for a trend
 point run several and let the harness aggregate:

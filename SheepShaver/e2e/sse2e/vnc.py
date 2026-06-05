@@ -1,8 +1,6 @@
 """Thin wrapper over vncdotool's synchronous API."""
 from __future__ import annotations
 
-import time
-
 from vncdotool import api
 
 
@@ -12,16 +10,10 @@ class Vnc:
         self._client = api.connect(f"{host}::{port}")
 
     def click(self, x: int, y: int) -> None:
-        # HOLD the button: move -> settle -> down -> brief hold -> up. vncdotool's mousePress
-        # fires button-down and -up with no gap; the guest drains both in a single ADB poll and
-        # never sees the button held, so no click registers (the cursor moves but nothing is
-        # selected). Holding ~0.2s spans several 60Hz ADB interrupts -> a real click. Verified by
-        # a held click visibly opening the Apple menu over VNC. See LEARNINGS (2026-06-05).
+        # An instant press is fine — VNC clicks register on both SDL2 and SDL3 (verified: an
+        # instant click drives a menu selection / opens "About This Computer"). See LEARNINGS.
         self._client.mouseMove(x, y)
-        time.sleep(0.2)
-        self._client.mouseDown(1)
-        time.sleep(0.2)
-        self._client.mouseUp(1)
+        self._client.mousePress(1)
 
     def key(self, name: str) -> None:
         self._client.keyPress(name)

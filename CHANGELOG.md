@@ -11,6 +11,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver] P1a register-allocator eviction validated; SS_JIT_VERIFY oracle confounds mapped
+
+- **P1a closed — RA eviction path validated.** The >8-live-GPR `ra_evict` path (never hit by
+  the harness's small vectors) is validated on **oracle-independent** evidence: `lmw_stmw_wide`
+  (12 live GPRs) passes the harness JIT-vs-interp REGDUMP (separate clean executions, no replay
+  confounds), and a full chaining-on boot reaches Finder with eviction firing continuously.
+  **P8 (cross-block pinning) unblocked.** Detail: OPTIMIZATION-PLAN §P1a.
+- **Mapped the `SS_JIT_VERIFY` differential oracle's 6 false-positive classes** across three
+  whole-boot sweeps (chaining-on; `SS_JIT_NO_CHAIN=1`; raised-budget ~92k lines). Every reported
+  divergence is structural, **zero real codegen bugs**: block chaining, blr/bclr returns,
+  intra-block loops, mid-block conditional paths, PC bookkeeping, and **memory-RMW** (the replay
+  restores registers but not guest memory, so a `lwz;addi;stw` counter shows a PC-matching,
+  step-by-2 divergence that fools a naive PC-match filter — `100fd0e0`). A literal whole-boot
+  clean verify is **unachievable** here (low budget → oracle goes dark mid-boot; high budget →
+  verify-every-block starves the guest timer into an early-boot ROM spin). Full taxonomy + the
+  X1 fix plan (replay mirrors JIT path/terminator; snapshot+restore memory; targeted/sampled
+  verify): OPTIMIZATION-PLAN §0b-extra4, ROADMAP A1.
+- **Diagnostic knobs added** (`ppc-jit.cpp`, `ppc-cpu.cpp`): `SS_JIT_NO_CHAIN=1` now logs a
+  startup marker so a no-chain run self-confirms; new `SS_JIT_VERIFY_BUDGET=N` overrides the
+  divergence report budget (default 20) for whole-boot coverage. The earlier "exactly one blr
+  residual" baseline was itself a latch artifact (§0b-extra5) — superseded by the taxonomy above.
+
 ### [SheepShaver] Guest OS version detection via SysVersion low-memory global
 
 - The emulator's idle hook now reads the guest's `SysVersion` ($015A) — a BCD-packed

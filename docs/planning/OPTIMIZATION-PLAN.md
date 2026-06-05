@@ -59,7 +59,18 @@ b5/b40 fields are zero.
 
 ## Open — Hardening (correctness debt on P1; gates P8)
 
-### P1a. Harden the register allocator
+### P1a. Harden the register allocator — ✅ RA VALIDATED (2026-06-05); gate basis revised
+
+**Outcome (2026-06-05):** the RA eviction path is validated on the evidence that is
+*independent of the verify oracle* — (1) `lmw_stmw_wide` forces >8-live `ra_evict` and
+passes the harness's JIT-vs-interp REGDUMP (the harness runs interp and JIT as **separate
+executions from clean state**, so it has none of the oracle's replay confounds), and (2) a
+full chaining-on boot reaches the Finder desktop, where eviction fires continuously and any
+corruption would crash the boot. `SS_JIT_VERIFY` boots are **corroboration** (66450 RAM
+blocks checked, zero *real* divergences after accounting for 6 oracle-artifact classes), not
+the proof. A *literal* whole-boot clean verify gate was found to be **unachievable on this
+config** (see step 2) — that's an oracle-tooling limitation (→ ROADMAP A1 / X1), not RA debt.
+P8 is unblocked.
 
 **Why first**: P1 shipped a real +15.6%, but its subtlest path — `ra_evict`
 under register pressure (>8 live GPRs in one block) — is **never exercised by
@@ -78,14 +89,19 @@ on it.
    `make test-jit` (score=100; `make harness-count`)**. CAVEAT: it only validates the JIT spill path in
    **jit mode** (`SS_HARNESS_MODE=jit`); the default `make test-opcodes` runs
    interpreter-determinism and does not exercise it.
-2. **Run `SS_JIT_VERIFY=1` boot** — the only check that exercises eviction +
-   cross-block flush on a real workload. **This gate is now trustworthy:** the
-   verify oracle previously latched silent after its first divergence (see
-   0b-extra5, fixed 2026-06-05), so a pre-2026-06-05 "clean" sweep proved nothing
-   past the first finding. It now runs the whole boot. Expected residual on a clean
-   sweep is **exactly one** false positive (the `blr`/`bclr`-into-Mixed-Mode return
-   block — see 0b-extra4), **not zero**. This boot is the remaining step to close
-   P1a; steps 1 and 4 are done, step 3 stays parked (unreachable on a 32-bit guest).
+2. ✅ **DONE (as corroboration) — `SS_JIT_VERIFY=1` boots, 2026-06-05.** Three boots
+   (chaining-on; `SS_JIT_NO_CHAIN=1`; `SS_JIT_NO_CHAIN=1` + `SS_JIT_VERIFY_BUDGET=100000`
+   for ~92k lines of coverage) found **zero real codegen divergences** — every reported
+   divergence is one of **six oracle-artifact classes** (the differential oracle is *not*
+   a clean gate; see 0b-extra4 for the full taxonomy + the budget/timing trap). The
+   "exactly one `blr` residual" figure from before was itself a **latch artifact** (0b-extra5):
+   once the latch was fixed the oracle revealed ~12 chaining-class artifacts, and the deep run
+   surfaced a memory-RMW artifact (`100fd0e0`) that even passes a naive PC-match filter. None
+   is an RA bug. **A literal whole-boot clean verify is unachievable here:** a low report
+   budget makes the oracle go dark at ~22% of boot, and a high budget makes verify-every-block
+   so slow it starves the guest timer into an early-boot ROM spin (never reaches Finder). So
+   closure rests on the oracle-*independent* evidence above, not on this boot. Steps 1 and 4
+   are done; step 3 stays parked (unreachable on a 32-bit guest).
 3. **Document/fix the 64-bit accessor coherence hole.** `emit_load_gpr64` /
    `emit_store_gpr64` read/write `PPCR_GPR(n)` (the low word) **directly**,
    bypassing the RA's low-word cache. A 32-bit op leaves a dirty low word in
@@ -179,27 +195,40 @@ Uses ADD (not ADDS) to preserve NZCV from the initial CMP.
 to all 5 AND-mask sites: rlwinm, rlwimi (both mask and ~mask), rlwnm, andi.,
 andis.  992/1024 PPC masks are encodable.  Encoder from `ppc-logical-imm.hpp`.
 
-### 0b-extra4. SS_JIT_VERIFY: skip blr/bclr returns — OPEN (diagnostics, cosmetic)
+### 0b-extra4. SS_JIT_VERIFY oracle confound taxonomy — OPEN (tooling; supersedes the old "skip blr" note)
 
-**Symptom**: a clean `SS_JIT_VERIFY=1` boot still reports exactly **one** residual
-divergence (e.g. block `100fc278`), down from the 20+ that the cascade fix removed.
-It is a **false positive, not a codegen bug**: the diverging block ends in `mtlr;
-blr` (a subroutine return into the Mixed Mode Manager), and the reported deltas are
-purely control-flow/stack — `LR`/`GPR0` differ by whole block addresses and `GPR1`
-differs by exactly the in-block `addi r1,r1,N` frame teardown. The interpreter
-replay follows the return into the callee (a different dispatch path) while the JIT
-treats the branch as a block terminator.
+The differential oracle re-runs the interpreter for one block and diffs it against the JIT's
+post-block state. It is **not a clean gate**: the P1a whole-boot sweeps (2026-06-05) showed
+its divergences are *all* false positives in **six structural classes**. None is a codegen
+bug, but together they make a literally-clean boot unachievable. The root causes are two
+design shortcuts in the replay (`ppc-cpu.cpp`): the interp re-run **(a)** stops on "PC left
+`[start,end)`" instead of mirroring the JIT block's actual path/exit, and **(b)** restores
+*registers only — never guest memory* — so the JIT's stores are still live when the interp
+replays.
 
-**Why it survives the existing fix**: the cascade fix skips blocks ending in link-
-*setting* branches (`bl`/`bctrl`). A `blr`/`bclr` is link-*using* (a return), so it
-isn't skipped.
+| # | Class | Tell | Root cause |
+|---|-------|------|------------|
+| 1 | **Block chaining** | `jit_state` is end-of-chain (e.g. `li r4,1` → jit r4=0x80); jit PC in ROM dispatcher | `fn()` runs the whole chain; oracle compares 1 interp block. Use `SS_JIT_NO_CHAIN=1`. |
+| 2 | **blr/bclr return** | `GPR1` off by the in-block `addi r1,r1,N`; `LR`/`PC` = block-addr vs return-addr | interp follows the return; JIT terminates the block |
+| 3 | **Intra-block loop** | exact off-by-one-iteration; jit PC = loop-back target | backward branch target is in `[start,end)`, so replay keeps iterating |
+| 4 | **Mid-block conditional path** | PC mismatch + path-dependent regs | replay and JIT take different arms of an inline `bc` |
+| 5 | **PC bookkeeping** | PC-only divergence, zero data | block-boundary/branch-target accounting |
+| 6 | **Memory RMW (no restore)** | **PC matches**, one GPR off by a constant; value **steps by 2** across visits | replay sees memory the JIT's `stw` already wrote; `100fd0e0` (`lwz;addi;stw` counter) is the type case |
 
-**Fix**: extend the VERIFY skip filter to also skip blocks whose terminator is
-`blr`/`bclr` (the return into Mixed Mode is inherently a path divergence, never a
-codegen defect). Takes the residual 1 → 0.
-**Effort**: Low (one condition in the VERIFY gate). **Risk**: Low, but it slightly
-*reduces* oracle coverage (return blocks stop being checked) — only worth doing if
-the single residual is causing noise; otherwise leave it documented.
+**Class 6 is the dangerous one** — it passes a naive "PC-match ⇒ real bug" filter. Discriminator:
+a *real* missing-`addi` bug steps the counter by 1; the double-apply artifact steps by **2**
+(JIT store + replay store), proving the JIT op executed. The rigorous filter is per-record
+(a record with a GPR line but no PC line), not block-level set difference.
+
+**The proper fix is the X1 verify/bisection tooling (ROADMAP A1):** make the replay mirror the
+JIT block's path and stop at its real terminator (kills 2/3/4/5), and snapshot+restore the
+touched guest memory around the replay (kills 6). Also note the **budget/timing trap**: the
+report budget gates *entry*, so a low budget makes the oracle go dark mid-boot, while a high
+budget (`SS_JIT_VERIFY_BUDGET`) makes verify-every-block starve the guest timer into an
+early-boot ROM spin — neither reaches Finder with full coverage. A targeted/sampled verify
+(only register-pressure blocks) is the way around it. **Do not gate P1a on this** — P1a closed
+on oracle-independent evidence (see P1a outcome).
+**Effort**: Medium (replay rework + memory snapshot). **Risk**: Low (tooling only).
 
 ### 0b-extra5. SS_JIT_VERIFY suppression latch decay — DONE (2026-06-05)
 

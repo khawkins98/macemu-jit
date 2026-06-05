@@ -132,6 +132,8 @@ static inline bool jit_chain_runtime_disabled(void) {
 	if (cached < 0) {
 		const char *e = getenv("SS_JIT_NO_CHAIN");
 		cached = (e && *e == '1') ? 1 : 0;
+		if (cached)
+			fprintf(stderr, "PPC-JIT-A64: block chaining DISABLED (SS_JIT_NO_CHAIN=1)\n");
 	}
 	return cached == 1;
 }

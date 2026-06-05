@@ -100,6 +100,16 @@ harness that can't catch mistakes just produces the next silent bug.
   a "force opcode family → interpreter" bisection knob (we have none), and aligned dual-trace
   divergence. Clean dev infrastructure, no runtime coupling; helps clear OPTIMIZATION-PLAN
   §0b-extra4. Detail: `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md` X1.
+  - **Sharpened by the P1a sweeps (2026-06-05):** the current `SS_JIT_VERIFY` differential
+    oracle has **6 false-positive classes** (full taxonomy in OPTIMIZATION-PLAN §0b-extra4) and
+    **cannot produce a clean whole-boot run** (low report budget → goes dark at ~22%; high
+    `SS_JIT_VERIFY_BUDGET` → verify-every-block starves the guest timer into an early-boot ROM
+    spin). Concrete X1 work items that emerged: (i) make the interp replay **mirror the JIT
+    block's path + real terminator** (kills the chaining/return/loop/conditional/PC classes);
+    (ii) **snapshot+restore the touched guest memory** around the replay (kills the memory-RMW
+    class — the one that fools a PC-match filter); (iii) a **targeted/sampled** verify scoped to
+    register-pressure blocks so coverage doesn't require booting verify-everything. Diagnostic
+    knobs already landed: `SS_JIT_NO_CHAIN` (now logs a marker), `SS_JIT_VERIFY_BUDGET`.
 
 **Verifiable here** (harness/build, no boot needed). **Unblocks A2 and de-risks all of Track B.**
 **Detail:** `docs/TESTING.md`; harness `SheepShaver/jit-test/run.sh`; generators `gen-*-vectors.py`.

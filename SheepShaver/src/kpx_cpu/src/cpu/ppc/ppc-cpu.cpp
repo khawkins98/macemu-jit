@@ -1267,7 +1267,18 @@ void powerpc_cpu::execute(uint32 entry)
 				  pdi_jit_post:
 					/* ---- SS_JIT_VERIFY: compare JIT output against interpreter ---- */
 					if (__builtin_expect(jit_verify_enabled && jit_verify_n_insns > 0, false)) {
-						static int verify_divergence_budget = 20;
+						/* Report budget: once it hits 0 the oracle stops checking EVERY
+						 * subsequent block for the rest of the boot (entry-gated below), so a
+						 * low budget makes verify go dark early — covering only the front of
+						 * boot, not the eviction-heavy later workload. Default 20 (quiet);
+						 * override with SS_JIT_VERIFY_BUDGET=N for whole-boot coverage. */
+						static int verify_divergence_budget = -1;
+						if (verify_divergence_budget < 0) {
+							const char *b = getenv("SS_JIT_VERIFY_BUDGET");
+							verify_divergence_budget = (b && atoi(b) > 0) ? atoi(b) : 20;
+							fprintf(stderr, "[VERIFY] divergence report budget = %d%s\n",
+							        verify_divergence_budget, (b && atoi(b) > 0) ? " (SS_JIT_VERIFY_BUDGET)" : " (default)");
+						}
 						/* After a divergence, skip the next few in-range blocks before
 						 * re-checking so a single bug doesn't cascade into a wall of false
 						 * divergences. Counts DOWN to 0 (was a latching bool that, once set,

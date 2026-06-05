@@ -196,6 +196,14 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
     prefs.push_str("ether slirp\n");
     prefs.push_str("nosound true\n");
 
+    // VNC enabled by default for screenshot capture; random port in 5900-5999 to avoid collisions
+    let vncport = 5900 + (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() % 100) as u16;
+    prefs.push_str("vncserver true\n");
+    prefs.push_str(&format!("vncport {}\n", vncport));
+
     let prefs_path = vm_dir.join("prefs");
     let mut f =
         fs::File::create(&prefs_path).map_err(|e| format!("Failed to write prefs: {}", e))?;

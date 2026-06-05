@@ -20,13 +20,13 @@ VNCPORT = 5950
 
 
 def main() -> int:
-    runner.kill_strays()  # only one emulator instance at a time
     assets = config.resolve_assets()
     medium = os.environ.get("SS_E2E_MEDIUM", "iso")  # "iso" (read-only, default) or "disk"
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-"))
     if medium == "disk":
         # Writable disk boot: copy the pristine master per run (instant APFS clonefile) so the
         # master is never dirtied. Used for the benchmark medium (Mac OS 9 + Speedometer).
+        boot_image = assets.disk
         run_disk = disk.copy_pristine(Path(assets.disk), work)
         prefs = disk.render_prefs(
             HERE / "config" / "test.prefs.template",
@@ -38,6 +38,7 @@ def main() -> int:
     else:
         # Read-only ISO boot (default): no pristine-copy — the ISO can't be dirtied, so it's
         # stable and reproducible.
+        boot_image = assets.iso
         prefs = disk.render_prefs(
             HERE / "config" / "test.prefs.iso.template",
             work / "test.prefs",
@@ -45,6 +46,12 @@ def main() -> int:
             cdrom=assets.iso,
             vncport=VNCPORT,
         )
+    # Pre-flight: kill+reap strays and confirm the boot image is free, so we never spin up a session
+    # that boots to the "?" no-boot-disk icon because a stray instance still owns the disk.
+    problem = runner.preflight(boot_image)
+    if problem:
+        print(f"FAIL: preflight — {problem}")
+        return 1
     artifacts = HERE / "artifacts"
     artifacts.mkdir(exist_ok=True)
     res = scenario.run_lifecycle(

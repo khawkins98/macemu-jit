@@ -18,8 +18,13 @@ VNCPORT = 5950
 
 
 def main() -> int:
-    runner.kill_strays()  # only one emulator instance at a time
     assets = config.resolve_assets()
+    # Pre-flight: kill+reap strays and confirm the disk master is free, so a stray instance holding
+    # it can't make this run boot to the "?" no-boot-disk icon.
+    problem = runner.preflight(assets.disk)
+    if problem:
+        print(f"FAIL: preflight — {problem}")
+        return 1
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-bench-"))
     # Instant APFS clonefile copy so the master stays pristine.
     run_disk = disk.copy_pristine(Path(assets.disk), work)

@@ -5,16 +5,64 @@ import os
 import signal
 import subprocess
 import threading
+import time
 
 
-def kill_strays() -> None:
-    """Kill any stray SheepShaver before a run — only one instance can run at a time (shared
-    prefs/disk/SDL window). Safe no-op if none are running or `pkill` is absent."""
+def _sheepshaver_pids() -> list[int]:
+    """PIDs of running SheepShaver instances (empty if none / pgrep absent)."""
+    try:
+        out = subprocess.run(["pgrep", "-x", "SheepShaver"], capture_output=True, text=True)
+        return [int(p) for p in out.stdout.split()]
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def kill_strays(wait: float = 6.0) -> None:
+    """Kill any stray SheepShaver AND wait until they are actually gone — only one instance can run
+    at a time (they share the disk image, the VNC port, and the SDL window). `pkill` returns before
+    the OS has reaped the process and released its file handles, so a bare pkill can leave an instance
+    still holding the disk image when the next run launches — the classic cause of a "?" no-boot-disk
+    hang. Polling until the PIDs disappear closes that window."""
     try:
         subprocess.run(["pkill", "-9", "-x", "SheepShaver"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
-        pass
+        return
+    deadline = time.monotonic() + wait
+    while _sheepshaver_pids() and time.monotonic() < deadline:
+        time.sleep(0.2)
+
+
+def disk_holders(path: str) -> list[int]:
+    """PIDs holding `path` open (via `lsof -t`); empty if free or lsof absent."""
+    try:
+        out = subprocess.run(["lsof", "-t", "--", path], capture_output=True, text=True)
+        return [int(p) for p in out.stdout.split()]
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def preflight(*boot_images: str) -> str | None:
+    """Run BEFORE launching the emulator. Kill+reap stray instances, then verify none remain and the
+    boot image(s) aren't still held open by another process. Returns None if clear, else a
+    human-readable reason to abort — so we fail fast with a clear message instead of spinning up a
+    doomed session that boots to the "?" no-boot-disk icon (a stray SheepShaver still owns the disk).
+    """
+    kill_strays()
+    stray = _sheepshaver_pids()
+    if stray:
+        return (f"a SheepShaver instance is still running (pid {stray}) after kill — refusing to "
+                f"launch (it would contend for the disk/VNC port and likely '?'-hang). Kill it first.")
+    for img in boot_images:
+        if not img:
+            continue
+        holders = disk_holders(img)
+        # Exclude our own process just in case; any other holder means the image is in use.
+        holders = [p for p in holders if p != os.getpid()]
+        if holders:
+            return (f"boot image {img!r} is held open by pid(s) {holders} — refusing to launch "
+                    f"(SheepShaver couldn't get the disk → would boot to the '?' icon).")
+    return None
 
 
 class Runner:

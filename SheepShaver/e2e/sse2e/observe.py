@@ -84,13 +84,15 @@ def parse_app(line: str) -> AppEvent | None:
     )
 
 
-def is_app_dialog(line: str) -> bool:
-    """True if this `[APP]` line reports a modal dialog is up (`modal=1`).
+_READY_RE = re.compile(r"\[READY\] desktop settled")
 
-    Used to detect dialogs appearing (e.g. Speedometer's "tests are done!" — the
-    benchmark-finished hook) without screenshots/OCR.
+
+def saw_desktop_ready(text: str) -> bool:
+    """True if the emulator emitted the settled-desktop `[READY]` signal — the Finder has been
+    frontmost and non-modal for a ~2 s dwell. A more robust "desktop actually usable" marker than the
+    first `[BOOT] idle`, which can fire before the Finder finishes drawing the desktop.
     """
-    return line.lstrip().startswith("[APP]") and "modal=1" in line
+    return bool(_READY_RE.search(text))
 
 
 def saw_clean_shutdown(text: str) -> bool:

@@ -37,17 +37,10 @@ def test_clean_exit_absent_when_only_boot():
     assert observe.saw_clean_shutdown(text) is False
 
 
-def test_is_app_dialog_true_on_modal():
-    assert observe.is_app_dialog("[APP] frontApp='Speedometer 4.02' modal=1 ticks=9001") is True
-
-
-def test_is_app_dialog_false_when_no_modal():
-    assert observe.is_app_dialog("[APP] frontApp='Finder' modal=0 ticks=900") is False
-
-
-def test_is_app_dialog_false_on_non_app_line():
-    # A [BOOT] line can also carry modal=1, but it's not an [APP] dialog signal.
-    assert observe.is_app_dialog("[BOOT] idle frontApp='' modal=1 ticks=300 (5.0s)") is False
+def test_saw_desktop_ready():
+    assert observe.saw_desktop_ready(
+        "[READY] desktop settled frontApp='Finder' menubar=20 modal=0 ticks=489 (8.2s)") is True
+    assert observe.saw_desktop_ready("[BOOT] idle frontApp='Finder' modal=0 ticks=300 (5.0s)") is False
 
 
 def test_parse_app_full_signal():
@@ -78,3 +71,14 @@ def test_parse_boot_ready_tolerates_win_title_fields():
     line = "[BOOT] idle frontApp='Finder' modal=0 win=0x10b24110 title='Desktop' ticks=369 (6.2s)"
     ev = observe.parse_boot_ready(line)
     assert ev is not None and ev.front_app == "Finder" and ev.modal is False and ev.secs == 6.2
+
+
+def test_parse_app_apostrophe_is_sanitized_not_raw():
+    # The emulator replaces a literal "'" with "`" before emitting (emul_op.cpp e2e_log_safe_char),
+    # so single-quoted fields stay parseable. A title with a backtick parses cleanly...
+    ev = observe.parse_app("[APP] frontApp='Finder' modal=0 win=0x1 title='It`s done' ticks=42")
+    assert ev is not None and ev.title == "It`s done"
+    # ...and a RAW apostrophe (the bug guarded against) would truncate the title at the quote —
+    # documenting why the C++ sanitizer must run.
+    ev2 = observe.parse_app("[APP] frontApp='Finder' modal=0 win=0x1 title='It's done' ticks=42")
+    assert ev2 is None or ev2.title != "It's done"

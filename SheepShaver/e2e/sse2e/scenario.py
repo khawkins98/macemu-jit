@@ -32,7 +32,9 @@ def run_lifecycle(
         # 1. Wait for the deterministic boot-ready signal.
         ev = _await_boot_ready(runner, boot_timeout)
         if ev is None:
-            return Result(False, "boot timed out (no [BOOT] idle within timeout)", runner.log_text())
+            return Result(False, "boot timed out (no [BOOT] idle) — if the guest shows the '?' "
+                          "no-boot-disk icon, a stray SheepShaver likely holds the disk image "
+                          "(check `pgrep SheepShaver`)", runner.log_text())
         if not observe.is_desktop_ready(ev):
             return Result(
                 False,
@@ -125,7 +127,9 @@ def run_benchmark(
     try:
         ev = _await_boot_ready(runner, boot_timeout)
         if ev is None:
-            return BenchResult(False, "boot timed out (no [BOOT] idle)", runner.log_text())
+            return BenchResult(False, "boot timed out (no [BOOT] idle) — if the guest shows the '?' "
+                               "no-boot-disk icon, a stray SheepShaver likely holds the disk image "
+                               "(check `pgrep SheepShaver`)", runner.log_text())
 
         # Wait DETERMINISTICALLY for Speedometer to auto-launch and idle on its splash (the [APP]
         # signal), instead of a fixed sleep — boot+launch time is highly variable.
@@ -255,22 +259,6 @@ def _drive_until(runner: Runner, vnc: Vnc, key: str, predicate, desc: str,
         time.sleep(0.2)
     print(f"  [gate] {desc}: TIMEOUT after {timeout:.0f}s", flush=True)
     return None
-
-
-def _count_dialogs(text: str) -> int:
-    """Number of `[APP] ... modal=1` lines in the log so far (each = a dialog appearing)."""
-    return sum(1 for ln in text.splitlines() if observe.is_app_dialog(ln))
-
-
-def _await_new_dialog(runner: Runner, baseline: int, timeout: float) -> bool:
-    """Wait until a NEW dialog (modal=1) appears beyond `baseline` — e.g. Speedometer's
-    "tests are done!" after the benchmark. Returns False on timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _count_dialogs(runner.log_text()) > baseline:
-            return True
-        time.sleep(0.5)
-    return False
 
 
 def _await_app(runner: Runner, app: str, timeout: float) -> bool:

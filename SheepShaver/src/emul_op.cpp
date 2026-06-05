@@ -73,48 +73,72 @@ static uint32 MakeExecutableTvec;
 // fixed low-mem addresses are stable across classic Mac OS; SheepShaver maps guest low memory via
 // Mac2HostAddr/ReadMacIntN. The idle hook itself reuses SheepShaver's own SynchIdleTime ROM patch
 // (rom_patches.cpp), so this adds only the state read, not a new trap.
+// Is `a` a guest pointer we can safely dereference? Valid Mac pointers/handles are even-aligned and
+// live in mapped Mac RAM. A WILD handle (a background pseudo-window's titleHandle can be junk) outside
+// RAM would, under DIRECT_ADDRESSING, deref to UNMAPPED host memory and SIGSEGV the emulator — so
+// every guest deref below is gated on this. (Reads stay within [0, RAMBase+RAMSize), which the live
+// window pointers satisfy; anything beyond RAM is rejected before the deref.)
+static inline bool e2e_guest_ptr_ok(uint32 a)
+{
+	return (a & 1) == 0 && a >= 0x100 && a < RAMBase + RAMSize;
+}
+
+// Make a byte safe to drop into a single-quoted log field: non-printable -> '?' (and flags a junk
+// read via *bad); a literal single-quote -> '`' so it can't break the harness's frontApp='...' /
+// title='...' regexes (which capture with '[^']*').
+static inline char e2e_log_safe_char(uint8 c, bool *bad)
+{
+	if (c < 32 || c >= 127) { if (bad) *bad = true; return '?'; }
+	if (c == '\'')
+		return '`';
+	return (char)c;
+}
+
 // Front window title, for instrumentation. WindowRecord.titleHandle is at +0x86 (a StringHandle =
 // Handle to a Str255: deref the handle to a master ptr, then read length byte + chars). Empty for
-// untitled dialogs/alerts. Sanitized to printable ASCII so it's safe to drop into a log line.
-// Returns FALSE if the read looks like garbage (insane length, or non-printable bytes) — under
-// cooperative multitasking the frontmost "window" briefly points at background-extension pseudo-
-// windows whose title deref yields junk; the caller suppresses those frames to keep the log clean.
+// untitled dialogs/alerts. Sanitized to log-safe ASCII. Returns FALSE if a pointer is wild or the
+// read looks like garbage (insane length / non-printable bytes) — under cooperative multitasking the
+// frontmost "window" briefly points at background-extension pseudo-windows whose title deref yields
+// junk; the caller suppresses those frames, and the bounds-checks keep a wild deref from crashing.
 static bool e2e_front_window_title(uint32 win, char *out, int outsz)
 {
 	out[0] = '\0';
 	if (!win)
 		return true;			// bare desktop / no front window = a valid empty title
+	if (!e2e_guest_ptr_ok(win))
+		return false;
 	uint32 hdl = ReadMacInt32(win + 0x86);		// titleHandle
 	if (!hdl)
 		return true;			// untitled window = valid empty
+	if (!e2e_guest_ptr_ok(hdl))
+		return false;
 	uint32 ptr = ReadMacInt32(hdl);				// *titleHandle -> Str255
 	if (!ptr)
 		return true;
+	if (!e2e_guest_ptr_ok(ptr))
+		return false;
 	uint8 *s = Mac2HostAddr(ptr);
 	int len = s[0];
 	if (len > 63)
 		return false;			// insane Str255 length = junk read
 	bool valid = true;
-	for (int i = 0; i < len; i++) {
-		uint8 c = s[1 + i];
-		if (c < 32 || c >= 127) { valid = false; c = '?'; }
-		if (i < outsz - 1)
-			out[i] = (char)c;
-	}
+	for (int i = 0; i < len && i < outsz - 1; i++)
+		out[i] = e2e_log_safe_char(s[1 + i], &valid);
 	out[(len < outsz - 1) ? len : outsz - 1] = '\0';
 	return valid;
 }
 
 static void e2e_emit_idle_signals(void)
 {
-	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars).
+	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars). Sanitize to log-safe ASCII so an
+	// app name containing a quote/control char can't break the harness's frontApp='...' parser.
 	char app[32];
 	uint8 *namep = Mac2HostAddr(0x910);
 	int len = namep[0];
 	if (len > 31)
 		len = 31;
 	for (int i = 0; i < len; i++)
-		app[i] = (char)namep[1 + i];
+		app[i] = e2e_log_safe_char(namep[1 + i], NULL);
 	app[len] = '\0';
 
 	// Modal check: is the front window a dialog? WindowList head = 0x9D6; windowKind at +0x6C.
@@ -129,12 +153,38 @@ static void e2e_emit_idle_signals(void)
 	bool title_valid = e2e_front_window_title(front, title, sizeof(title));
 	uint32 ticks = ReadMacInt32(0x16a);	// Ticks since boot (60/s)
 
-	// [BOOT]: one-shot at the first idle (boot-ready) — the smoke gate waits for this line.
+	// [BOOT]: one-shot at the FIRST idle (boot-ready). Kept as a diagnostic; it can fire before the
+	// Finder finishes drawing the desktop, so prefer [READY] (below) for "desktop actually usable".
 	static bool boot_emitted = false;
 	if (!boot_emitted) {
 		boot_emitted = true;
 		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' ticks=%u (%.1fs)\n",
 		        app, modal, front, title, ticks, ticks / 60.0);
+		fflush(stderr);
+	}
+
+	// [READY]: one-shot when the desktop is SETTLED — the Finder has been seen frontmost at least
+	// once (CurApName churns ~6/s under cooperative MT, so a latch beats "currently Finder"), no
+	// modal dialog is up, and that has held for a ~2 s dwell. More robust than first-idle, which can
+	// fire mid-draw. MBarHeight ($0BAA, the menu-bar height — non-zero once the Finder has drawn its
+	// menu bar) is emitted as instrumentation to evaluate folding it into the gate later. NOTE: this
+	// fires only while the desktop stays non-modal, so on the benchmark disk it may not fire before a
+	// Startup Item (Speedometer) grabs the foreground — that path gates on [APP], not [READY].
+	static bool ready_emitted = false;
+	static bool finder_seen = false;
+	static uint32 settled_since = 0;		// guest tick the settled condition began (0 = not settled)
+	if (strcmp(app, "Finder") == 0)
+		finder_seen = true;
+	bool settled = finder_seen && !modal;
+	if (!settled)
+		settled_since = 0;
+	else if (settled_since == 0)
+		settled_since = ticks;
+	if (!ready_emitted && settled && settled_since != 0 && (ticks - settled_since) >= 120) {
+		ready_emitted = true;
+		uint16 mbar = ReadMacInt16(0x0baa);	// MBarHeight
+		fprintf(stderr, "[READY] desktop settled frontApp='%s' menubar=%u modal=%d ticks=%u (%.1fs)\n",
+		        app, mbar, modal, ticks, ticks / 60.0);
 		fflush(stderr);
 	}
 

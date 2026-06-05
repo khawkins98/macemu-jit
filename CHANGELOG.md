@@ -11,6 +11,54 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver] SDL3 is now the genuinely-built default backend (+ the bugs that surfaced)
+
+- **The build had been silently linking SDL2.** `configure.ac` defaults to SDL3, but the *generated*
+  `configure` was stale (generated before the SDL3-default flip), so every build linked SDL2 — the
+  E2E harness had been validating SDL2 the whole time. Re-bootstrapped (`NO_CONFIGURE=1 ./autogen.sh`)
+  so the build actually links SDL3 (`otool -L` confirms `libSDL3`). See LEARNINGS / spec §17.
+- **SDL3 boot regression fixed.** The live-JIT-stats title-bar update called `SDL_SetWindowTitle`
+  from the redraw thread; on macOS that Cocoa call is main-thread-only and stalled the redraw thread
+  → VBL stops → guest hangs in early boot (commit `5d87d713`, the "Live JIT stats" entry below).
+- **SDL3 shutdown crash fixed.** `Quit()` calls `VideoExit()` twice (directly + via `ExitAll()`);
+  `VideoExit()` destroyed `frame_buffer_lock`/`sdl_palette_lock`/`sdl_events_lock` without NULLing
+  them, so the 2nd pass double-destroyed freed mutexes → `os_unfair_lock is corrupt` abort (SDL2
+  tolerated it; SDL3's os_unfair_lock-backed mutexes don't). Fix: NULL after `SDL_DestroyMutex`
+  (`video_sdl3.cpp`, commit `3daa9c98`). Diagnosed from a user-captured crash backtrace (the earlier
+  Metal-deadlock theory was wrong — host VBL degradation had masked the real bug). Spec §18.
+- **VNC server ported to SDL3** (`vnc_server.cpp`, `video_sdl3.cpp`, commit `01bc52fe`). It was
+  SDL2-only (`#if SDL2 && !SDL3`; the SDL3 branch was empty stubs), so on SDL3 the benchmark +
+  headless screenshots failed (VNC `ConnectionRefused`). Guard widened to
+  `#if SDL_VERSION_ATLEAST(2,0,0)`; SDL3 adaptations for the renamed keymod/condition-variable
+  symbols, `SDL_EVENT_KEY_*`/float mouse coords, and `SDL_GetPixelFormatDetails`; the 4 call sites
+  wired into `video_sdl3.cpp` mirroring SDL2. `make e2e-bench` PASS on SDL3 (port 5950,
+  pixel-correct capture). **SDL3 now has full harness parity.** Spec §20.
+
+### [SheepShaver] E2E harness — signal-gated benchmark, richer signals, robustness fixes
+
+- **Harness no longer hangs after PASS** (commit `f55dd7f6`). vncdotool starts a non-daemon Twisted
+  reactor on connect; a swallowed screenshot-connect failure skipped `close()`, leaving the reactor
+  to block interpreter exit (print PASS, then hang / lingering Python). Fix: entry points
+  `flush` + `os._exit(code)`; the boot screenshot always `api.shutdown()` in a `finally`.
+- **Richer `[APP]`/`[BOOT]` idle signals** carry the front-window pointer (`win=`) and **title**
+  (`title=`); garbage frames (background-extension pseudo-windows under cooperative MT) are
+  suppressed, cutting the benchmark's signal lines from hundreds to ~32 and making the log a readable
+  state story. Guest reads are sanitized (a literal `'` → backtick so it can't break the
+  `frontApp='…'`/`title='…'` parsers) and bounds-checked (a wild titleHandle no longer SIGSEGVs the
+  host). (`emul_op.cpp`.)
+- **Benchmark drive steps are signal-gated** (`_await_since`/`_drive_until`) instead of fixed sleeps:
+  each step proceeds the instant the guest reaches the next window state, prints its elapsed time
+  (`[gate] step: Xs`), and self-corrects (resends a key the splash silently dropped — one continuous
+  watch, no cursor race). Done-detection gates on the `All Done!` alert title (unambiguous), not a
+  modal count. (`observe.py`, `scenario.py`; commits `8972c0f3`, `b170415d`.)
+- **`[READY]` settled-desktop signal** — emitted once the Finder has been frontmost + non-modal for a
+  ~2 s dwell (more robust than the first `[BOOT] idle`, which can fire mid-draw); carries `MBarHeight`
+  for evaluation. A better "desktop actually usable" marker. (`emul_op.cpp`, `observe.saw_desktop_ready`.)
+- **Pre-flight disk-availability check** (`runner.preflight`): `make e2e`/`e2e-bench` now kill **and
+  reap** stray SheepShaver instances (bare `pkill` returns before the OS releases file handles) and
+  refuse to launch if the boot image is still held open — so a stray session can no longer make a run
+  boot to the "?" no-boot-disk icon; it fails fast with a clear message instead.
+
 ### [docs] Silicon Sheep plan — Tier 4 Automation & Scripting
 
 - Added a **Tier 4 — Automation & Scripting** section to `docs/planning/DESKTOP_INTEGRATION_PLAN.md`:

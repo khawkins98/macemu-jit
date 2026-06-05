@@ -71,7 +71,19 @@ fn make_vm_id(name: &str) -> String {
     format!("{}-{:08x}.sheepvm", slug, ts)
 }
 
+// Tests override this via VM_LIBRARY_DIR_OVERRIDE to use a temp directory
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+static TEST_DIR_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
 fn vm_library_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(ref dir) = *TEST_DIR_OVERRIDE.lock().unwrap() {
+        fs::create_dir_all(dir).ok();
+        return dir.clone();
+    }
+
     let dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("SiliconSheep")
@@ -390,4 +402,185 @@ pub fn delete_profile(id: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn with_temp_dir<F: FnOnce(&Path)>(f: F) {
+        let dir = std::env::temp_dir().join(format!("silicon-sheep-test-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64));
+        fs::create_dir_all(&dir).unwrap();
+        *TEST_DIR_OVERRIDE.lock().unwrap() = Some(dir.clone());
+        f(&dir);
+        *TEST_DIR_OVERRIDE.lock().unwrap() = None;
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn sample_request() -> CreateVmRequest {
+        CreateVmRequest {
+            name: "Test Mac".to_string(),
+            rom_path: "/Users/Shared/macemu/test.rom".to_string(),
+            ram_mb: 256,
+            disk_mode: "create".to_string(),
+            disk_size_gb: 2.0,
+            disk_path: String::new(),
+            cd_path: String::new(),
+            screen: "win/1024/768".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_create_profile_produces_bootable_prefs() {
+        with_temp_dir(|_| {
+            let profile = create_profile(&sample_request()).unwrap();
+
+            assert!(profile.id.ends_with(".sheepvm"), "VM dir must end with .sheepvm");
+
+            let prefs_path = vm_library_dir().join(&profile.id).join("prefs");
+            assert!(prefs_path.exists(), "prefs file must exist");
+
+            let content = fs::read_to_string(&prefs_path).unwrap();
+            let pf = crate::prefs::PrefsFile::parse(&content);
+
+            assert_eq!(pf.get("rom"), Some("/Users/Shared/macemu/test.rom"));
+            assert_eq!(pf.get("ramsize"), Some("256M"));
+            assert_eq!(pf.get("screen"), Some("win/1024/768"));
+            assert!(pf.get("ether").is_some(), "networking should be configured");
+            assert!(!pf.get_all("disk").is_empty(), "at least one disk must be attached");
+        });
+    }
+
+    #[test]
+    fn test_create_profile_with_cd_sets_bootdriver() {
+        with_temp_dir(|_| {
+            let mut req = sample_request();
+            req.cd_path = "/path/to/install.iso".to_string();
+            req.disk_mode = "existing".to_string();
+            req.disk_path = String::new();
+
+            let profile = create_profile(&req).unwrap();
+            let prefs_path = vm_library_dir().join(&profile.id).join("prefs");
+            let content = fs::read_to_string(&prefs_path).unwrap();
+            let pf = crate::prefs::PrefsFile::parse(&content);
+
+            assert_eq!(pf.get("cdrom"), Some("/path/to/install.iso"));
+            assert_eq!(pf.get("bootdriver"), Some("-62"), "CD boot must set bootdriver -62");
+        });
+    }
+
+    #[test]
+    fn test_create_disk_image() {
+        with_temp_dir(|_| {
+            let profile = create_profile(&sample_request()).unwrap();
+            assert_eq!(profile.disk_paths.len(), 1);
+            let disk = Path::new(&profile.disk_paths[0]);
+            assert!(disk.exists(), "disk image must be created");
+            let meta = fs::metadata(disk).unwrap();
+            assert_eq!(meta.len(), 2 * 1024 * 1024 * 1024, "disk should be 2 GB");
+        });
+    }
+
+    #[test]
+    fn test_create_delete_roundtrip() {
+        with_temp_dir(|_| {
+            let profile = create_profile(&sample_request()).unwrap();
+            let id = profile.id.clone();
+
+            assert_eq!(list_profiles().len(), 1);
+            assert!(get_profile(&id).is_ok());
+
+            delete_profile(&id).unwrap();
+            assert_eq!(list_profiles().len(), 0);
+            assert!(get_profile(&id).is_err());
+            assert!(!vm_library_dir().join(&id).exists(), "VM dir should be removed");
+        });
+    }
+
+    #[test]
+    fn test_rename_profile() {
+        with_temp_dir(|_| {
+            let profile = create_profile(&sample_request()).unwrap();
+            rename_profile(&profile.id, "Renamed Mac").unwrap();
+            let updated = get_profile(&profile.id).unwrap();
+            assert_eq!(updated.name, "Renamed Mac");
+
+            delete_profile(&profile.id).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_duplicate_profile() {
+        with_temp_dir(|_| {
+            let original = create_profile(&sample_request()).unwrap();
+            let copy = duplicate_profile(&original.id, "Copy of Test").unwrap();
+
+            assert_ne!(original.id, copy.id);
+            assert!(copy.id.ends_with(".sheepvm"));
+            assert_eq!(copy.name, "Copy of Test");
+            assert_eq!(list_profiles().len(), 2);
+
+            for disk in &copy.disk_paths {
+                assert!(disk.contains(&copy.id), "disk path should reference the new VM dir");
+                assert!(!disk.contains(&original.id), "disk path must not reference the original");
+            }
+
+            let copy_prefs_path = vm_library_dir().join(&copy.id).join("prefs");
+            assert!(copy_prefs_path.exists());
+
+            delete_profile(&original.id).unwrap();
+            delete_profile(&copy.id).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_sync_profile_from_prefs() {
+        with_temp_dir(|_| {
+            let profile = create_profile(&sample_request()).unwrap();
+
+            let prefs_path = vm_library_dir().join(&profile.id).join("prefs");
+            let mut pf = crate::prefs::load_prefs(&prefs_path).unwrap();
+            pf.set("ramsize", "512M");
+            pf.set("screen", "win/800/600");
+            crate::prefs::save_prefs(&prefs_path, &pf).unwrap();
+
+            sync_profile_from_prefs(&profile.id).unwrap();
+            let updated = get_profile(&profile.id).unwrap();
+            assert_eq!(updated.ram_mb, 512);
+            assert_eq!(updated.screen, "win/800/600");
+
+            delete_profile(&profile.id).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_duplicate_warns_on_external_disks() {
+        with_temp_dir(|_| {
+            let mut req = sample_request();
+            req.disk_mode = "existing".to_string();
+            req.disk_path = "/Users/Shared/macemu/external.dsk".to_string();
+
+            let original = create_profile(&req).unwrap();
+            let copy = duplicate_profile(&original.id, "Copy").unwrap();
+
+            assert!(copy.shared_disk_warning.is_some(),
+                "should warn about shared external disk");
+            assert!(copy.shared_disk_warning.as_ref().unwrap().contains("external.dsk"));
+
+            delete_profile(&original.id).unwrap();
+            delete_profile(&copy.id).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_vm_id_has_sheepvm_suffix() {
+        let id = make_vm_id("My Cool Mac");
+        assert!(id.ends_with(".sheepvm"), "ID must end with .sheepvm, got: {}", id);
+        assert!(id.starts_with("my-cool-mac-"), "ID should start with slugified name");
+    }
 }

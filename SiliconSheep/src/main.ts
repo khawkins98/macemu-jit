@@ -9,6 +9,7 @@ interface VmProfile {
   disk_paths: string[];
   cd_path: string;
   screen: string;
+  shared_disk_warning?: string | null;
 }
 
 interface RomInfo {

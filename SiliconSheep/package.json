@@ -10,7 +10,7 @@
     "vite:dev": "vite",
     "vite:build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "cd src-tauri && cargo test",
+    "test": "cd src-tauri && cargo test -- --test-threads=1",
     "check": "npm run typecheck && npm run test"
   },
   "dependencies": {

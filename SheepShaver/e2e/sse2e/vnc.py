@@ -16,6 +16,11 @@ class Vnc:
     def key(self, name: str) -> None:
         self._client.keyPress(name)
 
+    def type_text(self, text: str) -> None:
+        """Send each character as a discrete key press (alphanumeric names map 1:1)."""
+        for ch in text:
+            self._client.keyPress(ch)
+
     def capture(self, path: str) -> None:
         self._client.captureScreen(path)
 

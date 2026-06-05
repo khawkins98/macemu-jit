@@ -7,10 +7,11 @@ down cleanly via the host->guest hook. Requires a logged-in macOS GUI session (S
 """
 import sys
 import os
+import time
 import tempfile
 from pathlib import Path
 
-from sse2e import config, disk, runner, scenario
+from sse2e import bench_export, config, disk, runner, scenario
 
 HERE = Path(__file__).parent
 EMULATOR = HERE.parent / "src" / "Unix" / "SheepShaver"
@@ -55,6 +56,31 @@ def main() -> int:
     if res.result_image:
         print(f"  results image: {res.result_image}")
     print(f"  emulator log:  {artifacts / 'benchmark-emulator.log'}")
+
+    # Best-effort benchmark-history export. Collect+report only: nothing here can flip a
+    # PASS to FAIL. The run-copy disk (run_disk) still exists in its tempdir at this point.
+    if res.ok:
+        try:
+            ts = time.strftime("%Y-%m-%dT%H-%M-%S")
+            raw = bench_export.extract_report(str(run_disk))
+            if raw is None:
+                why = ("hfsutils missing — `make e2e-setup`"
+                       if not bench_export.hfsutils_available()
+                       else f"no '{bench_export.REPORT_NAME}' on the disk (Cmd-T save may not have taken)")
+                print(f"  history: report not extracted ({why})")
+            else:
+                rep = bench_export.parse_report(raw)
+                hist_root = artifacts / "benchmark-history"
+                bench_export.archive_run(
+                    report=rep, raw_text=raw,
+                    png=Path(res.result_image) if res.result_image else None,
+                    history_root=hist_root, timestamp=ts,
+                    duration_s=res.duration_s,
+                    jit_blocks=bench_export.parse_jit_blocks(res.log))
+                print(bench_export.format_delta(hist_root / "history.csv"))
+                print(f"  archived: {hist_root / ts}")
+        except Exception as e:
+            print(f"  history: export skipped ({e})")
     return 0 if res.ok else 1
 
 

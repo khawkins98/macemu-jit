@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import observe
+from .bench_export import REPORT_NAME
 from .runner import Runner
 from .vnc import Vnc
 
@@ -128,6 +129,7 @@ class BenchResult:
     log: str
     result_image: str | None = None
     duration_s: float | None = None  # measured suite runtime (a coarse perf signal)
+    report_saved: bool = False       # whether the in-guest Cmd-T text-report save was driven
 
 
 def run_benchmark(
@@ -205,6 +207,20 @@ def run_benchmark(
         img = str(artifact_dir / "benchmark-result.png")
         vnc.capture(img)                         # capture the results (with the "All Done!" alert up)
         vnc.key("enter"); time.sleep(1.5)        # dismiss "All Done!" -> guest returns to idle
+
+        # Save Speedometer's text report onto the (throwaway) run-copy disk so the host can
+        # extract the numbers after shutdown. Cmd-T = "Save Text Report"; the dialog opens with
+        # the name field selected, so typing replaces the default with our deterministic name
+        # (no "replace existing?" prompt on a pristine copy). Best-effort: any failure here must
+        # NOT fail the benchmark — the report export is purely additive (collect+report only).
+        report_saved = False
+        try:
+            vnc.key("super-t"); time.sleep(1.0)           # File > Save Text Report...
+            vnc.type_text(REPORT_NAME); time.sleep(0.3)   # replace the selected default name
+            vnc.key("enter"); time.sleep(1.5)             # Return = Save (default button)
+            report_saved = True
+        except Exception:
+            pass                                          # leave report_saved False; PASS unaffected
         vnc.close()
 
         runner.request_shutdown()
@@ -215,7 +231,7 @@ def run_benchmark(
             return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img, duration_s)
         return BenchResult(True,
                            f"benchmark complete in {duration_s:.0f}s (gates: {gates}); results + log captured",
-                           log, img, duration_s)
+                           log, img, duration_s, report_saved=report_saved)
     finally:
         # Always save the emulator log (even on early failure) — terminal output for analysis.
         try:

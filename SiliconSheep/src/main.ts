@@ -1085,16 +1085,32 @@ async function loadScreenshots() {
   }
 }
 
+let screenshotCounter = 0;
+
 async function pollRunningStatus() {
   const newRunningId = await checkRunning();
   if (newRunningId !== runningVmId) {
     runningVmId = newRunningId;
     if (!newRunningId) {
-      // VM just stopped — reload screenshots (may have a new one)
       vms = await loadVms();
       await loadScreenshots();
     }
     if (currentView === "library") render();
+  }
+
+  // Capture a live screenshot every ~10s while running (every 5th poll at 2s interval)
+  if (runningVmId && ++screenshotCounter >= 5) {
+    screenshotCounter = 0;
+    try {
+      await invoke("capture_vm_screenshot", { id: runningVmId });
+      const src = (await invoke("get_vm_screenshot", { id: runningVmId })) as string | null;
+      if (src) {
+        vmScreenshots.set(runningVmId, src);
+        if (currentView === "library") render();
+      }
+    } catch {
+      // VNC may not be ready yet or vncdotool not available
+    }
   }
 }
 

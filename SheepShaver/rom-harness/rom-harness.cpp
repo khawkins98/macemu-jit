@@ -1166,7 +1166,9 @@ static double bench_time_one(const BenchKernel *kern, int n_body,
 	uint32_t mac_pc = (uint32_t)(uintptr_t)p;
 	ppc_jit_block jblk;
 	if (!ppc_jit_aarch64_compile(mac_pc, mem, total, &jblk) || !jblk.complete) {
-		fprintf(stderr, "bench: compile failed (%s, n=%d)\n", kern->name, n_body);
+		/* stdout, not stderr: `make bench` masks stderr (JIT library chatter has no
+		 * env gate); the bench's own diagnostics must survive that redirect. */
+		printf("bench: compile failed (%s, n=%d)\n", kern->name, n_body);
 		return -1.0;
 	}
 	ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
@@ -1219,7 +1221,7 @@ static int run_bench(int argc, char **argv) {
 	if (mem == MAP_FAILED)
 		mem = (uint8_t *)mmap(NULL, total, ROM_HARNESS_MEM_PROT,
 			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-	if (mem == MAP_FAILED) { perror("bench mmap"); return 1; }
+	if (mem == MAP_FAILED) { printf("bench mmap: %s\n", strerror(errno)); return 1; }
 	/* macOS arm64 cannot map below 4 GB (__PAGEZERO), so `mem` lands high — that
 	 * is fine for the register-only kernels: instruction *fetch* is offset-based
 	 * (jit_fetch_ptr keys on low32(ram) and returns ram+offset), and these kernels
@@ -1230,7 +1232,7 @@ static int run_bench(int argc, char **argv) {
 	memset(mem, 0, total);
 
 	if (!ppc_jit_aarch64_init(4096)) {
-		fprintf(stderr, "bench: JIT init failed\n");
+		printf("bench: JIT init failed\n");
 		return 1;
 	}
 
@@ -1239,9 +1241,9 @@ static int run_bench(int argc, char **argv) {
 	seed_regs(&seedregs, 0xB3C0FFEE, base);               /* valid r1/lr; random r3/r4 */
 
 	if (compare_path && bench_baseline_stale(compare_path))
-		fprintf(stderr, "WARNING: baseline '%s' is OLDER than ppc-jit.cpp — "
-		        "comparison may be stale; re-baseline with --save-baseline.\n",
-		        compare_path);
+		printf("WARNING: baseline '%s' is OLDER than ppc-jit.cpp — "
+		       "comparison may be stale; re-baseline with --save-baseline.\n",
+		       compare_path);
 
 	printf("jit-bench: %d kernels, iters=%ld, differential N=%d-%d (ns/insn cancels "
 	       "prologue/epilogue)\n", BENCH_NKERNELS, iters, BENCH_N_BIG, BENCH_N_SMALL);

@@ -1268,7 +1268,11 @@ void powerpc_cpu::execute(uint32 entry)
 					/* ---- SS_JIT_VERIFY: compare JIT output against interpreter ---- */
 					if (__builtin_expect(jit_verify_enabled && jit_verify_n_insns > 0, false)) {
 						static int verify_divergence_budget = 20;
-						static bool verify_suppressed = false;
+						/* After a divergence, skip the next few in-range blocks before
+						 * re-checking so a single bug doesn't cascade into a wall of false
+						 * divergences. Counts DOWN to 0 (was a latching bool that, once set,
+						 * gated its own clearing branch and silenced verify for the whole run). */
+						static int verify_suppress_blocks = 0;
 						/* Skip blocks that end with bl/bctrl to the Mixed Mode dispatch
 						 * area (0x10100000-0x10110000) or any callee — these produce
 						 * cascading false divergences because the interpreter follows
@@ -1285,7 +1289,7 @@ void powerpc_cpu::execute(uint32 entry)
 							                         ((last_op >> 1) & 0x3FF) == 528))))
 								has_link_call = true;
 						}
-						if (verify_divergence_budget > 0 && !has_link_call && !verify_suppressed &&
+						if (verify_divergence_budget > 0 && !has_link_call && verify_suppress_blocks == 0 &&
 						    jit_block_start_pc >= 0x10000000 && jit_block_start_pc < 0x20000000) {
 							/* Save post-JIT state */
 							powerpc_registers jit_state;
@@ -1369,7 +1373,7 @@ void powerpc_cpu::execute(uint32 entry)
 
 							if (!match) {
 								verify_divergence_budget--;
-								verify_suppressed = true; /* suppress subsequent cascade */
+								verify_suppress_blocks = 2; /* skip next in-range blocks to clear cascade */
 								/* Dump the block's opcodes */
 								fprintf(stderr, "[VERIFY] Block %08x (%d insns):", jit_block_start_pc, jit_verify_n_insns);
 								for (int vi = 0; vi < jit_verify_n_insns; vi++) {
@@ -1379,12 +1383,17 @@ void powerpc_cpu::execute(uint32 entry)
 								fprintf(stderr, "\n");
 								if (verify_divergence_budget == 0)
 									fprintf(stderr, "[VERIFY] Budget exhausted — further divergences suppressed\n");
-							} else {
-								verify_suppressed = false; /* clean block — resume checking */
 							}
 
 							/* Restore JIT state so execution continues correctly */
 							memcpy(regs_ptr(), &jit_state, sizeof(powerpc_registers));
+						} else if (verify_suppress_blocks > 0 &&
+						           jit_block_start_pc >= 0x10000000 && jit_block_start_pc < 0x20000000) {
+							/* Counting down a post-divergence cascade window. Only in-range
+							 * blocks count — execution is overwhelmingly ROM (0x50xxxxxx), so
+							 * decrementing on every block would drain this before any RAM block
+							 * is skipped, making suppression a no-op. */
+							verify_suppress_blocks--;
 						}
 					}
 					/* Time-based heartbeat — file only, no stderr spam */

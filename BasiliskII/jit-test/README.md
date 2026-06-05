@@ -52,6 +52,11 @@ Before executing vectors, `run.sh` performs deterministic preflight validation:
 - each sentinel is an 8-hex-digit value
 - sentinel values are unique across vectors
 - no extra `TESTS[...]`/`SENTINEL_A6[...]` keys exist outside `TEST_ORDER`
+- **non-vacuous body**: a vector may not be entirely NOPs (`4E71`) — an all-NOP body
+  exercises only decode/dispatch and asserts nothing under the interp-vs-JIT
+  differential. The two intentional decode/dispatch sanity vectors (`nop`,
+  `nop_triplet`) are allow-listed; a new all-NOP vector is treated as a gutted or
+  mis-pasted payload and rejected (add it to the allow-list if it is deliberate).
 
 Any invariant violation aborts with machine-parseable failure metrics (`infra_fail=1`) instead of silently running a malformed suite.
 

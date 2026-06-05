@@ -1999,6 +1999,18 @@ for name in "${TEST_ORDER[@]}"; do
         emit_failure_metrics 1 "TESTS for $name must not include MOVEA immediate opcode 2C7C (reserved for harness sentinel append)" 1
     fi
 
+    # Vacuousness guard: a vector whose body is entirely NOPs (0x4E71) exercises
+    # only the decode/dispatch path and asserts nothing about opcode codegen under
+    # the interp-vs-JIT differential — interp and JIT trivially agree regardless of
+    # backend correctness. nop/nop_triplet are the *intentional* decode/dispatch
+    # sanity vectors and are allow-listed; any other all-NOP body is almost
+    # certainly a gutted or mis-pasted vector that would "pass" without testing
+    # anything. (Empty bodies are already rejected by the 4-hex-word regex above.)
+    if [[ ! " nop nop_triplet " == *" $name "* ]] &&
+       [[ "$hex_words" =~ ^4[Ee]71([[:space:]]+4[Ee]71)*$ ]]; then
+        emit_failure_metrics 1 "vacuous vector $name: body is all-NOP, exercises no opcode under test; if this is an intentional decode/dispatch sanity vector, add it to the preflight allow-list" 1
+    fi
+
     sentinel="${SENTINEL_A6[$name]}"
     if ! [[ "$sentinel" =~ ^[0-9a-fA-F]{8}$ ]]; then
         emit_failure_metrics 1 "invalid sentinel format for $name: $sentinel" 1

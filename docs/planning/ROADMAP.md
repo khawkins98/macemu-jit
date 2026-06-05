@@ -96,9 +96,12 @@ harness that can't catch mistakes just produces the next silent bug.
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered
   G4 golden results (catches bugs shared by *both* interp and JIT). See IMPLEMENTATION-BACKLOG T1.
-- 🟡 **Borrow BasiliskII's verify/bisection tooling** — targeted-PC verify (fast enough to run),
-  a "force opcode family → interpreter" bisection knob (we have none), and aligned dual-trace
-  divergence. Clean dev infrastructure, no runtime coupling; helps clear OPTIMIZATION-PLAN
+- 🟡 **Borrow BasiliskII's verify/bisection tooling** — targeted-PC verify (fast enough to run)
+  and aligned dual-trace divergence. **Partly already present (2026-06-05 audit):** the
+  "force opcode family → interpreter" bisection knob *exists* — `SS_JIT_SKIP_OPC` (primary),
+  `SS_JIT_SKIP_XO` (XO31), `SS_JIT_SKIP_XO63` (FP), `SS_JIT_SKIP_XO19` (CR/branch) — so manual
+  bisection works today; the remaining gap is **automated aligned dual-trace** + **targeted-PC
+  verify scoping**. Clean dev infrastructure, no runtime coupling; helps clear OPTIMIZATION-PLAN
   §0b-extra4. Detail: `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md` X1.
   - **Sharpened by the P1a sweeps (2026-06-05):** the current `SS_JIT_VERIFY` differential
     oracle has **6 false-positive classes** (full taxonomy in OPTIMIZATION-PLAN §0b-extra4) and

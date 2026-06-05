@@ -24,13 +24,22 @@ It is the first *system-level* regression gate — complements `make test-jit` /
 
 ## What it verifies
 
+The emulator emits deterministic lifecycle signals from its idle hook (`emul_op.cpp`):
+
 | Signal | Meaning | Stream |
 |--------|---------|--------|
-| `[BOOT] idle frontApp='Finder' modal=0` | reached the Finder desktop, idle, no blocking dialog | stderr |
+| `[BOOT] idle frontApp='…' modal=N win=0x… title='…' ticks=N (Xs)` | first Process-Manager idle (boot-ready); the smoke checks `frontApp='Finder'` + `modal=0` | stderr |
+| `[READY] desktop settled frontApp='Finder' menubar=N modal=0 ticks=N (Xs)` | the desktop has been Finder-frontmost + non-modal for a ~2 s dwell — a more robust "actually usable" marker than first-idle | stderr |
+| `[APP] frontApp='…' modal=N win=0x… title='…' ticks=N` | fires on a frontmost-app / modal / front-window-title change. The benchmark **gates on this**: it waits for `frontApp` containing `Speedometer` (launch) and for `title='All Done!'` (suite finished), and each drive step is signal-gated (look for `[gate] <step>: Xs` in the run output), not fixed sleeps. | stderr |
 | `Shutdown complete.` | the guest ran its real shutdown (flush/unmount) | **stdout** |
 | `PPC-JIT-A64: session …` + exit 0 | host process exited cleanly (atexit ran) | stderr |
 
-A force-kill (timeout) or a `frontApp != Finder` / `modal=1` idle is a **FAIL**, not a pass.
+`win=` is the front WindowRecord pointer and `title=` its title (sanitized; a literal `'` becomes a
+backtick); background-extension churn frames are suppressed. A force-kill (timeout) or a
+`frontApp != Finder` / `modal=1` idle is a **FAIL**, not a pass. A `'?'` no-boot-disk boot usually
+means a stray SheepShaver still holds the disk image — the runner's pre-flight kills/reaps strays and
+refuses to launch if the image is held; if it still hangs, a host restart clears graphics/VBL
+degradation from many prior launches.
 
 ---
 

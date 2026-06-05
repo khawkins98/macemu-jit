@@ -1,6 +1,6 @@
 # Design Brief: SheepShaver End-to-End VNC Test Harness
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-05
 > **Why this doc exists:** Design for an automated boot/run/shutdown E2E harness (ROADMAP A5) —
 > the system-level complement to the instruction-level gates, and the unlock for agents to
 > self-validate their own JIT changes end-to-end.
@@ -450,7 +450,7 @@ traverses SDL).
 **Verified:** `make e2e` (smoke) PASS ×2 on SDL3 (boot → Finder → clean shutdown, exit 0);
 `make test-jit` 264/264 score=100.
 
-## 19. SDL3 has NO VNC server — `make e2e-bench` + screenshots require SDL2 (2026-06-05)
+## 19. SDL3 has NO VNC server — `make e2e-bench` + screenshots require SDL2 (2026-06-05) — RESOLVED, see §20
 
 Running the benchmark on the (now genuinely) SDL3 build fails: it boots to Finder and Speedometer
 launches, but the harness's VNC client gets `ConnectionRefused` on :5950 — **the VNC server never
@@ -474,3 +474,42 @@ SDL3 default that the §17 backend review didn't know about.
    changed `SDL_Surface` API (format enum, lock/pitch), and wire the 4 call sites into
    `video_sdl3.cpp` mirroring SDL2. Then SDL3 reaches feature parity.
 3. **SDL3 default, benchmark/screenshots documented as SDL2-only** until (2) lands.
+
+## 20. VNC ported to SDL3 + signal-gated/instrumented benchmark + robustness (2026-06-05, RESOLVED)
+
+Chose §19 Option 2 — **the VNC server is now ported to SDL3** (commit `01bc52fe`), so SDL3 has full
+harness parity. `vnc_server.cpp`'s guard widened from `#if SDL2 && !SDL3` to `#if
+SDL_VERSION_ATLEAST(2,0,0)` (the `#else` stub now only covers SDL<2); SDL3 adaptations: `#undef`/
+`#define` shims for the renamed keymod + condition-variable symbols (SDL3 ships them as migration
+error-tokens), `SDL_EVENT_KEY_*`/float mouse-coords event injection, and `SDL_GetPixelFormatDetails`
+for the pixel format. Four call sites wired into `video_sdl3.cpp` mirroring `video_sdl2.cpp` (include;
+`VNCServerInitFromPrefs()` in video init; `VNCServerUpdate(host_surface, sdl_update_video_rect)` in
+`present_sdl_video`; `VNCServerShutdown()` in `VideoExit`; plus a `video_mode_changing` definition for
+this backend). Verified: `make e2e-bench` PASS on SDL3 — `VNC server enabled on port 5950`, VNC keys
+drove Speedometer, pixel-correct result capture, clean shutdown.
+
+**Signal-gating + instrumentation.** The benchmark drive steps no longer use fixed sleeps. The idle
+hook's `[APP]`/`[BOOT]` signals now carry the front-window pointer (`win=`) and **title** (`title=`),
+with garbage background-window frames suppressed (the cooperative-MT churn). Each drive step gates on
+the actual window transition (`_await_since`), prints `[gate] <step>: Xs`, and self-corrects
+(`_drive_until` resends a dropped key on one continuous watch — no cursor race). Done-detection gates
+on the `All Done!` alert title. The instrumentation revealed Speedometer's splash takes a variable
+~10-24 s to become input-ready (the real bottleneck; transitions are then 0.2 s).
+
+**Correctness + robustness (expert-review pass).**
+- Guest reads in `emul_op.cpp` are sanitized (a literal `'` → backtick, so it can't break the
+  `frontApp='…'`/`title='…'` regexes) and **bounds-checked** (a wild `titleHandle` no longer
+  SIGSEGVs the host).
+- New **`[READY]`** signal: emitted once the Finder is frontmost + non-modal for a ~2 s dwell — a more
+  robust "desktop actually usable" marker than the first `[BOOT] idle`; carries `MBarHeight`.
+- **`runner.preflight()`**: kill *and reap* stray SheepShaver + verify the boot image isn't held
+  open, refusing to launch into a "?" no-boot-disk hang. (A stray holding the disk is one "?" cause;
+  host graphics/VBL degradation after many launches is another that no pre-flight can detect — a host
+  restart clears it.)
+- Harness no longer hangs after PASS (entry points `os._exit` past vncdotool's non-daemon reactor).
+
+**Still open:** the C++ shutdown-confirm step (`e2e_check_host_shutdown`) is the one blind, un-gated
+key-press — should gate on the dialog being modal + resend, mirroring `_drive_until`. Unit tests for
+the gate/retry logic (feed canned log text to a `FakeRunner`). `Runner` should serve incremental log
+lines (the gates re-read+re-parse the whole buffer every 0.2 s). Score parsing (Speedometer text
+export) remains the headline open feature (§16).

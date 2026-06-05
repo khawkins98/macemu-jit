@@ -90,32 +90,30 @@ function formatLastBooted(ts: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function renderVmCard(vm: VmProfile): string {
+function renderVmRow(vm: VmProfile): string {
   const isRunning = vm.id === runningVmId;
   const screenshotSrc = vmScreenshots.get(vm.id);
-  const lastBooted = formatLastBooted(vm.last_booted);
+  const osLabel = vm.os_version ? escapeHtml(vm.os_version) : `${vm.ram_mb} MB`;
   return `
-    <div class="vm-card" data-id="${escapeAttr(vm.id)}">
-      <div class="screenshot">
+    <div class="vm-row ${isRunning ? "vm-row--running" : ""}" data-id="${escapeAttr(vm.id)}">
+      <div class="vm-row__thumb">
         ${screenshotSrc
-          ? `<img src="${screenshotSrc}" alt="VM screenshot" class="screenshot-img" />`
-          : `<span class="screenshot-icon">🖥</span>`
+          ? `<img src="${screenshotSrc}" alt="" class="vm-row__thumb-img" />`
+          : `<span class="vm-row__thumb-placeholder">🖥</span>`
         }
+        ${isRunning ? '<span class="vm-row__live-dot"></span>' : ""}
       </div>
-      <div class="card-body">
-        <div class="name">${escapeHtml(vm.name)}</div>
-        <div class="meta">${vm.os_version ? escapeHtml(vm.os_version) + " · " : ""}${vm.ram_mb} MB RAM${lastBooted ? " · " + lastBooted : ""}</div>
-        <div class="card-actions">
-          ${isRunning
-            ? `<button class="btn btn-secondary btn-sm" data-action="stop" data-id="${escapeAttr(vm.id)}">◼ Stop</button>`
-            : `<button class="btn btn-primary btn-sm" data-action="launch" data-id="${escapeAttr(vm.id)}">▶ Start</button>`
-          }
-          <button class="btn btn-secondary btn-sm" data-action="settings" data-id="${escapeAttr(vm.id)}">⚙</button>
-          <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">⎘</button>
-          <button class="btn btn-secondary btn-sm" data-action="reveal" data-id="${escapeAttr(vm.id)}" title="Reveal in Finder">📂</button>
-          <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">✕</button>
-        </div>
-        ${isRunning ? '<span class="status running">Running</span>' : ""}
+      <div class="vm-row__info">
+        <span class="vm-row__name">${escapeHtml(vm.name)}</span>
+        <span class="vm-row__meta">${osLabel}</span>
+      </div>
+      <div class="vm-row__actions">
+        ${isRunning
+          ? `<button class="vm-row__btn" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">⏻</button>`
+          : `<button class="vm-row__btn" data-action="launch" data-id="${escapeAttr(vm.id)}" title="Start">⏻</button>`
+        }
+        <span class="vm-row__sep"></span>
+        <button class="vm-row__btn" data-action="settings" data-id="${escapeAttr(vm.id)}" title="Configure">⚙</button>
       </div>
     </div>
   `;
@@ -153,15 +151,12 @@ function renderLibrary(): string {
   return `
     ${renderTitlebar()}
     ${renderErrorBanner()}
-    <div class="header">
-      <h1>Virtual Machines</h1>
-      <div style="display: flex; gap: 8px;">
-        <button class="btn btn-secondary" data-action="import-prefs">Import Prefs</button>
-        <button class="btn btn-primary" data-action="wizard">+ New VM</button>
-      </div>
+    <div class="cc-list">
+      ${vms.map(renderVmRow).join("")}
     </div>
-    <div class="vm-grid">
-      ${vms.map(renderVmCard).join("")}
+    <div class="cc-footer">
+      <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">⤓</button>
+      <button class="vm-row__btn" data-action="wizard" title="New VM">＋</button>
     </div>
   `;
 }
@@ -727,8 +722,11 @@ function renderSettings(): string {
     <div class="settings">
       <div class="settings-header">
         <button class="btn btn-secondary" data-action="back-to-library">← Back</button>
-        <h2>${escapeHtml(vm.name)}</h2>
+        <h2>${escapeHtml(vm.name)} Configuration</h2>
         <div style="flex:1"></div>
+        <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">⎘ Duplicate</button>
+        <button class="btn btn-secondary btn-sm" data-action="reveal" data-id="${escapeAttr(vm.id)}" title="Reveal in Finder">📂</button>
+        <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">✕</button>
         <button class="btn btn-primary" data-action="save-settings">Save</button>
       </div>
       <div class="settings-body">

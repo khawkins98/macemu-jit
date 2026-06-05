@@ -29,19 +29,21 @@ rabbit hole. Hard-won facts:
   era) to pushing SDL events, which silently **drops mouse-button events** (pushed motion survives
   — hence cursor moves, clicks don't). But restoring direct ADB still didn't make the click
   register, so the regression isn't the whole cause.
-- **Run this 10-second test FIRST, before theorizing — it decides everything:** does a *real
-  mouse click on the SDL window* select/activate anything? Real host clicks go through the SAME
-  absolute `MoveTo` + `ADBMouseDown(0)` path as VNC injection, so:
-  - real click **works** → the bug is **VNC-injection-thread-specific** (libvncserver thread vs
-    the emulator main thread calling `ADBMouseDown`/`TriggerInterrupt`; a `button_buffer`/interrupt
-    timing or cross-thread issue). This is the MORE likely case (the user's "just click the
-    desktop" suggestions imply they've seen real clicks work).
-  - real click **also fails** → then look at `adb.cpp` absolute-mouse: the `CursorDeviceDispatch
-    MoveTo` (POWERPC_ROM path, ~line 400) may not update the `RawMouse`/`MTemp` low-mem globals the
-    Toolbox hit-tests clicks against (the non-PPC path ~line 415 DOES write `0x82a/0x828/0x82e/
-    0x82c`). Lower probability — don't lead with it.
-- The click work was **reverted** (kept the tree clean; the harness is keyboard-only and doesn't
-  need it). Separate future fix; tracked in memory `e2e-vnc-click-injection`.
+- **CONFIRMED (2026-06-05) by a real-mouse test: the bug is INJECTION-specific, not the ADB
+  path.** Booted the smoke ISO to the Finder and had the user click the desktop with the real
+  mouse (added a temp `[REAL-CLICK]` fprintf on the `SDL_EVENT_MOUSE_BUTTON_DOWN` case to trace
+  it). Result: 12 `[REAL-CLICK] → ADBMouseDown` traces AND the Finder *responded* — the `[APP]`
+  signal showed a window ('Mac OS Internal Edition' CD volume) come to the front. So real clicks
+  fire the SAME `ADBMouseMoved`/`ADBMouseDown` path AND work → **`RawMouse`/`MoveTo` is fine; the
+  earlier RawMouse theory is RULED OUT.**
+- So the bug is in **VNC injection** specifically: genuine main-thread SDL button events work,
+  but VNC's don't — whether VNC pushes them via `SDL_PushEvent` (current; SDL3 may drop pushed
+  *button* events while delivering pushed *motion*) OR injects ADB directly from the libvncserver
+  thread (a `button_buffer`/`TriggerInterrupt` cross-thread/timing issue). Next fix attempt:
+  determine which of those two it is — e.g. trace whether a `SDL_PushEvent`'d button reaches
+  `handle_events`, and try marshaling VNC clicks onto the main thread.
+- The click fix work was **reverted** (kept the tree clean; the harness is keyboard-only and
+  doesn't need it). Separate future fix; tracked in memory `e2e-vnc-click-injection`.
 
 **3. The idle-hook `frontApp` signal LIES — spurious `'Finder' Desktop` frames appear ~every 300
 ticks even when Speedometer is really frontmost.** Gating on `"Finder" in e.app` gives false

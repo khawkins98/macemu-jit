@@ -54,10 +54,6 @@ const KNOWN_ROMS: &[KnownRom] = &[
         sha256: "ecfa2a80e3e6b89c3f975e4e8b63acadcb285e39eb2b2f7e2caad857e39a8e8a",
         name: "Mac OS ROM 1.1 (1998-07-21)",
     },
-    KnownRom {
-        sha256: "b0e1be6e58e7e0c8a5469b0c16e2d6a4a5b5e2c7d8f9a1b3c4d5e6f7a8b9c0d1",
-        name: "Mac OS ROM 9.0.1",
-    },
 ];
 
 fn vm_library_dir() -> PathBuf {

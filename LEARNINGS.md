@@ -3,6 +3,17 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-05 — SDL_SetWindowTitle is main-thread-only on macOS
+
+`SDL_SetWindowTitle` calls into Cocoa (`NSWindow setTitle:`), which asserts "should only be
+modified on the main thread" and aborts. The redraw thread (`redraw_func`, `do_video_refresh`)
+is NOT the main thread. Calling `set_window_name()` from `do_video_refresh()` caused either an
+abort or a VBL stall (same mechanism as the lldb VBL disruption — see below). The live JIT
+stats title update was removed; the `ppc_jit_aarch64_get_stats()` API and `status_suffix` param
+are kept for a future main-thread reimplementation. Correct approaches: SDL3's
+`SDL_RunOnMainThread()`, or `dispatch_async(dispatch_get_main_queue(), ...)` on macOS, or
+a custom SDL user event dispatched to the main thread.
+
 ## 2026-06-04 — Verified non-issues from the 2026-06-03 diagnostics review (do NOT re-investigate)
 
 An adversarial review of the heartbeat/diag + `build-ss` guard work attacked these and proved

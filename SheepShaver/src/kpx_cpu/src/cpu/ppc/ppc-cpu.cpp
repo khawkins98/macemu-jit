@@ -1373,7 +1373,19 @@ void powerpc_cpu::execute(uint32 entry)
 
 							if (!match) {
 								verify_divergence_budget--;
-								verify_suppress_blocks = 2; /* skip next in-range blocks to clear cascade */
+								/* TUNABLE: cascade-suppression window (in-range blocks skipped
+								 * after a divergence). 2 is a guess — line 1387 restores full
+								 * jit_state and the next block recaptures pre_state from it, so
+								 * interp and JIT start each block identically and cross-block
+								 * poisoning shouldn't actually occur; this is belt-and-suspenders.
+								 * If it ever needs adjustment, the symptoms are:
+								 *   too LOW  -> [VERIFY] DIVERGENCE lines arrive in tight bursts
+								 *               (a real bug echoing across consecutive blocks),
+								 *               and verify_divergence_budget(20) drains fast.
+								 *   too HIGH -> genuine, independent divergences get swallowed;
+								 *               you see one report then suspicious silence even
+								 *               though the JIT is still wrong downstream. */
+								verify_suppress_blocks = 2;
 								/* Dump the block's opcodes */
 								fprintf(stderr, "[VERIFY] Block %08x (%d insns):", jit_block_start_pc, jit_verify_n_insns);
 								for (int vi = 0; vi < jit_verify_n_insns; vi++) {

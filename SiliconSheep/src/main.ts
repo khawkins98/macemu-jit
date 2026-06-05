@@ -979,6 +979,7 @@ async function handleAction(e: Event) {
           }
           pendingSettings = {};
           vms = await loadVms();
+          await loadVmPrefs(selectedVmId);
           showToast("Settings saved", "success");
           render();
         } catch (err) {

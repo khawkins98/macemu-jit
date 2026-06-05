@@ -1,6 +1,6 @@
 # SheepShaver ARM64 JIT Optimization Plan
 
-> **Status:** 🟡 Active · **Created:** 2026-06-03 · **Updated:** 2026-06-04
+> **Status:** 🟡 Active · **Created:** 2026-06-03 · **Updated:** 2026-06-05
 > **Why this doc exists:** SheepShaver JIT performance roadmap — done / open / deferred levers with measured baselines.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 

@@ -1678,12 +1678,22 @@ void VideoExit(void)
 		static_cast<SDL_monitor_desc *>(*i)->video_close();
 
 	// Destroy locks
-	if (frame_buffer_lock)
+	// NULL the pointers after destroying: Quit() calls VideoExit() twice (directly, then via
+	// ExitAll()), so without this the second pass double-destroys already-freed mutexes. On SDL3
+	// (os_unfair_lock-backed mutexes) that aborts: "os_unfair_lock is corrupt" in pthread_mutex_destroy
+	// during the E2E shutdown. The existing `if (lock)` guards already intend idempotency; complete it.
+	if (frame_buffer_lock) {
 		SDL_DestroyMutex(frame_buffer_lock);
-	if (sdl_palette_lock)
+		frame_buffer_lock = NULL;
+	}
+	if (sdl_palette_lock) {
 		SDL_DestroyMutex(sdl_palette_lock);
-	if (sdl_events_lock)
+		sdl_palette_lock = NULL;
+	}
+	if (sdl_events_lock) {
 		SDL_DestroyMutex(sdl_events_lock);
+		sdl_events_lock = NULL;
+	}
 }
 
 

@@ -19,7 +19,8 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-rom harness-count e2e e2e-bench \
+        test test-opcodes test-jit test-rom harness-count \
+        e2e e2e-smoke e2e-bench e2e-test e2e-setup e2e-clean \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean help \
@@ -143,19 +144,37 @@ test-jit: build-ss
 	@echo "TIP: For deeper verification, boot with:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
 	@echo "     For quick perf A/B:  cd rom-harness && make bench"
 
-# End-to-end VNC lifecycle smoke (ROADMAP A5). Boots the emulator in an isolated
-# repo-tracked config, drives Special>Shut Down over VNC, asserts a clean exit.
-# Requires a logged-in macOS GUI session + the venv (see e2e/README.md).
-e2e: build-ss
-	@if [ ! -x e2e/.venv/bin/python ]; then \
-		echo "e2e venv missing — run:  cd e2e && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"; \
-		exit 1; \
-	fi
+# --- End-to-end VNC harness (ROADMAP A5) -------------------------------------
+#   make e2e         boot -> clean-shutdown smoke (the system-level regression gate)
+#   make e2e-bench   boot Mac OS 9 + Speedometer, drive the suite over VNC, capture results
+#   make e2e-test    offline unit tests (no emulator, no assets, no GUI)
+#   make e2e-setup   (re)create the Python venv explicitly;  make e2e-clean  removes it
+# The venv auto-bootstraps on first use (cached, like `npm install`) — no manual setup.
+# e2e / e2e-bench need a logged-in macOS GUI session (SDL opens a real window). See e2e/README.md.
+
+# One-time venv bootstrap: a marker file, regenerated only when requirements.txt changes.
+e2e/.venv/.installed: e2e/requirements.txt
+	@echo "=== Setting up the e2e Python venv (one-time; ~30s) ==="
+	@cd e2e && python3 -m venv .venv \
+		&& .venv/bin/pip install -q --upgrade pip \
+		&& .venv/bin/pip install -q -r requirements.txt
+	@touch $@
+
+e2e-setup: e2e/.venv/.installed
+
+e2e: build-ss e2e/.venv/.installed
 	cd e2e && .venv/bin/python run_smoke.py
 
-e2e-bench: build-ss
-	@if [ ! -x e2e/.venv/bin/python ]; then echo "e2e venv missing (see e2e/README.md)"; exit 1; fi
+e2e-smoke: e2e
+
+e2e-bench: build-ss e2e/.venv/.installed
 	cd e2e && .venv/bin/python run_benchmark.py
+
+e2e-test: e2e/.venv/.installed
+	cd e2e && .venv/bin/python -m pytest -q
+
+e2e-clean:
+	rm -rf e2e/.venv
 
 test-rom: build-rom-harness
 	@echo ""

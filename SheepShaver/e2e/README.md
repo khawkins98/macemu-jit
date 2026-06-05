@@ -67,7 +67,8 @@ degradation from many prior launches.
    which needs an active WindowServer. This will **not** run over a bare SSH session with no
    desktop, and there is no Xvfb equivalent on macOS. (A self-hosted CI Mac must auto-login.)
 2. **SheepShaver built** — `SheepShaver/src/Unix/SheepShaver` exists (see build below).
-3. **Python 3** with a venv + the harness deps (`vncdotool`, `pytest`, `Pillow`).
+3. **Python 3** — the harness venv (`vncdotool`, `pytest`, `Pillow`, `imagehash`) auto-installs on
+   first `make e2e`; no manual setup.
 4. **Two assets** (large, not in git), resolved by env var or local-dev default:
    - **ROM** — an OldWorld PPC ROM. `SS_E2E_ROM` (default
      `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom`).
@@ -83,58 +84,40 @@ degradation from many prior launches.
 
 ---
 
-## One-time setup
-
-```bash
-# 1. Build SheepShaver (first time also needs configure — see CLAUDE.md / SheepShaver build docs)
-cd SheepShaver/src/Unix
-NO_CONFIGURE=1 ./autogen.sh
-./configure --enable-sdl-video --enable-sdl-audio --enable-jit \
-            --without-gtk --without-x --without-esd \
-            CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib
-cd ../.. && make build-ss
-
-# 2. Create the Python venv + install harness deps
-cd e2e
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# 3. Provide the assets: a ROM at SS_E2E_ROM and a bootable ISO at SS_E2E_ISO (defaults above).
-#    The default ISO boot needs NO disk setup — the read-only CD is booted directly each run.
-#    (Only if you use the disk path instead: provide a cleanly-shut-down master at SS_E2E_DISK.)
-```
-
----
-
-## Run it
+## Quick start
 
 ```bash
 cd SheepShaver
-make e2e                       # build-ss + run the smoke; exit 0 = PASS, non-zero = FAIL
-
-# read-only ISO (default) vs the writable Mac OS 9 + Speedometer disk:
-cd e2e
-.venv/bin/python run_smoke.py                      # ISO medium (default)
-SS_E2E_MEDIUM=disk .venv/bin/python run_smoke.py   # disk medium (macos9_mini.dsk)
-
-# Benchmark: boot the Mac OS 9 + Speedometer disk, run the full suite, capture results:
-make e2e-bench                                     # from SheepShaver/
-# or: cd e2e && .venv/bin/python run_benchmark.py
-# Artifacts: e2e/artifacts/benchmark-result.png (PR/CPU numbers) + benchmark-emulator.log
+make e2e          # smoke: build, boot, clean-shutdown, assert exit 0   (PASS / non-zero FAIL)
+make e2e-bench    # benchmark: boot Mac OS 9 + Speedometer, drive the suite, capture results
+make e2e-test     # offline unit tests (no emulator / assets / GUI)
 ```
 
-A run takes ~1 min on the default ISO path (boot ~5 s, shutdown flush ~20–30 s; no per-run disk
-copy — the ISO is read-only). The SDL window appears on your screen and VNC is served on port
-**5950** if you want to watch live. On failure, `e2e/artifacts/fail.log` (full merged log) and any
-screenshots are written for inspection.
+**That's the whole setup.** The Python venv **auto-installs on first run** (cached after, like
+`npm install`) — no manual `venv`/`pip`. `make e2e` builds the emulator for you. Other targets:
+`make e2e-setup` ((re)create the venv), `make e2e-clean` (remove it).
+
+> First-ever build also needs a one-time `configure` — see the SheepShaver build commands in
+> `CLAUDE.md` / the repo build docs. After that, `make e2e` is incremental.
+
+Variants:
+
+```bash
+SS_E2E_MEDIUM=disk make e2e     # run the smoke on the writable Mac OS 9 disk instead of the ISO
+```
+
+A smoke run is ~1 min (boot ~5 s, shutdown flush ~20–30 s). The SDL window appears on your screen and
+**VNC is served on port 5950** if you want to watch live. On failure, `artifacts/fail.log` + any
+screenshots are written; `make e2e-bench` also writes `artifacts/benchmark-result.png` (PR/CPU) and
+`artifacts/benchmark-emulator.log`.
 
 ### Offline unit tests (no boot, no assets)
 
 ```bash
-cd e2e && .venv/bin/pytest -q          # 12 tests: observe / runner / disk / config
+make e2e-test          # from SheepShaver/ — 24 tests: observe / runner / disk / config / imagecmp
 ```
 
-These run anywhere (CI included) — they exercise the log parsing, teardown, and prefs logic with
+These run anywhere (CI included) — they exercise the signal parsing, teardown, and prefs logic with
 fixtures, no emulator required.
 
 ---

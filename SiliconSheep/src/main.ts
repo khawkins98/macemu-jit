@@ -778,7 +778,6 @@ function renderSettings(): string {
     ${renderTitlebar()}
     <div class="settings">
       <div class="settings-header">
-        <button class="btn btn-secondary" data-action="back-to-library">← Back</button>
         <h2>${escapeHtml(vm.name)} Configuration</h2>
         <div style="flex:1"></div>
         <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">⎘ Duplicate</button>

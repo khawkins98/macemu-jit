@@ -612,6 +612,31 @@ TEST_ORDER+=(evict_rd_eq_ra)
 T_evict_mixed_alu="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 7C632214 7CA53050 7D074838 7D6A6378 7DCD7A78 7E119214"
 TEST_ORDER+=(evict_mixed_alu)
 
+# --- RA eviction at edge surfaces (P1a residual, 2026-06-05) ---
+# Two surfaces the pure-register straight-line battery above does NOT cover:
+# eviction at a control-flow exit, and eviction × deferred CR0/XER state.
+#
+# evict_branch_exit: 16-live pressure, r3..r10 dirty-evicted (=0x15), then a
+# conditional branch TERMINATES the block — forcing ra_flush_all of the dirty
+# slots on the bc edge (a different exit path than the blr terminator the others
+# use). The branch condition reads r10 (a dirty/evicted reg), so a bad flush also
+# steers the branch wrong. beq is taken (r10==0x15) → skips `li r3,0` → r3 stays
+# 0x15; a flush/eviction bug diverges r3 (or the dirty regs in the REGDUMP).
+T_evict_branch_exit="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 7C639214 7C848A14 7CA58214 7CC67A14 7CE77214 7D086A14 7D296214 7D4A5A14 2C0A0015 41820008 38600000"
+TEST_ORDER+=(evict_branch_exit)
+
+# evict_rc1_cr0: same wide eviction but the combines are add. (Rc=1), so
+# emit_update_cr0 runs on each op while the RA is evicting. REGDUMP captures CR —
+# a bad CR0 input under pressure diverges CR (final CR0 reflects r10+r11=0x15>0).
+T_evict_rc1_cr0="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 7C639215 7C848A15 7CA58215 7CC67A15 7CE77215 7D086A15 7D296215 7D4A5A15"
+TEST_ORDER+=(evict_rc1_cr0)
+
+# evict_adde_carry: XER carry chain under pressure — addic. seeds CA (+CR0), then
+# an adde chain propagates carry across evicted regs. REGDUMP captures XER + CR; a
+# bad CA handling or operand under eviction diverges XER/GPRs.
+T_evict_adde_carry="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 3463FFFF 7C842914 7CC63914 7D084914 7D4A5914"
+TEST_ORDER+=(evict_adde_carry)
+
 # --- adde/subfe carry-wrap edge cases (backlog A1/A2) ---
 # adde carry-out edge: CA=1 and rA+rB=0xFFFFFFFF → result 0, CA_out must be 1
 # li r3,-1; addic r0,r3,1 (sets CA=1, r0=0); li r4,0; adde r5,r4,r3

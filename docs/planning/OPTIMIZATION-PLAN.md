@@ -72,18 +72,24 @@ divergences after accounting for 6 oracle-artifact classes), not the proof. A *l
 whole-boot clean verify gate was found to be **unachievable on this config** (see step 2) —
 that's an oracle-tooling limitation (→ ROADMAP A1 / X1), not RA debt. P8 is unblocked.
 
-**Calibration — this is "substantially strengthened," not "every eviction edge proven."** The
-targeted (confound-free) harness coverage is strong for **mid-block, pure-register, single-exit,
-Rc=0** eviction. Two eviction-adjacent surfaces have only **functional** (boot) coverage, not a
-targeted harness vector yet — worth adding via the same cheap, no-boot lever:
-- **(a) Eviction at control-flow exits/terminators** — flush-on-exit of dirty RA slots when a
-  block evicts *and then* terminates on a conditional `bc` or the `bclr` Mixed-Mode bail. Every
-  battery vector exits via a single `blr`. (P1's exit-path audit + the `ra_flush_all()` on the
-  bclr bail give design-level assurance; a targeted vector would make it confound-free.)
-- **(b) Eviction × deferred state** — CR0-setting ops (`add.` etc.) and XER carry (`adde`/
-  `subfe`) under pressure: does eviction churning the CR0/carry input keep it correct? The
-  battery is all Rc=0. (Lazy CR0 specifically is dormant — disabled/eager, §0g — so this is the
-  *eager* CR/XER-under-pressure surface.)
+**Calibration — "substantially strengthened," not "every eviction edge proven."** The targeted
+(confound-free) harness coverage started strong for **mid-block, pure-register, single-exit,
+Rc=0** eviction, and the two named eviction-adjacent surfaces now have **targeted vectors too**
+(2026-06-05) — both confirmed fully JIT-compiled, no interp fallback, hand-checked REGDUMP:
+- **(a) Eviction at control-flow exits/terminators** — ✅ `evict_branch_exit`: 16-live pressure
+  with dirty r3–r10, then a conditional `bc` that **terminates the block** (verified `blocks=2`),
+  forcing `ra_flush_all` of the dirty slots on the branch edge; the branch condition reads an
+  evicted reg, so a bad flush also missteers it. (Still design-level only: the `bclr` Mixed-Mode
+  bail path specifically — its `ra_flush_all()` is audited, not yet harness-targeted.)
+- **(b) Eviction × deferred state** — ✅ `evict_rc1_cr0` (Rc=1 `add.` → `emit_update_cr0` under
+  pressure, CR captured) and ✅ `evict_adde_carry` (`addic.` + `adde` chain → XER carry under
+  pressure, XER/CR captured). (Lazy CR0 is dormant — disabled/eager, §0g — so this is the *eager*
+  CR/XER surface.)
+
+  **Still not exhaustive** (deliberately): not covered by a targeted vector — eviction across an
+  interp-fallback boundary or spcflags poll, FP/VR-register interactions, the `bclr` bail path,
+  and higher live-counts/clean-dirty interleavings. The boot gives functional assurance for these;
+  more vectors are the cheap no-boot lever if a specific one becomes load-bearing.
 
 **Why first**: P1 shipped a real +15.6%, but its subtlest path — `ra_evict`
 under register pressure (>8 live GPRs in one block) — is **never exercised by

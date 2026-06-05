@@ -116,7 +116,11 @@ harness that can't catch mistakes just produces the next silent bug.
     **targeted/sampled** verify (`SS_JIT_VERIFY_PC`) — landed; 🟡 (ii) **snapshot+restore the
     touched guest memory** around the replay (kills the memory-RMW class — the one that fools a
     PC-match filter) — **the only remaining confound**; design (interp-first reorder + RAM-write
-    journal, verify-gated) under sub-agent review. Diagnostic knobs already landed: `SS_JIT_NO_CHAIN` (now logs a
+    journal, verify-gated) **designed + review-vetted, spec'd, awaiting greenlight** —
+    `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`. **Broad sweep
+    (2026-06-05) re-frames (ii) as LOW priority:** the boot-wide oracle now reports exactly four
+    `SUSPECT` blocks, **all four class-6 memory-RMW** (zero real codegen bugs) — so (ii) is oracle
+    completeness, not a bug fix. Diagnostic knobs already landed: `SS_JIT_NO_CHAIN` (now logs a
     marker), `SS_JIT_VERIFY_BUDGET`, `SS_JIT_VERIFY_PC=LO:HI` (targeted scope), and a
     **SUSPECT/ARTIFACT-PC classifier** on each divergence (PC-match ⇒ real-bug candidate;
     PC-mismatch ⇒ structural) so the log is triagable (`grep '[VERIFY] SUSPECT'`) without

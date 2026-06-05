@@ -266,6 +266,15 @@ early-boot ROM spin — neither reaches Finder with full coverage. A targeted/sa
 on oracle-independent evidence (see P1a outcome).
 **Effort**: Medium (replay rework + memory snapshot). **Risk**: Low (tooling only).
 
+**Broad sweep result (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot):** with fix (i)
++ dedup in place, the boot-wide oracle reports **exactly four `SUSPECT` blocks**
+(`100fd0e0`/`10106b50`/`1011e734`/`1018b04c`) and four `ARTIFACT-PC` blocks. **All four
+`SUSPECT`s are class-6 memory-RMW** — each loads from and stores to the same slot (two integer
+counters, one pointer-walk `4(r3)`, one indexed `[r3+r4]`); decode + step-by-2 confirm. **Zero
+real codegen bugs boot-wide.** This re-frames fix (ii) as *oracle completeness, not a bug fix* —
+LOW priority, defer. Ready-to-implement design (with the two landing-blocker must-fixes and the
+register-only caveat): `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
+
 ### 0b-extra5. SS_JIT_VERIFY suppression latch decay — DONE (2026-06-05)
 
 **Concern (from colleague review, 2026-06-04):** the cascade suppression latch

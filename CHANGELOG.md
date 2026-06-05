@@ -37,6 +37,14 @@ that inflates `n_insns`.
 - **Remaining**: only the memory-RMW confound (class 6) is left — the replay reads guest memory
   `fn()` already wrote. Fix (ii) (memory snapshot/restore, verify-gated) is the next step; it
   also doubles as the proof of "no real bug" (if it cleans them all, they were artifacts).
+- **Broad verify sweep (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot):** with fix (i)
+  + dedup, the boot-wide oracle reports **exactly four `SUSPECT` blocks**
+  (`100fd0e0`/`10106b50`/`1011e734`/`1018b04c`) and four `ARTIFACT-PC` blocks. **All four
+  `SUSPECT`s decode as class-6 memory-RMW** (two integer counters, pointer-walk `4(r3)`, indexed
+  `[r3+r4]`; step-by-2 confirmed) — **zero real codegen bugs boot-wide**. This re-frames fix (ii)
+  as *oracle completeness, not a bug fix* (LOW priority, defer). Ready-to-implement design with
+  the two landing-blocker must-fixes (`ends_in_fallback` bit; 16384-entry journal) and the
+  register-only caveat: `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
 
 - **P1a substantially strengthened — RA eviction path validated (targeted surfaces).** The
   >8-live-GPR `ra_evict` path (never hit by the harness's small vectors) is validated on

@@ -117,10 +117,15 @@ harness that can't catch mistakes just produces the next silent bug.
     touched guest memory** around the replay (kills the memory-RMW class — the one that fools a
     PC-match filter) — **the only remaining confound**; design (interp-first reorder + RAM-write
     journal, verify-gated) **designed + review-vetted, spec'd, awaiting greenlight** —
-    `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`. **Broad sweep
-    (2026-06-05) re-frames (ii) as LOW priority:** the boot-wide oracle now reports exactly four
-    `SUSPECT` blocks, **all four class-6 memory-RMW** (zero real codegen bugs) — so (ii) is oracle
-    completeness, not a bug fix. Diagnostic knobs already landed: `SS_JIT_NO_CHAIN` (now logs a
+    `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`. **Verify sweep
+    (2026-06-05), honestly scoped:** the oracle reports exactly four `SUSPECT` blocks, **all four
+    class-6 memory-RMW** (3 encoding-certified, 1 most-likely) — **no real codegen bug in the
+    covered region, but NOT whole-boot**: verify stalled the guest in an early-boot spin ~10 s in
+    (`comp=10826` frozen, only 8 block PCs ever verified, ≈0.07 %; never reached Finder — the
+    timer-starvation trap). **Deeper differential coverage is cheaper offline** (`make test-jit` /
+    rom-harness, no timer dependency) — prefer that over boot sweeps. (ii) is the *certification*
+    tool (turn artifacts "provably non-divergent") + deeper-verify enabler; **DEFER pending
+    greenlight**, not low-value polish. Diagnostic knobs already landed: `SS_JIT_NO_CHAIN` (now logs a
     marker), `SS_JIT_VERIFY_BUDGET`, `SS_JIT_VERIFY_PC=LO:HI` (targeted scope), and a
     **SUSPECT/ARTIFACT-PC classifier** on each divergence (PC-match ⇒ real-bug candidate;
     PC-mismatch ⇒ structural) so the log is triagable (`grep '[VERIFY] SUSPECT'`) without

@@ -266,14 +266,22 @@ early-boot ROM spin — neither reaches Finder with full coverage. A targeted/sa
 on oracle-independent evidence (see P1a outcome).
 **Effort**: Medium (replay rework + memory snapshot). **Risk**: Low (tooling only).
 
-**Broad sweep result (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot):** with fix (i)
-+ dedup in place, the boot-wide oracle reports **exactly four `SUSPECT` blocks**
+**Verify sweep result (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot) — honestly
+scoped:** with fix (i) + dedup, the oracle reports **exactly four `SUSPECT` blocks**
 (`100fd0e0`/`10106b50`/`1011e734`/`1018b04c`) and four `ARTIFACT-PC` blocks. **All four
-`SUSPECT`s are class-6 memory-RMW** — each loads from and stores to the same slot (two integer
-counters, one pointer-walk `4(r3)`, one indexed `[r3+r4]`); decode + step-by-2 confirm. **Zero
-real codegen bugs boot-wide.** This re-frames fix (ii) as *oracle completeness, not a bug fix* —
-LOW priority, defer. Ready-to-implement design (with the two landing-blocker must-fixes and the
-register-only caveat): `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
+`SUSPECT`s are class-6 memory-RMW**: three are *encoding-certified* (load+store same base reg &
+offset — `0(r8)`, `10(r31)`, `4(r3)`); `1018b04c` is most-likely (indexed `[r3+r4]` with the
+`stwx` base reloaded → runtime-contingent, but the value-chain confirms artifact and the broken-
+`lwzx` hypothesis is refuted). **No real codegen bug in the covered region — but NOT whole-boot.**
+Under verify the guest **stalled in an early-boot spin ~10 s in** (`comp=10826` frozen 10 s→3 min;
+only **8 distinct block PCs** ever verified, ≈0.07 % of compiled blocks; never reached Finder) —
+the documented timer-starvation trap; "nothing new after that" = nothing executed, not
+reassurance. **Deeper coverage is far cheaper via the offline rom-harness** (`make test-jit`,
+`rom-harness --passes/--seed/--count`, no timer dependency) — prefer that over more boot sweeps.
+Fix (ii) re-framed: **DEFER pending greenlight** — it is the tool that would *certify* the four
+artifacts and unblock deeper boot-time verify, not mere polish. Ready-to-implement design (two
+landing-blocker must-fixes + register-only caveat):
+`docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
 
 ### 0b-extra5. SS_JIT_VERIFY suppression latch decay — DONE (2026-06-05)
 

@@ -37,14 +37,22 @@ that inflates `n_insns`.
 - **Remaining**: only the memory-RMW confound (class 6) is left — the replay reads guest memory
   `fn()` already wrote. Fix (ii) (memory snapshot/restore, verify-gated) is the next step; it
   also doubles as the proof of "no real bug" (if it cleans them all, they were artifacts).
-- **Broad verify sweep (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot):** with fix (i)
-  + dedup, the boot-wide oracle reports **exactly four `SUSPECT` blocks**
+- **Verify sweep (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot) — honestly scoped:**
+  with fix (i) + dedup, the oracle reports **exactly four `SUSPECT` blocks**
   (`100fd0e0`/`10106b50`/`1011e734`/`1018b04c`) and four `ARTIFACT-PC` blocks. **All four
-  `SUSPECT`s decode as class-6 memory-RMW** (two integer counters, pointer-walk `4(r3)`, indexed
-  `[r3+r4]`; step-by-2 confirmed) — **zero real codegen bugs boot-wide**. This re-frames fix (ii)
-  as *oracle completeness, not a bug fix* (LOW priority, defer). Ready-to-implement design with
-  the two landing-blocker must-fixes (`ends_in_fallback` bit; 16384-entry journal) and the
-  register-only caveat: `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
+  `SUSPECT`s are class-6 memory-RMW**: three *encoding-certified* (load+store same base reg &
+  offset — `0(r8)`, `10(r31)`, `4(r3)`), and `1018b04c` most-likely (indexed `[r3+r4]`, `stwx`
+  base reloaded → contingent; value-chain confirms artifact, broken-`lwzx` hypothesis refuted —
+  the JIT's own load returns nonzero). **No real codegen bug in the covered region — but NOT
+  whole-boot:** under verify the guest stalled in an early-boot spin ~10 s in (`comp=10826` frozen
+  10 s→3 min, only 8 distinct block PCs ever verified ≈0.07 % of compiled blocks, never reached
+  Finder — the documented timer-starvation trap; "nothing new after" = nothing executed). **Deeper
+  differential coverage is cheaper offline** (`make test-jit`, `rom-harness --passes/--seed/--count`,
+  no timer dependency) — preferred over more boot sweeps. Fix (ii) re-framed: **DEFER pending
+  greenlight** — the tool that would *certify* the artifacts + unblock deeper boot-time verify,
+  not mere polish. Ready-to-implement design with the two landing-blocker must-fixes
+  (`ends_in_fallback` bit; 16384-entry journal) and the register-only caveat:
+  `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
 
 - **P1a substantially strengthened — RA eviction path validated (targeted surfaces).** The
   >8-live-GPR `ra_evict` path (never hit by the harness's small vectors) is validated on

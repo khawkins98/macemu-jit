@@ -1,23 +1,41 @@
-# SheepShaver E2E VNC harness (P1)
+# SheepShaver E2E VNC harness
 
-A scriptable end-to-end smoke test: it boots SheepShaver from a **repo-tracked isolated config**
-(`config/test.prefs.iso.template` — *not* your `~/.sheepshaver_prefs`), waits for a deterministic
-boot-ready signal, requests a clean shutdown via a **host→guest signal hook** (`SIGUSR1`), and
-asserts a clean exit. Both the boot-ready signal and the shutdown are proper hooks — VNC is used
-only for optional screenshots, not to drive the GUI.
+A scriptable, system-level regression gate that boots SheepShaver from a **repo-tracked isolated
+config** (never your `~/.sheepshaver_prefs`) and checks the emulator actually works end-to-end. It
+complements `make test-jit` / `SS_JIT_VERIFY` (which test the JIT *per-instruction*) at the layer
+they can't reach: "does it still boot to the Finder, run, and shut down cleanly after my change?"
 
-A green run prints:
+Two scenarios:
 
-```
-PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0
-```
+| `make e2e` (smoke) | `make e2e-bench` (benchmark) |
+|---|---|
+| Boot the read-only **ISO** → request a clean shutdown via the **host→guest hook** → assert clean exit. No GUI driving (VNC used only for an optional screenshot). | Boot the **Mac OS 9 + Speedometer disk** → drive the full Speedometer suite over **VNC** → capture the result image → clean shutdown. |
+| `PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0` | `PASS: benchmark complete in 39s (gates: splash=6.4s choose=0.2s)` |
 
-It is the first *system-level* regression gate — complements `make test-jit` / `SS_JIT_VERIFY`
-(which test the JIT per-instruction) by checking the emulator actually boots and shuts down.
+## How it works (the signal-driven design)
 
-- Design + rationale: `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`
-  (§12 = implementation outcome, including the shutdown-hook exploration)
-- Plan: `docs/superpowers/plans/2026-06-04-e2e-vnc-harness-p1.md`
+The harness is **driven by deterministic signals the emulator emits from its idle hook**
+(`SheepShaver/src/emul_op.cpp`), not by fixed sleeps or screenshot-scraping:
+
+- **`[BOOT] idle …`** — first Process-Manager idle (boot-ready).
+- **`[READY] desktop settled …`** — the Finder has been frontmost + non-modal for a ~2 s dwell (a
+  more robust "desktop actually usable" marker than first-idle).
+- **`[APP] frontApp='…' modal=N win=0x… title='…'`** — fires on a frontmost-app / modal / window-title
+  change. The benchmark **gates** on these: it waits for `Speedometer` to launch and for the
+  `All Done!` alert title, and each drive step proceeds the instant the guest reaches the next window
+  state (printing `[gate] <step>: Xs`) and **resends a key that didn't take** — so it's faster than
+  fixed sleeps and never races. See the signal table in "What it verifies".
+- **Shutdown** is a host→guest hook: `SIGUSR1` → the emulator injects the ADB Power key, waits for
+  the Shut Down dialog (gated on it being modal), confirms with Return (resending if needed), and the
+  guest runs its *real* shutdown → `OP_POWEROFF` → "Shutdown complete." → clean exit.
+
+The `runner` spawns the emulator + captures the log; `observe` parses the signals; `scenario` is the
+ordered drive logic; `vnc` is the thin keystroke/screenshot client. Each is unit-testable in
+isolation (see "Offline unit tests").
+
+- **Design + full rationale:** `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`
+  (§14 shutdown hook · §15 benchmark · §17–§20 SDL3/signal-gating/robustness · §16 open work)
+- **Plan:** `docs/superpowers/plans/2026-06-04-e2e-vnc-harness-p1.md`
 - CI integration is **future work** — see ROADMAP A5 for the macOS-runner complications.
 
 ---

@@ -137,6 +137,26 @@ Baseline (2026-06-03, Mac OS 8.6 on Apple Silicon):
 - Dhrystones/sec: 1,475K
 - CPU score: 64.2
 
+**Automated end-to-end testing (the E2E harness).** `make e2e` (boot → clean shutdown smoke) and
+`make e2e-bench` (boots Mac OS 9 + Speedometer, drives the full suite over VNC, captures the result
+image) run the emulator as a *system* and return a clean pass/fail — the regression gate for "does my
+change still boot/run/shut-down cleanly?" Full guide, signals, knobs, and troubleshooting:
+**`SheepShaver/e2e/README.md`**.
+
+### Diagnosing a "?" boot disk
+
+A flashing **`?` floppy** means classic Mac OS found no bootable System — almost always a **stray
+SheepShaver instance still holding the disk image** (only one instance can use it at a time):
+
+```bash
+pgrep -x SheepShaver        # is one already running?
+pkill -9 -x SheepShaver     # clear it, then relaunch
+```
+
+If `pgrep` shows nothing but boots still `?`-hang after many launches in one session, the macOS
+graphics/VBL timer has degraded — **log out/in or restart** to clear it. (The E2E harness now
+pre-flights this: it kills + *reaps* strays and refuses to launch if the disk image is held.)
+
 ## Building from Source
 
 ```bash

@@ -1223,6 +1223,9 @@ void powerpc_cpu::execute(uint32 entry)
 					jit_verify_enabled = (env && *env == '1') ? 1 : 0;
 					if (jit_verify_enabled)
 						fprintf(stderr, "[VERIFY] JIT verification mode ENABLED — every block runs twice\n");
+						if (!getenv("SS_JIT_NO_CHAIN") || getenv("SS_JIT_NO_CHAIN")[0] != '1')
+							fprintf(stderr, "[VERIFY] WARNING: SS_JIT_NO_CHAIN=1 is not set; chained blocks "
+							        "will report as ARTIFACT-PC (jit_state is end-of-chain). Set it for clean results.\n");
 				}
 				powerpc_registers jit_verify_pre_state;
 				int jit_verify_n_insns = 0;
@@ -1322,20 +1325,36 @@ void powerpc_cpu::execute(uint32 entry)
 							powerpc_registers jit_state;
 							memcpy(&jit_state, regs_ptr(), sizeof(powerpc_registers));
 
-							/* Restore pre-block state and re-run via interpreter.
-							 * Run up to N instructions, but stop early if pc() leaves the
-							 * block's address range — this handles blocks where a conditional
-							 * branch (bc) exits the block mid-way and the remaining compiled
-							 * instructions are unreachable dead code in the JIT output. */
+							/* No-op skip (X1): if fn() changed nothing (e.g. it bailed at the entry
+							 * spcflags poll, storing block_start to PC and returning), there is nothing
+							 * to verify and re-running the interpreter would falsely 'execute' the block.
+							 * memcmp covers all of powerpc_registers (incl. CR/XER/FPSCR/PC); both are
+							 * memcpy copies of the same struct so padding matches. A legit loop-to-start
+							 * is NOT skipped - its iteration changed registers. */
+							bool jit_changed = (memcmp(&jit_state, &jit_verify_pre_state, sizeof(powerpc_registers)) != 0);
+							if (jit_changed) {
+
+							/* Restore pre-block state and re-run the interpreter, mirroring the JIT
+							 * block's single-block control flow (X1 fix i). A JIT block runs LINEARLY
+							 * until the first conditional branch (bc, opcode 16 - BOTH arms epilogue to
+							 * the dispatcher, taken or not) or an unconditional terminator/taken branch.
+							 * Execute each insn, then stop when PC left the sequential path (pc != cur+4:
+							 * a taken branch/terminator) OR the insn was a bc (its not-taken arm leaves
+							 * pc=cur+4 yet still ends the block; dead code the compiler emits past it
+							 * inflates jit_verify_n_insns, so the cap alone won't stop here). The OLD
+							 * 'stop when pc leaves [start,end)' rule re-iterated loops, followed blr
+							 * returns, and ran into post-bc dead code - false-positive classes 2/4/5
+							 * (OPTIMIZATION-PLAN 0b-extra4). Requires SS_JIT_NO_CHAIN=1 (else jit_state is
+							 * end-of-chain). Cleans the control-structural classes; memory-dependent
+							 * blocks correctly stay SUSPECT until fix (ii). */
 							memcpy(regs_ptr(), &jit_verify_pre_state, sizeof(powerpc_registers));
-							uint32 verify_block_end = jit_block_start_pc + (jit_verify_n_insns * 4);
 							for (int vi = 0; vi < jit_verify_n_insns; vi++) {
 								uint32 cur_pc_v = pc();
-								if (cur_pc_v < jit_block_start_pc || cur_pc_v >= verify_block_end)
-									break; /* pc left the block (branch taken to outside) */
 								uint32 opcode = vm_read_memory_4(cur_pc_v);
 								const instr_info_t *ii = decode(opcode);
 								ii->execute(this, opcode);
+								if (pc() != cur_pc_v + 4 || (opcode >> 26) == 16)
+									break; /* JIT block exited here (taken branch/terminator, or bc either arm) */
 							}
 
 							/* Compare post-interpreter state against post-JIT state */
@@ -1441,6 +1460,7 @@ void powerpc_cpu::execute(uint32 entry)
 									fprintf(stderr, "[VERIFY] Budget exhausted — further divergences suppressed\n");
 							}
 
+							}
 							/* Restore JIT state so execution continues correctly */
 							memcpy(regs_ptr(), &jit_state, sizeof(powerpc_registers));
 						} else if (verify_suppress_blocks > 0 &&

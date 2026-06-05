@@ -56,6 +56,19 @@ const KNOWN_ROMS: &[KnownRom] = &[
     },
 ];
 
+fn make_vm_id(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u32;
+    format!("{}-{:08x}.sheepvm", slug, ts)
+}
+
 fn vm_library_dir() -> PathBuf {
     let dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -100,7 +113,11 @@ pub fn get_profile(id: &str) -> Result<VmProfile, String> {
 pub fn verify_rom(path: &str) -> Result<RomInfo, String> {
     let data = fs::read(path).map_err(|e| format!("Cannot read ROM: {}", e))?;
 
-    if data.len() != 4 * 1024 * 1024 {
+    let valid_sizes = [
+        4 * 1024 * 1024,  // OldWorld PCI PowerMac ROM (4 MB)
+        3 * 1024 * 1024,  // NewWorld CHRP ROM (3 MB)
+    ];
+    if !valid_sizes.contains(&data.len()) {
         return Ok(RomInfo {
             valid: false,
             name: String::new(),
@@ -127,19 +144,7 @@ pub fn verify_rom(path: &str) -> Result<RomInfo, String> {
 
 pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
     let mut vms = load_manifest();
-
-    let id = format!(
-        "{}-{:08x}",
-        req.name
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect::<String>(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u32
-    );
+    let id = make_vm_id(&req.name);
 
     let vm_dir = vm_library_dir().join(&id);
     fs::create_dir_all(&vm_dir).map_err(|e| format!("Failed to create VM directory: {}", e))?;
@@ -208,19 +213,7 @@ pub fn rename_profile(id: &str, new_name: &str) -> Result<(), String> {
 pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> {
     let source = get_profile(id)?;
     let mut vms = load_manifest();
-
-    let new_id = format!(
-        "{}-{:08x}",
-        new_name
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect::<String>(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u32
-    );
+    let new_id = make_vm_id(new_name);
 
     let source_dir = vm_library_dir().join(id);
     let dest_dir = vm_library_dir().join(&new_id);

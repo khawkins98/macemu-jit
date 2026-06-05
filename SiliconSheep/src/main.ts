@@ -178,7 +178,7 @@ function renderWizardStep(): string {
             </div>
             ${wizardState.romStatus === "verified" ? `<div class="rom-badge verified">✓ ${escapeHtml(wizardState.romName)} — compatible</div>` : ""}
             ${wizardState.romStatus === "accepted" ? '<div class="rom-badge accepted">⚠ ROM file accepted (unverified)</div>' : ""}
-            ${wizardState.romStatus === "error" ? '<div class="rom-badge error">✕ Invalid ROM — must be exactly 4 MB</div>' : ""}
+            ${wizardState.romStatus === "error" ? '<div class="rom-badge error">✕ Invalid ROM — expected 3 MB (NewWorld) or 4 MB (OldWorld)</div>' : ""}
           </button>
           <details class="help-disclosure">
             <summary>Where do I find a ROM file?</summary>

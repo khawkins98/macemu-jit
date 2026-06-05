@@ -376,17 +376,36 @@ function renderSettings(): string {
         <label>Window Size <span class="hot-reload-badge restart">Requires restart</span></label>
         <select class="input" id="setting-screen" ${isRunning ? "disabled" : ""}>
           ${["win/640/480", "win/800/600", "win/1024/768", "win/1280/1024"]
-            .map((s) => `<option value="${s}" ${vm.screen === s ? "selected" : ""}>${s.replace("win/", "").replace("/", "×")}</option>`)
+            .map((s) => {
+              const current = getPref("screen") || vm.screen;
+              return `<option value="${s}" ${current === s ? "selected" : ""}>${s.replace("win/", "").replace("/", "×")}</option>`;
+            })
             .join("")}
         </select>
       </div>
+      <div class="form-group">
+        <label>Refresh Rate</label>
+        <select class="input" id="setting-frameskip">
+          ${[
+            { v: "1", label: "Every frame (60 fps)" },
+            { v: "2", label: "Every 2nd (30 fps)" },
+            { v: "4", label: "Every 4th (15 fps)" },
+            { v: "8", label: "Every 8th (8 fps)" },
+          ].map((o) => `<option value="${o.v}" ${getPref("frameskip") === o.v ? "selected" : ""}>${o.label}</option>`)
+           .join("")}
+        </select>
+        <p class="text-muted" style="margin-top: 4px;">Lower refresh = less CPU. Default is every 2nd frame.</p>
+      </div>
     `,
-    storage: `
+    storage: (() => {
+      const disks = getPrefs("disk");
+      const cdroms = getPrefs("cdrom");
+      return `
       <div class="form-group">
         <label>Disk Images</label>
-        ${vm.disk_paths.length === 0
+        ${disks.length === 0
           ? '<p class="text-muted">No disks attached.</p>'
-          : vm.disk_paths.map((d) => `
+          : disks.map((d) => `
             <div class="file-input" style="margin-bottom: 8px;">
               <span class="file-path">${escapeHtml(d)}</span>
             </div>
@@ -399,12 +418,28 @@ function renderSettings(): string {
       </div>
       <div class="form-group">
         <label>CD-ROM</label>
-        <div class="file-input">
-          <span class="file-path">${escapeHtml(vm.cd_path || "None")}</span>
-          <button class="btn btn-secondary btn-sm" data-action="pick-setting-cd">Browse</button>
-        </div>
+        ${cdroms.length === 0
+          ? `<div class="file-input">
+              <span class="file-path">None</span>
+              <button class="btn btn-secondary btn-sm" data-action="pick-setting-cd">Browse</button>
+            </div>`
+          : cdroms.map((c) => `
+            <div class="file-input" style="margin-bottom: 8px;">
+              <span class="file-path">${escapeHtml(c)}</span>
+            </div>
+          `).join("") + `
+            <button class="btn btn-secondary btn-sm" data-action="pick-setting-cd" style="margin-top: 8px;">+ Add CD</button>`
+        }
       </div>
-    `,
+      <div class="form-group">
+        <label>No CD-ROM Drive</label>
+        <select class="input" id="setting-nocdrom">
+          <option value="false" ${getPref("nocdrom") !== "true" ? "selected" : ""}>CD drive enabled</option>
+          <option value="true" ${getPref("nocdrom") === "true" ? "selected" : ""}>CD drive disabled</option>
+        </select>
+      </div>
+    `;
+    })(),
     network: `
       <div class="form-group">
         <label>Networking</label>
@@ -511,10 +546,12 @@ function captureCurrentSectionSettings() {
     ["setting-name", "name", (v) => v],
     ["setting-ram", "ramsize", (v) => v + "M"],
     ["setting-screen", "screen", (v) => v],
+    ["setting-frameskip", "frameskip", (v) => v],
     ["setting-ether", "ether", (v) => v],
     ["setting-nosound", "nosound", (v) => v],
     ["setting-jitcache", "jitcachesize", (v) => v],
     ["setting-bootdriver", "bootdriver", (v) => v],
+    ["setting-nocdrom", "nocdrom", (v) => v],
   ];
   for (const [elId, key, transform] of fields) {
     const el = document.getElementById(elId) as HTMLInputElement | HTMLSelectElement | null;

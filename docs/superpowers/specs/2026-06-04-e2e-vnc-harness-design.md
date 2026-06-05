@@ -448,4 +448,29 @@ degraded — restart first. Keyboard delivery was correctly ruled out throughout
 traverses SDL).
 
 **Verified:** `make e2e` (smoke) PASS ×2 on SDL3 (boot → Finder → clean shutdown, exit 0);
-`make test-jit` 264/264 score=100. SDL3 is now the validated default backend on macOS.
+`make test-jit` 264/264 score=100.
+
+## 19. SDL3 has NO VNC server — `make e2e-bench` + screenshots require SDL2 (2026-06-05)
+
+Running the benchmark on the (now genuinely) SDL3 build fails: it boots to Finder and Speedometer
+launches, but the harness's VNC client gets `ConnectionRefused` on :5950 — **the VNC server never
+starts on SDL3.** Root cause: `vnc_server.cpp:14` gates the entire libvncserver implementation to
+`#if SDL_VERSION_ATLEAST(2,0,0) && !SDL_VERSION_ATLEAST(3,0,0)`; the SDL3 `#else` branch is **empty
+stubs** (`VNCServerInitFromPrefs`/`Shutdown`/`Update` are no-ops, `vnc_server.cpp:630-650`).
+`video_sdl3.cpp` correspondingly has **zero** VNC calls, vs `video_sdl2.cpp`'s 4 (`#include
+"vnc_server.h"`; `VNCServerInitFromPrefs()` @1745; `VNCServerUpdate(host_surface, rect)` @1192;
+`VNCServerShutdown()` @1966; input is via libvncserver's own callback thread). The benchmark never
+caught this before because every prior build silently linked SDL2 (§17).
+
+**Impact:** on SDL3, only the **smoke** (boot + SIGUSR1 shutdown — no VNC) works. The **benchmark**
+and the golden-image **screenshot** diff need VNC → **SDL2 only** for now. This is a real cost of the
+SDL3 default that the §17 backend review didn't know about.
+
+**Options (user decision):**
+1. **Keep SDL2 as the harness default** (`./configure … --with-sdl2`): full harness — smoke +
+   benchmark + screenshots — all work today. Treat SDL3 as opt-in until VNC is ported.
+2. **Port the VNC server to SDL3** (tracked work, ~half a day, needs a *stable* host to test): remove
+   the SDL2-only guard in `vnc_server.cpp`, adapt its ~480-line libvncserver integration to SDL3's
+   changed `SDL_Surface` API (format enum, lock/pitch), and wire the 4 call sites into
+   `video_sdl3.cpp` mirroring SDL2. Then SDL3 reaches feature parity.
+3. **SDL3 default, benchmark/screenshots documented as SDL2-only** until (2) lands.

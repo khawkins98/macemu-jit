@@ -148,13 +148,44 @@ fn is_vm_running(state: State<AppState>) -> Option<String> {
 }
 
 fn find_emulator_binary() -> Option<String> {
-    let candidates = [
-        "../SheepShaver/src/Unix/SheepShaver",
-        "/usr/local/bin/SheepShaver",
-        "/opt/homebrew/bin/SheepShaver",
-    ];
-    for path in &candidates {
-        let p = std::path::Path::new(path);
+    use std::path::PathBuf;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Relative to the Tauri executable (works in dev and production)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // Dev mode: exe is in SiliconSheep/src-tauri/target/{debug,release}/
+            // → repo root is 4 levels up
+            candidates.push(exe_dir.join("../../../../SheepShaver/src/Unix/SheepShaver"));
+            // Production .app bundle: exe is in Silicon Sheep.app/Contents/MacOS/
+            // → sibling binary in the same dir or repo checkout nearby
+            candidates.push(exe_dir.join("SheepShaver"));
+        }
+    }
+
+    // Relative to cwd (works when launched from repo root)
+    candidates.push(PathBuf::from("SheepShaver/src/Unix/SheepShaver"));
+    candidates.push(PathBuf::from("../SheepShaver/src/Unix/SheepShaver"));
+
+    // System-wide installs
+    candidates.push(PathBuf::from("/usr/local/bin/SheepShaver"));
+    candidates.push(PathBuf::from("/opt/homebrew/bin/SheepShaver"));
+
+    // Check PATH via `which`
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("SheepShaver")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                candidates.push(PathBuf::from(path));
+            }
+        }
+    }
+
+    for p in &candidates {
         if p.exists() {
             return Some(
                 p.canonicalize()

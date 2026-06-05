@@ -142,12 +142,12 @@ impl PrefsFile {
         });
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // needed for multi-value pref editing (e.g. replacing all disk entries); tested, not yet wired to a command
     pub fn remove_all(&mut self, key: &str) {
         self.entries.retain(|e| e.key != key);
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used in tests; will be needed when settings UI reads bool prefs directly
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         let val = self.get(key)?;
         match val.to_lowercase().as_str() {

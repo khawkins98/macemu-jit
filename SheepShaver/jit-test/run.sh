@@ -587,6 +587,31 @@ TEST_ORDER+=(lmw_stmw)
 T_lmw_stmw_wide="3A800014 3AA00015 3AC00016 3AE00017 3B000018 3B200019 3B40001A 3B60001B 3B80001C 3BA0001D 3BC0001E 3BE0001F BE810400 3A800000 3AA00000 3AC00000 3AE00000 3B000000 3B200000 3B400000 3B600000 3B800000 3BA00000 3BC00000 3BE00000 BA810400"
 TEST_ORDER+=(lmw_stmw_wide)
 
+# --- RA eviction battery (pure-register, no lmw/stmw): broaden P1a beyond the
+# single load/store-multiple case. Each block uses 16 distinct GPRs (r3..r18) >
+# RA_NUM_REGS=8 in one straight-line block, forcing ra_evict. Pure li+ALU, so
+# there is no memory/chaining/loop confound — a clean JIT-vs-interp REGDUMP diff.
+# Encodings capstone-verified. See OPTIMIZATION-PLAN §P1a.
+#
+# evict_wb16: write r3..r18, then add each EARLY reg to a LATE reg
+# (r3+r18, r4+r17, ... r10+r11 = 21 each). r3..r10 are dirty-evicted while
+# r11..r18 fill the cache, then reloaded for the adds — exercises spill+reload of
+# dirty slots; a bad spill slot / lost dirty bit / stale reload corrupts the sums.
+T_evict_wb16="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 7C639214 7C848A14 7CA58214 7CC67A14 7CE77214 7D086A14 7D296214 7D4A5A14"
+TEST_ORDER+=(evict_wb16)
+
+# evict_rd_eq_ra: rD==rA==rB doubling (add rN,rN,rN) on evicted regs — exercises
+# the P1 bringup ordering rule (ra_load source must precede ra_store dest, else a
+# read of the just-allocated dest returns uninitialised data) under eviction.
+T_evict_rd_eq_ra="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 7C631A14 7C842214 7CA52A14 7CC63214 7CE73A14 7D084214 7D294A14 7D4A5214"
+TEST_ORDER+=(evict_rd_eq_ra)
+
+# evict_mixed_alu: variety of ALU ops (add/subf/and/or/xor) with different XOs and
+# dest-position encodings, spread across the wide live set so eviction churns under
+# mixed opcodes rather than a single op shape.
+T_evict_mixed_alu="38600003 38800004 38A00005 38C00006 38E00007 39000008 39200009 3940000A 3960000B 3980000C 39A0000D 39C0000E 39E0000F 3A000010 3A200011 3A400012 7C632214 7CA53050 7D074838 7D6A6378 7DCD7A78 7E119214"
+TEST_ORDER+=(evict_mixed_alu)
+
 # --- adde/subfe carry-wrap edge cases (backlog A1/A2) ---
 # adde carry-out edge: CA=1 and rA+rB=0xFFFFFFFF → result 0, CA_out must be 1
 # li r3,-1; addic r0,r3,1 (sets CA=1, r0=0); li r4,0; adde r5,r4,r3

@@ -83,12 +83,19 @@ on it.
 **Effort**: Low (~1 hour)
 **Risk**: This *closes* risk rather than adding it.
 
-1. **Add a >8-live-GPR eviction vector.** ✅ **DONE** — `lmw_stmw_wide` (li
-   r20–r31, stmw, zero, lmw r20: 12 GPRs > `RA_NUM_REGS=8`) is in the harness and
-   forces mid-block `ra_evict` of both clean and dirty slots. It **passes under
-   `make test-jit` (score=100; `make harness-count`)**. CAVEAT: it only validates the JIT spill path in
-   **jit mode** (`SS_HARNESS_MODE=jit`); the default `make test-opcodes` runs
-   interpreter-determinism and does not exercise it.
+1. **Add >8-live-GPR eviction vectors.** ✅ **DONE + BROADENED (2026-06-05)** —
+   `lmw_stmw_wide` (li r20–r31, stmw, zero, lmw r20: 12 GPRs) was the first; a
+   **pure-register eviction battery** now widens coverage beyond load/store-multiple:
+   `evict_wb16` (write r3–r18, then add early+late so r3–r10 are dirty-evicted then
+   reloaded — spill/reload of dirty slots), `evict_rd_eq_ra` (`add rN,rN,rN` on
+   evicted regs — the ra_load-before-ra_store ordering rule under pressure), and
+   `evict_mixed_alu` (add/subf/and/or/xor variety). Each uses 16 distinct GPRs >
+   `RA_NUM_REGS=8` in one straight-line block (capstone-verified encodings; no
+   memory/chaining/loop confound). All pass `make test-jit` (**267/267, score=100**),
+   and `evict_wb16` was confirmed **fully JIT-compiled** (`complete=1`, 360 bytes
+   native, hit=24 miss=0 — not an interpreter fallback) with a hand-checked REGDUMP.
+   CAVEAT: validates the JIT spill path in **jit mode** (`SS_HARNESS_MODE=jit`); the
+   default `make test-opcodes` runs interpreter-determinism and does not exercise it.
 2. ✅ **DONE (as corroboration) — `SS_JIT_VERIFY=1` boots, 2026-06-05.** Three boots
    (chaining-on; `SS_JIT_NO_CHAIN=1`; `SS_JIT_NO_CHAIN=1` + `SS_JIT_VERIFY_BUDGET=100000`
    for ~92k lines of coverage) found **zero real codegen divergences** — every reported

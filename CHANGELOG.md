@@ -18,6 +18,15 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   (12 live GPRs) passes the harness JIT-vs-interp REGDUMP (separate clean executions, no replay
   confounds), and a full chaining-on boot reaches Finder with eviction firing continuously.
   **P8 (cross-block pinning) unblocked.** Detail: OPTIMIZATION-PLAN §P1a.
+- **Eviction harness battery broadened (264 -> 267 vectors).** Three pure-register
+  vectors widen `ra_evict` coverage beyond the single `lmw_stmw_wide` load/store-multiple
+  case: `evict_wb16` (write r3-r18, read early+late -> dirty spill+reload), `evict_rd_eq_ra`
+  (`add rN,rN,rN` on evicted regs -> the ra_load-before-ra_store ordering rule under
+  pressure), `evict_mixed_alu` (add/subf/and/or/xor variety). Each uses 16 distinct GPRs >
+  `RA_NUM_REGS=8` in one straight-line block (capstone-verified encodings, no memory/
+  chaining/loop confound). All pass `make test-jit` (267/267, score=100); `evict_wb16`
+  confirmed fully JIT-compiled (not an interp fallback) with a hand-checked REGDUMP. The
+  confound-free, no-boot way to harden P1a -- the right instrument vs. the verify oracle.
 - **Mapped the `SS_JIT_VERIFY` differential oracle's 6 false-positive classes** across three
   whole-boot sweeps (chaining-on; `SS_JIT_NO_CHAIN=1`; raised-budget ~92k lines). Every reported
   divergence is structural, **zero real codegen bugs**: block chaining, blr/bclr returns,

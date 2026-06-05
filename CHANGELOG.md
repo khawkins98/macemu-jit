@@ -83,13 +83,19 @@ Tooling-only (no runtime/codegen change); hardens the signals used to judge the 
 
 ### [SheepShaver] E2E benchmark history export
 
-`make e2e-bench` now saves Speedometer's text report in-guest (Cmd-T), extracts it
-host-side via hfsutils (no extra boot — reads the unmounted run-copy image directly,
-MacRoman-decoded, hfsutils state isolated via a throwaway HOME), and archives each run
-under gitignored `SheepShaver/e2e/artifacts/benchmark-history/<timestamp>/` (raw
-`report.txt` + `scores.csv` + result PNG) plus an append-only `history.csv`, printing the
-PR/CPU/Graphics/Disk/Math delta vs the previous run. Collect+report only — a save/extract
-failure never flips a PASS to FAIL. New `sse2e/bench_export.py` (+15 unit tests);
+`make e2e-bench` now saves Speedometer's text report in-guest (Cmd-T → Return, accepting
+the default name "Power Macintosh Report"), extracts it host-side via hfsutils (no extra
+boot — reads the unmounted run-copy image directly, MacRoman-decoded, hfsutils state
+isolated via a throwaway HOME), and archives each run under gitignored
+`SheepShaver/e2e/artifacts/benchmark-history/<timestamp>/` (raw `report.txt` + `scores.csv`
++ result PNG) plus an append-only `history.csv`, printing the CPU/Graphics/Disk/Math delta
+vs the previous run. (`PR`/PowerRating is panel-only, not in the text report — not trended
+yet; OCR/compute is a follow-up. Scores are noisy run-to-run, host-load dependent.)
+Collect+report only — a save/extract failure never flips a PASS to FAIL. The benchmark now
+**shuts down unattended**: since the Power-key hook only fires at the Finder (not over a
+frontmost app), the harness quits Speedometer keyboard-only (Cmd-Q → Return through the
+save dialogs) to the Finder first. (VNC mouse *clicks* don't register in the guest — a
+separate open bug, see LEARNINGS.) New `sse2e/bench_export.py` (+19 unit tests);
 `make e2e-setup` gains an optional hfsutils check. Design + plan:
 `docs/superpowers/specs/2026-06-05-benchmark-result-export-design.md`,
 `docs/superpowers/plans/2026-06-05-benchmark-result-export.md`.

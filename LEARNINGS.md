@@ -29,12 +29,19 @@ rabbit hole. Hard-won facts:
   era) to pushing SDL events, which silently **drops mouse-button events** (pushed motion survives
   — hence cursor moves, clicks don't). But restoring direct ADB still didn't make the click
   register, so the regression isn't the whole cause.
-- Suspected remaining cause (NOT yet fixed): `adb.cpp` absolute-mouse uses `CursorDeviceDispatch
-  MoveTo` (POWERPC_ROM path, ~line 400) which moves the cursor but likely doesn't update the
-  `RawMouse`/`MTemp` low-mem globals the Toolbox hit-tests clicks against (the non-PPC path ~line
-  415 DOES write `0x82a/0x828/0x82e/0x82c`). Tracked in memory `e2e-vnc-click-injection`.
+- **Run this 10-second test FIRST, before theorizing — it decides everything:** does a *real
+  mouse click on the SDL window* select/activate anything? Real host clicks go through the SAME
+  absolute `MoveTo` + `ADBMouseDown(0)` path as VNC injection, so:
+  - real click **works** → the bug is **VNC-injection-thread-specific** (libvncserver thread vs
+    the emulator main thread calling `ADBMouseDown`/`TriggerInterrupt`; a `button_buffer`/interrupt
+    timing or cross-thread issue). This is the MORE likely case (the user's "just click the
+    desktop" suggestions imply they've seen real clicks work).
+  - real click **also fails** → then look at `adb.cpp` absolute-mouse: the `CursorDeviceDispatch
+    MoveTo` (POWERPC_ROM path, ~line 400) may not update the `RawMouse`/`MTemp` low-mem globals the
+    Toolbox hit-tests clicks against (the non-PPC path ~line 415 DOES write `0x82a/0x828/0x82e/
+    0x82c`). Lower probability — don't lead with it.
 - The click work was **reverted** (kept the tree clean; the harness is keyboard-only and doesn't
-  need it). It's a separate future fix.
+  need it). Separate future fix; tracked in memory `e2e-vnc-click-injection`.
 
 **3. The idle-hook `frontApp` signal LIES — spurious `'Finder' Desktop` frames appear ~every 300
 ticks even when Speedometer is really frontmost.** Gating on `"Finder" in e.app` gives false

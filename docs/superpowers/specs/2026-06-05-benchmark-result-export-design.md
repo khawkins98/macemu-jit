@@ -1,9 +1,48 @@
 # Benchmark result export & history — design
 
-> **Status:** design (approved decisions below). Next: implementation plan.
+> **Status:** ✅ SHIPPED 2026-06-05 (commits `cad1af88`…`286b0aa2`). The design below is
+> preserved as written; read **§0 As-built** first for what actually shipped — a few things
+> changed during implementation.
 > **Topic:** Automate capture of Speedometer's text report from each `make e2e-bench`
 > run, extract it host-side, archive it with a timestamp, and report the delta vs the
 > previous run — so JIT/boot performance is trackable over time.
+
+---
+
+## 0. As-built (2026-06-05) — what shipped vs. this design
+
+The pipeline works end-to-end and shuts down **unattended** (verified: 3 consecutive PASSes,
+`Shutdown complete.` + clean exit). Deltas from the design below:
+
+- **Save uses Speedometer's DEFAULT name, not a typed name.** Typing `e2e-report` into the
+  save dialog proved unreliable over VNC (keys dropped/leaked; the file saved under the
+  default name anyway). So we press **Cmd-T → Return** (accept the default "Power Macintosh
+  Report"), and the host matches it by the `REPORT_MATCH` substring (`"report"`) instead of an
+  exact name. (`bench_export._find_report`.)
+- **§2 verification gate RESOLVED:** the Cmd-T text report DOES contain `CPU/Graphics/Disk/Math`
+  (+ many FPU sub-scores) — but it does **NOT** contain **`PR`** (PowerRating is panel-only).
+  So PR is **not** trended yet — see "Open data gaps" below.
+- **Shutdown is keyboard-only quit-to-Finder.** New finding: the host→guest Power-key shutdown
+  hook only raises the Shut Down dialog **at the Finder**, not over a frontmost app — so the
+  benchmark (Speedometer frontmost) hung. Fix: after saving, **Cmd-Q**, then answer
+  Speedometer's "Save before quitting?" (Yes/No/Cancel) + any record-save dialog with **Return**
+  until it quits to the Finder, where the existing hook shuts down. (`scenario.py`.)
+- **VNC mouse CLICKS don't register in the guest** (keyboard + motion do) — a separate,
+  still-open emulator bug, which is why the shutdown is keyboard-only. Details + the decisive
+  next test: `LEARNINGS.md` (2026-06-05) and memory `e2e-vnc-click-injection`.
+
+**Open data gaps (follow-ups, not blocking):**
+- **PR (PowerRating) — the headline number — is not captured** (not in the text report).
+  Options: OCR it from the `benchmark-result.png` we already capture, or compute it from the
+  sub-scores (Speedometer's weighted formula). This is the biggest *data* gap for a trend tool.
+- **Scores are noisy run-to-run** (host-load dependent; e.g. CPU 33 vs 64 on a degraded host).
+  A single run is not a reliable trend point — caveat the history, and any future regression
+  gate should average N runs rather than diff single runs.
+- **No unit test for the `quit-modal` retry loop** (the FakeRunner gap, §20 of the e2e spec).
+- The `back-to-finder` gate keys off the **noisy `frontApp` signal** (spurious `'Finder'`
+  frames) — it didn't verify the quit, the runs passed because Speedometer *did* quit. Failure
+  is graceful (shutdown timeout → FAIL). Consider keying off "Speedometer gone / stable Finder
+  for N frames" instead.
 
 **Goal:** After the e2e Speedometer benchmark finishes, save its **text report** inside the
 guest, extract that file **host-side** (no extra boot), parse the scores, archive each run

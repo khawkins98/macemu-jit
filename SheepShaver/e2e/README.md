@@ -62,23 +62,36 @@ degradation from many prior launches.
 ### Benchmark history
 
 After a passing `make e2e-bench`, the harness saves Speedometer's **text report** in-guest
-(Cmd-T → "Save Text Report"), extracts it host-side with **hfsutils** (no extra boot, reading
-the unmounted run-copy image directly), and archives each run to the gitignored
-`artifacts/benchmark-history/<timestamp>/` (raw `report.txt`, `scores.csv`, result PNG) plus an
-append-only `history.csv`. It prints the delta vs the previous run:
+(Cmd-T → "Save Text Report", accepting the default name "Power Macintosh Report"), extracts it
+host-side with **hfsutils** (no extra boot, reading the unmounted run-copy image directly), and
+archives each run to the gitignored `artifacts/benchmark-history/<timestamp>/` (raw `report.txt`,
+`scores.csv`, result PNG) plus an append-only `history.csv`. It prints the delta vs the previous
+run:
 
 ```
-benchmark history: 2026-06-05T16-16-03  (vs 2026-06-04T09-02-11)
-  PR             30.103 ->      31.402  (+4.3%)
-  CPU            64.265 ->      66.010  (+2.7%)
-  ...
-archived: artifacts/benchmark-history/2026-06-05T16-16-03/
+benchmark history: 2026-06-05T18-57-13  (vs 2026-06-05T18-54-50)
+  CPU            63.864 ->      66.035  (+3.4%)
+  Graphics       39.185 ->      39.640  (+1.2%)
+  Disk            9.052 ->       9.650  (+6.6%)
+  Math        11810.757 ->   12614.100  (+6.8%)
+archived: artifacts/benchmark-history/2026-06-05T18-57-13/
 ```
 
 This is **collect + report only** — the numbers never fail the run; they're for tracking
-JIT/boot performance over time. Because the benchmark runs on a throwaway per-run clonefile
-copy of the disk, nothing accumulates on the master image. Needs `brew install hfsutils`
-(checked by `make e2e-setup`; without it the run still passes, just skips history).
+JIT/boot performance over time. The benchmark runs on a throwaway per-run clonefile copy of the
+disk, so nothing accumulates on the master image. Needs `brew install hfsutils` (checked by
+`make e2e-setup`; without it the run still passes, just skips history).
+
+**How the unattended shutdown works** (non-obvious): the Power-key shutdown hook only raises the
+Shut Down dialog at the **Finder**, not over a frontmost app — so after saving, the harness
+quits Speedometer **keyboard-only** (Cmd-Q → Return through "Save before quitting?" / record-save
+dialogs) back to the Finder, where the hook shuts down. (VNC mouse *clicks* don't register in the
+guest — a separate open bug; see `LEARNINGS.md`.)
+
+**Caveats:** `PR` (PowerRating, the headline Speedometer number) is **not** captured — it's only
+in the on-screen panel, not the text report (follow-up: OCR it from `benchmark-result.png` or
+compute it). And the scores are **noisy run-to-run** (host-load dependent) — treat a single run
+as a rough point, not a precise measurement.
 
 ---
 

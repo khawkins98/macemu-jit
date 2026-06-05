@@ -297,6 +297,36 @@ the Setup Assistant over VNC+OCR. **Tart** is CLI-only and exists to run macOS V
 Sheep can take the *control-surface* and *guest-tools* ideas wholesale; the *guest interaction*
 layer is the novel classic-Mac work.
 
+#### Shared architecture (2026-06-05 codebase investigation)
+
+Three parallel investigations (one per layer) converged on a single design and surfaced one
+correction to the premise above:
+
+- **Correction — the bidirectional RPC does not exist yet.** The text below originally assumed the
+  CLI rides "the UDS RPC the launcher already speaks." In fact the emulator is an RPC *client*
+  (outbound only — `main_unix.cpp:992`; the method enum in `rpc.h:96-100` is just EXIT /
+  ERROR_ALERT / WARNING_ALERT), and the Tauri launcher has **no socket code at all** — it spawns
+  with bare args (`SiliconSheep/src-tauri/src/main.rs:104`) and stops a VM via `SIGUSR1`
+  (`main.rs:116`). So **Layer A's true first task (A0) is making that channel bidirectional**;
+  every other Tier-4 item rides on it.
+- **One spine: one protocol, one broker, one idle-hook mailbox.** Every guest-affecting command
+  (input injection, AppleEvents, the guest-agent doorbell) must run on the **emulator thread**, and
+  the safe service point already exists: the 60 Hz `OP_IDLE_TIME`/`OP_IDLE_TIME_2` idle hook
+  (`emul_op.cpp:609/618`), where the proven `e2e_check_host_shutdown()` state machine
+  (`emul_op.cpp:149`) already injects ADB events. The design generalizes that hook into a
+  **host-side command mailbox**: front-ends (CLI / AppleScript / MCP) → the launcher (single
+  broker, enforces the one-VM invariant) → UDS RPC → mailbox → drained in the idle hook on the emul
+  thread. Read-only observation (RAM reads via `Mac2HostAddr`) is thread-safe and answers
+  synchronously; anything touching guest state is deferred to the hook. **One pump, three consumers.**
+- **Three execution contexts govern feasibility:** (1) RAM **observation** — any thread, instant,
+  proven; (2) ADB **input** — buffers, drained on the 60 Hz VBL, proven; (3) **`Execute68kTrap` /
+  AppleEvents / any Toolbox call** — emul-thread, EMUL_OP context only, **no precedent in the tree
+  yet** (`cpu_emulation.h:117`; `HOST-GUEST-CHANNELS.md` §5). Get the context wrong and you corrupt
+  the guest.
+
+The per-layer integration designs (with `file:line` anchors, phased build orders, and risks) are in
+the **"Integration design — per layer"** subsection below.
+
 #### Layer A — Launcher control surface (pure launcher work, no emulator changes)
 
 - [ ] **`siliconsheep` CLI** — `list / create / start / stop / snapshot / status / config` over
@@ -348,6 +378,134 @@ images, what commercial guest-tools packages do:
   E2E scratch-disk + boot-from-ISO setup).
 - [ ] **Disk snapshots in the UI** — surface `clonefile`-of-disk snapshots as a near-term feature,
   distinct from the very-high-effort full CPU/device-state save/restore filed under Tier 3.
+
+#### Integration design — per layer (2026-06-05 investigation)
+
+Grounded in the actual codebase; `file:line` as of 2026-06-05 (`macos-arm64`). See **Shared
+architecture** above for the cross-cutting spine these all reuse.
+
+##### Layer A — control surface
+
+**Integration points:**
+
+| Concern | Symbol / location |
+|---|---|
+| Emulator spawn (no `--gui-connection` today) | `SiliconSheep/src-tauri/src/main.rs:104-108` (`launch_vm`) |
+| Stop = SIGUSR1, not RPC | `main.rs:116-128` (`stop_vm`); handler `main_unix.cpp:275-278` (`sigusr1_handler`) |
+| RPC arg parse / client init (outbound only) | `main_unix.cpp:931-934` (`--gui-connection`), `:991-992` (`rpc_init_client`) |
+| RPC dispatch loop (exists, unused by emulator) | `rpc_unix.cpp:975-1015` (`rpc_dispatch`), `:1056` (`rpc_method_add_callbacks`) |
+| Method enum to extend | `rpc.h:96-100` |
+| **Guest-thread service point** (drain inbound here) | `emul_op.cpp:609`/`:618` (`OP_IDLE_TIME[_2]`), beside `e2e_check_host_shutdown()` `:149` |
+| Free `status` data | `emul_op.cpp:80` `CurApName`, `:88` `WindowList`+windowKind modal probe |
+| Window-creation gate (headless) | `main_unix.cpp:743` (`SDL_INIT_VIDEO`), `video_sdl3.cpp:759` (`SDL_CreateWindow`, unconditional) |
+| `--nogui` ≠ headless | `main_unix.cpp:944-945`,`:1002` (suppresses the *settings dialog* only) |
+| Headless precedent to copy | `main_unix.cpp:750-751` (`SDL_AUDIODRIVER=dummy` set before `SDL_Init` to avoid a headless hang) |
+| VNC reads a surface, not the window | `vnc_server.h:7` (`VNCServerUpdate(SDL_Surface*)`), pixels `vnc_server.cpp:232-340` |
+
+**Proposed RPC methods** (added to `rpc.h:96`; emulator registers callbacks + pumps `rpc_dispatch`
+from the idle hook so handlers run on the emul thread): `STATUS` (read `CurApName`/`WindowList`,
+cheap), `SHUTDOWN` (replaces the SIGUSR1 hack), `RELOAD_PREFS` (runtime-safe keys only),
+`PAUSE`/`RESUME`, `SNAPSHOT` (must quiesce+flush before the host `clonefile`s the disk —
+`vm.rs:309-353` already has the clone primitive). Transport already supports the needed arg types
+(`rpc.h:50-69`).
+
+**Phased build order:** A0 **bidirectional RPC bring-up** (M, med — prerequisite) → A1 `STATUS`
+(S, low) → A2 `siliconsheep` CLI over the launcher endpoint (S–M, low) → A4 `SHUTDOWN` (S, low) →
+A6 MCP server (M, low); then in parallel A3 **headless** (M, **high** — see below) and A7
+AppleScript dict + Shortcuts (M, med — real Obj-C bridging in a Rust/Tauri app, *not* the "S" the
+bullets imply); hard tail A5 `RELOAD_PREFS` (M), A8 `PAUSE/RESUME` (L, high — **`SIGUSR2` is already
+the nanokernel interrupt**, `main_unix.cpp:1269` — collision risk), A9 running-VM `SNAPSHOT` (L,
+**high correctness risk** — a mid-run `clonefile` can capture a torn FS; snapshot-while-stopped is
+the safe S).
+
+**Headless reality:** `--nogui` does *not* help. The realistic path mirrors the existing
+audio-dummy trick — gate `setenv("SDL_VIDEODRIVER","dummy")` before `SDL_Init` and/or skip
+`SDL_CreateWindow`. **But ROADMAP A5 notes macOS SDL needs a live WindowServer (no Xvfb equiv)** —
+so even dummy-video may require a logged-in self-hosted Mac, and "render to VNC with no window" is a
+*hypothesis to prove* (does a blittable `host_surface` survive under the dummy driver?), not a given.
+
+**Open questions:** reentrancy contract (defer *all* inbound handlers to the idle hook vs answer
+read-only `STATUS` on the reader thread?); which prefs are hot-reloadable (allowlist); one socket or
+two (recommend a separate launcher control socket proxied to the emulator UDS, so the launcher stays
+the single broker); carry a VM handle in the protocol from day one even though only one VM runs now.
+
+##### Layer B — guest control bridge
+
+Sorts entirely by the **three execution contexts** (see Shared architecture). Observation = any
+thread (proven, `e2e_emit_idle_signals` `emul_op.cpp:76`); ADB input = buffers drained on the VBL
+(proven, `adb.cpp:239-321`, already driven from both the VNC path and the idle hook); `AESend` =
+emul-thread/EMUL_OP only (**no precedent in the tree**).
+
+**Input API → ADB:** `move/click` → `ADBMouseMoved`+`ADBMouseDown/Up` (`adb.cpp:239/257/273`);
+coords are **Mac logical pixels in *absolute* mode** (`vnc_server.cpp:207`) — the bridge **must
+force `ADBSetRelMouseMode(false)`** (`adb.cpp:289`) because a grabbed window switches to relative
+deltas (`video_sdl3.cpp:1137`). `key` → modifier-down, `ADBKeyDown/Up(code)`, modifier-up (raw Mac
+keycodes; Return=0x24 as in `emul_op.cpp:176`). **Two hidden costs:** `type("text")` needs an
+**ASCII→keycode table that does not exist** (`event2keycode`/`keycode_table` `video_sdl3.cpp:2141`
+is keysym→Mac, not char→Mac); `menu(path)` is **not one ADB event** — either synthesize
+mouse-drag from `MenuList` (0x0A1C) geometry (fragile) or call `MenuSelect` via `Execute68kTrap`
+(cleaner but emul-thread-bound). Size both above `click`.
+
+**Observation API (pure RAM reads, offsets per `HOST-GUEST-CHANNELS.md` §3):** `CurApName` 0x0910
+(debounce — churns ~6/s); `WindowList` 0x09D6 (walk `+0x18` next, `+0x08` title, `+0x04` bounds,
+`+0x6C` windowKind: 2=dialog); modal = front `windowKind==2` (the check at `emul_op.cpp:88-95`);
+`MenuList` 0x0A1C; `EventQueue` 0x014C; `Ticks` 0x016A; `ScrnBase` 0x0824. Process list (8+) is not
+a low-mem global — needs `GetNextProcess` via `Execute68kTrap`.
+
+**AppleEvents bridge (design, unproven):** build descriptors in guest RAM with the proven idiom
+(`NewPtrSysClear` via `Execute68kTrap(0xa71e,…)` + `WriteMacInt*`, as `disk.cpp:267-272`), then
+`AECreateAppleEvent`/`AEPutParam*`/`AESend`. **The exact Apple Event Manager trap/`_Pack8` selector
+is TBD — verify against *Inside Macintosh: IAC*; do not hardcode.** Drives scriptable apps with an
+`'aete'` (Finder `odoc`/`quit`, AppleScript-aware apps); **cannot** do non-scriptable apps or block
+on a reply (use `kAENoReply`, observe results via RAM polling).
+
+**Phased:** B1 observation (S, low — half-built) → B2 command mailbox generalizing
+`e2e_check_host_shutdown`, registered on **both** `OP_IDLE_TIME`/`_2` (S, low) → B3 key/click/move +
+the new char table (S–M) → B4 `menu()` (M, med) → B5 AppleEvents (L, **high** — the moonshot).
+**Risks:** idle-hook liveness gates all mailbox-routed commands (a busy/modal guest can starve them;
+pure ADB/RAM are unaffected); low-mem offsets need a System 7→9.0.4 spot-check before Tier-3 chrome
+relies on them; HiDPI coordinate-space assertion on the direct-host path.
+
+##### Layer C — guest agent ("Silicon Sheep Tools", managed images only)
+
+**Channel choice — recommend (c) EmulOp RAM mailbox for control + (a) ExtFS for bulk; defer
+(b) OT/TCP:**
+
+| Channel | Mechanism (this codebase) | Verdict |
+|---|---|---|
+| (a) ExtFS "magic file" | single `extfs` root HLE'd to host file I/O (`extfs.cpp:438-443`, `extfs_unix.cpp:316/327`); poll a control file | **bulk payload** — coarse, weak as a doorbell |
+| (b) Open Transport TCP | slirp guest→host `10.0.2.2` free; host→guest needs `redir` (`ether_unix.cpp:1191`, `slirp/ctl.h:6-7`); heavy OT guest code, net-stack-up dependency | **defer** (optional future fallback) |
+| (c) **Custom EmulOp mailbox** | EMUL_OP is **opcode-gated, not address-gated** — a guest trap word dispatches to host `EmulOp()` from anywhere (`sheepshaver_glue.cpp:321`; JIT routes major-opcode-6 and refuses to chain into trampolines, `ppc-jit.cpp:3246`). Add one enum (`emul_op.h:41-54`) + one `case` (`emul_op.cpp:187`). | **best control channel** — synchronous, zero setup, no networking |
+
+**Mechanism:** the Tools app `NewPtr`s a mailbox struct and registers its address once via a new
+`OP_SST_REGISTER` selector; the host then reads/writes it directly (`WriteMacInt*`) and pumps it
+from the **same 60 Hz idle hook** (`emul_op.cpp:76/609`). Bulk file *contents* go via ExtFS; only
+the *filename* rides the mailbox. **Split-phase guest design (the load-bearing classic-Mac
+constraint):** an interrupt-time VBL/Time-Manager task may only *read the mailbox flag* (no Memory
+Manager / sync File Manager / `AESend` at interrupt time); the real work runs at **system-task
+time** in the agent's own event loop. v1 commands: `PING`, `CLIPBOARD_PUT/GET`, `IMPORT_FILE`,
+`OPEN_DOC`/`OPEN_URL`, `TIME_SYNC`, `RUN_SCRIPT`.
+
+**Honest costs (flagged, not buried):** (1) **no classic-Mac toolchain exists in the repo** —
+**Retro68** is net-new (free, scriptable, builds 68k+PPC with resource forks; CodeWarrior only if a
+glue gap appears); a 68k agent is the pragmatic default. (2) **Writing the helper into an HFS `.dsk`
+is unsolved + per-image + ongoing maintenance** — offline `libhfs`/`hfsutils` write vs ExtFS-copy +
+first-boot mover vs boot-once installer (must preserve resource fork + type/creator). (3) The agent
+is **ABI-coupled to the shipped emulator** (mailbox selector lives in `emul_op.h`), so guest image
+and binary version together.
+
+**Unlocks (Layer-C-only — pushing a command *into* the guest event loop):** scripted
+`odoc`/`gurl` from a *safe* time; on-demand AppleScript/OSA; a stable command ABI we own (vs Layer
+B's brittle RAM offsets); host-initiated clipboard. **Be honest:** time-sync (host can already write
+`Time` 0x020C) and clipboard (`OP_GET/PUT_SCRAP`) are already partly host-side — C adds only the
+*on-demand* form. **Does NOT solve** coherence / live resolution (need a display driver) or
+arbitrary-PC interruption — those stay infeasible.
+
+**Phased:** C0 mailbox spike (`OP_SST_REGISTER`+`PING`, trivial Retro68 stub) (S, low) → C1
+toolchain + HFS-install mechanism + one pre-installed image (M, **med-high** — biggest risk) → C2
+clipboard/import/time-sync (M, med) → C3 AppleEvents commands (M, med) → C4 wire to Layer A (S) →
+C5 optional OT/TCP (L, high). **Open:** HFS-install mechanism (gates C1); ABI mismatch handling;
+agent CPU when no front app yields (VBL vs `SystemTask`); `RUN_SCRIPT` = host→guest code-exec, gate it?
 
 #### Sources (for future agents picking this up)
 

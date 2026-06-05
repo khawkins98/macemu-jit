@@ -19,6 +19,12 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   bridge), and a "Silicon Sheep Tools" guest agent for *managed* images that reframes part of the
   Infeasible list. Grounded in prior art (UTM scripting, Lume's HTTP+MCP control, Tart, VirtualBuddy)
   with sources inline for future agents. Feeds the E2E harness (ROADMAP A5 / A5-V).
+- **Built out with a per-layer integration design** (parallel codebase investigation): `file:line`
+  anchors, RPC method additions, phased build orders + effort/risk per layer, and a "Shared
+  architecture" synthesis (one wire protocol, one broker, one idle-hook command mailbox on the emul
+  thread; the three execution contexts). Surfaced a premise correction — the bidirectional launcher
+  RPC does **not** exist yet (emulator is an outbound-only RPC client; Tauri launcher stops VMs via
+  SIGUSR1), so making that channel bidirectional is Layer A's true first task.
 
 ### [SheepShaver] E2E harness — host→guest shutdown hook + ISO medium + Speedometer benchmark (A5)
 

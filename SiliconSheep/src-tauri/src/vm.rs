@@ -24,6 +24,10 @@ pub struct VmProfile {
     pub screen: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_disk_warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_booted: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,6 +211,8 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
         cd_path: req.cd_path.clone(),
         screen: req.screen.clone(),
         shared_disk_warning: None,
+        os_version: None,
+        last_booted: None,
     };
 
     vms.push(profile.clone());
@@ -243,11 +249,26 @@ pub fn import_from_prefs_file(prefs_path: &str, name: &str) -> Result<VmProfile,
         cd_path,
         screen,
         shared_disk_warning: None,
+        os_version: None,
+        last_booted: None,
     };
 
     vms.push(profile.clone());
     save_manifest(&vms);
     Ok(profile)
+}
+
+pub fn update_last_booted(id: &str) -> Result<(), String> {
+    let mut vms = load_manifest();
+    if let Some(vm) = vms.iter_mut().find(|v| v.id == id) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        vm.last_booted = Some(format!("{}", now));
+        save_manifest(&vms);
+    }
+    Ok(())
 }
 
 pub fn rename_profile(id: &str, new_name: &str) -> Result<(), String> {
@@ -315,6 +336,8 @@ pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> 
                 shared_external_disks.join(", ")
             ))
         },
+        os_version: source.os_version,
+        last_booted: source.last_booted,
     };
 
     vms.push(new_profile.clone());

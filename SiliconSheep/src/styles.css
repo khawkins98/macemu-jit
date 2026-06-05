@@ -207,6 +207,7 @@ body {
 }
 
 .screenshot-icon { font-size: 36px; opacity: 0.2; }
+.screenshot-img { width: 100%; height: 100%; object-fit: cover; }
 
 .card-body { padding: var(--ss-space-md); }
 .vm-card .name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }

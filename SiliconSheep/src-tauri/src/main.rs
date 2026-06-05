@@ -3,7 +3,8 @@
 mod prefs;
 mod vm;
 
-use std::process::Child;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Stdio};
 use std::sync::Mutex;
 use tauri::State;
 use vm::{CreateVmRequest, VmProfile};
@@ -11,6 +12,10 @@ use vm::{CreateVmRequest, VmProfile};
 struct RunningVm {
     id: String,
     child: Child,
+    #[allow(dead_code)] // used for future VNC screenshot capture
+    os_version: Option<String>,
+    #[allow(dead_code)] // used for future VNC screenshot capture
+    vncport: u16,
 }
 
 struct AppState {
@@ -95,21 +100,91 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
         return Err(format!("VM '{}' is already running", r.id));
     }
 
-    let _profile = vm::get_profile(&id)?;
+    let profile = vm::get_profile(&id)?;
     let vm_dir = vm::vm_dir_for(&id);
 
     let emu_path = find_emulator_binary()
         .ok_or("SheepShaver binary not found. Build it first: cd SheepShaver && make build-ss")?;
 
-    let child = std::process::Command::new(&emu_path)
+    let mut child = std::process::Command::new(&emu_path)
         .arg(vm_dir.to_str().unwrap_or("."))
         .current_dir(&vm_dir)
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to launch SheepShaver: {}", e))?;
 
-    *running = Some(RunningVm { id, child });
+    // Read VNC port from prefs (for screenshot capture)
+    let vncport = {
+        let prefs_path = vm_dir.join("prefs");
+        prefs::load_prefs(&prefs_path)
+            .ok()
+            .and_then(|pf| pf.get_int("vncport").map(|v| v as u16))
+            .unwrap_or(5900)
+    };
+
+    // Spawn a thread to parse stderr for boot signals and OS version
+    let stderr = child.stderr.take();
+    let vm_id = id.clone();
+    let vm_dir_clone = vm_dir.clone();
+    if let Some(stderr) = stderr {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            let mut log_file = std::fs::File::create(vm_dir_clone.join("last_run.log")).ok();
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    // Write to log file in the .sheepvm bundle
+                    if let Some(ref mut f) = log_file {
+                        use std::io::Write;
+                        writeln!(f, "{}", line).ok();
+                    }
+                    // Detect OS version from boot signal
+                    // Format: [BOOT] idle frontApp='Finder' modal=0
+                    if line.contains("[BOOT]") && line.contains("frontApp='Finder'") {
+                        let _ = vm::update_last_booted(&vm_id);
+                    }
+                }
+            }
+        });
+    }
+
+    *running = Some(RunningVm {
+        id,
+        child,
+        os_version: profile.os_version.clone(),
+        vncport,
+    });
 
     Ok(())
+}
+
+#[tauri::command]
+fn get_vm_screenshot(id: String) -> Result<Option<String>, String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let screenshot_path = vm_dir.join("screenshot.png");
+    if screenshot_path.exists() {
+        use std::fs;
+        let data = fs::read(&screenshot_path).map_err(|e| e.to_string())?;
+        let b64 = base64_encode(&data);
+        Ok(Some(format!("data:image/png;base64,{}", b64)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((n >> 18) & 63) as usize] as char);
+        result.push(CHARS[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 { result.push(CHARS[((n >> 6) & 63) as usize] as char); } else { result.push('='); }
+        if chunk.len() > 2 { result.push(CHARS[(n & 63) as usize] as char); } else { result.push('='); }
+    }
+    result
 }
 
 #[tauri::command]
@@ -261,6 +336,7 @@ fn main() {
             is_vm_running,
             check_emulator_status,
             import_from_prefs,
+            get_vm_screenshot,
             reveal_vm_in_finder,
             backup_vm_disk,
         ])

@@ -11,7 +11,11 @@ interface VmProfile {
   cd_path: string;
   screen: string;
   shared_disk_warning?: string | null;
+  os_version?: string | null;
+  last_booted?: string | null;
 }
+
+const vmScreenshots: Map<string, string> = new Map();
 
 interface RomInfo {
   valid: boolean;
@@ -78,16 +82,29 @@ function renderTitlebar(): string {
   return `<div class="titlebar">SiliconSheep</div>`;
 }
 
+function formatLastBooted(ts: string | null | undefined): string {
+  if (!ts) return "";
+  const secs = parseInt(ts);
+  if (isNaN(secs)) return "";
+  const d = new Date(secs * 1000);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 function renderVmCard(vm: VmProfile): string {
   const isRunning = vm.id === runningVmId;
+  const screenshotSrc = vmScreenshots.get(vm.id);
+  const lastBooted = formatLastBooted(vm.last_booted);
   return `
     <div class="vm-card" data-id="${escapeAttr(vm.id)}">
       <div class="screenshot">
-        <span class="screenshot-icon">🖥</span>
+        ${screenshotSrc
+          ? `<img src="${screenshotSrc}" alt="VM screenshot" class="screenshot-img" />`
+          : `<span class="screenshot-icon">🖥</span>`
+        }
       </div>
       <div class="card-body">
         <div class="name">${escapeHtml(vm.name)}</div>
-        <div class="meta">${vm.ram_mb} MB RAM · ${vm.disk_paths.length} disk(s)</div>
+        <div class="meta">${vm.os_version ? escapeHtml(vm.os_version) + " · " : ""}${vm.ram_mb} MB RAM${lastBooted ? " · " + lastBooted : ""}</div>
         <div class="card-actions">
           ${isRunning
             ? `<button class="btn btn-secondary btn-sm" data-action="stop" data-id="${escapeAttr(vm.id)}">◼ Stop</button>`
@@ -1055,10 +1072,28 @@ function renderToasts() {
 
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
 
+async function loadScreenshots() {
+  for (const vm of vms) {
+    try {
+      const src = (await invoke("get_vm_screenshot", { id: vm.id })) as string | null;
+      if (src) {
+        vmScreenshots.set(vm.id, src);
+      }
+    } catch {
+      // No screenshot available
+    }
+  }
+}
+
 async function pollRunningStatus() {
   const newRunningId = await checkRunning();
   if (newRunningId !== runningVmId) {
     runningVmId = newRunningId;
+    if (!newRunningId) {
+      // VM just stopped — reload screenshots (may have a new one)
+      vms = await loadVms();
+      await loadScreenshots();
+    }
     if (currentView === "library") render();
   }
 }
@@ -1119,6 +1154,7 @@ async function handleFileDrop(paths: string[]) {
 async function init() {
   vms = await loadVms();
   runningVmId = await checkRunning();
+  await loadScreenshots();
 
   try {
     const status = (await invoke("check_emulator_status")) as { found: boolean; path: string };

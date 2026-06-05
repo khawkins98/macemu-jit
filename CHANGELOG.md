@@ -55,8 +55,11 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   noise (memory-RMW still lands in SUSPECT; disambiguate by value stepping by 2, not 1). New
   `SS_JIT_VERIFY_PC=LO:HI` scopes the oracle to one PC range to re-check a suspect block without
   the whole-boot slowdown. These make the *existing* confounded oracle usable; the replay-mirror
-  + memory-snapshot fixes (to make it *clean*) remain the X1 follow-on. Compile + logic-reviewed
-  (the verify path only runs at boot, not under `SS_TEST_HEX`); harness unaffected (270/270).
+  + memory-snapshot fixes (to make it *clean*) remain the X1 follow-on. **Boot-validated against
+  ground truth (2026-06-05):** two scoped `SS_JIT_NO_CHAIN=1 SS_JIT_VERIFY=1` boots tagged the 7
+  known structural blocks `ARTIFACT-PC` (20/20) and the lone memory-RMW block `100fd0e0` `SUSPECT`
+  (200/200, `GPR10` confirmed stepping by 2 — correct codegen, oracle double-apply); `SS_JIT_VERIFY_PC`
+  scoping confirmed working. Harness unaffected (270/270).
 
 ### [SheepShaver] Guest OS version detection via SysVersion low-memory global
 

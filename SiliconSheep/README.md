@@ -16,16 +16,18 @@ owns its own SDL3 window for the guest display; the launcher handles everything 
 SiliconSheep/
 ├── src-tauri/          # Rust backend (Tauri commands, VM management, IPC)
 │   ├── src/
-│   │   ├── main.rs     # Tauri entry point + command registrations
-│   │   └── vm.rs       # VM profile CRUD (JSON manifest + .sheepvm bundles)
+│   │   ├── main.rs     # Tauri entry + commands (launch, stop, settings, backup)
+│   │   ├── vm.rs       # VM profile CRUD, duplicate (clonefile), disk backup
+│   │   └── prefs.rs    # SheepShaver prefs parser (round-trip, K/M/G, comments)
 │   ├── Cargo.toml
-│   ├── tauri.conf.json # Tauri config (window, sidecar, plugins)
+│   ├── capabilities/   # Tauri v2 permission grants (shell, dialog)
+│   ├── tauri.conf.json
 │   └── build.rs
 ├── src/                # Web frontend (TypeScript + CSS)
-│   ├── main.ts         # App entry point, VM library view
-│   └── styles.css      # Dark/light mode, card grid, buttons
+│   ├── main.ts         # App: wizard, VM library, settings panel, toasts
+│   └── styles.css      # Dark/light mode, responsive card grid
 ├── index.html          # Vite entry
-├── package.json        # npm deps (Tauri CLI, Vite)
+├── package.json        # pnpm deps (Tauri CLI, Vite, TypeScript)
 ├── vite.config.ts
 └── README.md           # this file
 ```
@@ -34,27 +36,52 @@ SiliconSheep/
 SheepShaver only through:
 - The plain-text prefs file format (`KEYWORD value` per line)
 - Process lifecycle (spawn, signal, wait)
-- Future: Unix domain socket for IPC (hot-reload, status)
+- Future: Unix domain socket for IPC (hot-reload, status via existing `rpc_unix.cpp`)
 
 ## Prerequisites
 
 - Rust 1.70+ (`rustup`)
-- Node.js 18+ (`brew install node`)
+- Node.js 18+ and pnpm (`brew install node`, `npm i -g pnpm`)
 - A built SheepShaver binary at `../SheepShaver/src/Unix/SheepShaver`
 
 ## Development
 
 ```bash
 cd SiliconSheep
-npm install
-npm run dev        # starts Vite dev server + Tauri window
+pnpm install
+pnpm dev           # starts Vite dev server + Tauri window with hot reload
 ```
 
 ## Build
 
 ```bash
-npm run build      # production build → src-tauri/target/release/
+pnpm build         # production → src-tauri/target/release/bundle/macos/Silicon Sheep.app
 ```
+
+## Test
+
+```bash
+pnpm check         # runs TypeScript type-check + Rust tests (10 prefs parser tests)
+pnpm test          # Rust tests only
+pnpm typecheck     # TypeScript only
+```
+
+## Current Features
+
+- **First-run wizard** — 4 screens: Welcome → ROM picker (SHA-256 verification) → Disk
+  creation/selection + optional CD → Review & Boot
+- **VM library** — Card grid with Start/Stop/Settings/Duplicate/Reveal/Delete
+- **Settings panel** — Sidebar sections (General, Display, Storage, Network, Advanced)
+  with hot-reload badges and Save button
+- **Prefs bridge** — Round-trip faithful parser for SheepShaver's text format (comments,
+  K/M/G suffixes, multi-value keys)
+- **VM lifecycle** — Launch with emulator discovery, SIGUSR1 clean shutdown, running
+  status polling via `try_wait()`
+- **Disk backup** — APFS `clonefile` copy-on-write snapshot of disk images
+- **VM duplicate** — Instant APFS clone with path rewriting
+- **Toast notifications** — Launch coach marks, save confirmation, error feedback
+- **Dark/light mode** — CSS `prefers-color-scheme`
+- **Accessibility** — `focus-visible` styles, semantic buttons, keyboard navigation
 
 ## Relation to SheepShaver
 

@@ -13,11 +13,15 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ### [SheepShaver] P1a register-allocator eviction validated; SS_JIT_VERIFY oracle confounds mapped
 
-- **P1a closed — RA eviction path validated.** The >8-live-GPR `ra_evict` path (never hit by
-  the harness's small vectors) is validated on **oracle-independent** evidence: `lmw_stmw_wide`
-  (12 live GPRs) passes the harness JIT-vs-interp REGDUMP (separate clean executions, no replay
-  confounds), and a full chaining-on boot reaches Finder with eviction firing continuously.
-  **P8 (cross-block pinning) unblocked.** Detail: OPTIMIZATION-PLAN §P1a.
+- **P1a substantially strengthened — RA eviction path validated (targeted surfaces).** The
+  >8-live-GPR `ra_evict` path (never hit by the harness's small vectors) is validated on
+  **oracle-independent** evidence: the eviction battery (below) passes the harness JIT-vs-interp
+  REGDUMP (separate clean executions, no replay confounds), and a full chaining-on boot reaches
+  Finder with eviction firing continuously. **P8 (cross-block pinning) unblocked.** Calibration:
+  targeted harness coverage is strong for mid-block, pure-register, single-exit, Rc=0 eviction;
+  two surfaces have functional (boot) coverage but no targeted vector yet — eviction at
+  control-flow exits/terminators, and eviction × deferred CR0/XER state under pressure (next
+  cheap no-boot increment). Detail + residual: OPTIMIZATION-PLAN §P1a.
 - **Eviction harness battery broadened (264 -> 267 vectors).** Three pure-register
   vectors widen `ra_evict` coverage beyond the single `lmw_stmw_wide` load/store-multiple
   case: `evict_wb16` (write r3-r18, read early+late -> dirty spill+reload), `evict_rd_eq_ra`

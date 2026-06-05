@@ -59,18 +59,31 @@ b5/b40 fields are zero.
 
 ## Open — Hardening (correctness debt on P1; gates P8)
 
-### P1a. Harden the register allocator — ✅ RA VALIDATED (2026-06-05); gate basis revised
+### P1a. Harden the register allocator — ✅ SUBSTANTIALLY STRENGTHENED (2026-06-05); gate basis revised
 
 **Outcome (2026-06-05):** the RA eviction path is validated on the evidence that is
-*independent of the verify oracle* — (1) `lmw_stmw_wide` forces >8-live `ra_evict` and
-passes the harness's JIT-vs-interp REGDUMP (the harness runs interp and JIT as **separate
-executions from clean state**, so it has none of the oracle's replay confounds), and (2) a
-full chaining-on boot reaches the Finder desktop, where eviction fires continuously and any
-corruption would crash the boot. `SS_JIT_VERIFY` boots are **corroboration** (66450 RAM
-blocks checked, zero *real* divergences after accounting for 6 oracle-artifact classes), not
-the proof. A *literal* whole-boot clean verify gate was found to be **unachievable on this
-config** (see step 2) — that's an oracle-tooling limitation (→ ROADMAP A1 / X1), not RA debt.
-P8 is unblocked.
+*independent of the verify oracle* — (1) a targeted harness battery (`lmw_stmw_wide` +
+`evict_wb16` / `evict_rd_eq_ra` / `evict_mixed_alu`) forces >8-live `ra_evict` and passes the
+JIT-vs-interp REGDUMP (the harness runs interp and JIT as **separate executions from clean
+state**, so it has none of the oracle's replay confounds), and (2) a full chaining-on boot
+reaches the Finder desktop, where eviction fires continuously and any corruption would crash
+the boot. `SS_JIT_VERIFY` boots are **corroboration** (66450 RAM blocks checked, zero *real*
+divergences after accounting for 6 oracle-artifact classes), not the proof. A *literal*
+whole-boot clean verify gate was found to be **unachievable on this config** (see step 2) —
+that's an oracle-tooling limitation (→ ROADMAP A1 / X1), not RA debt. P8 is unblocked.
+
+**Calibration — this is "substantially strengthened," not "every eviction edge proven."** The
+targeted (confound-free) harness coverage is strong for **mid-block, pure-register, single-exit,
+Rc=0** eviction. Two eviction-adjacent surfaces have only **functional** (boot) coverage, not a
+targeted harness vector yet — worth adding via the same cheap, no-boot lever:
+- **(a) Eviction at control-flow exits/terminators** — flush-on-exit of dirty RA slots when a
+  block evicts *and then* terminates on a conditional `bc` or the `bclr` Mixed-Mode bail. Every
+  battery vector exits via a single `blr`. (P1's exit-path audit + the `ra_flush_all()` on the
+  bclr bail give design-level assurance; a targeted vector would make it confound-free.)
+- **(b) Eviction × deferred state** — CR0-setting ops (`add.` etc.) and XER carry (`adde`/
+  `subfe`) under pressure: does eviction churning the CR0/carry input keep it correct? The
+  battery is all Rc=0. (Lazy CR0 specifically is dormant — disabled/eager, §0g — so this is the
+  *eager* CR/XER-under-pressure surface.)
 
 **Why first**: P1 shipped a real +15.6%, but its subtlest path — `ra_evict`
 under register pressure (>8 live GPRs in one block) — is **never exercised by

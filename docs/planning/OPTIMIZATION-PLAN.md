@@ -264,6 +264,11 @@ with `ra==0` already demonstrates this pattern — extend it uniformly.
 
 ### 0g. Lazy CR0 Re-enable
 
+> **Cross-pollination (X2):** intra-block backward CR0-liveness — borrowed from BasiliskII's
+> `needed_flags` analysis — is the *missing safety proof* for re-enabling this cleanly (elide
+> CR0 writes never consumed before overwrite; no cross-block lazy state needed). See
+> `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
+
 **Expected impact**: 5-15% on Rc=1-heavy code (andi., add., rlwinm., etc.)
 **Effort**: Low-medium (code exists, same "boot hang regression" disable as RA)
 **Risk**: Medium — and the risk is *real*, not nominal: lazy CR0 was disabled for
@@ -294,6 +299,11 @@ eliminates them.
 ## Open — Medium Effort
 
 ### P2: Native bcctr — HIGHEST MISS COUNT but COMPLEX (98.5% of JIT misses)
+
+> **Cross-pollination (X3):** the §R2 guarded inline direct-mapped cache is the *light*
+> alternative — it sidesteps the Mixed-Mode-Manager RE that stalled the native-bcctr attempt,
+> and is the form to prefer over BasiliskII's heavier edge-profiling. See
+> `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
 
 **Expected impact**: Unknown — miss count is compile-time, not runtime-weighted.
 bcctr is a block terminator either way; the win is eliminating the dispatcher
@@ -470,6 +480,10 @@ Effort: ~1 day.  Risk: low (miss fallback = current behavior).
 Emit 2-instruction probe (load cached PC, compare) before falling back to hash
 dispatcher.  Removes full hash lookup for repeated indirect targets (bctr).
 Effort: ~1 day.  Risk: low (miss path is current behavior).
+*Cross-pollination (X3):* this is the **light** implementation of the BasiliskII
+"guarded indirect target" idea — preferred over its heavier edge-profiling + jmpdep
+machinery; also the practical workaround for P2 (native bcctr). See
+`docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
 
 **R3. Batch W^X toggles** — N/A (2026-06-04)
 Investigated: SheepShaver's code cache uses plain `mmap(PROT_RWX)` without

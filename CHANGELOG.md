@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [docs] BasiliskII → SheepShaver JIT cross-pollination triage
+
+- Added `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`: which techniques
+  from the BasiliskII 68K JIT (the more mature, same-host ARM64 lineage) are worth borrowing for
+  the SheepShaver PPC JIT, filtered by whether they come over clean or drag the heavy
+  lazy-state / multi-PC / lifecycle machinery in. Top borrows: verify/bisection tooling (X1,
+  Track A), intra-block backward CR0-liveness as the safety proof for re-enabling lazy CR0 (X2,
+  §0g), and the light §R2 inline-cache form of guarded indirect-branch resolution for `bcctr`
+  (X3, §P2/§P9) — explicitly *not* the heavy edge-profiling/jmpdep apparatus.
+- Wired into the trackers (bidirectional, per the doc-lifecycle rule): ROADMAP A1/B2/Track-B
+  intro, and back-pointers in OPTIMIZATION-PLAN §0g/§P2/§R2.
+- Includes a **fast-target-hardware re-ranking** (two independent sub-agent reviews): on Apple
+  Silicon the emulator already runs the 1990s guest faster than period hardware, so the four
+  non-throughput borrows (X1 tooling, X4 latency, X5 clarity, X6 methodology) top the list and
+  the two throughput borrows (X2 lazy-CR0, X3 bcctr) defer — also premature by our own rule
+  (gated on the unbuilt B1 execution-weighted profiler). Re-ranked order: X1 → X6 → X4 → X5.
+
 ### [shared] Repository tidy-up — relocate the BasiliskII harness, remove the superseded VNC-QA scaffold, document `cxmon/`
 
 - **Moved `jit-test/` → `BasiliskII/jit-test/`.** The root `jit-test/` was the *BasiliskII*

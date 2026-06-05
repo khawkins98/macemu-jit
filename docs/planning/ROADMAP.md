@@ -88,6 +88,10 @@ harness that can't catch mistakes just produces the next silent bug.
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered
   G4 golden results (catches bugs shared by *both* interp and JIT). See IMPLEMENTATION-BACKLOG T1.
+- 🟡 **Borrow BasiliskII's verify/bisection tooling** — targeted-PC verify (fast enough to run),
+  a "force opcode family → interpreter" bisection knob (we have none), and aligned dual-trace
+  divergence. Clean dev infrastructure, no runtime coupling; helps clear OPTIMIZATION-PLAN
+  §0b-extra4. Detail: `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md` X1.
 
 **Verifiable here** (harness/build, no boot needed). **Unblocks A2 and de-risks all of Track B.**
 **Detail:** `docs/TESTING.md`; harness `SheepShaver/jit-test/run.sh`; generators `gen-*-vectors.py`.
@@ -321,7 +325,10 @@ CONTRIBUTING + CLAUDE.md). **Complements** A1's boot-rig need (Paranoia FP confo
 
 Full plan, with per-lever effort/payoff and measured baselines, lives in
 **`docs/planning/OPTIMIZATION-PLAN.md`** (and the Dolphin/RPCS3/Box64/FEX survey items therein +
-`docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md`). The cheap, ready wins from the first
+`docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md`). Selected ideas from the
+**BasiliskII (68K) JIT** — the more mature, same-host lineage — are triaged for SheepShaver in
+`docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md` (what to borrow clean, and
+what heavy machinery to leave behind); the borrows feed A1/B2/B3 below. The cheap, ready wins from the first
 pass have largely **landed** (subfe/adde via ADCS, mullwo, CR0 cleanup/B1, LogicalImm/B2, code-cache
 sizing, atomic spcflags). What remains is the bigger, measurement-gated work. Tracked here as
 buckets so they don't fall off the map:
@@ -335,10 +342,14 @@ guessing. Nothing else in Track B should be tuned blind. **Unblocks B2–B4.**
 ## B2. 🟡 Medium levers — fallback & branch handling
 
 - **Native `bcctr`** (98.5% of JIT misses) — complex; needs Mixed-Mode-Manager RE; gated on B1.
+  *Light alternative:* the §R2 guarded inline direct-mapped cache (BasiliskII cross-pollination
+  X3) sidesteps the RE.
 - **Reduce interpreter fallbacks** (`lwarx`/`stwcx`/`mftb`/`isync` native) — ~5–10%.
 - **`isync` inline BLR** (0c), **lazy CR0 re-enable** (0g — was disabled after a boot regression;
-  needs A1's boot verify first).
-**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P2/P3/0c/0g.
+  needs A1's boot verify first). *De-risk:* intra-block backward CR0-liveness as the missing
+  safety proof (BasiliskII cross-pollination X2).
+**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P2/P3/0c/0g/R2;
+`docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
 
 ## B3. 🟡 High-effort levers
 

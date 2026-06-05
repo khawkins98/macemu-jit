@@ -283,6 +283,12 @@ body {
 
 .vm-row__btn--power-on { color: var(--ss-success); }
 
+/* Icon labels */
+.icon-label {
+  font-size: 11px;
+  vertical-align: middle;
+}
+
 /* Context menu */
 .context-menu {
   position: fixed;

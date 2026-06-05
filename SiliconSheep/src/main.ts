@@ -10,19 +10,35 @@ import iconToolbox from "./icons/toolbox.png";
 import iconTrash from "./icons/trash.png";
 import iconFolder from "./icons/folder_apple.png";
 
+// App preference: show text labels next to icons (stored in localStorage)
+let showIconLabels = localStorage.getItem("ss-icon-labels") !== "false";
+
+function toggleIconLabels() {
+  showIconLabels = !showIconLabels;
+  localStorage.setItem("ss-icon-labels", String(showIconLabels));
+  render();
+}
+
 const icon = (src: string, alt: string, size = 18) =>
-  `<img src="${src}" alt="${alt}" width="${size}" height="${size}" style="image-rendering: pixelated; vertical-align: middle;" />`
+  `<img src="${src}" alt="${alt}" width="${size}" height="${size}" style="image-rendering: pixelated; vertical-align: middle;" />`;
+
+const iconLabel = (src: string, alt: string, label: string, size = 18) =>
+  showIconLabels
+    ? `${icon(src, alt, size)} <span class="icon-label">${label}</span>`
+    : icon(src, alt, size);
 
 // Placeholders for icons we haven't sourced yet (TODO: find pixel art versions)
-const ICON_PLUS = "＋";
-const ICON_IMPORT = "⤓";
-const ICON_HELP = "?";
-const ICON_DUPLICATE = "⎘";
-const ICON_SETTINGS = icon(iconToolbox, "Configure");
-const ICON_POWER_ON = icon(iconDisplayOn, "Running");
-const ICON_POWER_OFF = icon(iconDisplayOff, "Start");
-const ICON_TRASH = icon(iconTrash, "Delete");
-const ICON_FOLDER = icon(iconFolder, "Reveal");
+const pLabel = (sym: string, label: string) => showIconLabels ? `${sym} <span class="icon-label">${label}</span>` : sym;
+
+const ICON_PLUS = () => pLabel("＋", "New");
+const ICON_IMPORT = () => pLabel("⤓", "Import");
+const ICON_HELP = () => pLabel("?", "Help");
+const ICON_DUPLICATE = () => pLabel("⎘", "Duplicate");
+const ICON_SETTINGS = () => iconLabel(iconToolbox, "Configure", "Configure");
+const ICON_POWER_ON = () => iconLabel(iconDisplayOn, "Running", "Shut Down");
+const ICON_POWER_OFF = () => iconLabel(iconDisplayOff, "Start", "Start");
+const ICON_TRASH = () => iconLabel(iconTrash, "Delete", "Delete");
+const ICON_FOLDER = () => iconLabel(iconFolder, "Reveal", "Finder");
 
 interface VmProfile {
   id: string;
@@ -144,11 +160,11 @@ function renderVmRow(vm: VmProfile): string {
       </div>
       <div class="vm-row__actions">
         ${isRunning
-          ? `<button class="vm-row__btn vm-row__btn--power-on" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">${ICON_POWER_ON}</button>`
-          : `<button class="vm-row__btn" data-action="launch" data-id="${escapeAttr(vm.id)}" title="Start">${ICON_POWER_OFF}</button>`
+          ? `<button class="vm-row__btn vm-row__btn--power-on" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">${ICON_POWER_ON()}</button>`
+          : `<button class="vm-row__btn" data-action="launch" data-id="${escapeAttr(vm.id)}" title="Start">${ICON_POWER_OFF()}</button>`
         }
         <span class="vm-row__sep"></span>
-        <button class="vm-row__btn" data-action="settings" data-id="${escapeAttr(vm.id)}" title="Configure">${ICON_SETTINGS}</button>
+        <button class="vm-row__btn" data-action="settings" data-id="${escapeAttr(vm.id)}" title="Configure">${ICON_SETTINGS()}</button>
       </div>
     </div>
   `;
@@ -190,10 +206,11 @@ function renderLibrary(): string {
       ${vms.map(renderVmRow).join("")}
     </div>
     <div class="cc-footer">
-      <button class="vm-row__btn" data-action="show-help" title="Help & Resources">${ICON_HELP}</button>
+      <button class="vm-row__btn" data-action="show-help" title="Help & Resources">${ICON_HELP()}</button>
+      <button class="vm-row__btn" data-action="toggle-labels" title="Toggle icon labels">${showIconLabels ? "Aa" : "Aa"}</button>
       <div style="flex:1"></div>
-      <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">${ICON_IMPORT}</button>
-      <button class="vm-row__btn" data-action="wizard" title="New VM">${ICON_PLUS}</button>
+      <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">${ICON_IMPORT()}</button>
+      <button class="vm-row__btn" data-action="wizard" title="New VM">${ICON_PLUS()}</button>
     </div>
   `;
 }
@@ -800,9 +817,9 @@ function renderSettings(): string {
       <div class="settings-header">
         <h2>${escapeHtml(vm.name)} Configuration</h2>
         <div style="flex:1"></div>
-        <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">${ICON_DUPLICATE} Duplicate</button>
-        <button class="btn btn-secondary btn-sm" data-action="reveal" data-id="${escapeAttr(vm.id)}" title="Reveal in Finder">${ICON_FOLDER}</button>
-        <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">${ICON_TRASH}</button>
+        <button class="btn btn-secondary btn-sm" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}" title="Duplicate">${ICON_DUPLICATE()}</button>
+        <button class="btn btn-secondary btn-sm" data-action="reveal" data-id="${escapeAttr(vm.id)}" title="Reveal in Finder">${ICON_FOLDER()}</button>
+        <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">${ICON_TRASH()}</button>
         <button class="btn btn-primary" data-action="save-settings">Save</button>
       </div>
       <div class="settings-body">
@@ -955,6 +972,10 @@ async function handleAction(e: Event) {
   const id = target.dataset.id;
 
   switch (action) {
+    case "toggle-labels":
+      toggleIconLabels();
+      break;
+
     case "show-help":
       showToast("Resources: infinitemac.org · macintoshgarden.org · emaculation.com · 68kmla.org", "info", 10000);
       break;
@@ -1370,15 +1391,15 @@ function showContextMenu(e: MouseEvent, vmId: string, vmName: string) {
   menu.className = "context-menu";
   menu.innerHTML = `
     ${isRunning
-      ? `<button class="context-menu__item" data-action="stop" data-id="${escapeAttr(vmId)}">${ICON_POWER_ON} Shut Down</button>`
-      : `<button class="context-menu__item" data-action="launch" data-id="${escapeAttr(vmId)}">${ICON_POWER_OFF} Start</button>`
+      ? `<button class="context-menu__item" data-action="stop" data-id="${escapeAttr(vmId)}">${icon(iconDisplayOn, "", 14)} Shut Down</button>`
+      : `<button class="context-menu__item" data-action="launch" data-id="${escapeAttr(vmId)}">${icon(iconDisplayOff, "", 14)} Start</button>`
     }
-    <button class="context-menu__item" data-action="settings" data-id="${escapeAttr(vmId)}">${ICON_SETTINGS} Configure</button>
+    <button class="context-menu__item" data-action="settings" data-id="${escapeAttr(vmId)}">${icon(iconToolbox, "", 14)} Configure</button>
     <div class="context-menu__sep"></div>
-    <button class="context-menu__item" data-action="duplicate" data-id="${escapeAttr(vmId)}" data-name="${escapeAttr(vmName)}">${ICON_DUPLICATE} Duplicate</button>
-    <button class="context-menu__item" data-action="reveal" data-id="${escapeAttr(vmId)}">${ICON_FOLDER} Show in Finder</button>
+    <button class="context-menu__item" data-action="duplicate" data-id="${escapeAttr(vmId)}" data-name="${escapeAttr(vmName)}">⎘ Duplicate</button>
+    <button class="context-menu__item" data-action="reveal" data-id="${escapeAttr(vmId)}">${icon(iconFolder, "", 14)} Show in Finder</button>
     <div class="context-menu__sep"></div>
-    <button class="context-menu__item context-menu__item--danger" data-action="delete" data-id="${escapeAttr(vmId)}">${ICON_TRASH} Delete</button>
+    <button class="context-menu__item context-menu__item--danger" data-action="delete" data-id="${escapeAttr(vmId)}">${icon(iconTrash, "", 14)} Delete</button>
   `;
   menu.style.left = `${e.clientX}px`;
   menu.style.top = `${e.clientY}px`;

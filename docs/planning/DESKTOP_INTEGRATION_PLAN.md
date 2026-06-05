@@ -279,10 +279,93 @@ behaviour.
 - [ ] **Full execution-state save/restore**: Serialize all CPU/JIT/device state for
   DOSBox-X-style save slots. Very high effort.
 
+### Tier 4 — Automation & Scripting (drive the guest without screenshots)
+
+**Added 2026-06-05.** The ambition: an external tool (CI, an AI agent, a `Shortcuts` workflow)
+can *drive and observe* a VM programmatically — not by hunting pixels in a VNC screenshot, but
+through structured commands and structured state. This is the natural evolution of the E2E VNC
+harness (ROADMAP **A5**): "Playwright-for-VNC" → "Playwright-for-AppleEvents." It also reframes
+part of the **Infeasible** list below — a guest agent is only infeasible for *retrofitting an
+arbitrary user's OS*; for the **managed VM images we build and ship**, installing a small guest
+helper is exactly what Parallels Tools / VirtualBuddyGuest / VMware Tools do.
+
+Prior art (see Sources at end of section): **UTM** exposes an AppleScript dictionary + a
+`utmctl` CLI + Shortcuts intents for VM-lifecycle control. **Lume** (MIT) runs an HTTP control
+server *and an MCP server for AI-agent integration*, and provisions VMs unattended by automating
+the Setup Assistant over VNC+OCR. **Tart** is CLI-only and exists to run macOS VMs in CI.
+**VirtualBuddy** ships `VirtualBuddyGuest` for clipboard + shared-folder auto-mount. Silicon
+Sheep can take the *control-surface* and *guest-tools* ideas wholesale; the *guest interaction*
+layer is the novel classic-Mac work.
+
+#### Layer A — Launcher control surface (pure launcher work, no emulator changes)
+
+- [ ] **`siliconsheep` CLI** — `list / create / start / stop / snapshot / status / config` over
+  the UDS RPC the launcher already speaks (`rpc_unix.cpp`, `--gui-connection`). Direct analogue
+  of UTM's `utmctl` (which is itself a thin wrapper over its AppleScript bridge).
+- [ ] **AppleScript dictionary + Shortcuts intents** — scriptable VM lifecycle for Automator /
+  Shortcuts / Script Editor users (UTM ships exactly this).
+- [ ] **MCP server** — expose VM control (and, later, the Layer-B guest bridge) as MCP tools so
+  an AI agent can spin up, drive, and tear down VMs headlessly. This is Lume's model; it makes
+  the emulator a first-class target for agentic workflows.
+- [ ] **Headless / CI mode** — run with no SDL window for automated testing (Tart's raison
+  d'être). This is the missing enabler for putting the E2E harness in CI (ROADMAP A5 §CI) and
+  for the `SS_JIT_VERIFY`-under-E2E gate (ROADMAP A5-V).
+
+#### Layer B — Guest control bridge (the screenshot-free part; novel classic-Mac work)
+
+- [ ] **Structured input injection** — `type(text)`, `click(x,y)`, `key(code)`, `menu(path)` as
+  first-class commands over the existing ADB injection path (already used by the E2E shutdown
+  hook), replacing pixel-coordinate hunting.
+- [ ] **Structured observation API** — window list, frontmost app, menu state, modal/dialog
+  detection, read straight from guest RAM (WindowList @ 0x9D6, CurApName @ 0x910, MenuList,
+  ScrnBase) — the reads already proven in `e2e_emit_boot_ready_once()`. Queryable instead of
+  OCR'd. See `docs/planning/HOST-GUEST-CHANNELS.md`.
+- [ ] **AppleEvents bridge** — Mac OS 8/9 shipped AppleScript/OSA. The host can inject AppleEvents
+  via `Execute68kTrap(AESend)` (already noted in Tier 2 for `odoc`), so scriptable era apps
+  (Finder and many others) can be *driven by command*, not by clicking. "Playwright without
+  pixels" for any AppleScript-aware app.
+
+#### Layer C — "Silicon Sheep Tools" guest agent (managed images only)
+
+The reframe of the Infeasible list. For VM images **we** create and ship, a tiny classic-Mac
+faceless-background app / `INIT` extension that listens on a channel — poll a magic file in the
+`extfs` share, a TCP socket via Open Transport, or a custom EmulOp mailbox — unlocks, for our
+images, what commercial guest-tools packages do:
+
+- [ ] **On-demand clipboard push/pull, scripted file import, "open URL/doc in guest", time-sync.**
+- [ ] **A reliable command channel** for automation that doesn't depend on reading RAM offsets
+  (push commands *into* the guest event loop, which host-side RAM reads can't do).
+- **Caveats (be honest):** only works on *our* managed images, not a user's BYO disk; needs a
+  classic-Mac build toolchain (Retro68 or CodeWarrior); ships as an optional "Install Silicon
+  Sheep Tools" step. This is the line between Tier-4-feasible and the truly-Infeasible items below.
+
+#### Smaller prior-art-grounded items
+
+- [ ] **VM gallery with one-click prebuilt images** (Infinite Mac / UTM gallery model) — "Mac OS
+  8.6, ready to boot," skipping the install dance entirely.
+- [ ] **Scripted/unattended OS install** — automate the classic Mac installer the way Lume
+  automates Setup Assistant; turns a blank disk + ISO into a ready VM with no clicks (ties to the
+  E2E scratch-disk + boot-from-ISO setup).
+- [ ] **Disk snapshots in the UI** — surface `clonefile`-of-disk snapshots as a near-term feature,
+  distinct from the very-high-effort full CPU/device-state save/restore filed under Tier 3.
+
+#### Sources (for future agents picking this up)
+
+- UTM scripting (AppleScript dictionary + `utmctl` CLI + Shortcuts): https://docs.getutm.app/scripting/scripting/ · repo https://github.com/utmapp/UTM
+- Lume (MIT; HTTP control server + MCP server for AI agents; VNC+OCR Setup-Assistant automation): https://cua.ai/docs/lume/guide/getting-started/comparison
+- Tart (CI-focused macOS VMs on Apple Silicon, CLI-only): https://tart.run/
+- VirtualBuddy + `VirtualBuddyGuest` (clipboard + shared-folder auto-mount guest agent): https://github.com/insidegui/VirtualBuddy
+- Internal substrate: `docs/planning/HOST-GUEST-CHANNELS.md` (readable guest structures + channel limits), `rpc_unix.cpp` (UDS RPC), ROADMAP A5 / A5-V (E2E harness this feeds).
+
 ### Infeasible (no workaround for classic Mac OS)
 
+> **Note (2026-06-05):** the *guest-agent* premise below is relaxed by **Tier 4 Layer C** for the
+> VM images we build and ship (just as Parallels/VMware/VirtualBuddy ship guest tools). It stays
+> infeasible for *retrofitting an arbitrary user's existing OS* without installing our helper, and
+> the display-driver-dependent items (coherence, live resolution) remain infeasible regardless.
+
 These features **require a guest agent, guest kernel extension, or modern guest OS** — none of
-which exist or can be injected for Mac OS 8/9:
+which exist or can be injected for Mac OS 8/9 *(without shipping our own guest tools — see Tier 4 Layer C)*:
 
 - **Full Coherence/Unity mode** (continuous per-window pixel buffers). Parallels/VMware do this
   via a guest-side hook DLL + custom display driver. No equivalent for Mac OS 9.

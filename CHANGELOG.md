@@ -11,6 +11,15 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [docs] Silicon Sheep plan — Tier 4 Automation & Scripting
+
+- Added a **Tier 4 — Automation & Scripting** section to `docs/planning/DESKTOP_INTEGRATION_PLAN.md`:
+  a launcher control surface (`siliconsheep` CLI / AppleScript / Shortcuts / MCP server / headless
+  CI mode), a screenshot-free guest control bridge (structured input + observation + an AppleEvents
+  bridge), and a "Silicon Sheep Tools" guest agent for *managed* images that reframes part of the
+  Infeasible list. Grounded in prior art (UTM scripting, Lume's HTTP+MCP control, Tart, VirtualBuddy)
+  with sources inline for future agents. Feeds the E2E harness (ROADMAP A5 / A5-V).
+
 ### [SheepShaver] E2E harness — host→guest shutdown hook + ISO medium + Speedometer benchmark (A5)
 
 - **Host→guest shutdown hook.** `SIGUSR1` → the emulator's idle hook injects the ADB Power key

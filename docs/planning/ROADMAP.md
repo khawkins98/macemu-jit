@@ -364,6 +364,16 @@ and Tauri architecture all researched; findings synthesized into the plan.
 - **C3. Tier 3 — Coherence Lite** (novel research): guest WindowList polling (0x9D6, proven in
   e2e code), frontmost app tracking (CurApName 0x910), host title-bar overlays, per-window
   Dock entries. True seamless windows infeasible near-term (no guest agent for Mac OS 9).
+- **C4. 🔜 Tier 4 — Automation & Scripting** (added 2026-06-05): drive/observe the guest *without
+  screenshots*. **Layer A** launcher control surface (`siliconsheep` CLI / AppleScript / Shortcuts
+  / MCP server / headless CI mode — UTM/Lume/Tart model); **Layer B** guest control bridge
+  (structured input + RAM observation + AppleEvents via `Execute68kTrap`); **Layer C** optional
+  "Silicon Sheep Tools" guest agent for *managed* images (reframes part of the Infeasible list).
+  Has a full per-layer integration design (file:line anchors, phased build orders, effort/risk).
+  **Key finding:** the bidirectional launcher↔emulator RPC does *not* exist yet, so **Layer A's A0
+  (make the RPC bidirectional) is the prerequisite** for the rest — and the lowest-risk first slice
+  (A0 → `STATUS` → CLI → MCP) also unblocks **A5** (E2E in CI) and **A5-V** (SS_JIT_VERIFY-under-E2E).
+  Feeds Track A's verification work; shares one idle-hook command-mailbox spine.
 
 **Framework:** Tauri v2 (Rust + pnpm + TypeScript). **Repo strategy:** hard-fork decision
 deferred but recognized as increasingly inevitable with Track C divergence.

@@ -393,30 +393,48 @@ function renderSettings(): string {
         </select>
       </div>
     `,
-    display: `
+    display: (() => {
+      const currentScreen = getPref("screen") || vm.screen;
+      const presets = ["win/640/480", "win/800/600", "win/1024/768", "win/1280/1024", "win/1600/1200", "win/1920/1080"];
+      const isCustom = !presets.includes(currentScreen);
+      const currentW = currentScreen.split("/")[1] || "800";
+      const currentH = currentScreen.split("/")[2] || "600";
+      const currentFrameskip = getPref("frameskip") || "1";
+      return `
       <div class="form-group">
         <label>Window Size <span class="hot-reload-badge restart">Requires restart</span></label>
-        <select class="input" id="setting-screen" ${isRunning ? "disabled" : ""}>
-          ${["win/640/480", "win/800/600", "win/1024/768", "win/1280/1024"]
-            .map((s) => {
-              const current = getPref("screen") || vm.screen;
-              return `<option value="${s}" ${current === s ? "selected" : ""}>${s.replace("win/", "").replace("/", "×")}</option>`;
-            })
+        <select class="input" id="setting-screen-preset" ${isRunning ? "disabled" : ""}>
+          ${presets
+            .map((s) => `<option value="${s}" ${currentScreen === s ? "selected" : ""}>${s.replace("win/", "").replace("/", "×")}</option>`)
             .join("")}
+          <option value="custom" ${isCustom ? "selected" : ""}>Custom...</option>
         </select>
       </div>
+      <div class="form-group" id="custom-res-group" style="${isCustom ? "" : "display:none"}">
+        <label>Custom Resolution</label>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input type="number" class="input" id="setting-screen-w" value="${escapeAttr(currentW)}"
+                 min="320" max="3840" style="width: 100px;" ${isRunning ? "disabled" : ""} />
+          <span>×</span>
+          <input type="number" class="input" id="setting-screen-h" value="${escapeAttr(currentH)}"
+                 min="240" max="2160" style="width: 100px;" ${isRunning ? "disabled" : ""} />
+        </div>
+        <p class="ss-text-muted">Any size works. Classic Mac OS apps assume 72 dpi; 1024×768 or 1280×1024 are the sweet spot. Very large resolutions may be slow.</p>
+      </div>
       <div class="form-group">
-        <label>Refresh Rate</label>
+        <label>Refresh Rate <span class="hot-reload-badge instant">Applies instantly</span></label>
         <select class="input" id="setting-frameskip">
           ${[
+            { v: "0", label: "Maximum (60 fps, every tick)" },
             { v: "1", label: "Every frame (60 fps)" },
-            { v: "2", label: "Every 2nd (30 fps)" },
-            { v: "4", label: "Every 4th (15 fps)" },
-            { v: "8", label: "Every 8th (8 fps)" },
-          ].map((o) => `<option value="${o.v}" ${getPref("frameskip") === o.v ? "selected" : ""}>${o.label}</option>`)
+            { v: "2", label: "Every 2nd frame (30 fps)" },
+            { v: "4", label: "Every 4th frame (15 fps)" },
+            { v: "8", label: "Every 8th frame (8 fps)" },
+            { v: "12", label: "Every 12th frame (5 fps)" },
+          ].map((o) => `<option value="${o.v}" ${currentFrameskip === o.v ? "selected" : ""}>${o.label}</option>`)
            .join("")}
         </select>
-        <p class="ss-text-muted" style="margin-top: 4px;">Lower refresh = less CPU. Default is every 2nd frame.</p>
+        <p class="ss-text-muted">The emulator ticks at 60 Hz internally. frameskip=0 and frameskip=1 both render every tick (60 fps). Higher values skip frames to reduce CPU load. The guest runs at full speed regardless — this only affects display updates.</p>
       </div>
       <div class="form-group">
         <label>QuickDraw Acceleration</label>
@@ -424,8 +442,8 @@ function renderSettings(): string {
           <option value="true" ${getPref("gfxaccel") !== "false" ? "selected" : ""}>Enabled (recommended)</option>
           <option value="false" ${getPref("gfxaccel") === "false" ? "selected" : ""}>Disabled</option>
         </select>
-      </div>
-    `,
+      </div>`;
+    })(),
     storage: (() => {
       const disks = getPrefs("disk");
       const cdroms = getPrefs("cdrom");
@@ -677,6 +695,17 @@ function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((el) => {
     el.addEventListener("click", handleAction);
   });
+
+  // Custom resolution toggle
+  const presetSelect = document.getElementById("setting-screen-preset") as HTMLSelectElement | null;
+  if (presetSelect) {
+    presetSelect.addEventListener("change", () => {
+      const customGroup = document.getElementById("custom-res-group");
+      if (customGroup) {
+        customGroup.style.display = presetSelect.value === "custom" ? "" : "none";
+      }
+    });
+  }
 }
 
 async function pickFile(
@@ -693,7 +722,14 @@ function captureCurrentSectionSettings() {
   const fields: [string, string, (v: string) => string][] = [
     ["setting-name", "name", (v) => v],
     ["setting-ram", "ramsize", (v) => v + "M"],
-    ["setting-screen", "screen", (v) => v],
+    ["setting-screen-preset", "screen", (v) => {
+      if (v === "custom") {
+        const w = (document.getElementById("setting-screen-w") as HTMLInputElement)?.value || "800";
+        const h = (document.getElementById("setting-screen-h") as HTMLInputElement)?.value || "600";
+        return `win/${w}/${h}`;
+      }
+      return v;
+    }],
     ["setting-frameskip", "frameskip", (v) => v],
     ["setting-ether", "ether", (v) => v],
     ["setting-nosound", "nosound", (v) => v],

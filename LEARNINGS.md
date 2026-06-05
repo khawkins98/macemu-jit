@@ -3,6 +3,49 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-05 — E2E benchmark auto-shutdown: keyboard quit-to-Finder; VNC mouse CLICKS don't register
+
+Automating the Speedometer benchmark to shut down **unattended** hit two non-obvious walls. The
+fix that works is **keyboard-only**; the click rabbit hole below cost hours — read it before
+trying to "just click something" over VNC.
+
+**1. The Power-key shutdown hook only raises the Shut Down dialog at the FINDER, not over a
+frontmost app.** The smoke test shuts down cleanly because it's at the Finder; the benchmark hung
+because Speedometer was frontmost (no shutdown dialog ever appeared). Fix: get back to the Finder
+first. Keyboard path that works: after saving the report, **Cmd-Q**, then answer Speedometer's
+"Save before quitting?" (Yes/No/Cancel) and the record-save dialog with **Return** (= Yes = save
+the Machine Record) until it quits to the Finder, where the hook shuts down. `scenario.py`.
+
+**2. VNC mouse CLICKS do not register in the guest — keyboard and mouse MOTION do.** This is the
+rabbit hole. Hard-won facts:
+- `vnc.click` must HOLD the button (move → sleep → `mouseDown` → sleep → `mouseUp`). vncdotool's
+  instant `mousePress` (down+up, no gap) is dropped by the guest.
+- **Verify VNC injection from the emulator side, not by guessing.** `vnc_pointer_callback`
+  (`vnc_server.cpp`) logs every event as `ADB: move(x,y)`; a temp `[E2E-CLICK]` fprintf confirmed
+  `ADBMouseDown(0)`/`Up(0)` DO fire at the correct coords. So the injection is fine — the guest
+  just doesn't act on the click.
+- Use **direct ADB injection** (`ADBMouseMoved/Down/Up` from the VNC thread), NOT `SDL_PushEvent`.
+  The SDL3 port regressed the working clicks (git `74886987`, the smoke-test "click Special menu"
+  era) to pushing SDL events, which silently **drops mouse-button events** (pushed motion survives
+  — hence cursor moves, clicks don't). But restoring direct ADB still didn't make the click
+  register, so the regression isn't the whole cause.
+- Suspected remaining cause (NOT yet fixed): `adb.cpp` absolute-mouse uses `CursorDeviceDispatch
+  MoveTo` (POWERPC_ROM path, ~line 400) which moves the cursor but likely doesn't update the
+  `RawMouse`/`MTemp` low-mem globals the Toolbox hit-tests clicks against (the non-PPC path ~line
+  415 DOES write `0x82a/0x828/0x82e/0x82c`). Tracked in memory `e2e-vnc-click-injection`.
+- The click work was **reverted** (kept the tree clean; the harness is keyboard-only and doesn't
+  need it). It's a separate future fix.
+
+**3. The idle-hook `frontApp` signal LIES — spurious `'Finder' Desktop` frames appear ~every 300
+ticks even when Speedometer is really frontmost.** Gating on `"Finder" in e.app` gives false
+positives (a `click-to-finder`/`back-to-finder` gate "passes" on noise). Don't trust a single
+frontApp frame as proof of an app switch.
+
+**4. Speedometer specifics:** "Save Text Report" (Cmd-T) saves a flat `Key:Value` text file under
+the **default name** "Power Macintosh Report" (typing a custom name is unreliable — match the
+default host-side). The text report has CPU/Graphics/Disk/Math + many sub-scores but **NOT `PR`**
+(PowerRating is panel-only). "Save Machine Record" (Cmd-S) is the opaque binary records DB.
+
 ## 2026-06-05 — SDL3 shutdown crash = double-`SDL_DestroyMutex` in `VideoExit()` (+ two process lessons)
 
 Switching to the SDL3 backend surfaced a clean-shutdown crash (E2E `code=-9`). Root cause: `Quit()`

@@ -147,6 +147,11 @@ fn is_vm_running(state: State<AppState>) -> Option<String> {
     }
 }
 
+#[tauri::command]
+fn import_from_prefs(prefs_path: String, name: String) -> Result<vm::VmProfile, String> {
+    vm::import_from_prefs_file(&prefs_path, &name)
+}
+
 fn find_emulator_binary() -> Option<String> {
     use std::path::PathBuf;
 
@@ -255,6 +260,7 @@ fn main() {
             stop_vm,
             is_vm_running,
             check_emulator_status,
+            import_from_prefs,
             reveal_vm_in_finder,
             backup_vm_disk,
         ])

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 interface VmProfile {
@@ -128,7 +129,10 @@ function renderLibrary(): string {
     ${renderErrorBanner()}
     <div class="header">
       <h1>Virtual Machines</h1>
-      <button class="btn btn-primary" data-action="wizard">+ New VM</button>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary" data-action="import-prefs">Import Prefs</button>
+        <button class="btn btn-primary" data-action="wizard">+ New VM</button>
+      </div>
     </div>
     <div class="vm-grid">
       ${vms.map(renderVmCard).join("")}
@@ -179,7 +183,7 @@ function renderWizardStep(): string {
             </div>
             ${wizardState.romStatus === "verified" ? `<div class="rom-badge verified">✓ ${escapeHtml(wizardState.romName)} — compatible</div>` : ""}
             ${wizardState.romStatus === "accepted" ? '<div class="rom-badge accepted">⚠ ROM file accepted (unverified)</div>' : ""}
-            ${wizardState.romStatus === "error" ? '<div class="rom-badge error">✕ Invalid ROM — expected 3 MB (NewWorld) or 4 MB (OldWorld)</div>' : ""}
+            ${wizardState.romStatus === "error" ? '<div class="rom-badge error">⚠ File doesn\'t look like a Mac ROM (unexpected size). <button class="btn-link" data-action="force-accept-rom">Proceed anyway</button></div>' : ""}
           </button>
           <details class="help-disclosure">
             <summary>Where do I find a ROM file?</summary>
@@ -192,7 +196,7 @@ function renderWizardStep(): string {
           </details>
           <div class="wizard-nav">
             <button class="btn btn-secondary" data-action="wizard-back">Back</button>
-            <button class="btn btn-primary" data-action="wizard-next" ${!wizardState.romPath ? "disabled" : ""}>Next</button>
+            <button class="btn btn-primary" data-action="wizard-next" ${!wizardState.romPath ? "disabled" : ""}>${wizardState.romStatus === "error" ? "Next (proceed anyway)" : "Next"}</button>
           </div>
         </div>
       `;
@@ -704,6 +708,22 @@ async function handleAction(e: Event) {
   const id = target.dataset.id;
 
   switch (action) {
+    case "import-prefs": {
+      const path = await pickFile("Select SheepShaver Prefs File");
+      if (path) {
+        try {
+          const name = path.split("/").pop()?.replace("_prefs", "").replace(".", " ") || "Imported VM";
+          await invoke("import_from_prefs", { prefsPath: path, name: `Imported: ${name}` });
+          vms = await loadVms();
+          showToast("VM imported from prefs file", "success");
+          render();
+        } catch (err) {
+          showToast(`Import failed: ${err}`, "error");
+        }
+      }
+      break;
+    }
+
     case "wizard":
       currentView = "wizard";
       wizardStep = 0;
@@ -754,6 +774,11 @@ async function handleAction(e: Event) {
       }
       break;
     }
+
+    case "force-accept-rom":
+      wizardState.romStatus = "accepted";
+      render();
+      break;
 
     case "pick-disk": {
       const path = await pickFile("Select Disk Image", [
@@ -1028,6 +1053,59 @@ async function pollRunningStatus() {
   }
 }
 
+async function handleFileDrop(paths: string[]) {
+  for (const path of paths) {
+    const lower = path.toLowerCase();
+
+    if (lower.endsWith(".rom") || lower.includes("rom")) {
+      // ROM file — use it in the wizard
+      if (currentView === "wizard" && wizardStep === 1) {
+        wizardState.romPath = path;
+        try {
+          const info = (await invoke("verify_rom", { path })) as RomInfo;
+          wizardState.romStatus = info.status as "" | "verified" | "accepted" | "error";
+          wizardState.romName = info.name;
+        } catch {
+          wizardState.romStatus = "accepted";
+        }
+        render();
+        showToast("ROM file dropped", "info");
+      } else {
+        showToast("Drop ROM files on the wizard's ROM step", "info");
+      }
+    } else if (lower.endsWith("_prefs") || lower.includes("sheepshaver_prefs") || lower.includes("prefs")) {
+      // Prefs file — import as a new VM
+      try {
+        const name = path.split("/").pop()?.replace("_prefs", "").replace(".", " ") || "Imported VM";
+        await invoke("import_from_prefs", { prefsPath: path, name: `Imported: ${name}` });
+        vms = await loadVms();
+        currentView = "library";
+        render();
+        showToast("VM imported from prefs file", "success");
+      } catch (err) {
+        showToast(`Import failed: ${err}`, "error");
+      }
+    } else if (lower.endsWith(".dsk") || lower.endsWith(".img") || lower.endsWith(".hfv")) {
+      // Disk image — use in wizard or settings
+      if (currentView === "wizard" && wizardStep === 2) {
+        wizardState.diskMode = "existing";
+        wizardState.diskPath = path;
+        render();
+        showToast("Disk image dropped", "info");
+      } else {
+        showToast("Drop disk images on the wizard's Disk step, or in VM settings", "info");
+      }
+    } else if (lower.endsWith(".iso") || lower.endsWith(".toast") || lower.endsWith(".cdr")) {
+      // CD image
+      if (currentView === "wizard" && wizardStep === 2) {
+        wizardState.cdPath = path;
+        render();
+        showToast("CD image dropped", "info");
+      }
+    }
+  }
+}
+
 async function init() {
   vms = await loadVms();
   runningVmId = await checkRunning();
@@ -1040,6 +1118,13 @@ async function init() {
   } catch {
     // Not fatal — may be running in browser preview
   }
+
+  // Listen for Tauri file drag-and-drop events
+  listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+    if (event.payload.paths?.length) {
+      handleFileDrop(event.payload.paths);
+    }
+  });
 
   render();
   statusPollInterval = setInterval(pollRunningStatus, 2000);

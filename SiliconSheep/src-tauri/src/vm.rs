@@ -126,12 +126,12 @@ pub fn get_profile(id: &str) -> Result<VmProfile, String> {
 
 pub fn verify_rom(path: &str) -> Result<RomInfo, String> {
     let data = fs::read(path).map_err(|e| format!("Cannot read ROM: {}", e))?;
+    let size = data.len();
 
-    let valid_sizes = [
-        4 * 1024 * 1024,  // OldWorld PCI PowerMac ROM (4 MB)
-        3 * 1024 * 1024,  // NewWorld CHRP ROM (3 MB)
-    ];
-    if !valid_sizes.contains(&data.len()) {
+    // SheepShaver accepts multiple ROM formats: raw 4 MB, CHRP 3 MB, compressed/
+    // trimmed OldWorld (~1.8 MB), and parcels-format (variable). Only reject files
+    // that are clearly not ROMs (too small to be useful, or too large).
+    if size < 512 * 1024 || size > 8 * 1024 * 1024 {
         return Ok(RomInfo {
             valid: false,
             name: String::new(),
@@ -211,6 +211,41 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
     vms.push(profile.clone());
     save_manifest(&vms);
 
+    Ok(profile)
+}
+
+pub fn import_from_prefs_file(prefs_path: &str, name: &str) -> Result<VmProfile, String> {
+    let pf = crate::prefs::load_prefs(std::path::Path::new(prefs_path))?;
+
+    let rom_path = pf.get("rom").unwrap_or("").to_string();
+    let ram_mb = pf.get_int("ramsize").map(|v| (v / (1024 * 1024)) as u32).unwrap_or(256);
+    let screen = pf.get("screen").unwrap_or("win/800/600").to_string();
+    let disk_paths: Vec<String> = pf.get_all("disk").iter().map(|s| s.to_string()).collect();
+    let cd_path = pf.get("cdrom").unwrap_or("").to_string();
+
+    let mut vms = load_manifest();
+    let id = make_vm_id(name);
+    let vm_dir = vm_library_dir().join(&id);
+    fs::create_dir_all(&vm_dir).map_err(|e| format!("Failed to create VM directory: {}", e))?;
+
+    // Copy the prefs file into the bundle
+    let dest_prefs = vm_dir.join("prefs");
+    fs::copy(prefs_path, &dest_prefs)
+        .map_err(|e| format!("Failed to copy prefs: {}", e))?;
+
+    let profile = VmProfile {
+        id,
+        name: name.to_string(),
+        rom_path,
+        ram_mb,
+        disk_paths,
+        cd_path,
+        screen,
+        shared_disk_warning: None,
+    };
+
+    vms.push(profile.clone());
+    save_manifest(&vms);
     Ok(profile)
 }
 

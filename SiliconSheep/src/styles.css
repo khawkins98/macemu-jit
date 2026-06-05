@@ -107,6 +107,21 @@ body {
 
 .btn-danger-hover:hover { color: var(--danger); border-color: var(--danger); }
 
+.btn-link {
+  background: none;
+  border: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
 /* VM Grid */
 .vm-grid {
   display: grid;

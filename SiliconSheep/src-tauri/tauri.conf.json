@@ -12,11 +12,12 @@
     "windows": [
       {
         "title": "SiliconSheep",
-        "width": 900,
-        "height": 640,
+        "width": 400,
+        "height": 160,
         "resizable": true,
-        "minWidth": 680,
-        "minHeight": 480
+        "minWidth": 320,
+        "minHeight": 100,
+        "maxHeight": 500
       }
     ],
     "security": {

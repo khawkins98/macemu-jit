@@ -9,6 +9,9 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",
-    "dialog:allow-ask"
+    "dialog:allow-ask",
+    "core:window:allow-create",
+    "core:window:allow-close",
+    "core:webview:allow-create-webview-window"
   ]
 }

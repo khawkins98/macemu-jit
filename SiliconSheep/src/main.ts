@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface VmProfile {
   id: string;
@@ -345,6 +347,39 @@ function renderWizardStep(): string {
 let settingsSection = "general";
 let pendingSettings: Record<string, string> = {};
 let debugEnvVars: Record<string, string> = {};
+let settingsWindowOpen = false;
+let isSettingsWindow = false;
+
+async function openSettingsWindow(vmId: string) {
+  if (settingsWindowOpen) {
+    showToast("Settings window is already open", "info");
+    return;
+  }
+
+  const vm = vms.find((v) => v.id === vmId);
+  const title = vm ? `${vm.name} Configuration` : "VM Configuration";
+
+  try {
+    const win = new WebviewWindow("settings", {
+      url: `index.html?settings=${encodeURIComponent(vmId)}`,
+      title,
+      width: 750,
+      height: 600,
+      resizable: true,
+      minWidth: 600,
+      minHeight: 400,
+    });
+
+    settingsWindowOpen = true;
+
+    win.once("tauri://destroyed", () => {
+      settingsWindowOpen = false;
+    });
+  } catch (e) {
+    settingsWindowOpen = false;
+    showToast(`Failed to open settings: ${e}`, "error");
+  }
+}
 
 interface PrefEntry {
   key: string;
@@ -999,18 +1034,17 @@ async function handleAction(e: Event) {
 
     case "settings":
       if (id) {
-        selectedVmId = id;
-        settingsSection = "general";
-        pendingSettings = {};
-        await loadVmPrefs(id);
-        currentView = "settings";
-        render();
+        await openSettingsWindow(id);
       }
       break;
 
     case "back-to-library":
-      currentView = "library";
-      render();
+      if (isSettingsWindow) {
+        getCurrentWindow().close();
+      } else {
+        currentView = "library";
+        render();
+      }
       break;
 
     case "launch":
@@ -1311,6 +1345,23 @@ async function handleFileDrop(paths: string[]) {
 async function init() {
   vms = await loadVms();
   runningVmId = await checkRunning();
+
+  // Detect if this is a settings window (opened with ?settings=<vmid>)
+  const params = new URLSearchParams(window.location.search);
+  const settingsVmId = params.get("settings");
+
+  if (settingsVmId) {
+    selectedVmId = settingsVmId;
+    settingsSection = "general";
+    pendingSettings = {};
+    await loadVmPrefs(settingsVmId);
+    currentView = "settings";
+    isSettingsWindow = true;
+    render();
+    return;
+  }
+
+  // Main window — Control Center
   await loadScreenshots();
 
   try {
@@ -1322,7 +1373,6 @@ async function init() {
     // Not fatal — may be running in browser preview
   }
 
-  // Listen for Tauri file drag-and-drop events
   listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
     if (event.payload.paths?.length) {
       handleFileDrop(event.payload.paths);

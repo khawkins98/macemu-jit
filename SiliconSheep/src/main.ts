@@ -396,6 +396,13 @@ function renderSettings(): string {
         </select>
         <p class="text-muted" style="margin-top: 4px;">Lower refresh = less CPU. Default is every 2nd frame.</p>
       </div>
+      <div class="form-group">
+        <label>QuickDraw Acceleration</label>
+        <select class="input" id="setting-gfxaccel">
+          <option value="true" ${getPref("gfxaccel") !== "false" ? "selected" : ""}>Enabled (recommended)</option>
+          <option value="false" ${getPref("gfxaccel") === "false" ? "selected" : ""}>Disabled</option>
+        </select>
+      </div>
     `,
     storage: (() => {
       const disks = getPrefs("disk");
@@ -449,6 +456,44 @@ function renderSettings(): string {
         </select>
         <p class="text-muted" style="margin-top: 8px;">In the guest, open TCP/IP in Control Panels and set Configure to "Using DHCP Server".</p>
       </div>
+      <div class="form-group">
+        <label>VNC Server</label>
+        <select class="input" id="setting-vncserver">
+          <option value="true" ${getPref("vncserver") === "true" ? "selected" : ""}>Enabled</option>
+          <option value="false" ${getPref("vncserver") !== "true" ? "selected" : ""}>Disabled</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>VNC Port</label>
+        <input type="number" class="input" id="setting-vncport" value="${escapeAttr(getPref("vncport") || "5900")}" />
+      </div>
+    `,
+    input: `
+      <div class="form-group">
+        <label>Mouse Wheel Mode</label>
+        <select class="input" id="setting-mousewheelmode">
+          <option value="0" ${getPref("mousewheelmode") !== "1" ? "selected" : ""}>Page Up/Down</option>
+          <option value="1" ${getPref("mousewheelmode") === "1" ? "selected" : ""}>Cursor Up/Down</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Mouse Wheel Lines</label>
+        <input type="number" class="input" id="setting-mousewheellines" value="${escapeAttr(getPref("mousewheellines") || "3")}" min="1" max="20" />
+      </div>
+      <div class="form-group">
+        <label>Swap Option/Command Keys</label>
+        <select class="input" id="setting-swap_opt_cmd">
+          <option value="false" ${getPref("swap_opt_cmd") !== "true" ? "selected" : ""}>No (Option=Option, Command=Command)</option>
+          <option value="true" ${getPref("swap_opt_cmd") === "true" ? "selected" : ""}>Yes (swap Option ↔ Command)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Use Raw Keycodes</label>
+        <select class="input" id="setting-keycodes">
+          <option value="false" ${getPref("keycodes") !== "true" ? "selected" : ""}>No (use keysyms)</option>
+          <option value="true" ${getPref("keycodes") === "true" ? "selected" : ""}>Yes (use keycodes)</option>
+        </select>
+      </div>
     `,
     advanced: `
       <div class="form-group">
@@ -480,6 +525,77 @@ function renderSettings(): string {
           <option value="-62" ${getPref("bootdriver") === "-62" ? "selected" : ""}>CD-ROM</option>
         </select>
       </div>
+      <details class="expert-fold">
+        <summary>Expert Settings</summary>
+        <div class="expert-content">
+          <div class="form-group">
+            <label>Ignore Illegal Memory Accesses</label>
+            <select class="input" id="setting-ignoresegv">
+              <option value="true" ${getPref("ignoresegv") !== "false" ? "selected" : ""}>Yes (recommended)</option>
+              <option value="false" ${getPref("ignoresegv") === "false" ? "selected" : ""}>No (crash on SEGV)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Ignore Illegal Instructions</label>
+            <select class="input" id="setting-ignoreillegal">
+              <option value="true" ${getPref("ignoreillegal") !== "false" ? "selected" : ""}>Yes (recommended)</option>
+              <option value="false" ${getPref("ignoreillegal") === "false" ? "selected" : ""}>No (crash on SIGILL)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Idle Wait</label>
+            <select class="input" id="setting-idlewait">
+              <option value="true" ${getPref("idlewait") !== "false" ? "selected" : ""}>Yes (save CPU when idle)</option>
+              <option value="false" ${getPref("idlewait") === "false" ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>JIT Compiler <span class="hot-reload-badge restart">Requires restart</span></label>
+            <select class="input" id="setting-jit" ${isRunning ? "disabled" : ""}>
+              <option value="true" ${getPref("jit") !== "false" ? "selected" : ""}>Enabled</option>
+              <option value="false" ${getPref("jit") === "false" ? "selected" : ""}>Disabled (interpreter)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>68K DR Emulator</label>
+            <select class="input" id="setting-jit68k">
+              <option value="false" ${getPref("jit68k") !== "true" ? "selected" : ""}>Disabled</option>
+              <option value="true" ${getPref("jit68k") === "true" ? "selected" : ""}>Enabled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Clipboard Conversion</label>
+            <select class="input" id="setting-noclipconversion">
+              <option value="false" ${getPref("noclipconversion") !== "true" ? "selected" : ""}>Enabled (convert clipboard)</option>
+              <option value="true" ${getPref("noclipconversion") === "true" ? "selected" : ""}>Disabled (raw clipboard)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Hardware Cursor</label>
+            <select class="input" id="setting-hardcursor">
+              <option value="false" ${getPref("hardcursor") !== "true" ? "selected" : ""}>Software cursor</option>
+              <option value="true" ${getPref("hardcursor") === "true" ? "selected" : ""}>Hardware cursor</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Serial Port A</label>
+            <input type="text" class="input" id="setting-seriala" value="${escapeAttr(getPref("seriala"))}" placeholder="e.g. /dev/tty.usbserial" />
+          </div>
+          <div class="form-group">
+            <label>Serial Port B</label>
+            <input type="text" class="input" id="setting-serialb" value="${escapeAttr(getPref("serialb"))}" placeholder="e.g. /dev/tty.usbserial" />
+          </div>
+          <div class="form-group">
+            <label>Keyboard Type</label>
+            <input type="number" class="input" id="setting-keyboardtype" value="${escapeAttr(getPref("keyboardtype") || "5")}" />
+            <p class="text-muted" style="margin-top: 4px;">5 = extended keyboard (default)</p>
+          </div>
+          <div class="form-group">
+            <label>SDL Renderer</label>
+            <input type="text" class="input" id="setting-sdlrender" value="${escapeAttr(getPref("sdlrender") || "")}" placeholder="auto (default)" />
+          </div>
+        </div>
+      </details>
     `,
   };
 
@@ -550,8 +666,26 @@ function captureCurrentSectionSettings() {
     ["setting-ether", "ether", (v) => v],
     ["setting-nosound", "nosound", (v) => v],
     ["setting-jitcache", "jitcachesize", (v) => v],
+    ["setting-gfxaccel", "gfxaccel", (v) => v],
+    ["setting-vncserver", "vncserver", (v) => v],
+    ["setting-vncport", "vncport", (v) => v],
+    ["setting-mousewheelmode", "mousewheelmode", (v) => v],
+    ["setting-mousewheellines", "mousewheellines", (v) => v],
+    ["setting-swap_opt_cmd", "swap_opt_cmd", (v) => v],
+    ["setting-keycodes", "keycodes", (v) => v],
     ["setting-bootdriver", "bootdriver", (v) => v],
     ["setting-nocdrom", "nocdrom", (v) => v],
+    ["setting-ignoresegv", "ignoresegv", (v) => v],
+    ["setting-ignoreillegal", "ignoreillegal", (v) => v],
+    ["setting-idlewait", "idlewait", (v) => v],
+    ["setting-jit", "jit", (v) => v],
+    ["setting-jit68k", "jit68k", (v) => v],
+    ["setting-noclipconversion", "noclipconversion", (v) => v],
+    ["setting-hardcursor", "hardcursor", (v) => v],
+    ["setting-seriala", "seriala", (v) => v],
+    ["setting-serialb", "serialb", (v) => v],
+    ["setting-keyboardtype", "keyboardtype", (v) => v],
+    ["setting-sdlrender", "sdlrender", (v) => v],
   ];
   for (const [elId, key, transform] of fields) {
     const el = document.getElementById(elId) as HTMLInputElement | HTMLSelectElement | null;

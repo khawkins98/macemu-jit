@@ -486,6 +486,33 @@ body {
 
 .text-muted { color: var(--text-muted); font-size: 13px; }
 
+/* Expert fold-out */
+.expert-fold {
+  margin-top: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.expert-fold summary {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.expert-fold summary:hover { color: var(--text); }
+
+.expert-fold[open] summary {
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.expert-content {
+  padding: 16px;
+}
+
 /* Focus styles for accessibility */
 .btn:focus-visible,
 .drop-zone:focus-visible,

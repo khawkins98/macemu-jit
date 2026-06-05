@@ -181,3 +181,48 @@ def test_format_delta_shows_percent_change(tmp_path):
 
 def test_format_delta_no_history():
     assert "no runs" in bench_export.format_delta(Path("/nonexistent/history.csv"))
+
+
+# --- summarize + format_summary (less-noisy multi-run signal) ---
+
+def test_summarize_median_min_max_and_cv():
+    r1 = bench_export.parse_report(_REPORT)                                  # CPU 64.265
+    r2 = bench_export.parse_report(_REPORT.replace("CPU: 64.265", "CPU: 66.265"))
+    r3 = bench_export.parse_report(_REPORT.replace("CPU: 64.265", "CPU: 65.265"))
+    s = bench_export.summarize([r1, r2, r3])
+    assert s["cpu"]["n"] == 3
+    assert s["cpu"]["median"] == 65.265
+    assert s["cpu"]["min"] == 64.265 and s["cpu"]["max"] == 66.265
+    assert s["cpu"]["cv_pct"] > 0          # the three CPU values differ -> nonzero noise
+    assert s["math"]["cv_pct"] == 0.0      # Math identical across all three -> zero noise
+
+
+def test_summarize_skips_missing_metric_and_accepts_plain_dicts():
+    s = bench_export.summarize([{"cpu": 10.0}, {"cpu": "12.0"}])  # plain dicts, one stringy
+    assert s["cpu"]["n"] == 2 and s["cpu"]["median"] == 11.0
+    assert "disk" not in s                                         # never present -> omitted
+
+
+def test_format_summary_flags_noisy_metric():
+    # Disk swings wildly (high CV), CPU steady (low CV).
+    rows = [{"cpu": 64.0, "disk": 5.0}, {"cpu": 64.1, "disk": 15.0}]
+    out = bench_export.format_summary(bench_export.summarize(rows))
+    assert "Disk" in out and "noisy" in out
+    assert "CPU" in out and out.count("noisy") == 1   # only Disk flagged
+
+
+def test_format_summary_empty():
+    assert "no scores" in bench_export.format_summary({})
+
+
+def test_read_history_roundtrip_and_missing(tmp_path):
+    root = tmp_path / "benchmark-history"
+    assert bench_export.read_history(root / "history.csv") == []   # absent -> []
+    bench_export.archive_run(report=_report(), raw_text=_REPORT, png=None,
+                             history_root=root, timestamp="t1")
+    bench_export.archive_run(report=_report(), raw_text=_REPORT, png=None,
+                             history_root=root, timestamp="t2")
+    rows = bench_export.read_history(root / "history.csv")
+    assert [r["timestamp"] for r in rows] == ["t1", "t2"]   # oldest-first
+    # the "rows appended this batch" slice the multi-run orchestrator relies on:
+    assert len(rows[1:]) == 1 and rows[1:][0]["timestamp"] == "t2"

@@ -31,18 +31,25 @@ The pipeline works end-to-end and shuts down **unattended** (verified: 3 consecu
   still-open emulator bug, which is why the shutdown is keyboard-only. Details + the decisive
   next test: `LEARNINGS.md` (2026-06-05) and memory `e2e-vnc-click-injection`.
 
-**Open data gaps (follow-ups, not blocking):**
-- **PR (PowerRating) — the headline number — is not captured** (not in the text report).
-  Options: OCR it from the `benchmark-result.png` we already capture, or compute it from the
-  sub-scores (Speedometer's weighted formula). This is the biggest *data* gap for a trend tool.
-- **Scores are noisy run-to-run** (host-load dependent; e.g. CPU 33 vs 64 on a degraded host).
-  A single run is not a reliable trend point — caveat the history, and any future regression
-  gate should average N runs rather than diff single runs.
-- **No unit test for the `quit-modal` retry loop** (the FakeRunner gap, §20 of the e2e spec).
+**Data decisions & remaining gaps:**
+- **`PR` (PowerRating) is deliberately NOT trended.** It's a disk-weighted composite, so it
+  inherits the Disk metric's high run-to-run noise and misleads as a "performance" number. It's
+  also panel-only (absent from the text report). We trend the component scores instead and
+  exclude `pr` from aggregation (`bench_export._AGG_METRICS`). *(Resolved, not a gap.)*
+- **Run-to-run noise — addressed via `SS_E2E_RUNS=N`.** A single run is host-load sensitive
+  (e.g. CPU 33 vs 64 on a degraded host). Setting `SS_E2E_RUNS=N` runs the benchmark N times
+  (each in its **own subprocess** — vncdotool's Twisted reactor can't restart in-process) and
+  prints a batch **summary**: the **median** per metric (robust to a one-off spike) and each
+  metric's **CV%** (coefficient of variation = run-to-run noise), flagging >5%. The CV% is
+  host-state dependent: on a quiet host CPU/Math settle to <1% and **Disk** is the noisy one
+  (I/O); under host load CPU contention makes everything noisy (measured ~7% on a busy host). So
+  the CV% is the honest "is this batch trustworthy?" signal — for clean numbers, run on an idle
+  machine with more runs. (`bench_export.summarize`/`format_summary`/`read_history`.) *(Resolved.)*
+- **No unit test for the `quit-modal` retry loop** (the FakeRunner gap, §20 of the e2e spec). Open.
 - The `back-to-finder` gate keys off the **noisy `frontApp` signal** (spurious `'Finder'`
   frames) — it didn't verify the quit, the runs passed because Speedometer *did* quit. Failure
   is graceful (shutdown timeout → FAIL). Consider keying off "Speedometer gone / stable Finder
-  for N frames" instead.
+  for N frames" instead. Open (low priority).
 
 **Goal:** After the e2e Speedometer benchmark finishes, save its **text report** inside the
 guest, extract that file **host-side** (no extra boot), parse the scores, archive each run

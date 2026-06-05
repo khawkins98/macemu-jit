@@ -88,10 +88,29 @@ quits Speedometer **keyboard-only** (Cmd-Q → Return through "Save before quitt
 dialogs) back to the Finder, where the hook shuts down. (VNC mouse *clicks* don't register in the
 guest — a separate open bug; see `LEARNINGS.md`.)
 
-**Caveats:** `PR` (PowerRating, the headline Speedometer number) is **not** captured — it's only
-in the on-screen panel, not the text report (follow-up: OCR it from `benchmark-result.png` or
-compute it). And the scores are **noisy run-to-run** (host-load dependent) — treat a single run
-as a rough point, not a precise measurement.
+**Less-noisy measurement — `SS_E2E_RUNS=N`.** A single run is host-load sensitive, so for a trend
+point run several and let the harness aggregate:
+
+```bash
+SS_E2E_RUNS=3 make e2e-bench   # 3 boots, then a batch summary:
+#   benchmark summary (3 runs) — median ± run-to-run noise:
+#     CPU         64.000  ± 0.2%  [63.900..64.200] n=3
+#     Math     12000.000  ± 0.1%  [11990.000..12010.000] n=3
+#     Disk         8.000  ±34.4%  [5.000..12.000] n=3  <- noisy, treat with caution
+```
+
+It reports the **median** (robust to a one-off spike) and each metric's **CV%** (run-to-run
+noise), flagging any metric above 5%. The CV% is measured *per batch* and reflects **host
+state**, so use it as a "is this measurement trustworthy?" signal:
+- On a **quiet** machine, compute metrics (CPU/Math) settle to <1% and **Disk** is the noisy one
+  (I/O, tens of %) — trust CPU/Math for JIT-perf trends, not Disk.
+- Under **host load**, CPU contention makes *everything* noisy (we measured CPU/Math ~7% on a
+  busy host) — if the whole batch is flagged noisy, the numbers aren't reliable; re-run on an
+  idle machine with more runs (`SS_E2E_RUNS=5`).
+
+**`PR` (PowerRating) is deliberately not trended** — it's a disk-weighted composite, so it
+inherits Disk's noise and misleads as a "performance" number (and it's panel-only anyway). We
+trend the component scores instead.
 
 ---
 

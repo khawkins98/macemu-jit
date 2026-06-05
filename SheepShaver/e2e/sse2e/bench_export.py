@@ -11,6 +11,7 @@ import csv
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -244,11 +245,17 @@ def archive_run(*, report: Report, raw_text: str, png, history_root: Path,
     return run_dir
 
 
+def read_history(history_csv: Path) -> list[dict]:
+    """All rows of history.csv as dicts (oldest first), or [] if absent/empty."""
+    p = Path(history_csv)
+    if not p.exists():
+        return []
+    with p.open(newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def format_delta(history_csv: Path) -> str:
-    if not Path(history_csv).exists():
-        return "benchmark history: (no runs recorded)"
-    with Path(history_csv).open(newline="") as f:
-        rows = list(csv.DictReader(f))
+    rows = read_history(history_csv)
     if not rows:
         return "benchmark history: (no runs recorded)"
     metrics = [("PR", "pr"), ("CPU", "cpu"), ("Graphics", "graphics"),
@@ -274,4 +281,56 @@ def format_delta(history_csv: Path) -> str:
                     lines.append(f"  {label:<9} {p} -> {c}")
             elif c:
                 lines.append(f"  {label:<9} {c}")
+    return "\n".join(lines)
+
+
+# Metrics worth aggregating. Deliberately NO `pr` (PowerRating): it's a disk-weighted composite,
+# so it inherits the Disk metric's high run-to-run noise and misleads as a "performance" number.
+_AGG_METRICS = [("cpu", "CPU"), ("graphics", "Graphics"), ("disk", "Disk"), ("math", "Math")]
+NOISY_CV_PCT = 5.0  # coefficient-of-variation above which a metric is flagged unreliable
+
+
+def _scores_of(r):
+    """Accept a parsed Report (has .scores) or a plain score/CSV-row dict."""
+    return r.scores if hasattr(r, "scores") else r
+
+
+def summarize(reports, metrics=("cpu", "graphics", "disk", "math")) -> dict:
+    """Aggregate a batch of runs per metric: {n, median, min, max, cv_pct}.
+
+    The point is a LESS NOISY signal than a single run: `median` is robust to a one-off
+    host-load spike, and `cv_pct` (coefficient of variation = stdev/mean, %) quantifies the
+    run-to-run noise — low for compute-bound metrics (CPU/Math), high for I/O-bound ones
+    (Disk). Accepts parsed Reports or plain dicts; non-numeric/missing values are skipped.
+    """
+    out: dict = {}
+    for m in metrics:
+        vals: list[float] = []
+        for r in reports:
+            v = _scores_of(r).get(m)
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                pass
+        if not vals:
+            continue
+        mean = statistics.fmean(vals)
+        cv = (statistics.pstdev(vals) / mean * 100.0) if len(vals) > 1 and mean else 0.0
+        out[m] = {"n": len(vals), "median": statistics.median(vals),
+                  "min": min(vals), "max": max(vals), "cv_pct": cv}
+    return out
+
+
+def format_summary(summary: dict, label: str = "batch") -> str:
+    """Pretty-print a `summarize()` result: median ± run-to-run noise, flagging noisy metrics."""
+    if not summary:
+        return f"benchmark summary ({label}): (no scores)"
+    lines = [f"benchmark summary ({label}) — median ± run-to-run noise (lower noise = more trustworthy):"]
+    for key, name in _AGG_METRICS:
+        s = summary.get(key)
+        if not s:
+            continue
+        flag = "  <- noisy, treat with caution" if s["cv_pct"] >= NOISY_CV_PCT else ""
+        lines.append(f"  {name:<9} {s['median']:>11.3f}  ±{s['cv_pct']:>5.1f}%  "
+                     f"[{s['min']:.3f}..{s['max']:.3f}] n={s['n']}{flag}")
     return "\n".join(lines)

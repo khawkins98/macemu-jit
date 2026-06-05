@@ -111,14 +111,19 @@ boot — reads the unmounted run-copy image directly, MacRoman-decoded, hfsutils
 isolated via a throwaway HOME), and archives each run under gitignored
 `SheepShaver/e2e/artifacts/benchmark-history/<timestamp>/` (raw `report.txt` + `scores.csv`
 + result PNG) plus an append-only `history.csv`, printing the CPU/Graphics/Disk/Math delta
-vs the previous run. (`PR`/PowerRating is panel-only, not in the text report — not trended
-yet; OCR/compute is a follow-up. Scores are noisy run-to-run, host-load dependent.)
-Collect+report only — a save/extract failure never flips a PASS to FAIL. The benchmark now
-**shuts down unattended**: since the Power-key hook only fires at the Finder (not over a
-frontmost app), the harness quits Speedometer keyboard-only (Cmd-Q → Return through the
-save dialogs) to the Finder first. (VNC mouse *clicks* don't register in the guest — a
-separate open bug, see LEARNINGS.) New `sse2e/bench_export.py` (+19 unit tests);
-`make e2e-setup` gains an optional hfsutils check. Design + plan:
+vs the previous run. Collect+report only — a save/extract failure never flips a PASS to FAIL.
+The benchmark now **shuts down unattended**: since the Power-key hook only fires at the
+Finder (not over a frontmost app), the harness quits Speedometer keyboard-only (Cmd-Q →
+Return through the save dialogs) to the Finder first. (VNC mouse *clicks* don't register in
+the guest — a separate open bug, see LEARNINGS.)
+**Less-noisy measurement:** `SS_E2E_RUNS=N` runs N times (each in its own subprocess — vncdotool's
+Twisted reactor can't restart in-process) and prints a batch summary — the **median** per metric
++ each metric's **CV%** (run-to-run noise), flagging >5%. CV% is host-state dependent (quiet host:
+CPU/Math <1%, Disk noisy; under load: everything noisy) — the honest "is this batch trustworthy?"
+signal. `PR`/PowerRating is **deliberately not trended** (disk-weighted composite → inherits
+Disk's noise, misleads as a perf number; also panel-only). New `sse2e/bench_export.py` (+23 unit
+tests); throwaway run-copies are now cleaned up; `make e2e-setup` gains an optional hfsutils
+check. Design + plan:
 `docs/superpowers/specs/2026-06-05-benchmark-result-export-design.md`,
 `docs/superpowers/plans/2026-06-05-benchmark-result-export.md`.
 

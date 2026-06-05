@@ -141,11 +141,12 @@ def run_benchmark(
         # robust — never races ahead, self-corrects if a key lands before the window is input-ready.
         timings: dict[str, float] = {}
 
-        # Splash -> main window. The splash takes a variable ~10-24 s to become input-ready (and the
-        # Enter is silently dropped until then), so resend on a tight ~3 s cadence to catch the
-        # readiness window promptly rather than in coarse chunks.
+        # Splash -> main window. Predicate is sound because the splash is the ONLY Speedometer state
+        # before the main window, and it is modal — so the first non-modal Speedometer event is the
+        # main window. Resend Enter every 3 s until then (the splash drops input for a variable
+        # ~10-24 s).
         t = _drive_until(runner, vnc, "enter", lambda e: "Speedometer" in e.app and not e.modal,
-                         "splash->main", attempts=12, per_timeout=3.0)
+                         "splash->main", timeout=40.0, resend=3.0)
         if t is None:
             return BenchResult(False, "splash did not dismiss to Speedometer's main window",
                                runner.log_text())
@@ -154,9 +155,10 @@ def run_benchmark(
         vnc.key("esc"); time.sleep(0.5)          # dismiss the optional registration prompt (absent on
                                                  # this build, so there's no signal to gate on — brief)
 
-        # Cmd+A = "run all" -> "choose a disk" dialog (modal=1). Retry in case the key races.
+        # Cmd+A = "run all" -> "choose a disk" dialog. Predicate `e.modal` is sound here because the
+        # main window (just reached) is non-modal, so the first modal event AFTER Cmd+A is this dialog.
         t = _drive_until(runner, vnc, "super-a", lambda e: e.modal, "choose-disk dialog",
-                         attempts=3, per_timeout=8.0)
+                         timeout=20.0, resend=4.0)
         if t is None:
             return BenchResult(False, "choose-disk dialog did not appear after Cmd+A",
                                runner.log_text())
@@ -225,18 +227,33 @@ def _await_since(runner: Runner, since: int, predicate, timeout: float, desc: st
 
 
 def _drive_until(runner: Runner, vnc: Vnc, key: str, predicate, desc: str,
-                 attempts: int = 3, per_timeout: float = 12.0):
-    """Send `key`, then gate on `predicate`; if the transition doesn't happen, RESEND and retry
-    (up to `attempts`). Robust against a key landing before the target window is input-ready (e.g.
-    Speedometer's splash takes ~10 s to accept input) or racing the cooperative-multitasking frontApp
-    oscillation. Returns elapsed seconds of the successful attempt, or None if all attempts time out.
-    Only use where resending the key is harmless (idempotent default-button / menu actions)."""
-    for attempt in range(1, attempts + 1):
-        since = _nlines(runner)
-        vnc.key(key)
-        t = _await_since(runner, since, predicate, per_timeout, f"{desc} (try {attempt}/{attempts})")
-        if t is not None:
-            return t
+                 timeout: float = 40.0, resend: float = 3.0):
+    """Drive a key-triggered window transition robustly.
+
+    ONE continuous watch (from a single log cursor `since`) for an `[APP]` event satisfying
+    `predicate`, while RESENDING `key` every `resend` seconds as a nudge until it happens. The resend
+    is needed because the target window can silently drop input until it is ready (Speedometer's
+    splash takes a variable ~10-24 s). Watching continuously — rather than re-cursoring per retry —
+    means a transition is never missed in the gap between retries, and the resend stops the instant
+    the transition is observed (at most one extra key after it). Returns elapsed seconds, or None on
+    timeout. Use only for idempotent keys (resending is harmless once the window is past).
+    """
+    since = _nlines(runner)
+    t0 = time.monotonic()
+    last_send = t0 - resend          # send once immediately
+    while time.monotonic() - t0 < timeout:
+        now = time.monotonic()
+        if now - last_send >= resend:
+            vnc.key(key)
+            last_send = now
+        for ln in runner.log_text().splitlines()[since:]:
+            ev = observe.parse_app(ln)
+            if ev is not None and predicate(ev):
+                elapsed = time.monotonic() - t0
+                print(f"  [gate] {desc}: {elapsed:.1f}s", flush=True)
+                return elapsed
+        time.sleep(0.2)
+    print(f"  [gate] {desc}: TIMEOUT after {timeout:.0f}s", flush=True)
     return None
 
 

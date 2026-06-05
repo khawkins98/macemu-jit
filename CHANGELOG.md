@@ -11,6 +11,32 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver][BasiliskII] JIT harness & diagnostic integrity hardening
+
+Tooling-only (no runtime/codegen change); hardens the signals used to judge the JIT:
+
+- **[SheepShaver] SS_JIT_VERIFY suppression latch fixed.** The differential interp-vs-JIT
+  oracle used a `bool verify_suppressed` that, once set on the first divergence, gated its
+  own clearing branch — so verify went silent for the rest of the run after one report.
+  Replaced with a `verify_suppress_blocks` countdown decremented only on in-range (RAM)
+  blocks (execution is overwhelmingly ROM at `0x50xxxxxx`, so a per-block decrement would
+  drain it before any RAM block is skipped). Checking now auto-resumes. Tunable with a
+  symptom guide in the code comment. (`ppc-cpu.cpp`)
+- **[SheepShaver] rom-harness bench no longer blanket-masks stderr.** `make bench` shows
+  the JIT engine chatter by default; masking is opt-in via `make bench BENCH_QUIET=1`. The
+  bench's own warnings/errors (baseline-stale, init-fail, compile-fail) are routed to
+  **stdout** so they survive even under `BENCH_QUIET=1` — the previous unconditional
+  `2>/dev/null` silently hid them, including the advertised "baseline OLDER than
+  ppc-jit.cpp" warning.
+- **[BasiliskII][SheepShaver] preflight vacuousness guard (shallow tier).** Both
+  `jit-test/run.sh` preflights now reject a vector whose body is entirely NOPs (`4E71` /
+  PPC `60000000`) — it exercises only decode/dispatch and asserts nothing under the
+  differential. Intentional decode/dispatch sanity vectors (`nop`, `nop_triplet`) are
+  allow-listed. Verified: rejects synthetic all-NOP vectors, zero false positives across
+  the real tables (B2 452, SS 264). The **deep** tier (real-opcode body whose result hides
+  in an FPR/VR/memory the REGDUMP can't see) remains deferred to the `gen-*-vectors.py`
+  generators / a future sentinel-mutation redesign.
+
 ### [SheepShaver] E2E benchmark history export
 
 `make e2e-bench` now saves Speedometer's text report in-guest (Cmd-T), extracts it

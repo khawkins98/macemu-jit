@@ -1417,10 +1417,16 @@ echo "HARNESS mode=$SS_HARNESS_MODE" >&2
 # The SheepShaver harness previously had NO self-validation (unlike BasiliskII's).
 # Validate the vector table before trusting any result: every TEST_ORDER entry has
 # a definition, tokens are well-formed (8 hex chars), and no name/hex is duplicated.
-# NOTE: this does NOT catch vacuous vectors (whose result hides in an FPR/VR/memory
-# the REGDUMP can't see) — that defense lives in the gen-*-vectors.py generators,
-# which construct the result into a GPR with distinct operands. A harness-side
-# vacuousness guard needs a sentinel/mutation redesign (see CHANGELOG, deferred).
+# Vacuousness has two tiers:
+#   - SHALLOW (all-NOP body): guarded below. A vector that is nothing but PPC NOPs
+#     (60000000 = ori r0,r0,0) exercises only decode/dispatch and asserts nothing
+#     under the interp-vs-JIT differential — almost always a gutted/mis-pasted
+#     payload. Mirrors BasiliskII/jit-test/run.sh.
+#   - DEEP (real opcodes whose result hides in an FPR/VR/memory the REGDUMP can't
+#     see, or operands too trivial to distinguish a buggy backend): NOT caught here.
+#     That defense lives in the gen-*-vectors.py generators (result built into a GPR
+#     with distinct operands); a harness-side deep guard needs a sentinel/mutation
+#     redesign (deferred).
 _seen_name=""; _seen_hex=""; infra_fail=0
 for name in "${TEST_ORDER[@]}"; do
     eval "hex=\"\${T_${name}:-}\""
@@ -1431,6 +1437,22 @@ for name in "${TEST_ORDER[@]}"; do
             *) echo "INFRA: $name has malformed token '$tok' (need exactly 8 hex chars)" >&2; infra_fail=1 ;;
         esac
     done
+    # Shallow vacuousness guard (see two-tier note above): an all-NOP body asserts
+    # nothing under the interp-vs-JIT differential. 'nop' is the deliberate
+    # decode/dispatch sanity vector and is allow-listed; any other all-NOP body is
+    # treated as a gutted/mis-pasted payload. (PPC NOP 60000000 is all-digits, so no
+    # case folding is needed; the token loop above already proved $hex is non-empty.)
+    case " nop " in
+        *" $name "*) ;;   # allow-listed decode/dispatch sanity vector
+        *)
+            _all_nop=1
+            for tok in $hex; do [ "$tok" = "60000000" ] || _all_nop=0; done
+            if [ "$_all_nop" = 1 ]; then
+                echo "INFRA: vacuous vector '$name': body is all-NOP (60000000), exercises no opcode under test; allow-list it only if it is a deliberate decode/dispatch sanity vector" >&2
+                infra_fail=1
+            fi
+            ;;
+    esac
     # Duplicate NAME is a real bug: the 2nd T_<name> shadows the 1st in bash var
     # lookup, so one of the two vectors never runs (lost coverage). Hard fail.
     case " $_seen_name " in *" $name "*) echo "INFRA: duplicate vector name '$name' (shadows an earlier vector — one never runs)" >&2; infra_fail=1 ;; esac

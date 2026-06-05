@@ -131,6 +131,24 @@ Tooling-only (no runtime/codegen change); hardens the signals used to judge the 
   in an FPR/VR/memory the REGDUMP can't see) remains deferred to the `gen-*-vectors.py`
   generators / a future sentinel-mutation redesign.
 
+### [SheepShaver] E2E harness — trustworthy gates: FakeRunner tests, settle-based gate, honest PASS
+
+Hardens the *integrity* of the benchmark's pass/fail signal (this session exposed runs printing
+PASS when the automation hadn't actually worked unattended):
+
+- **Drive/gate logic is now unit-tested offline.** `scenario.py`'s save/quit sequence was
+  extracted into testable helpers (`_save_text_report`, `_quit_to_finder`, `_await_front_app`);
+  new `tests/test_scenario.py` exercises them with a **`FakeRunner`** (scripted `[APP]` log lines)
+  + **`FakeVnc`** (records keys, reacts to input) + a fake clock — 14 deterministic tests, no
+  emulator/boot. The most error-prone part of the harness finally has coverage.
+- **`back-to-finder` gate hardened against the noisy `frontApp` signal.** It used to fire on a
+  single spurious `'Finder'` frame (false confidence). `_await_front_app` now requires Speedometer
+  to be ABSENT across a window of consecutive `[APP]` frames (and Finder present) — it only
+  succeeds once Speedometer has really quit. Unit-tested against the exact false positive.
+- **Honest benchmark PASS.** A green `make e2e-bench` now requires the guest's real clean-shutdown
+  signatures (`saw_clean_shutdown`: "Shutdown complete." + the atexit session line), not just a 0
+  exit code — so PASS means the harness genuinely drove an unattended shutdown. 67 unit tests pass.
+
 ### [SheepShaver] E2E benchmark history export
 
 `make e2e-bench` now saves Speedometer's text report in-guest (Cmd-T → Return, accepting

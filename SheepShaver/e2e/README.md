@@ -173,7 +173,7 @@ screenshots are written; `make e2e-bench` also writes `artifacts/benchmark-resul
 ### Offline unit tests (no boot, no assets)
 
 ```bash
-make e2e-test          # from SheepShaver/ — 45 tests: observe / runner / disk / config / imagecmp / bench_export
+make e2e-test          # from SheepShaver/ — 67 tests: observe / runner / disk / config / imagecmp / bench_export / scenario
 ```
 
 These run anywhere (CI included) — they exercise the signal parsing, teardown, and prefs logic with

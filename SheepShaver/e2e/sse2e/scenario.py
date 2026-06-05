@@ -207,40 +207,15 @@ def run_benchmark(
         vnc.capture(img)                         # capture the results (with the "All Done!" alert up)
         vnc.key("enter"); time.sleep(1.5)        # dismiss "All Done!" -> guest returns to idle
 
-        # Save Speedometer's text report onto the (throwaway) run-copy disk, then quit to the
-        # Finder so the host-side extraction (after shutdown) has a file to read. Cmd-T opens a
-        # MODAL "Save Text Report" dialog; accept its DEFAULT name ("Power Macintosh Report") with
-        # Return — typing a custom name proved unreliable (keys dropped/leaked, and it saved under
-        # the default name anyway), so we don't type; the host matches the default name.
-        # All best-effort: a hiccup here must not fail the benchmark (export is additive).
+        # Save the text report onto the (throwaway) run-copy disk so the host can extract it after
+        # shutdown, then quit Speedometer back to the Finder (the Power-key shutdown hook only raises
+        # the Shut Down dialog at the Finder, not over a frontmost app). Both are extracted, unit-
+        # tested helpers. All best-effort: a hiccup here must NOT fail the benchmark — the real gate
+        # is the clean shutdown asserted below.
         report_saved = False
         try:
-            since = _nlines(runner)
-            vnc.key("super-t")                            # File > Save Text Report...
-            if _await_since(runner, since, lambda e: e.modal, 8.0, "save-dialog") is not None:
-                since = _nlines(runner)
-                vnc.key("enter")                          # Return = Save (accept default name)
-                if _await_since(runner, since, lambda e: not e.modal, 8.0, "save-commit") is not None:
-                    report_saved = True
-                else:
-                    since = _nlines(runner)
-                    vnc.key("esc")                        # cancel a lingering dialog so it can't
-                    _await_since(runner, since, lambda e: not e.modal, 5.0, "save-cancel")  # block shutdown
-            # Quit Speedometer back to the Finder so the Power-key shutdown hook works (it only
-            # raises the Shut Down dialog at the Finder, not over a frontmost app). KEYBOARD-ONLY:
-            # VNC mouse *clicks* don't register in the guest (a deep ADB absolute-mouse bug — the
-            # button fires at the right coords but the Toolbox doesn't act on it; see
-            # memory/e2e-vnc-click-injection). So Cmd-Q, then answer each modal that follows with
-            # Return: "Save before quitting?" -> Yes (save the Machine Record) -> the record save
-            # dialog -> accept default name -> (any replace prompt) -> Speedometer quits to Finder.
-            since = _nlines(runner)
-            vnc.key("super-q")                            # Cmd-Q = Quit
-            for _ in range(4):
-                if _await_since(runner, since, lambda e: e.modal, 3.0, "quit-modal") is None:
-                    break
-                since = _nlines(runner)
-                vnc.key("enter")                          # default button (Yes / Save / Replace)
-            _await_since(runner, since, lambda e: "Finder" in e.app, 12.0, "back-to-finder")
+            report_saved = _save_text_report(runner, vnc)
+            _quit_to_finder(runner, vnc)
             time.sleep(1.5)                               # let the Finder settle before shutdown
         except Exception:
             pass                                          # leave report_saved False; PASS unaffected
@@ -252,6 +227,15 @@ def run_benchmark(
         gates = " ".join(f"{k}={v:.1f}s" for k, v in timings.items())
         if code is None:
             return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img, duration_s)
+        # Honest PASS: a clean *exit code alone* isn't enough — require the guest's real shutdown
+        # signatures ("Shutdown complete." + the atexit session line). This is what makes a green
+        # benchmark mean the automation genuinely drove an unattended shutdown, not that the process
+        # happened to exit (e.g. was helped along externally).
+        if code != 0 or not observe.saw_clean_shutdown(log):
+            return BenchResult(False,
+                               f"benchmark ran but the shutdown was not clean (exit={code}, "
+                               f"clean_signatures={observe.saw_clean_shutdown(log)})",
+                               log, img, duration_s, report_saved=report_saved)
         return BenchResult(True,
                            f"benchmark complete in {duration_s:.0f}s (gates: {gates}); results + log captured",
                            log, img, duration_s, report_saved=report_saved)
@@ -321,6 +305,73 @@ def _drive_until(runner: Runner, vnc: Vnc, key: str, predicate, desc: str,
         time.sleep(0.2)
     print(f"  [gate] {desc}: TIMEOUT after {timeout:.0f}s", flush=True)
     return None
+
+
+def _await_front_app(runner: Runner, since: int, want: str, avoid: str,
+                     timeout: float, settle: int = 4):
+    """Wait until the front-app stream SETTLES on `want` and away from `avoid`: the most recent
+    `settle` `[APP]` frames (after `since`) all lack `avoid` and at least one is `want`.
+
+    This is reliable where a single-frame check is NOT. The idle hook emits spurious one-off
+    `frontApp='Finder'` frames even while another app is genuinely frontmost, so gating on a single
+    'Finder' frame gives false positives (it "passes" while Speedometer is still up). Requiring
+    `avoid` to be ABSENT across a window of consecutive frames only succeeds once the app has really
+    quit — those spurious frames are interleaved with `avoid` frames, so any `settle`-frame window
+    that still contains the app fails the check. Returns elapsed seconds, or None on timeout.
+    """
+    t0 = time.monotonic()
+    deadline = t0 + timeout
+    while time.monotonic() < deadline:
+        events = [e for e in (observe.parse_app(ln)
+                              for ln in runner.log_text().splitlines()[since:]) if e is not None]
+        recent = events[-settle:]
+        if len(recent) >= settle and not any(avoid in e.app for e in recent) \
+                and any(want in e.app for e in recent):
+            elapsed = time.monotonic() - t0
+            print(f"  [gate] settle:{want} (no {avoid}): {elapsed:.1f}s", flush=True)
+            return elapsed
+        time.sleep(0.2)
+    print(f"  [gate] settle:{want} (no {avoid}): TIMEOUT after {timeout:.0f}s", flush=True)
+    return None
+
+
+def _save_text_report(runner: Runner, vnc: Vnc) -> bool:
+    """Drive Cmd-T "Save Text Report" and accept the default name ("Power Macintosh Report").
+
+    Typing a custom name proved unreliable (keys dropped/leaked and it saved under the default name
+    anyway), so we don't type — the host matches the default name. Returns True if the modal save
+    dialog opened and committed; best-effort — the caller must not fail the benchmark on a False.
+    """
+    since = _nlines(runner)
+    vnc.key("super-t")                                # File > Save Text Report...
+    if _await_since(runner, since, lambda e: e.modal, 8.0, "save-dialog") is None:
+        return False                                  # no save dialog appeared
+    since = _nlines(runner)
+    vnc.key("enter")                                  # Return = Save (accept the default name)
+    if _await_since(runner, since, lambda e: not e.modal, 8.0, "save-commit") is not None:
+        return True
+    since = _nlines(runner)                            # dialog stuck — Escape it so it can't block quit
+    vnc.key("esc")
+    _await_since(runner, since, lambda e: not e.modal, 5.0, "save-cancel")
+    return False
+
+
+def _quit_to_finder(runner: Runner, vnc: Vnc, timeout: float = 12.0) -> bool:
+    """Quit Speedometer back to the Finder, KEYBOARD-ONLY. Cmd-Q, then answer each modal that follows
+    ("Save before quitting?" -> Yes -> the record save dialog -> accept -> any replace prompt) with
+    Return, until Speedometer has reliably VANISHED from the front-app stream (via `_await_front_app`,
+    not a single noisy 'Finder' frame). Returns True if the Finder was reached. The Power-key shutdown
+    hook only raises the Shut Down dialog at the Finder, not over a frontmost app.
+    """
+    since = _nlines(runner)
+    vnc.key("super-q")                                # Cmd-Q = Quit
+    for _ in range(4):                                # answer the save-changes chain with Return
+        if _await_since(runner, since, lambda e: e.modal, 3.0, "quit-modal") is None:
+            break
+        since = _nlines(runner)
+        vnc.key("enter")                              # default button (Yes / Save / Replace)
+    return _await_front_app(runner, since, want="Finder", avoid="Speedometer",
+                            timeout=timeout) is not None
 
 
 def _await_app(runner: Runner, app: str, timeout: float) -> bool:

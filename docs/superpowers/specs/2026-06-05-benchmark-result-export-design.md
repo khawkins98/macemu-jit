@@ -48,11 +48,19 @@ The pipeline works end-to-end and shuts down **unattended** (verified: 3 consecu
   (I/O); under host load CPU contention makes everything noisy (measured ~7% on a busy host). So
   the CV% is the honest "is this batch trustworthy?" signal — for clean numbers, run on an idle
   machine with more runs. (`bench_export.summarize`/`format_summary`/`read_history`.) *(Resolved.)*
-- **No unit test for the `quit-modal` retry loop** (the FakeRunner gap, §20 of the e2e spec). Open.
-- The `back-to-finder` gate keys off the **noisy `frontApp` signal** (spurious `'Finder'`
-  frames) — it didn't verify the quit, the runs passed because Speedometer *did* quit. Failure
-  is graceful (shutdown timeout → FAIL). Consider keying off "Speedometer gone / stable Finder
-  for N frames" instead. Open (low priority).
+- **Drive/gate logic now unit-tested (the FakeRunner gap, §20).** `scenario.py`'s save/quit logic
+  was extracted into testable helpers (`_save_text_report`, `_quit_to_finder`, `_await_front_app`),
+  and `tests/test_scenario.py` covers them with a `FakeRunner` (scripted log lines) + `FakeVnc`
+  (records keys) + a fake clock — 14 offline tests, no boot. *(Resolved.)*
+- **`back-to-finder` gate hardened.** It keyed off the **noisy `frontApp` signal** (a single
+  spurious `'Finder'` frame), giving false confidence. Replaced with `_await_front_app`, which
+  requires `avoid` (Speedometer) to be ABSENT across a window of `settle` consecutive frames and
+  `want` (Finder) present — so it only fires once Speedometer has really quit. Unit-tested against
+  the exact spurious-frame false positive. *(Resolved.)*
+- **Honest benchmark PASS.** A green `e2e-bench` now requires the guest's real clean-shutdown
+  signatures (`saw_clean_shutdown`: "Shutdown complete." + the atexit line), not just a 0 exit —
+  so PASS means the automation genuinely drove an unattended shutdown, closing the false-PASS gap
+  this session exposed. *(Resolved.)*
 
 **Goal:** After the e2e Speedometer benchmark finishes, save its **text report** inside the
 guest, extract that file **host-side** (no extra boot), parse the scores, archive each run

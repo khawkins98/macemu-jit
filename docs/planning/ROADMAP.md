@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-05
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -250,6 +250,34 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
   win (faster fetch + per-run copy); (4) ~2 min/run. The offline pytest suite (`pytest -q`, no
   boot) *can* run on any runner today. A starter self-hosted workflow is sketched in the session
   notes; not committed pending the small-disk + asset-fetch pieces.
+
+**🔜 New (2026-06-05) — connect the harness to per-instruction JIT correctness.** The lifecycle
++ benchmark harness proves the emulator runs *as a system*; it does not prove the JIT is
+*arithmetically* correct. Two items close that gap (and stop the shiny system harness from
+creating a false sense of coverage):
+
+- **A5-V. `SS_JIT_VERIFY`-under-E2E mode.** Add an opt-in harness mode (`make e2e-verify` / a
+  `--verify` flag) that boots the golden workload with `SS_JIT_VERIFY=1`, then parses the
+  divergence log and **fails the run on any divergence not on a known-false-positive allowlist**
+  (today: exactly the `blr`-boundary block — see LEARNINGS "SS_JIT_VERIFY false positives";
+  ideally fixed via OPTIMIZATION-PLAN 0b-extra4 so the allowlist is empty). This turns the
+  system harness into an *automatic per-instruction differential gate* across whatever real
+  software the workload exercises — catching the class of bug (vsel, ev_mixed, vacuous FP) that
+  only shows up in VRs/FPRs the screen never displays. Caveat: `SS_JIT_VERIFY` runs every block
+  twice through the interpreter — **very slow**, so this is a nightly/pre-merge gate, not the
+  every-run smoke test. **Depends on:** P1 (done). **Complements:** A1 (the boot-time oracle is
+  A1's "in-the-wild validation path"; this automates it). **Detail:** add to the E2E spec.
+
+- **A5-C. Don't let the system harness mask the per-instruction coverage holes.** `make e2e`
+  passing is necessary, not sufficient — the open per-op gaps stay the real safety net and must
+  still be closed in A1/A2, NOT considered covered because the boot is green:
+  - **A2 leftovers (untested):** halfword multiplies `vmul{o,e}{u,s}h`, word pack `vpkuwum`,
+    signed byte multiplies `vmulosb`/`vmulesb` — need distinct/signed test vectors + a per-op fix.
+  - **A1 leftover:** the scored *arithmetic* word-op vectors (`vadduwm`/`vsubuwm`/`vmaxsw`/…)
+    still use byteswap-palindrome operands (`0x05..`/`0x03..`) that can't catch a byteswap/lane
+    bug — regenerate with **distinct AND carry-inducing** operands.
+  These are harness-verifiable here (no boot). A5-V is the backstop that catches what the per-op
+  suite *doesn't* cover; it is not a substitute for growing that suite.
 
 **Detail:** spec §12 in `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`, plan in
 `docs/superpowers/plans/`, run guide in `SheepShaver/e2e/README.md`, code in `SheepShaver/e2e/`.

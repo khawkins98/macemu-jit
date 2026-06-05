@@ -14,7 +14,7 @@ brew install autoconf automake sdl2 vde
 
 You also need:
 - An **OldWorld PPC Mac ROM** — Mac OS ROM 1.1 (1.8 MB). Not included; you must source this yourself.
-- A **Mac OS 8.6 CD image** or a pre-installed HFS disk image.
+- A **Mac OS 8.6/9.0.4 or similar CD image** or a pre-installed HFS disk image.
 
 ### Build
 
@@ -39,7 +39,7 @@ SheepShaver reads `~/.sheepshaver_prefs` on startup. A minimal working configura
 ```
 rom   /path/to/Mac OS ROM 1.1.rom
 disk  /path/to/your-disk.dsk        # optional: pre-installed HFS disk image
-cdrom /path/to/Mac OS 8.6.iso       # bootable installer CD
+cdrom /path/to/Mac OS.iso           # bootable installer CD
 ramsize 268435456
 screen win/800/600
 nosound true

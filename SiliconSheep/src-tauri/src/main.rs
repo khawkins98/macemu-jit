@@ -163,7 +163,7 @@ fn find_emulator_binary() -> Option<String> {
             // Dev mode: exe is in SiliconSheep/src-tauri/target/{debug,release}/
             // → repo root is 4 levels up
             candidates.push(exe_dir.join("../../../../SheepShaver/src/Unix/SheepShaver"));
-            // Production .app bundle: exe is in Silicon Sheep.app/Contents/MacOS/
+            // Production .app bundle: exe is in SiliconSheep.app/Contents/MacOS/
             // → sibling binary in the same dir or repo checkout nearby
             candidates.push(exe_dir.join("SheepShaver"));
         }
@@ -265,5 +265,5 @@ fn main() {
             backup_vm_disk,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Silicon Sheep");
+        .expect("error while running SiliconSheep");
 }

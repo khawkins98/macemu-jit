@@ -1,5 +1,5 @@
 {
-  "productName": "Silicon Sheep",
+  "productName": "SiliconSheep",
   "version": "0.1.0",
   "identifier": "com.siliconsheep.app",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Silicon Sheep",
+        "title": "SiliconSheep",
         "width": 900,
         "height": 640,
         "resizable": true,

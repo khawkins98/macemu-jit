@@ -1,7 +1,7 @@
-# Silicon Sheep — Desktop Integration Feature Plan
+# SiliconSheep — Desktop Integration Feature Plan
 
 > **Status:** 🟡 Active — scaffolded · **Created:** 2026-06-02 · **Updated:** 2026-06-05
-> **Why this doc exists:** "Silicon Sheep" — a Tauri v2 launcher/VM manager for SheepShaver (first-run wizard, VM library, hot-reload, coherence-lite). Framework pivoted from Cocoa to Tauri (2026-06-05). Scaffold at `SiliconSheep/`.
+> **Why this doc exists:** "SiliconSheep" — a Tauri v2 launcher/VM manager for SheepShaver (first-run wizard, VM library, hot-reload, coherence-lite). Framework pivoted from Cocoa to Tauri (2026-06-05). Scaffold at `SiliconSheep/`.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 
@@ -15,7 +15,7 @@ A modern Cocoa launcher and desktop integration layer for SheepShaver, targeting
 
 ### Hard fork, not a submodule
 
-Silicon Sheep will be a **hard fork of kanjitalk755/macemu** (the most actively maintained upstream), not a submodule or thin wrapper. Reasons:
+SiliconSheep will be a **hard fork of kanjitalk755/macemu** (the most actively maintained upstream), not a submodule or thin wrapper. Reasons:
 
 - We need to make structural changes to the emulator core (extfs multi-volume, prefs hot-reload, ARM64 JIT) that upstream is unlikely to accept wholesale.
 - A clean, pruned repo is easier to reason about and faster to build.
@@ -43,10 +43,10 @@ The repo currently carries a lot of weight from platforms and tooling we will ne
 | `BasiliskII/src/SDL/` old SDL1 paths | SDL1 is superseded by SDL2; keeping SDL2 only |
 | `SheepShaver/src/BeOS/` | Same as above |
 | `SheepShaver/src/Windows/` | Same as above |
-| `SheepShaver/src/Unix/prefs_editor_gtk.cpp` | GTK prefs editor; replaced by Silicon Sheep launcher |
+| `SheepShaver/src/Unix/prefs_editor_gtk.cpp` | GTK prefs editor; replaced by SiliconSheep launcher |
 | `SheepShaver/src/MacOSX/SheepShaver.xcodeproj` | Replaced by programmatic Cocoa build |
 | `SheepShaver/src/MacOSX/SheepShaver_Xcode8.xcodeproj` | Same |
-| `SheepShaver/src/MacOSX/Launcher/SheepShaverLauncher.xcodeproj` | Replaced by Silicon Sheep |
+| `SheepShaver/src/MacOSX/Launcher/SheepShaverLauncher.xcodeproj` | Replaced by SiliconSheep |
 | Old 32-bit / i386 JIT backends | Targeting ARM64 + x86_64 only |
 
 **What stays:**
@@ -56,7 +56,7 @@ The repo currently carries a lot of weight from platforms and tooling we will ne
 - All `src/Unix/` and `src/MacOSX/` code not covered above.
 - SDL2 video/audio backends.
 
-### Silicon Sheep launcher location
+### SiliconSheep launcher location
 
 Lives at `SiliconSheep/` in the repo root — a sibling to `BasiliskII/` and `SheepShaver/`. It references the emulator binaries as auxiliary executables in the app bundle, built separately via the Autotools path. One repo, one `make` invocation builds everything.
 
@@ -160,7 +160,7 @@ Pure launcher/wrapper work. SheepShaver binary is a sidecar child process; Tauri
 #### First-Run Wizard (screen by screen)
 
 - [ ] **Screen 1 — Welcome.** Illustration of a classic Mac desktop inside a modern macOS window
-  frame. "Silicon Sheep — Classic Mac OS on Apple Silicon." Single button: "Get Started."
+  frame. "SiliconSheep — Classic Mac OS on Apple Silicon." Single button: "Get Started."
 - [ ] **Screen 2 — ROM.** "You need a Macintosh ROM file." Large drop target + browse button.
   SHA-256 check against known-good hashes: recognized → green check + ROM name; unrecognized
   but 4 MB → amber "accepted (unverified)"; wrong size → red error. SHA is an *indicator*,
@@ -378,7 +378,7 @@ the **"Integration design — per layer"** subsection below.
   (Finder and many others) can be *driven by command*, not by clicking. "Playwright without
   pixels" for any AppleScript-aware app.
 
-#### Layer C — "Silicon Sheep Tools" guest agent (managed images only)
+#### Layer C — "SiliconSheep Tools" guest agent (managed images only)
 
 The reframe of the Infeasible list. For VM images **we** create and ship, a tiny classic-Mac
 faceless-background app / `INIT` extension that listens on a channel — poll a magic file in the
@@ -489,7 +489,7 @@ the new char table (S–M) → B4 `menu()` (M, med) → B5 AppleEvents (L, **hig
 pure ADB/RAM are unaffected); low-mem offsets need a System 7→9.0.4 spot-check before Tier-3 chrome
 relies on them; HiDPI coordinate-space assertion on the direct-host path.
 
-##### Layer C — guest agent ("Silicon Sheep Tools", managed images only)
+##### Layer C — guest agent ("SiliconSheep Tools", managed images only)
 
 **Channel choice — recommend (c) EmulOp RAM mailbox for control + (a) ExtFS for bulk; defer
 (b) OT/TCP:**
@@ -748,7 +748,7 @@ We can optionally add SHA-256 verification against known-good ROMs in the launch
 3. **extfs multi-value vs numbered keys:** Use the multi-value pref pattern (multiple `extfs`
    lines, like `disk`) — path of least resistance, consistent with the rest of the prefs file.
    (Consensus from earlier research; treat as decided unless problems arise.)
-4. ~~Should Silicon Sheep live as a subdirectory or a separate repo?~~ **Decided:** sibling
+4. ~~Should SiliconSheep live as a subdirectory or a separate repo?~~ **Decided:** sibling
    directory at `SiliconSheep/` in this repo. The hard-fork question is deferred but recognized
    as increasingly inevitable.
 

@@ -1,4 +1,4 @@
-# Silicon Sheep
+# SiliconSheep
 
 > **Status:** 🟡 Active · **Created:** 2026-06-05 · **Updated:** 2026-06-05
 > **Why this doc exists:** Developer guide for the Tauri v2 launcher/VM manager for SheepShaver.
@@ -8,7 +8,7 @@ Parallels-like experience to classic Mac OS (8.x–9.x) emulation on Apple Silic
 
 ## Architecture
 
-Silicon Sheep is a **Tauri v2** app — a Rust backend with a web frontend (HTML/CSS/TypeScript).
+SiliconSheep is a **Tauri v2** app — a Rust backend with a web frontend (HTML/CSS/TypeScript).
 It manages VM profiles and launches SheepShaver as a **sidecar** child process. The emulator
 owns its own SDL3 window for the guest display; the launcher handles everything else.
 
@@ -55,7 +55,7 @@ pnpm dev           # starts Vite dev server + Tauri window with hot reload
 ## Build
 
 ```bash
-pnpm build         # production → src-tauri/target/release/bundle/macos/Silicon Sheep.app
+pnpm build         # production → src-tauri/target/release/bundle/macos/SiliconSheep.app
 ```
 
 ## Test
@@ -86,7 +86,7 @@ pnpm typecheck     # TypeScript only
 ## Relation to SheepShaver
 
 This is a sibling project, not a replacement. SheepShaver continues to work as a standalone
-Unix binary with its text prefs file. Silicon Sheep wraps it with a GUI — it does not modify
+Unix binary with its text prefs file. SiliconSheep wraps it with a GUI — it does not modify
 the emulator core. Emulator-side changes (IPC socket, new EmulOps) are contributed back to
 `SheepShaver/` as normal patches, documented in the main CHANGELOG.md.
 

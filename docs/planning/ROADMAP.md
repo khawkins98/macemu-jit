@@ -22,7 +22,7 @@ not by order. The only hard sequencing is *within* a track (noted per item).
 |---|-------|--------------|-------|----------|
 | **A** | **Correctness & verification** | Trust that the booting emulator isn't silently wrong | 🔜 active front | `docs/TESTING.md` |
 | **B** | **Performance / JIT optimization** | Faster guest execution | 🟡 cheap wins landed; big levers open | `docs/planning/OPTIMIZATION-PLAN.md` |
-| **C** | **Desktop integration ("Silicon Sheep")** | A Parallels-like, first-class macOS app experience | ⏸ researched, not started | `docs/planning/DESKTOP_INTEGRATION_PLAN.md` |
+| **C** | **Desktop integration ("SiliconSheep")** | A Parallels-like, first-class macOS app experience | ⏸ researched, not started | `docs/planning/DESKTOP_INTEGRATION_PLAN.md` |
 | **D** | **Platform breadth** | BasiliskII/68K on macOS; Linux/ARM re-convergence | ⏸ optional | per-item below |
 
 > **Cross-cutting theme — verification is the bottleneck, not the fix.** The `vsel` bug, the
@@ -370,7 +370,7 @@ recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still
 
 ---
 
-# Track C — Desktop integration ("Silicon Sheep") — the Parallels-like experience
+# Track C — Desktop integration ("SiliconSheep") — the Parallels-like experience
 
 🟡 **Active — scaffolded (2026-06-05).** Tauri v2 project at `SiliconSheep/` compiles (Rust
 backend + Vite frontend). Framework pivoted from Cocoa/ObjC to Tauri for cross-platform door
@@ -392,7 +392,7 @@ and Tauri architecture all researched; findings synthesized into the plan.
   screenshots*. **Layer A** launcher control surface (`siliconsheep` CLI / AppleScript / Shortcuts
   / MCP server / headless CI mode — UTM/Lume/Tart model); **Layer B** guest control bridge
   (structured input + RAM observation + AppleEvents via `Execute68kTrap`); **Layer C** optional
-  "Silicon Sheep Tools" guest agent for *managed* images (reframes part of the Infeasible list).
+  "SiliconSheep Tools" guest agent for *managed* images (reframes part of the Infeasible list).
   Has a full per-layer integration design (file:line anchors, phased build orders, effort/risk).
   **Key finding:** the bidirectional launcher↔emulator RPC does *not* exist yet, so **Layer A's A0
   (make the RPC bidirectional) is the prerequisite** for the rest — and the lowest-risk first slice

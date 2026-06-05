@@ -1,7 +1,7 @@
 # Host-Guest Interaction Channels Reference
 
 > **Status:** 📖 Reference · **Created:** 2026-06-05 · **Updated:** 2026-06-05
-> **Why this doc exists:** Catalogues all host↔guest interaction channels in SheepShaver — what exists, what's achievable, and what's impossible without a guest agent. Reference for Silicon Sheep integration work.
+> **Why this doc exists:** Catalogues all host↔guest interaction channels in SheepShaver — what exists, what's achievable, and what's impossible without a guest agent. Reference for SiliconSheep integration work.
 
 ---
 

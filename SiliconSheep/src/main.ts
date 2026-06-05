@@ -75,7 +75,7 @@ function fileName(path: string): string {
 }
 
 function renderTitlebar(): string {
-  return `<div class="titlebar">Silicon Sheep</div>`;
+  return `<div class="titlebar">SiliconSheep</div>`;
 }
 
 function renderVmCard(vm: VmProfile): string {
@@ -160,7 +160,7 @@ function renderWizardStep(): string {
       content = `
         <div class="wizard-welcome">
           <div class="welcome-icon">🐑</div>
-          <h2>Silicon Sheep</h2>
+          <h2>SiliconSheep</h2>
           <p class="subtitle">Classic Mac OS on Apple Silicon</p>
           <p class="welcome-desc">Set up a virtual Power Macintosh running Mac OS 8 or 9. You'll need a ROM file — everything else can be created for you.</p>
           <button class="btn btn-primary btn-lg" data-action="wizard-next">Get Started</button>

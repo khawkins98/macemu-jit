@@ -97,12 +97,12 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   refuse to launch if the boot image is still held open — so a stray session can no longer make a run
   boot to the "?" no-boot-disk icon; it fails fast with a clear message instead.
 
-### [docs] Silicon Sheep plan — Tier 4 Automation & Scripting
+### [docs] SiliconSheep plan — Tier 4 Automation & Scripting
 
 - Added a **Tier 4 — Automation & Scripting** section to `docs/planning/DESKTOP_INTEGRATION_PLAN.md`:
   a launcher control surface (`siliconsheep` CLI / AppleScript / Shortcuts / MCP server / headless
   CI mode), a screenshot-free guest control bridge (structured input + observation + an AppleEvents
-  bridge), and a "Silicon Sheep Tools" guest agent for *managed* images that reframes part of the
+  bridge), and a "SiliconSheep Tools" guest agent for *managed* images that reframes part of the
   Infeasible list. Grounded in prior art (UTM scripting, Lume's HTTP+MCP control, Tart, VirtualBuddy)
   with sources inline for future agents. Feeds the E2E harness (ROADMAP A5 / A5-V).
 - **Built out with a per-layer integration design** (parallel codebase investigation): `file:line`
@@ -148,7 +148,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   run reproduced the abort). The getter + param are retained for a future reimplementation that
   applies the title on the **main thread** (e.g. a pending-title mailbox drained by the main loop).
 
-### [docs] Silicon Sheep — Tauri v2 launcher scaffolded + plan expanded
+### [docs] SiliconSheep — Tauri v2 launcher scaffolded + plan expanded
 
 - **Framework pivot:** Desktop integration plan (`DESKTOP_INTEGRATION_PLAN.md`) revised from
   Cocoa/ObjC to **Tauri v2** (Rust + pnpm + TypeScript). Rationale: cross-platform door stays

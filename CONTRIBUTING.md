@@ -229,7 +229,7 @@ codegen comparisons.
 | Env vars (any `getenv()` call) | `USER-HANDBOOK.md` env var table, `CLAUDE.md` |
 | Research findings | `docs/planning/OPTIMIZATION-PLAN.md`, `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` |
 | Benchmark results | `docs/BENCHMARKS.md` |
-| Silicon Sheep features (`SiliconSheep/`) | `docs/planning/DESKTOP_INTEGRATION_PLAN.md`, `ROADMAP.md` Track C, `CHANGELOG.md` |
+| SiliconSheep features (`SiliconSheep/`) | `docs/planning/DESKTOP_INTEGRATION_PLAN.md`, `ROADMAP.md` Track C, `CHANGELOG.md` |
 | Host-guest interaction channels | `docs/planning/HOST-GUEST-CHANNELS.md` |
 
 ## Project Structure (key files)
@@ -251,6 +251,6 @@ SheepShaver/jit-test/run.sh        # opcode test harness (count: make harness-co
 SheepShaver/rom-harness/           # standalone JIT exerciser + microbench
 SheepShaver/e2e/                   # end-to-end VNC test harness
 SiliconSheep/                      # Tauri v2 launcher / VM manager (Track C)
-docs/planning/DESKTOP_INTEGRATION_PLAN.md  # Silicon Sheep feature plan
+docs/planning/DESKTOP_INTEGRATION_PLAN.md  # SiliconSheep feature plan
 docs/planning/HOST-GUEST-CHANNELS.md       # host↔guest interaction reference
 ```

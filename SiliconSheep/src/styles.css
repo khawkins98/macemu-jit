@@ -699,6 +699,14 @@ body {
 }
 .settings-header h2 { font-size: 18px; font-weight: 600; }
 
+.settings-running-banner {
+  background: rgba(204, 153, 51, 0.15);
+  border-bottom: 1px solid rgba(204, 153, 51, 0.3);
+  color: var(--ss-warning);
+  padding: 6px var(--ss-space-lg);
+  font-size: 11px;
+}
+
 .settings-body { display: flex; flex: 1; overflow: hidden; }
 
 .settings-sidebar {

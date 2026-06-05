@@ -3,6 +3,7 @@
 mod prefs;
 mod vm;
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Stdio};
 use std::sync::Mutex;
@@ -10,16 +11,12 @@ use tauri::State;
 use vm::{CreateVmRequest, VmProfile};
 
 struct RunningVm {
-    id: String,
     child: Child,
-    #[allow(dead_code)] // used for future VNC screenshot capture
-    os_version: Option<String>,
-    #[allow(dead_code)] // used for future VNC screenshot capture
     vncport: u16,
 }
 
 struct AppState {
-    running: Mutex<Option<RunningVm>>,
+    running: Mutex<HashMap<String, RunningVm>>,
 }
 
 #[tauri::command]
@@ -96,11 +93,24 @@ fn update_vm_setting(id: String, key: String, value: String) -> Result<(), Strin
 #[tauri::command]
 fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, String>>, state: State<AppState>) -> Result<(), String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
-    if let Some(ref r) = *running {
-        return Err(format!("VM '{}' is already running", r.id));
+    if running.contains_key(&id) {
+        return Err(format!("VM '{}' is already running", id));
     }
 
+    // Check for shared disk images with any running VM
     let profile = vm::get_profile(&id)?;
+    for (other_id, _) in running.iter() {
+        if let Ok(other) = vm::get_profile(other_id) {
+            for disk in &profile.disk_paths {
+                if other.disk_paths.contains(disk) {
+                    return Err(format!(
+                        "Cannot start: disk '{}' is in use by VM '{}'",
+                        disk.split('/').last().unwrap_or(disk), other.name
+                    ));
+                }
+            }
+        }
+    }
     let vm_dir = vm::vm_dir_for(&id);
 
     let emu_path = find_emulator_binary()
@@ -192,12 +202,7 @@ fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, Stri
         });
     }
 
-    *running = Some(RunningVm {
-        id,
-        child,
-        os_version: profile.os_version.clone(),
-        vncport,
-    });
+    running.insert(id, RunningVm { child, vncport });
 
     Ok(())
 }
@@ -339,57 +344,43 @@ fn capture_vnc_screenshot(vncport: u16, output_path: &std::path::Path) -> Result
 #[tauri::command]
 fn capture_vm_screenshot(id: String, state: State<AppState>) -> Result<(), String> {
     let running = state.running.lock().map_err(|e| e.to_string())?;
-    if let Some(ref r) = *running {
-        if r.id != id {
-            return Err("That VM is not running".to_string());
-        }
-        let vm_dir = vm::vm_dir_for(&id);
-        let screenshot_path = vm_dir.join("screenshot.png");
-        capture_vnc_screenshot(r.vncport, &screenshot_path)?;
-        Ok(())
-    } else {
-        Err("No VM is running".to_string())
-    }
+    let r = running.get(&id).ok_or("That VM is not running")?;
+    let vm_dir = vm::vm_dir_for(&id);
+    let screenshot_path = vm_dir.join("screenshot.png");
+    capture_vnc_screenshot(r.vncport, &screenshot_path)
 }
 
 #[tauri::command]
-fn stop_vm(state: State<AppState>) -> Result<(), String> {
+fn stop_vm(id: String, state: State<AppState>) -> Result<(), String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
-    if let Some(ref r) = *running {
-        // Capture a final screenshot before shutdown
-        let vm_dir = vm::vm_dir_for(&r.id);
-        let screenshot_path = vm_dir.join("screenshot.png");
-        capture_vnc_screenshot(r.vncport, &screenshot_path).ok();
+    let r = running.get(&id).ok_or("That VM is not running")?;
 
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(r.child.id() as i32, libc::SIGUSR1);
-        }
-        *running = None;
-        Ok(())
-    } else {
-        Err("No VM is running".to_string())
+    let vm_dir = vm::vm_dir_for(&id);
+    let screenshot_path = vm_dir.join("screenshot.png");
+    capture_vnc_screenshot(r.vncport, &screenshot_path).ok();
+
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(r.child.id() as i32, libc::SIGUSR1);
     }
+    running.remove(&id);
+    Ok(())
 }
 
 #[tauri::command]
-fn is_vm_running(state: State<AppState>) -> Option<String> {
-    let mut running = state.running.lock().ok()?;
-    if let Some(ref mut r) = *running {
+fn get_running_vms(state: State<AppState>) -> Vec<String> {
+    let mut running = state.running.lock().unwrap_or_else(|e| e.into_inner());
+    let mut dead: Vec<String> = Vec::new();
+    for (id, r) in running.iter_mut() {
         match r.child.try_wait() {
-            Ok(Some(_)) => {
-                *running = None;
-                None
-            }
-            Ok(None) => Some(r.id.clone()),
-            Err(_) => {
-                *running = None;
-                None
-            }
+            Ok(Some(_)) | Err(_) => dead.push(id.clone()),
+            Ok(None) => {}
         }
-    } else {
-        None
     }
+    for id in &dead {
+        running.remove(id);
+    }
+    running.keys().cloned().collect()
 }
 
 #[tauri::command]
@@ -488,7 +479,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
-            running: Mutex::new(None),
+            running: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             list_vms,
@@ -503,7 +494,7 @@ fn main() {
             add_vm_disk,
             launch_vm,
             stop_vm,
-            is_vm_running,
+            get_running_vms,
             check_emulator_status,
             import_from_prefs,
             get_vm_screenshot,

@@ -67,7 +67,7 @@ type View = "library" | "wizard" | "settings";
 let currentView: View = "library";
 let vms: VmProfile[] = [];
 let selectedVmId: string | null = null;
-let runningVmId: string | null = null;
+let runningVmIds: Set<string> = new Set();
 let wizardStep = 0;
 let wizardState = {
   romPath: "",
@@ -90,11 +90,12 @@ async function loadVms(): Promise<VmProfile[]> {
   }
 }
 
-async function checkRunning(): Promise<string | null> {
+async function checkRunning(): Promise<Set<string>> {
   try {
-    return (await invoke("is_vm_running")) as string | null;
+    const ids = (await invoke("get_running_vms")) as string[];
+    return new Set(ids);
   } catch {
-    return null;
+    return new Set();
   }
 }
 
@@ -138,7 +139,7 @@ function formatElapsed(launchTs: number): string {
 }
 
 function renderVmRow(vm: VmProfile): string {
-  const isRunning = vm.id === runningVmId;
+  const isRunning = runningVmIds.has(vm.id);
   const screenshotSrc = vmScreenshots.get(vm.id);
   const osLabel = vm.os_version ? escapeHtml(vm.os_version) : `${vm.ram_mb} MB`;
   const launchTs = vmLaunchTimestamps.get(vm.id);
@@ -468,7 +469,7 @@ function getPrefs(key: string): string[] {
 function renderSettings(): string {
   const vm = vms.find((v) => v.id === selectedVmId);
   if (!vm) return renderLibrary();
-  const isRunning = vm.id === runningVmId;
+  const isRunning = runningVmIds.has(vm.id);
 
   const sections: Record<string, string> = {
     general: `
@@ -822,6 +823,7 @@ function renderSettings(): string {
         <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}" title="Delete">${ICON_TRASH()}</button>
         <button class="btn btn-primary" data-action="save-settings">Save</button>
       </div>
+      ${isRunning ? '<div class="settings-running-banner">This VM is running. Hardware settings are disabled — stop the VM to change them.</div>' : ""}
       <div class="settings-body">
         <div class="settings-sidebar">
           ${Object.keys(sections).map((s) => `
@@ -865,7 +867,7 @@ function bindEvents() {
     el.addEventListener("dblclick", (e) => {
       const row = (e.currentTarget as HTMLElement);
       const vmId = row.dataset.id;
-      if (vmId && vmId !== runningVmId) {
+      if (vmId && !runningVmIds.has(vmId)) {
         handleAction({ target: row.querySelector('[data-action="launch"]') } as unknown as Event);
       }
     });
@@ -1107,7 +1109,7 @@ async function handleAction(e: Event) {
 
         try {
           await invoke("launch_vm", { id: vm.id, envVars: null });
-          runningVmId = vm.id;
+          runningVmIds.add(vm.id);
         } catch (err) {
           console.error("Created VM but failed to launch:", err);
         }
@@ -1141,7 +1143,7 @@ async function handleAction(e: Event) {
         try {
           const envVars = Object.keys(debugEnvVars).length > 0 ? debugEnvVars : null;
           await invoke("launch_vm", { id, envVars });
-          runningVmId = id;
+          runningVmIds.add(id);
           vmLaunchTimestamps.set(id, Date.now());
           showToast("VM started. Click inside the classic desktop to capture the mouse. Ctrl-F5 to release.", "info", 8000);
           render();
@@ -1153,9 +1155,9 @@ async function handleAction(e: Event) {
 
     case "stop":
       try {
-        await invoke("stop_vm");
-        if (runningVmId) vmLaunchTimestamps.delete(runningVmId);
-        runningVmId = null;
+        await invoke("stop_vm", { id });
+        if (id) vmLaunchTimestamps.delete(id);
+        if (id) runningVmIds.delete(id);
         render();
       } catch (err) {
         console.error("Failed to stop VM:", err);
@@ -1355,29 +1357,36 @@ async function loadScreenshots() {
 let screenshotCounter = 0;
 
 async function pollRunningStatus() {
-  const newRunningId = await checkRunning();
-  if (newRunningId !== runningVmId) {
-    runningVmId = newRunningId;
-    if (!newRunningId) {
+  const newRunning = await checkRunning();
+  const changed = newRunning.size !== runningVmIds.size ||
+    [...newRunning].some((id) => !runningVmIds.has(id));
+
+  if (changed) {
+    // Detect VMs that just stopped
+    for (const id of runningVmIds) {
+      if (!newRunning.has(id)) {
+        vmLaunchTimestamps.delete(id);
+      }
+    }
+    runningVmIds = newRunning;
+    if (runningVmIds.size === 0) {
       vms = await loadVms();
       await loadScreenshots();
     }
     if (currentView === "library") render();
   }
 
-  // Capture a live screenshot every ~10s while running (every 5th poll at 2s interval)
-  if (runningVmId && ++screenshotCounter >= 5) {
+  // Capture live screenshots every ~10s for all running VMs
+  if (runningVmIds.size > 0 && ++screenshotCounter >= 5) {
     screenshotCounter = 0;
-    try {
-      await invoke("capture_vm_screenshot", { id: runningVmId });
-      const src = (await invoke("get_vm_screenshot", { id: runningVmId })) as string | null;
-      if (src) {
-        vmScreenshots.set(runningVmId, src);
-        if (currentView === "library") render();
-      }
-    } catch {
-      // VNC may not be ready yet or vncdotool not available
+    for (const id of runningVmIds) {
+      try {
+        await invoke("capture_vm_screenshot", { id });
+        const src = (await invoke("get_vm_screenshot", { id })) as string | null;
+        if (src) vmScreenshots.set(id, src);
+      } catch { /* VNC may not be ready */ }
     }
+    if (currentView === "library") render();
   }
 }
 
@@ -1385,7 +1394,7 @@ function showContextMenu(e: MouseEvent, vmId: string, vmName: string) {
   const existing = document.getElementById("context-menu");
   if (existing) existing.remove();
 
-  const isRunning = vmId === runningVmId;
+  const isRunning = runningVmIds.has(vmId);
   const menu = document.createElement("div");
   menu.id = "context-menu";
   menu.className = "context-menu";
@@ -1476,7 +1485,7 @@ async function handleFileDrop(paths: string[]) {
 
 async function init() {
   vms = await loadVms();
-  runningVmId = await checkRunning();
+  runningVmIds = await checkRunning();
 
   // Detect if this is a settings window (opened with ?settings=<vmid>)
   const params = new URLSearchParams(window.location.search);

@@ -539,6 +539,7 @@ function renderSettings(): string {
               <option value="true" ${getPref("ignoresegv") !== "false" ? "selected" : ""}>Yes (recommended)</option>
               <option value="false" ${getPref("ignoresegv") === "false" ? "selected" : ""}>No (crash on SEGV)</option>
             </select>
+            <p class="text-muted">Some Mac OS software accesses memory outside its allocated range. Ignoring these prevents crashes at the cost of possible subtle glitches.</p>
           </div>
           <div class="form-group">
             <label>Ignore Illegal Instructions</label>
@@ -546,6 +547,7 @@ function renderSettings(): string {
               <option value="true" ${getPref("ignoreillegal") !== "false" ? "selected" : ""}>Yes (recommended)</option>
               <option value="false" ${getPref("ignoreillegal") === "false" ? "selected" : ""}>No (crash on SIGILL)</option>
             </select>
+            <p class="text-muted">Some ROM code contains instructions not supported by the emulator. Ignoring them keeps the system running.</p>
           </div>
           <div class="form-group">
             <label>Idle Wait</label>
@@ -553,6 +555,7 @@ function renderSettings(): string {
               <option value="true" ${getPref("idlewait") !== "false" ? "selected" : ""}>Yes (save CPU when idle)</option>
               <option value="false" ${getPref("idlewait") === "false" ? "selected" : ""}>No</option>
             </select>
+            <p class="text-muted">Sleeps the host CPU when the guest is idle, reducing power and heat. Disable if the guest freezes during idle periods.</p>
           </div>
           <div class="form-group">
             <label>JIT Compiler <span class="hot-reload-badge restart">Requires restart</span></label>
@@ -560,6 +563,7 @@ function renderSettings(): string {
               <option value="true" ${getPref("jit") !== "false" ? "selected" : ""}>Enabled</option>
               <option value="false" ${getPref("jit") === "false" ? "selected" : ""}>Disabled (interpreter)</option>
             </select>
+            <p class="text-muted">The AArch64 JIT compiles PowerPC code to native ARM64 for ~2x performance. Disable to fall back to the slower interpreter for debugging.</p>
           </div>
           <div class="form-group">
             <label>68K DR Emulator</label>
@@ -567,6 +571,7 @@ function renderSettings(): string {
               <option value="false" ${getPref("jit68k") !== "true" ? "selected" : ""}>Disabled</option>
               <option value="true" ${getPref("jit68k") === "true" ? "selected" : ""}>Enabled</option>
             </select>
+            <p class="text-muted">The Mac OS ROM contains 68K code run by a built-in emulator (the "DR emulator"). This legacy JIT for that layer is usually not needed on ARM64.</p>
           </div>
           <div class="form-group">
             <label>Clipboard Conversion</label>
@@ -574,6 +579,7 @@ function renderSettings(): string {
               <option value="false" ${getPref("noclipconversion") !== "true" ? "selected" : ""}>Enabled (convert clipboard)</option>
               <option value="true" ${getPref("noclipconversion") === "true" ? "selected" : ""}>Disabled (raw clipboard)</option>
             </select>
+            <p class="text-muted">Converts text encoding (Mac Roman to Unicode) and image formats when copying between guest and host. Disable if clipboard sync causes issues.</p>
           </div>
           <div class="form-group">
             <label>Hardware Cursor</label>
@@ -581,23 +587,27 @@ function renderSettings(): string {
               <option value="false" ${getPref("hardcursor") !== "true" ? "selected" : ""}>Software cursor</option>
               <option value="true" ${getPref("hardcursor") === "true" ? "selected" : ""}>Hardware cursor</option>
             </select>
+            <p class="text-muted">Hardware cursor uses the host OS cursor for lower latency. Software cursor renders the classic Mac arrow inside the guest framebuffer.</p>
           </div>
           <div class="form-group">
             <label>Serial Port A</label>
             <input type="text" class="input" id="setting-seriala" value="${escapeAttr(getPref("seriala"))}" placeholder="e.g. /dev/tty.usbserial" />
+            <p class="text-muted">Maps to the guest's modem port. Use a host serial device path or leave empty.</p>
           </div>
           <div class="form-group">
             <label>Serial Port B</label>
             <input type="text" class="input" id="setting-serialb" value="${escapeAttr(getPref("serialb"))}" placeholder="e.g. /dev/tty.usbserial" />
+            <p class="text-muted">Maps to the guest's printer port.</p>
           </div>
           <div class="form-group">
             <label>Keyboard Type</label>
             <input type="number" class="input" id="setting-keyboardtype" value="${escapeAttr(getPref("keyboardtype") || "5")}" />
-            <p class="text-muted" style="margin-top: 4px;">5 = extended keyboard (default)</p>
+            <p class="text-muted">The keyboard type reported to Mac OS. 5 = Apple Extended Keyboard II (default, works for most layouts).</p>
           </div>
           <div class="form-group">
             <label>SDL Renderer</label>
             <input type="text" class="input" id="setting-sdlrender" value="${escapeAttr(getPref("sdlrender") || "")}" placeholder="auto (default)" />
+            <p class="text-muted">Override the SDL rendering backend. "auto" lets SDL choose (usually Metal on macOS). Try "software" if you see display glitches.</p>
           </div>
         </div>
       </details>

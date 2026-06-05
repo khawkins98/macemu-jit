@@ -73,6 +73,38 @@ static uint32 MakeExecutableTvec;
 // fixed low-mem addresses are stable across classic Mac OS; SheepShaver maps guest low memory via
 // Mac2HostAddr/ReadMacIntN. The idle hook itself reuses SheepShaver's own SynchIdleTime ROM patch
 // (rom_patches.cpp), so this adds only the state read, not a new trap.
+// Front window title, for instrumentation. WindowRecord.titleHandle is at +0x86 (a StringHandle =
+// Handle to a Str255: deref the handle to a master ptr, then read length byte + chars). Empty for
+// untitled dialogs/alerts. Sanitized to printable ASCII so it's safe to drop into a log line.
+// Returns FALSE if the read looks like garbage (insane length, or non-printable bytes) — under
+// cooperative multitasking the frontmost "window" briefly points at background-extension pseudo-
+// windows whose title deref yields junk; the caller suppresses those frames to keep the log clean.
+static bool e2e_front_window_title(uint32 win, char *out, int outsz)
+{
+	out[0] = '\0';
+	if (!win)
+		return true;			// bare desktop / no front window = a valid empty title
+	uint32 hdl = ReadMacInt32(win + 0x86);		// titleHandle
+	if (!hdl)
+		return true;			// untitled window = valid empty
+	uint32 ptr = ReadMacInt32(hdl);				// *titleHandle -> Str255
+	if (!ptr)
+		return true;
+	uint8 *s = Mac2HostAddr(ptr);
+	int len = s[0];
+	if (len > 63)
+		return false;			// insane Str255 length = junk read
+	bool valid = true;
+	for (int i = 0; i < len; i++) {
+		uint8 c = s[1 + i];
+		if (c < 32 || c >= 127) { valid = false; c = '?'; }
+		if (i < outsz - 1)
+			out[i] = (char)c;
+	}
+	out[(len < outsz - 1) ? len : outsz - 1] = '\0';
+	return valid;
+}
+
 static void e2e_emit_idle_signals(void)
 {
 	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars).
@@ -93,37 +125,51 @@ static void e2e_emit_idle_signals(void)
 		if (kind == 2)			// dialogKind
 			modal = 1;
 	}
+	char title[64];
+	bool title_valid = e2e_front_window_title(front, title, sizeof(title));
 	uint32 ticks = ReadMacInt32(0x16a);	// Ticks since boot (60/s)
 
 	// [BOOT]: one-shot at the first idle (boot-ready) — the smoke gate waits for this line.
 	static bool boot_emitted = false;
 	if (!boot_emitted) {
 		boot_emitted = true;
-		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d ticks=%u (%.1fs)\n",
-		        app, modal, ticks, ticks / 60.0);
+		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' ticks=%u (%.1fs)\n",
+		        app, modal, front, title, ticks, ticks / 60.0);
 		fflush(stderr);
 	}
 
-	// [APP]: emit on frontmost-app change OR front-window modal change.
+	// [APP]: emit on frontmost-app change, front-window MODAL change, or front-window TITLE change.
 	//  - App changes let the harness wait for an app to launch (Speedometer from Startup Items).
 	//    CurApName churns among background extensions under cooperative multitasking (~6/s of
-	//    noise), so app-only emits are rate-limited (~0.5s).
-	//  - Modal changes are ALWAYS emitted (rare + important): they mark a dialog appearing /
-	//    disappearing — e.g. Speedometer's "tests are done!" dialog, which is the harness's
-	//    benchmark-finished hook (modal 0->1).
+	//    noise), so pure app-name emits are rate-limited (~0.5s).
+	//  - Modal + title changes are emitted immediately (meaningful): the title distinguishes the
+	//    important dialogs (e.g. Speedometer's "All Done!" = the benchmark-finished hook, vs its
+	//    untitled splash/registration/"choose a disk" dialogs, which all reuse ONE window so they're
+	//    NOT individually distinguishable — see docs). win=/title= are instrumentation.
+	//    NOTE: we deliberately do NOT trigger on the front-window POINTER changing — under
+	//    cooperative multitasking the frontmost window oscillates among background extensions every
+	//    frame, which floods the log without adding signal.
 	static char last_app[32] = { 0 };
 	static int last_modal = -1;
+	static char last_title[64] = { 0 };
 	static uint32 last_app_emit = 0;
 	bool app_changed = (strcmp(app, last_app) != 0);
 	bool modal_changed = (modal != last_modal);
-	if (app_changed || modal_changed) {
-		if (modal_changed || (ticks - last_app_emit) >= 30) {	// 0.5s debounce on app churn
-			fprintf(stderr, "[APP] frontApp='%s' modal=%d ticks=%u\n", app, modal, ticks);
+	bool title_changed = (strcmp(title, last_title) != 0);
+	// Skip transient junk frames (garbage front-window title = a background-extension pseudo-window
+	// momentarily frontmost). This suppresses the cooperative-multitasking churn that otherwise
+	// floods the log, leaving the real foreground states (Finder 'Desktop', Speedometer dialogs).
+	if (title_valid && (app_changed || modal_changed || title_changed)) {
+		if (modal_changed || title_changed || (ticks - last_app_emit) >= 30) {	// 0.5s debounce on app churn
+			fprintf(stderr, "[APP] frontApp='%s' modal=%d win=0x%x title='%s' ticks=%u\n",
+			        app, modal, front, title, ticks);
 			fflush(stderr);
 			last_app_emit = ticks;
 		}
 		strncpy(last_app, app, sizeof(last_app) - 1);
 		last_app[sizeof(last_app) - 1] = '\0';
+		strncpy(last_title, title, sizeof(last_title) - 1);
+		last_title[sizeof(last_title) - 1] = '\0';
 		last_modal = modal;
 	}
 }

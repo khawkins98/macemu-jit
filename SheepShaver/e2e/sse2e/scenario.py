@@ -132,34 +132,60 @@ def run_benchmark(
         if not _await_app(runner, "Speedometer", SPEEDO_LAUNCH_TIMEOUT):
             return BenchResult(False, "Speedometer did not launch (no [APP] frontApp='Speedometer')",
                                runner.log_text())
-        time.sleep(2.0)  # small settle after the splash-idle signal
         vnc = Vnc(port=vncport)
-        vnc.key("enter"); time.sleep(2.5)    # dismiss splash (stable, waits for Enter)
-        vnc.key("esc");   time.sleep(2.5)    # dismiss registration prompt
-        vnc.key("super-a"); time.sleep(3.0)  # Cmd+A -> run all -> "choose drive to test" dialog (modal=1)
-        # Count dialogs seen so far (incl. the just-opened "choose drive"); the benchmark-done
-        # detection waits for the NEXT one ("The tests are done!").
-        dialogs_before = _count_dialogs(runner.log_text())
-        vnc.key("enter")                     # OK = main (Desktop) disk -> benchmark auto-starts
-        # Wait DETERMINISTICALLY for the "tests are done!" dialog (a new modal=1 [APP] signal)
-        # instead of a fixed sleep. The elapsed time is a coarse perf signal.
-        t0 = time.monotonic()
-        if not _await_new_dialog(runner, dialogs_before, BENCH_DONE_TIMEOUT):
-            log = runner.log_text()
-            return BenchResult(False, "benchmark did not finish (no done-dialog within timeout)", log)
-        duration_s = time.monotonic() - t0
-        time.sleep(1.5)                      # let the done-dialog settle before the screenshot
+
+        # Every drive step is SIGNAL-GATED on the actual guest window transition (the enriched [APP]
+        # title=/modal= signals) instead of a fixed sleep: we proceed the instant the guest reaches
+        # the next state, each gate prints its elapsed time (perf instrumentation), and a key that
+        # didn't take is resent (_drive_until). Faster than fixed sleeps when the guest is quick, and
+        # robust — never races ahead, self-corrects if a key lands before the window is input-ready.
+        timings: dict[str, float] = {}
+
+        # Splash -> main window. The splash takes a variable ~10-24 s to become input-ready (and the
+        # Enter is silently dropped until then), so resend on a tight ~3 s cadence to catch the
+        # readiness window promptly rather than in coarse chunks.
+        t = _drive_until(runner, vnc, "enter", lambda e: "Speedometer" in e.app and not e.modal,
+                         "splash->main", attempts=12, per_timeout=3.0)
+        if t is None:
+            return BenchResult(False, "splash did not dismiss to Speedometer's main window",
+                               runner.log_text())
+        timings["splash"] = t
+
+        vnc.key("esc"); time.sleep(0.5)          # dismiss the optional registration prompt (absent on
+                                                 # this build, so there's no signal to gate on — brief)
+
+        # Cmd+A = "run all" -> "choose a disk" dialog (modal=1). Retry in case the key races.
+        t = _drive_until(runner, vnc, "super-a", lambda e: e.modal, "choose-disk dialog",
+                         attempts=3, per_timeout=8.0)
+        if t is None:
+            return BenchResult(False, "choose-disk dialog did not appear after Cmd+A",
+                               runner.log_text())
+        timings["choose"] = t
+
+        since = _nlines(runner)
+        vnc.key("enter")                         # OK = the main Desktop disk -> benchmark runs
+        # The benchmark-finished signal is Speedometer's "All Done!" alert (title=) — unambiguous,
+        # unlike the older modal=1 count, which also matched the choose-disk dialog.
+        duration_s = _await_since(runner, since, lambda e: "All Done" in e.title,
+                                  BENCH_DONE_TIMEOUT, "benchmark")
+        if duration_s is None:
+            return BenchResult(False, "benchmark did not finish (no 'All Done!' alert within timeout)",
+                               runner.log_text())
+
+        time.sleep(1.0)                          # let the alert settle before the screenshot
         img = str(artifact_dir / "benchmark-result.png")
-        vnc.capture(img)                     # capture the results (with the done-dialog)
-        vnc.key("enter"); time.sleep(2.0)    # dismiss "The tests are done!" -> guest returns to idle
+        vnc.capture(img)                         # capture the results (with the "All Done!" alert up)
+        vnc.key("enter"); time.sleep(1.5)        # dismiss "All Done!" -> guest returns to idle
         vnc.close()
 
         runner.request_shutdown()
         code = runner.wait(timeout=shutdown_timeout)
         log = runner.log_text()
+        gates = " ".join(f"{k}={v:.1f}s" for k, v in timings.items())
         if code is None:
             return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img, duration_s)
-        return BenchResult(True, f"benchmark complete in {duration_s:.0f}s; results + log captured",
+        return BenchResult(True,
+                           f"benchmark complete in {duration_s:.0f}s (gates: {gates}); results + log captured",
                            log, img, duration_s)
     finally:
         # Always save the emulator log (even on early failure) — terminal output for analysis.
@@ -168,6 +194,50 @@ def run_benchmark(
         except Exception:
             pass
         runner.terminate()
+
+
+def _nlines(runner: Runner) -> int:
+    """Current emulator-log line count — a cursor so a gate only matches signals AFTER an action."""
+    return len(runner.log_text().splitlines())
+
+
+def _await_since(runner: Runner, since: int, predicate, timeout: float, desc: str):
+    """Wait until an `[APP]` event appearing AFTER log line `since` satisfies `predicate(ev)`.
+
+    Returns the elapsed seconds (perf instrumentation — also printed as `[gate] <desc>: Xs`), or
+    None on timeout. Gating on the actual window transition (parsed via observe.parse_app) rather
+    than a fixed sleep makes each step faster (proceed the instant the state is reached) AND robust
+    (never races ahead of the guest). `since` prevents matching a stale signal from before the action.
+    """
+    t0 = time.monotonic()
+    deadline = t0 + timeout
+    while time.monotonic() < deadline:
+        lines = runner.log_text().splitlines()
+        for ln in lines[since:]:
+            ev = observe.parse_app(ln)
+            if ev is not None and predicate(ev):
+                elapsed = time.monotonic() - t0
+                print(f"  [gate] {desc}: {elapsed:.1f}s", flush=True)
+                return elapsed
+        time.sleep(0.2)
+    print(f"  [gate] {desc}: TIMEOUT after {timeout:.0f}s", flush=True)
+    return None
+
+
+def _drive_until(runner: Runner, vnc: Vnc, key: str, predicate, desc: str,
+                 attempts: int = 3, per_timeout: float = 12.0):
+    """Send `key`, then gate on `predicate`; if the transition doesn't happen, RESEND and retry
+    (up to `attempts`). Robust against a key landing before the target window is input-ready (e.g.
+    Speedometer's splash takes ~10 s to accept input) or racing the cooperative-multitasking frontApp
+    oscillation. Returns elapsed seconds of the successful attempt, or None if all attempts time out.
+    Only use where resending the key is harmless (idempotent default-button / menu actions)."""
+    for attempt in range(1, attempts + 1):
+        since = _nlines(runner)
+        vnc.key(key)
+        t = _await_since(runner, since, predicate, per_timeout, f"{desc} (try {attempt}/{attempts})")
+        if t is not None:
+            return t
+    return None
 
 
 def _count_dialogs(text: str) -> int:

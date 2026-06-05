@@ -48,3 +48,33 @@ def test_is_app_dialog_false_when_no_modal():
 def test_is_app_dialog_false_on_non_app_line():
     # A [BOOT] line can also carry modal=1, but it's not an [APP] dialog signal.
     assert observe.is_app_dialog("[BOOT] idle frontApp='' modal=1 ticks=300 (5.0s)") is False
+
+
+def test_parse_app_full_signal():
+    ev = observe.parse_app(
+        "[APP] frontApp='Speedometer 4.02' modal=1 win=0x1edcf8c0 title='All Done!' ticks=5245"
+    )
+    assert ev is not None
+    assert ev.app == "Speedometer 4.02" and ev.modal is True
+    assert ev.win == "0x1edcf8c0" and ev.title == "All Done!" and ev.ticks == 5245
+
+
+def test_parse_app_empty_title_nonmodal():
+    ev = observe.parse_app("[APP] frontApp='Finder' modal=0 win=0x10b24110 title='Desktop' ticks=369")
+    assert ev is not None and ev.app == "Finder" and ev.modal is False and ev.title == "Desktop"
+
+
+def test_parse_app_back_compat_no_win_title():
+    # Older signal form (no win=/title=) must still parse.
+    ev = observe.parse_app("[APP] frontApp='Finder' modal=0 ticks=900")
+    assert ev is not None and ev.app == "Finder" and ev.win == "" and ev.title == "" and ev.ticks == 900
+
+
+def test_parse_app_ignores_boot_line():
+    assert observe.parse_app("[BOOT] idle frontApp='Finder' modal=0 ticks=369 (6.2s)") is None
+
+
+def test_parse_boot_ready_tolerates_win_title_fields():
+    line = "[BOOT] idle frontApp='Finder' modal=0 win=0x10b24110 title='Desktop' ticks=369 (6.2s)"
+    ev = observe.parse_boot_ready(line)
+    assert ev is not None and ev.front_app == "Finder" and ev.modal is False and ev.secs == 6.2

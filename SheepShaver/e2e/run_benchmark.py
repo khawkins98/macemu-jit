@@ -51,9 +51,10 @@ def main() -> int:
         prefs=str(prefs),
         vncport=VNCPORT,
         artifact_dir=artifacts,
-        # Diagnostic knob: keep the window up longer at the shutdown stage so a stuck shutdown
-        # can be inspected on-screen before the harness force-kills it (default 30s).
-        shutdown_timeout=float(os.environ.get("SS_E2E_SHUTDOWN_TIMEOUT", "30")),
+        # Shutdown allows for the Mac OS 9 disk flush (≈20–40s) plus the quit-to-Finder; 60s
+        # default leaves margin without masking a genuine hang. Override with the env var (e.g.
+        # raise it to inspect a stuck shutdown on-screen before the harness force-kills it).
+        shutdown_timeout=float(os.environ.get("SS_E2E_SHUTDOWN_TIMEOUT", "60")),
     )
     print(f"{'PASS' if res.ok else 'FAIL'}: {res.reason}")
     if res.result_image:

@@ -49,6 +49,15 @@ def front_app(line: str) -> str | None:
     return m.group("app") if m else None
 
 
+def is_app_dialog(line: str) -> bool:
+    """True if this `[APP]` line reports a modal dialog is up (`modal=1`).
+
+    Used to detect dialogs appearing (e.g. Speedometer's "tests are done!" — the
+    benchmark-finished hook) without screenshots/OCR.
+    """
+    return line.lstrip().startswith("[APP]") and "modal=1" in line
+
+
 def saw_clean_shutdown(text: str) -> bool:
     """True if the log shows a clean guest shutdown (both signatures present)."""
     return bool(_SHUTDOWN_RE.search(text)) and bool(_ATEXIT_RE.search(text))

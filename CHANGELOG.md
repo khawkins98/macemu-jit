@@ -32,7 +32,14 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **`make e2e-bench` — Speedometer benchmark automation.** Boots a small stripped Mac OS 9.0.4 +
   Speedometer disk, drives the full suite over VNC (gated on a new `[APP] frontApp` change signal
   so it doesn't race the variable app launch), captures the results image (PR/CPU) + emulator log,
-  and shuts down via the hook. Verified PASS (PR 29.375). Score *parsing* (OCR) is the next step.
+  and shuts down via the hook. Verified PASS (PR 29.375).
+- **Benchmark-finished hook (no fixed sleep).** The idle hook's `[APP]` signal now also fires on a
+  front-window **modal change**, so Speedometer's "tests are done!" dialog (modal 0→1) is a
+  deterministic finish signal. `run_benchmark` waits for that dialog instead of a fixed 105 s sleep
+  and reports the measured suite duration (a coarse perf signal). App-change `[APP]` emits are
+  debounced to ~0.5 s (CurApName churns ~6/s among background extensions); modal changes are always
+  emitted. (`emul_op.cpp`, `observe.is_app_dialog()`, `scenario.run_benchmark`.) Score *parsing*
+  (Speedometer text export) is the next step.
 - **Fixes found building it:** `Vnc.close()` calls `api.shutdown()` (vncdotool's reactor otherwise
   hung every capture ~2 min); host-FS (`extfs`) mount disabled in the test prefs; verbose `pytest`.
 - Run guide: `SheepShaver/e2e/README.md`; design: `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`

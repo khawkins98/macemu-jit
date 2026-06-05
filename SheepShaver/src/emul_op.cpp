@@ -104,15 +104,27 @@ static void e2e_emit_idle_signals(void)
 		fflush(stderr);
 	}
 
-	// [APP]: emit whenever the frontmost app CHANGES — e.g. an app auto-launching from Startup
-	// Items (Speedometer for the benchmark). Lets the harness wait deterministically for an app to
-	// be up + idle, independent of how long the (highly variable) boot + launch took.
+	// [APP]: emit on frontmost-app change OR front-window modal change.
+	//  - App changes let the harness wait for an app to launch (Speedometer from Startup Items).
+	//    CurApName churns among background extensions under cooperative multitasking (~6/s of
+	//    noise), so app-only emits are rate-limited (~0.5s).
+	//  - Modal changes are ALWAYS emitted (rare + important): they mark a dialog appearing /
+	//    disappearing — e.g. Speedometer's "tests are done!" dialog, which is the harness's
+	//    benchmark-finished hook (modal 0->1).
 	static char last_app[32] = { 0 };
-	if (strcmp(app, last_app) != 0) {
+	static int last_modal = -1;
+	static uint32 last_app_emit = 0;
+	bool app_changed = (strcmp(app, last_app) != 0);
+	bool modal_changed = (modal != last_modal);
+	if (app_changed || modal_changed) {
+		if (modal_changed || (ticks - last_app_emit) >= 30) {	// 0.5s debounce on app churn
+			fprintf(stderr, "[APP] frontApp='%s' modal=%d ticks=%u\n", app, modal, ticks);
+			fflush(stderr);
+			last_app_emit = ticks;
+		}
 		strncpy(last_app, app, sizeof(last_app) - 1);
 		last_app[sizeof(last_app) - 1] = '\0';
-		fprintf(stderr, "[APP] frontApp='%s' modal=%d ticks=%u\n", app, modal, ticks);
-		fflush(stderr);
+		last_modal = modal;
 	}
 }
 

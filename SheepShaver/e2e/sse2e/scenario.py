@@ -83,9 +83,9 @@ def _await_boot_ready(runner: Runner, timeout: float) -> observe.BootReady | Non
 # --- Benchmark scenario (Speedometer) -------------------------------------------------
 
 # Speedometer auto-launches from the guest Startup Items; we wait for its [APP] signal (deterministic)
-# rather than guessing the (highly variable) launch time. BENCH_RUN_WAIT is the only fixed wall-clock.
+# to detect both the launch AND the "tests are done!" dialog (modal=1) — no fixed benchmark sleep.
 SPEEDO_LAUNCH_TIMEOUT = 90.0   # max wait for Speedometer to launch + idle on its splash
-BENCH_RUN_WAIT = 105.0         # OK-the-disk -> full Speedometer suite done (~90 s + margin)
+BENCH_DONE_TIMEOUT = 240.0     # max wait for the "tests are done!" dialog (suite is ~90s)
 
 
 @dataclass
@@ -94,6 +94,7 @@ class BenchResult:
     reason: str
     log: str
     result_image: str | None = None
+    duration_s: float | None = None  # measured suite runtime (a coarse perf signal)
 
 
 def run_benchmark(
@@ -127,9 +128,19 @@ def run_benchmark(
         vnc = Vnc(port=vncport)
         vnc.key("enter"); time.sleep(2.5)    # dismiss splash (stable, waits for Enter)
         vnc.key("esc");   time.sleep(2.5)    # dismiss registration prompt
-        vnc.key("super-a"); time.sleep(3.0)  # Cmd+A -> run all -> "choose drive to test" dialog
-        vnc.key("enter"); time.sleep(2.5)    # OK = main (Desktop) disk -> benchmark auto-starts
-        time.sleep(BENCH_RUN_WAIT)           # full suite runs -> "The tests are done!" dialog
+        vnc.key("super-a"); time.sleep(3.0)  # Cmd+A -> run all -> "choose drive to test" dialog (modal=1)
+        # Count dialogs seen so far (incl. the just-opened "choose drive"); the benchmark-done
+        # detection waits for the NEXT one ("The tests are done!").
+        dialogs_before = _count_dialogs(runner.log_text())
+        vnc.key("enter")                     # OK = main (Desktop) disk -> benchmark auto-starts
+        # Wait DETERMINISTICALLY for the "tests are done!" dialog (a new modal=1 [APP] signal)
+        # instead of a fixed sleep. The elapsed time is a coarse perf signal.
+        t0 = time.monotonic()
+        if not _await_new_dialog(runner, dialogs_before, BENCH_DONE_TIMEOUT):
+            log = runner.log_text()
+            return BenchResult(False, "benchmark did not finish (no done-dialog within timeout)", log)
+        duration_s = time.monotonic() - t0
+        time.sleep(1.5)                      # let the done-dialog settle before the screenshot
         img = str(artifact_dir / "benchmark-result.png")
         vnc.capture(img)                     # capture the results (with the done-dialog)
         vnc.key("enter"); time.sleep(2.0)    # dismiss "The tests are done!" -> guest returns to idle
@@ -139,8 +150,9 @@ def run_benchmark(
         code = runner.wait(timeout=shutdown_timeout)
         log = runner.log_text()
         if code is None:
-            return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img)
-        return BenchResult(True, "benchmark complete; results + log captured", log, img)
+            return BenchResult(False, "shutdown timed out after benchmark (had to kill)", log, img, duration_s)
+        return BenchResult(True, f"benchmark complete in {duration_s:.0f}s; results + log captured",
+                           log, img, duration_s)
     finally:
         # Always save the emulator log (even on early failure) — terminal output for analysis.
         try:
@@ -148,6 +160,22 @@ def run_benchmark(
         except Exception:
             pass
         runner.terminate()
+
+
+def _count_dialogs(text: str) -> int:
+    """Number of `[APP] ... modal=1` lines in the log so far (each = a dialog appearing)."""
+    return sum(1 for ln in text.splitlines() if observe.is_app_dialog(ln))
+
+
+def _await_new_dialog(runner: Runner, baseline: int, timeout: float) -> bool:
+    """Wait until a NEW dialog (modal=1) appears beyond `baseline` — e.g. Speedometer's
+    "tests are done!" after the benchmark. Returns False on timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _count_dialogs(runner.log_text()) > baseline:
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _await_app(runner: Runner, app: str, timeout: float) -> bool:

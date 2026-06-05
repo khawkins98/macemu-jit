@@ -35,3 +35,16 @@ def test_clean_exit_detected_in_log():
 def test_clean_exit_absent_when_only_boot():
     text = (FIX / "boot_ready.log").read_text()
     assert observe.saw_clean_shutdown(text) is False
+
+
+def test_is_app_dialog_true_on_modal():
+    assert observe.is_app_dialog("[APP] frontApp='Speedometer 4.02' modal=1 ticks=9001") is True
+
+
+def test_is_app_dialog_false_when_no_modal():
+    assert observe.is_app_dialog("[APP] frontApp='Finder' modal=0 ticks=900") is False
+
+
+def test_is_app_dialog_false_on_non_app_line():
+    # A [BOOT] line can also carry modal=1, but it's not an [APP] dialog signal.
+    assert observe.is_app_dialog("[BOOT] idle frontApp='' modal=1 ticks=300 (5.0s)") is False

@@ -1279,6 +1279,21 @@ void powerpc_cpu::execute(uint32 entry)
 							fprintf(stderr, "[VERIFY] divergence report budget = %d%s\n",
 							        verify_divergence_budget, (b && atoi(b) > 0) ? " (SS_JIT_VERIFY_BUDGET)" : " (default)");
 						}
+						/* SS_JIT_VERIFY_PC=LO:HI (hex): targeted-PC verify — restrict the
+						 * oracle to blocks whose start PC is in [LO,HI). Lets you re-check one
+						 * suspect range without the whole-boot interp-replay slowdown (the
+						 * budget/timing trap, OPTIMIZATION-PLAN 0b-extra4). Unset = all in-range. */
+						static uint32 verify_pc_lo = 0, verify_pc_hi = 0;
+						static int verify_pc_checked = 0;
+						if (!verify_pc_checked) {
+							verify_pc_checked = 1;
+							const char *p = getenv("SS_JIT_VERIFY_PC");
+							unsigned lo = 0, hi = 0;
+							if (p && *p && sscanf(p, "%x:%x", &lo, &hi) == 2 && hi > lo) {
+								verify_pc_lo = lo; verify_pc_hi = hi;
+								fprintf(stderr, "[VERIFY] PC scope = [%08x,%08x) (SS_JIT_VERIFY_PC)\n", lo, hi);
+							}
+						}
 						/* After a divergence, skip the next few in-range blocks before
 						 * re-checking so a single bug doesn't cascade into a wall of false
 						 * divergences. Counts DOWN to 0 (was a latching bool that, once set,
@@ -1301,7 +1316,8 @@ void powerpc_cpu::execute(uint32 entry)
 								has_link_call = true;
 						}
 						if (verify_divergence_budget > 0 && !has_link_call && verify_suppress_blocks == 0 &&
-						    jit_block_start_pc >= 0x10000000 && jit_block_start_pc < 0x20000000) {
+						    jit_block_start_pc >= 0x10000000 && jit_block_start_pc < 0x20000000 &&
+						    (verify_pc_hi == 0 || (jit_block_start_pc >= verify_pc_lo && jit_block_start_pc < verify_pc_hi))) {
 							/* Save post-JIT state */
 							powerpc_registers jit_state;
 							memcpy(&jit_state, regs_ptr(), sizeof(powerpc_registers));
@@ -1383,6 +1399,23 @@ void powerpc_cpu::execute(uint32 entry)
 							}
 
 							if (!match) {
+								/* Classify the record so the log is triagable instead of a wall
+								 * of noise (OPTIMIZATION-PLAN 0b-extra4). If interp and JIT agree
+								 * on the exit PC, they took the SAME control flow, so a register
+								 * divergence is a real-bug CANDIDATE -> SUSPECT. If the exit PC
+								 * differs, they took different paths (chaining / blr-return /
+								 * intra-block loop / conditional arm) and the whole record is a
+								 * structural ARTIFACT of the differential oracle, not a codegen
+								 * bug. CAVEAT: a memory read-modify-write block (load X; op; store
+								 * X) also lands in SUSPECT, because the replay restores registers
+								 * but not guest memory — disambiguate by the value stepping by 2
+								 * across visits (JIT store + replay store), not 1. Triage:
+								 * `grep '\[VERIFY\] SUSPECT'`. */
+								bool pc_match = (pc() == jit_state.pc);
+								fprintf(stderr, "[VERIFY] %s block %08x (exit PC %s)\n",
+								        pc_match ? "SUSPECT" : "ARTIFACT-PC", jit_block_start_pc,
+								        pc_match ? "matches: real-bug candidate (memory-RMW also lands here — check value steps by 2, not 1)"
+								                 : "differs: structural artifact, not a codegen bug");
 								verify_divergence_budget--;
 								/* TUNABLE: cascade-suppression window (in-range blocks skipped
 								 * after a divergence). 2 is a guess — line 1387 restores full

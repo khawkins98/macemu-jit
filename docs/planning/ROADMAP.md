@@ -100,8 +100,10 @@ harness that can't catch mistakes just produces the next silent bug.
   and aligned dual-trace divergence. **Partly already present (2026-06-05 audit):** the
   "force opcode family → interpreter" bisection knob *exists* — `SS_JIT_SKIP_OPC` (primary),
   `SS_JIT_SKIP_XO` (XO31), `SS_JIT_SKIP_XO63` (FP), `SS_JIT_SKIP_XO19` (CR/branch) — so manual
-  bisection works today; the remaining gap is **automated aligned dual-trace** + **targeted-PC
-  verify scoping**. Clean dev infrastructure, no runtime coupling; helps clear OPTIMIZATION-PLAN
+  bisection works today; ✅ **targeted-PC verify scoping landed (2026-06-05)** —
+  `SS_JIT_VERIFY_PC=LO:HI` restricts the oracle to one PC range (re-check a suspect block
+  without the whole-boot slowdown). Remaining gap: **automated aligned dual-trace**. Clean dev
+  infrastructure, no runtime coupling; helps clear OPTIMIZATION-PLAN
   §0b-extra4. Detail: `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md` X1.
   - **Sharpened by the P1a sweeps (2026-06-05):** the current `SS_JIT_VERIFY` differential
     oracle has **6 false-positive classes** (full taxonomy in OPTIMIZATION-PLAN §0b-extra4) and
@@ -116,7 +118,11 @@ harness that can't catch mistakes just produces the next silent bug.
     memory-correct, whole-boot-clean oracle for a fraction of the (i) replay-rework effort
     (chaining already has the `SS_JIT_NO_CHAIN` workaround), so they're the high-value slice;
     (i) is the larger follow-on. Diagnostic knobs already landed: `SS_JIT_NO_CHAIN` (now logs a
-    marker), `SS_JIT_VERIFY_BUDGET`.
+    marker), `SS_JIT_VERIFY_BUDGET`, `SS_JIT_VERIFY_PC=LO:HI` (targeted scope), and a
+    **SUSPECT/ARTIFACT-PC classifier** on each divergence (PC-match ⇒ real-bug candidate;
+    PC-mismatch ⇒ structural) so the log is triagable (`grep '[VERIFY] SUSPECT'`) without
+    waiting on fix (i). These make the *existing* confounded oracle usable; (i)+(ii) still
+    needed to make it *clean*.
 
 **Verifiable here** (harness/build, no boot needed). **Unblocks A2 and de-risks all of Track B.**
 **Detail:** `docs/TESTING.md`; harness `SheepShaver/jit-test/run.sh`; generators `gen-*-vectors.py`.

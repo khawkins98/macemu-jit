@@ -48,6 +48,15 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   startup marker so a no-chain run self-confirms; new `SS_JIT_VERIFY_BUDGET=N` overrides the
   divergence report budget (default 20) for whole-boot coverage. The earlier "exactly one blr
   residual" baseline was itself a latch artifact (§0b-extra5) — superseded by the taxonomy above.
+- **`SS_JIT_VERIFY` made triagable + targetable (partial X1, tooling).** Each divergence is now
+  classified inline — **`[VERIFY] SUSPECT`** (interp/JIT agree on exit PC ⇒ same control flow ⇒
+  real-bug candidate) vs **`[VERIFY] ARTIFACT-PC`** (exit PC differs ⇒ structural confound, not a
+  codegen bug) — so a whole-boot log triages to `grep '[VERIFY] SUSPECT'` instead of a wall of
+  noise (memory-RMW still lands in SUSPECT; disambiguate by value stepping by 2, not 1). New
+  `SS_JIT_VERIFY_PC=LO:HI` scopes the oracle to one PC range to re-check a suspect block without
+  the whole-boot slowdown. These make the *existing* confounded oracle usable; the replay-mirror
+  + memory-snapshot fixes (to make it *clean*) remain the X1 follow-on. Compile + logic-reviewed
+  (the verify path only runs at boot, not under `SS_TEST_HEX`); harness unaffected (270/270).
 
 ### [SheepShaver] Guest OS version detection via SysVersion low-memory global
 

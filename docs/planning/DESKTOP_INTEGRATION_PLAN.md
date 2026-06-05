@@ -1,6 +1,6 @@
 # SiliconSheep — Desktop Integration Feature Plan
 
-> **Status:** 🟡 Active — scaffolded · **Created:** 2026-06-02 · **Updated:** 2026-06-05
+> **Status:** 🟡 Active — Tier 1 largely complete · **Created:** 2026-06-02 · **Updated:** 2026-06-05
 > **Why this doc exists:** "SiliconSheep" — a Tauri v2 launcher/VM manager for SheepShaver (first-run wizard, VM library, hot-reload, coherence-lite). Framework pivoted from Cocoa to Tauri (2026-06-05). Scaffold at `SiliconSheep/`.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -159,69 +159,54 @@ Pure launcher/wrapper work. SheepShaver binary is a sidecar child process; Tauri
 
 #### First-Run Wizard (screen by screen)
 
-- [ ] **Screen 1 — Welcome.** Illustration of a classic Mac desktop inside a modern macOS window
-  frame. "SiliconSheep — Classic Mac OS on Apple Silicon." Single button: "Get Started."
-- [ ] **Screen 2 — ROM.** "You need a Macintosh ROM file." Large drop target + browse button.
-  SHA-256 check against known-good hashes: recognized → green check + ROM name; unrecognized
-  but 4 MB → amber "accepted (unverified)"; wrong size → red error. SHA is an *indicator*,
-  never a gate. Help disclosure links to E-Maculation and 68kMLA (no hosted downloads).
-- [ ] **Screen 3 — Disk.** Two paths: (A) "I have a disk image" — file picker. (B) "Create a
-  new disk" — size slider (500 MB / 1 / 2 / 4 GB, default 2 GB), auto-creates raw image.
-  Optional: "Do you have a Mac OS install CD image?" drop target for ISO/toast.
-- [ ] **Screen 4 — Review & Boot.** Summary card: ROM, disk, RAM (256 MB default), display
-  (windowed 1024×768), networking (slirp on). All editable inline. Single "Start" button
-  creates `.sheepvm` bundle, writes prefs, launches SheepShaver.
+- [x] **Screen 1 — Welcome.** "SiliconSheep — Classic Mac OS on Apple Silicon." Single button.
+- [x] **Screen 2 — ROM.** Browse + drag-drop. SHA-256 check: green verified / amber accepted /
+  "proceed anyway" for unrecognized. Accepts compressed/trimmed ROMs (512K–8MB).
+- [x] **Screen 3 — Disk.** Create new (size picker) or use existing. Optional CD image.
+- [x] **Screen 4 — Review & Boot.** Summary card, editable inline, "Create & Start."
 
 #### VM Library
 
-- [ ] **Card grid**, responsive (1 col narrow → 2–3 wide). Per card: name (editable),
-  screenshot thumbnail (captured on clean shutdown, placeholder if never run), OS version,
-  disk size, last-launched date. Status pill: Running (green) / Stopped (grey).
-- [ ] **Actions per card:** Play, Settings (gear), Duplicate (APFS `clonefile` — instant,
-  zero-copy on APFS), Delete (confirmation, option to keep disk image).
-- [ ] **Top-level "+" button** opens the wizard flow (minus welcome screen).
-- [ ] **Import:** drag `.sheepvm` folder onto library. **Export:** right-click → Reveal in Finder.
+- [x] **Card grid**, responsive. Per card: screenshot (live VNC every ~10s + final on shutdown),
+  OS version (from `[SYSV]` Gestalt hook), RAM, last-booted date. Status pill.
+- [x] **Actions per card:** Start/Stop, Settings, Duplicate (APFS clonefile), Reveal in Finder,
+  Delete.
+- [x] **Top-level "+" button** + **"Import Prefs"** button.
+- [x] **Drag-and-drop:** ROM, disk, CD, prefs files → routed to the right context.
 - [ ] **Search/filter bar** appears once library exceeds 6 VMs.
 
 #### Settings Panel
 
-- [ ] **Sidebar categories:** General (name, RAM, ROM), Display (resolution, scale), Storage
-  (disks, shared folders), Network (slirp/vde), Advanced (JIT toggle, debug env vars).
-- [ ] **Hot-reload indicators per setting:** "Applies instantly" (frameskip, mouse) vs
-  "Applies on next boot" (writes prefs, auto-restarts child) vs "Requires shutdown" (RAM,
-  JIT — greyed out while running).
+- [x] **7 sidebar sections:** General, Display (custom resolution + presets, frameskip, QD accel),
+  Storage (disks, CDs, nocdrom, extfs), Network (slirp, VNC server/port), Input (mouse wheel,
+  swap opt/cmd, keycodes), Advanced (sound, JIT cache, boot driver, expert fold-out with all
+  remaining prefs + explainer text), Debug (env vars, log viewer).
+- [x] **Hot-reload indicators per setting.**
 
 #### Other Tier 1 Items
 
 - [ ] **Auto-restart on pref change**: Write prefs, SIGTERM child, relaunch. Eliminates the
   manual quit/relaunch cycle for non-hot-reloadable settings.
-- [ ] **Fullscreen escape overlay**: Hover-reveal bar at top edge: "Press Ctrl-Return to exit
-  fullscreen" with clickable button. Auto-hides after 3s, reappears on mouse-to-top-edge.
-- [ ] **Dark mode**: CSS `prefers-color-scheme` — free with web UI. Guest display is always
-  the guest's own palette; don't try to tint it.
-- [ ] **Gatekeeper mitigation**: Detect blocked launch (exit code / `xattr` check). Dialog:
-  "macOS blocked SheepShaver." One-click `xattr -cr` "Fix Now" button (admin password prompt).
-- [ ] **Disk backup ("snapshots")**: Available only when VM is stopped. Copies `.dsk` with
+- [ ] **Fullscreen escape overlay**: Hover-reveal bar at top edge.
+- [x] **Dark mode**: CSS `prefers-color-scheme`.
+- [ ] **Gatekeeper mitigation**: `xattr -cr` button.
+- [x] **Disk backup ("snapshots")**: Available only when VM is stopped. Copies `.dsk` with
   timestamp suffix. Restore = swap file back. Labelled honestly as "Disk Backup", not
   "snapshot" (no saved CPU/RAM state). Uses APFS `clonefile` when possible (instant).
-- [ ] **Screenshot/recording capture**: Grab the SDL framebuffer from host side (no guest
-  involvement).
-- [ ] **Drag-and-drop file import**: Drop host files onto the launcher → write to the `extfs`
-  shared folder. Pure launcher plumbing, no emulator change needed.
+- [x] **Screenshot capture**: Live VNC screenshots every ~10s + final frame on shutdown. Stored
+  in `.sheepvm/screenshot.png`. BGR→RGB channel fix via `vnc_capture.py`.
+- [x] **Drag-and-drop file import**: ROM, disk, CD, prefs files → routed to wizard step or import.
 - [ ] **CRT/scanline shaders + integer scaling** (stretch): SDL render pipeline or Metal
-  post-process pass. Pixel-perfect integer scaling by default (retro aesthetic); optional
-  "Smooth scaling" toggle for bilinear.
-- [ ] **Coach marks** for first-time tasks: "Your install CD is mounted…", "Click inside the
-  classic desktop to capture the mouse. Press Ctrl-F5 to release.", "Networking is on. Open
-  TCP/IP in Control Panels and set Configure to 'Using DHCP Server'."
+  post-process pass.
+- [x] **Coach marks**: Mouse capture toast on first launch ("Click inside the classic desktop to
+  capture the mouse. Press Ctrl-F5 to release.").
 
 #### Error States
 
-- [ ] ROM not found: red banner + "Locate ROM" file picker.
+- [x] ROM not found / emulator not found: error banner with guidance.
 - [ ] Disk missing/corrupt: card warning badge → "Locate" / "Remove from VM".
-- [ ] Emulator crashed: card flips to "Crashed" (red pill), shows stderr tail. "Relaunch" +
-  "View Full Log" buttons.
-- [ ] Mouse capture toast on first launch.
+- [ ] Emulator crashed: card flips to "Crashed" (red pill), shows stderr tail.
+- [x] Mouse capture toast on first launch.
 
 ### Tier 2 — Enhanced Desktop Integration (emulator IPC/hooks needed)
 

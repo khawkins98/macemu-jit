@@ -11,6 +11,50 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver] Guest OS version detection via SysVersion low-memory global
+
+- The emulator's idle hook now reads the guest's `SysVersion` ($015A) — a BCD-packed
+  OS version set by Mac OS during boot. Emits `[SYSV] osVersion=0x0860 (8.6.0)` to
+  stderr on first detection. Verified firing on Mac OS 8.6 (E2E ISO) and Mac OS 9.0
+  (benchmark disk). This is a generic guest-state introspection hook, reusable for
+  other runtime queries.
+
+### [shared] SavePrefs now preserves comments, blank lines, and ordering
+
+- Previously `SavePrefs()` dumped the in-memory prefs list, stripping all `#` comments
+  and user ordering. New `SavePrefsToStreamMerging()` reads the original file, passes
+  through comments/blanks, replaces known-key lines with current values, appends new
+  keys. Write-to-temp + rename avoids the truncation race. Verified: comments in
+  `~/.sheepshaver_prefs` survive a full E2E boot+shutdown cycle.
+
+### [docs] SiliconSheep — full feature set shipped and documented
+
+SiliconSheep Tauri v2 launcher progressed from scaffold to functional app:
+
+- **First-run wizard**: 4-screen flow (Welcome → ROM picker with SHA-256 verification →
+  Disk creation + optional CD → Review & Boot). ROM validation accepts compressed/trimmed
+  ROMs (512K–8MB), shows "proceed anyway" for unrecognized files.
+- **VM library**: Card grid with live VNC screenshots (captured every ~10s while running,
+  final frame on shutdown), OS version (from `[SYSV]` hook), last-booted date.
+- **Complete settings panel**: 7 sections (General, Display, Storage, Network, Input,
+  Advanced with Expert fold-out, Debug). All 30+ SheepShaver prefs configurable.
+  Custom resolution support (any width×height). Explainer text on all expert settings.
+- **Debug panel**: GUI controls for JIT diagnostics — SS_JIT_VERIFY, SS_JIT_NO_CHAIN,
+  SS_JIT_NO_ROM, SS_USE_JIT, SS_JIT_TRACE_RING, watch addresses, skip opcodes. Env vars
+  passed to the emulator child process on launch.
+- **Log retention**: Timestamped logs in `<vm>.sheepvm/logs/`, last 10 kept, symlink to
+  latest, "View Logs" button in Debug section.
+- **Drag-and-drop**: ROM files, disk images, CD images, prefs files — drop on the window,
+  routed to the right context (wizard step or import).
+- **Import from prefs**: "Import Prefs" button or drag-drop a `sheepshaver_prefs` file to
+  create a VM from an existing config.
+- **VM duplicate**: APFS `clonefile` for instant zero-copy, warns on shared external disks.
+- **Disk backup**: APFS clonefile snapshot of disk images (available when VM stopped).
+- **19 Rust tests** (10 prefs parser + 9 VM integration). TypeScript strict mode. Vite 8 +
+  TypeScript 6. Zero compiler warnings.
+- **Deps**: Vite 8.0, TypeScript 6.0, all Tauri packages at latest (2.11.x).
+- **Renamed** "Silicon Sheep" → "SiliconSheep" (one word, like SheepShaver).
+
 ### [SheepShaver][BasiliskII] JIT harness & diagnostic integrity hardening
 
 Tooling-only (no runtime/codegen change); hardens the signals used to judge the JIT:

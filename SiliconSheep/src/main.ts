@@ -128,6 +128,15 @@ function renderEmptyState(): string {
       <h2>No Virtual Machines</h2>
       <p>Create your first classic Mac virtual machine to get started with Mac OS 8 or 9 on Apple Silicon.</p>
       <button class="btn btn-primary btn-lg" data-action="wizard">Create Virtual Machine</button>
+      <div class="community-links">
+        <p class="ss-text-muted" style="margin-top: 32px;">Find software and resources:</p>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 8px;">
+          <a href="https://infinitemac.org" target="_blank" class="community-link">Infinite Mac — try classic Mac OS in your browser</a>
+          <a href="https://macintoshgarden.org" target="_blank" class="community-link">Macintosh Garden — classic Mac software archive</a>
+          <a href="https://www.emaculation.com/forum/" target="_blank" class="community-link">E-Maculation — emulation community</a>
+          <a href="https://68kmla.org" target="_blank" class="community-link">68k MLA — vintage Mac community</a>
+        </div>
+      </div>
     </div>
   `;
 }

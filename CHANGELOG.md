@@ -11,6 +11,40 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver] rom-harness — skip-not-abort on fallback blocks (broad sweeps unblocked)
+
+The standalone differential rom-harness `abort()`ed the entire run the moment a JIT block that
+the compiler marked `complete == true` hit the inline-interp fallback bridge (`ppc_jit_interp_one`)
+at runtime — which happens whenever the linear ROM scan picks up a mis-scanned data region or an
+op handled only via fallback. Under random seeds this killed the run on the *first* such block
+(no Score line printed), making broad differential sweeps impossible.
+
+- **Fix (harness-only, `rom-harness.cpp`, zero emulator/boot risk):** the fallback bridge now
+  `siglongjmp`s back to a per-block guard (a shared `sigsetjmp` buffer, mirroring the existing
+  SIGSEGV protection) instead of `abort()`ing. Such blocks are counted as **`JIT fallback`**
+  skips and the sweep continues to completion. Verified across 3 seeds (1/7/42, `--count=10000`):
+  all now finish cleanly (~110 fallback blocks gracefully skipped/seed, was: abort on block 1).
+- **Honest characterization of the now-visible failures (root cause found via review — block-model
+  mismatch, not codegen bugs):** ~43–49 differential failures/seed are surfaced, but the dominant
+  cause is **structural, not a bug**. The scanner ends a block at the first terminator and counts a
+  conditional branch (`bc`, opcode 16) as one — but the JIT does **not** treat `bc` as a block
+  terminator, so it compiles/runs *past* it. The harness then compares a short interp run against a
+  longer JIT run from the same start PC; registers diverge because the two ran **different
+  instruction spans** (the exact analog of the `SS_JIT_VERIFY` fix-(i) block-exit problem).
+  Verified: the flagged single-instruction `bc` block `42424642` "fails" only because the JIT ran 5
+  instructions past it while the harness interp ran 1; the `bc` codegen is **correct** — a
+  non-vacuous real-emulator test (`SS_TEST_HEX="38600002 7C6903A6 42424642"` = li/mtctr/bc) gives
+  identical interp and JIT REGDUMP (CTR 2→1, branch to the correct AA=1 target). So this is a
+  harness block-comparison artifact, **not** a JIT bug and **not** a harness-interp ISA bug. The
+  GPR-diff "minority" is largely **cascade** from the same span mismatch in multi-insn blocks, not
+  independent bugs. A trustworthy differential would compare only when `jblk.n_insns == blk.n_insns`
+  (or run the interp for the JIT's instruction count) — tracked as a follow-up. Treat the absolute
+  count as a noisy regression-delta upper bound, **not** an "N JIT bugs" figure. README
+  "Interpreting Results" updated with the block-model caveat + the worked `bc` example.
+- **Corroborates fix-(ii) must-fix (a):** the root cause (`complete` not distinguishing
+  fallback-ending blocks) is the same `ends_in_fallback` signal gap noted in `ppc-jit.cpp:4792`
+  and `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
+
 ### [SheepShaver] SS_JIT_VERIFY oracle — X1 fix (i): replay mirrors the JIT single-block exit
 
 The differential oracle's interp replay used "stop when pc leaves [start,end)", which

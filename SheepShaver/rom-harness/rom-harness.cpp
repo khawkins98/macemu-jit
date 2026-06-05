@@ -57,16 +57,30 @@
 /* ---------- Forward declarations for the JIT ---------- */
 #include "ppc-jit.h"
 
+/* Shared guard for unsafe JIT block execution. The run loop arms `jit_guard_jmp`
+ * with sigsetjmp before each block; a SIGSEGV (segv_handler) or an inline-interp
+ * fallback (ppc_jit_interp_one below) longjmps back so the harness can *skip* the
+ * block instead of crashing. `segv_caught`/`fallback_caught` distinguish the cause;
+ * `fallback_opcode`/`fallback_pc` carry diagnostics for --verbose. */
+static sigjmp_buf jit_guard_jmp;
+static volatile sig_atomic_t segv_caught = 0;
+static volatile sig_atomic_t fallback_caught = 0;
+static volatile uint32_t fallback_opcode = 0;
+static volatile uint32_t fallback_pc = 0;
+
 /* The JIT references this bridge for its inline-interpreter fallback path
  * (emit_inline_interp_call); the real implementation lives in the emulator
- * (ppc-cpu.cpp), which this standalone harness does not link.  This harness
- * (and the --bench microbench) only ever runs COMPLETE blocks, so the bridge is
- * never invoked — provide a stub purely so ppc-jit.o links here, and abort
- * loudly if a fallback block ever does reach it. */
+ * (ppc-cpu.cpp), which this standalone harness does not link.  The harness can
+ * only run blocks that execute fully native — but a block the compiler marks
+ * `complete == true` can still emit a fallback call (e.g. a ROM region that was
+ * mis-scanned as code, or an op handled only via fallback; see ppc-jit.cpp
+ * "complete stays true" note). Rather than abort the whole run, longjmp back to
+ * the per-block guard so this one block is counted as skipped. */
 extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val) {
-	fprintf(stderr, "rom-harness: ppc_jit_interp_one stub hit (opcode=%08x pc=%08x)"
-	        " — only complete blocks are supported here\n", opcode, pc_val);
-	abort();
+	fallback_opcode = opcode;
+	fallback_pc = pc_val;
+	fallback_caught = 1;
+	siglongjmp(jit_guard_jmp, 1);
 }
 
 /* ---------- PPC instruction decoding helpers ---------- */
@@ -991,13 +1005,12 @@ static int scan_rom_blocks(const uint8_t *rom, size_t rom_size,
 }
 
 /* ---------- SIGSEGV handler for safe JIT execution ---------- */
-
-static sigjmp_buf segv_jmp;
-static volatile sig_atomic_t segv_caught = 0;
+/* Guard state (jit_guard_jmp, segv_caught, fallback_*) is declared near the top
+ * of the file alongside the ppc_jit_interp_one fallback bridge that shares it. */
 
 static void segv_handler(int sig, siginfo_t *si, void *ctx) {
 	segv_caught = 1;
-	siglongjmp(segv_jmp, 1);
+	siglongjmp(jit_guard_jmp, 1);
 }
 
 /* ---------- Comparison ---------- */
@@ -1010,6 +1023,7 @@ struct TestResult {
 	int interp_unsupported;
 	int jit_compile_fail;
 	int jit_segv;
+	int jit_fallback;    /* complete-but-fallback block: skipped, not crashed */
 };
 
 static void print_regs(const char *label, const PPCRegs *r) {
@@ -1538,9 +1552,14 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			
-			/* Run JIT with SIGSEGV protection + timeout */
+			/* Run JIT with SIGSEGV + fallback protection + timeout. A complete
+			   block can still hit the inline-interp fallback bridge at runtime
+			   (ppc_jit_interp_one), which the standalone harness can't execute;
+			   both that and a SIGSEGV longjmp back here so the block is skipped,
+			   not fatal. */
 			segv_caught = 0;
-			if (sigsetjmp(segv_jmp, 1) == 0) {
+			fallback_caught = 0;
+			if (sigsetjmp(jit_guard_jmp, 1) == 0) {
 				ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
 				alarm(1); /* 1-second timeout per block */
 				fn((void *)&jit_regs);
@@ -1551,6 +1570,15 @@ int main(int argc, char **argv) {
 				result.skipped++;
 				if (verbose)
 					fprintf(stderr, "  ROM+0x%06x: JIT SIGSEGV\n", blk.offset);
+				continue;
+			}
+			if (fallback_caught) {
+				result.jit_fallback++;
+				result.skipped++;
+				if (verbose)
+					fprintf(stderr, "  ROM+0x%06x: JIT fallback (opcode=%08x pc=%08x) "
+						"— skipped\n", blk.offset,
+						(uint32_t)fallback_opcode, (uint32_t)fallback_pc);
 				continue;
 			}
 			
@@ -1601,6 +1629,7 @@ done:
 	fprintf(stderr, "  Interp unsupported: %d\n", result.interp_unsupported);
 	fprintf(stderr, "  JIT compile fail:   %d\n", result.jit_compile_fail);
 	fprintf(stderr, "  JIT SIGSEGV:        %d\n", result.jit_segv);
+	fprintf(stderr, "  JIT fallback:       %d\n", result.jit_fallback);
 	fprintf(stderr, "Time: %.2f sec (%.0f blocks/sec)\n",
 		elapsed, testable > 0 ? testable / elapsed : 0);
 	fprintf(stderr, "Score: %d/%d\n", result.passed, result.passed + result.failed);

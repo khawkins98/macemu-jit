@@ -106,6 +106,40 @@ Score: 663/766
 - **Skipped** blocks are excluded from the score (incomplete JIT, unsupported interp ops)
 - **JIT compile fail** = JIT couldn't compile the block (incomplete, unknown opcode)
 - **Interp unsupported** = harness interpreter doesn't handle an opcode in the block
+- **JIT fallback** = a block the compiler marked `complete` still emitted an inline-interp
+  fallback call at runtime (`ppc_jit_interp_one`), which this standalone harness can't execute.
+  These are **skipped, not fatal** — previously the bridge `abort()`ed, killing the whole run
+  on the first such block and making broad random sweeps impossible. (The underlying cause —
+  `complete` not distinguishing fallback-ending blocks — is tracked as fix-(ii) must-fix (a) in
+  `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.)
+
+> **⚠️ Most raw-ROM-scan failures are a block-model mismatch, NOT codegen bugs.** The scanner ends
+> a block at the first **terminator**, and it counts a conditional branch (`bc`, opcode 16) as a
+> terminator — so a `bc`-terminated block is, to the scanner, `blk.n_insns` long ending at the
+> `bc`. **The JIT does not treat `bc` as a block terminator** (both arms fall through to the
+> dispatcher), so it compiles and runs *past* the `bc` — `jblk.n_insns` can be much larger. The
+> harness then compares a short interp run against a longer JIT run of the **same start PC**:
+> registers diverge because the two ran *different instruction spans*, not because either is wrong.
+> (This is the exact analog of the `SS_JIT_VERIFY` "fix (i)" block-exit problem — see
+> `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md` and OPTIMIZATION-PLAN
+> §0b-extra4.) **A trustworthy differential would only compare when `jblk.n_insns == blk.n_insns`**
+> (or run the interp for the JIT's actual instruction count); until then, treat branch-terminated
+> failures as structurally non-comparable, and GPR diffs in multi-insn blocks as **cascade** from
+> the span mismatch, not independent bugs.
+>
+> **Worked example (2026-06-05, verified).** The single-instruction block `42424642`
+> (`bc BO=18,BI=9`, AA=1) "fails" here — but the JIT compiled **5** instructions past it while the
+> harness interp ran **1**. The `bc` codegen itself is correct: a non-vacuous real-emulator test
+> `SS_TEST_HEX="38600002 7C6903A6 42424642"` (li r3,2; mtctr r3; bc) gives **identical** interp and
+> JIT REGDUMP (CTR 2→1, branch taken to the correct AA=1 target). So this is a harness
+> block-comparison artifact, *not* a JIT bug and *not* a harness-interp ISA bug.
+>
+> To confirm any *genuinely* suspicious failure, use the **real** emulator as referee:
+> `SS_TEST_HEX=<hex...> SS_TEST_DUMP=1 SS_TEST_JIT={0,1} ./src/Unix/SheepShaver`, diff the REGDUMP.
+> The scanner also runs mis-scanned **data** as code (string tables `50425831`=`"PBX1"`,
+> `206d656d`=`" mem"`). Net: the absolute failure count is a noisy upper bound for regression
+> deltas (same seed, before/after), **not** an "N JIT bugs" figure — and it is currently dominated
+> by the block-model mismatch on legitimate branch-terminated blocks.
 
 ## Bugs Found By This Harness
 

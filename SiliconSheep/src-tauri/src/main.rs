@@ -137,7 +137,18 @@ fn launch_vm(id: String, state: State<AppState>) -> Result<(), String> {
                         use std::io::Write;
                         writeln!(f, "{}", line).ok();
                     }
-                    // Detect OS version from boot signal
+                    // Detect OS version from guest Gestalt read
+                    // Format: [SYSV] osVersion=0x0860 (8.6.0)
+                    if line.contains("[SYSV] osVersion=") {
+                        if let Some(ver_str) = line.split('(').nth(1) {
+                            let ver = ver_str.trim_end_matches(')').trim();
+                            if !ver.is_empty() {
+                                let os_name = format!("Mac OS {}", ver);
+                                let _ = vm::update_os_version(&vm_id, &os_name);
+                            }
+                        }
+                    }
+                    // Detect boot-ready signal
                     // Format: [BOOT] idle frontApp='Finder' modal=0
                     if line.contains("[BOOT]") && line.contains("frontApp='Finder'") {
                         let _ = vm::update_last_booted(&vm_id);

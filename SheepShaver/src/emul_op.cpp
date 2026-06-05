@@ -158,6 +158,19 @@ static void e2e_emit_idle_signals(void)
 	// Finder finishes drawing the desktop, so prefer [READY] (below) for "desktop actually usable".
 	// menubar= is included here too so its first-idle value can be compared with [READY]'s — if it's
 	// already non-zero at first idle, MBarHeight isn't a useful extra readiness discriminator.
+	// Guest OS version: SysVersion low-memory global ($015A), BCD-packed (0x0860 = 8.6.0).
+	// Read on every idle until non-zero (may not be initialized at first idle).
+	static uint16 detected_sysv = 0;
+	if (!detected_sysv) {
+		uint16 sv = ReadMacInt16(0x015a);
+		if (sv >= 0x0700 && sv <= 0x0fff) {
+			detected_sysv = sv;
+			fprintf(stderr, "[SYSV] osVersion=0x%04X (%d.%d.%d)\n",
+			        sv, (sv >> 8) & 0xf, (sv >> 4) & 0xf, sv & 0xf);
+			fflush(stderr);
+		}
+	}
+
 	static bool boot_emitted = false;
 	if (!boot_emitted) {
 		boot_emitted = true;

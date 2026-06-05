@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -92,12 +92,25 @@ function formatLastBooted(ts: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+function formatElapsed(launchTs: number): string {
+  const secs = Math.floor((Date.now() - launchTs) / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return `${mins}m ${remSecs}s`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
 function renderVmRow(vm: VmProfile): string {
   const isRunning = vm.id === runningVmId;
   const screenshotSrc = vmScreenshots.get(vm.id);
   const osLabel = vm.os_version ? escapeHtml(vm.os_version) : `${vm.ram_mb} MB`;
+  const launchTs = vmLaunchTimestamps.get(vm.id);
+  const elapsed = isRunning && launchTs ? formatElapsed(launchTs) : "";
   return `
-    <div class="vm-row ${isRunning ? "vm-row--running" : ""}" data-id="${escapeAttr(vm.id)}">
+    <div class="vm-row ${isRunning ? "vm-row--running" : ""}"
+         data-id="${escapeAttr(vm.id)}"
+         data-name="${escapeAttr(vm.name)}">
       <div class="vm-row__thumb">
         ${screenshotSrc
           ? `<img src="${screenshotSrc}" alt="" class="vm-row__thumb-img" />`
@@ -107,11 +120,11 @@ function renderVmRow(vm: VmProfile): string {
       </div>
       <div class="vm-row__info">
         <span class="vm-row__name">${escapeHtml(vm.name)}</span>
-        <span class="vm-row__meta">${osLabel}</span>
+        <span class="vm-row__meta">${osLabel}${elapsed ? ` · ${elapsed}` : ""}</span>
       </div>
       <div class="vm-row__actions">
         ${isRunning
-          ? `<button class="vm-row__btn" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">⏻</button>`
+          ? `<button class="vm-row__btn vm-row__btn--power-on" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">⏻</button>`
           : `<button class="vm-row__btn" data-action="launch" data-id="${escapeAttr(vm.id)}" title="Start">⏻</button>`
         }
         <span class="vm-row__sep"></span>
@@ -157,6 +170,8 @@ function renderLibrary(): string {
       ${vms.map(renderVmRow).join("")}
     </div>
     <div class="cc-footer">
+      <button class="vm-row__btn" data-action="show-help" title="Help & Resources">?</button>
+      <div style="flex:1"></div>
       <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">⤓</button>
       <button class="vm-row__btn" data-action="wizard" title="New VM">＋</button>
     </div>
@@ -349,11 +364,18 @@ let pendingSettings: Record<string, string> = {};
 let debugEnvVars: Record<string, string> = {};
 let settingsWindowOpen = false;
 let isSettingsWindow = false;
+const vmLaunchTimestamps: Map<string, number> = new Map();
 
 async function openSettingsWindow(vmId: string) {
-  if (settingsWindowOpen) {
-    showToast("Settings window is already open", "info");
-    return;
+  // Check by window label — survives Control Center close/reopen
+  try {
+    const existing = await WebviewWindow.getByLabel("settings");
+    if (existing) {
+      await existing.setFocus();
+      return;
+    }
+  } catch {
+    // Window doesn't exist — proceed to create
   }
 
   const vm = vms.find((v) => v.id === vmId);
@@ -802,6 +824,29 @@ function bindEvents() {
     el.addEventListener("click", handleAction);
   });
 
+  // P1.5: Double-click VM row to boot
+  document.querySelectorAll(".vm-row").forEach((el) => {
+    el.addEventListener("dblclick", (e) => {
+      const row = (e.currentTarget as HTMLElement);
+      const vmId = row.dataset.id;
+      if (vmId && vmId !== runningVmId) {
+        handleAction({ target: row.querySelector('[data-action="launch"]') } as unknown as Event);
+      }
+    });
+  });
+
+  // P1.4: Right-click context menu
+  document.querySelectorAll(".vm-row").forEach((el) => {
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const row = el as HTMLElement;
+      const vmId = row.dataset.id;
+      const vmName = row.dataset.name;
+      if (!vmId) return;
+      showContextMenu(e as MouseEvent, vmId, vmName || "VM");
+    });
+  });
+
   // Custom resolution toggle
   const presetSelect = document.getElementById("setting-screen-preset") as HTMLSelectElement | null;
   if (presetSelect) {
@@ -891,6 +936,10 @@ async function handleAction(e: Event) {
   const id = target.dataset.id;
 
   switch (action) {
+    case "show-help":
+      showToast("Resources: infinitemac.org · macintoshgarden.org · emaculation.com · 68kmla.org", "info", 10000);
+      break;
+
     case "import-prefs": {
       const path = await pickFile("Select SheepShaver Prefs File");
       if (path) {
@@ -1053,7 +1102,8 @@ async function handleAction(e: Event) {
           const envVars = Object.keys(debugEnvVars).length > 0 ? debugEnvVars : null;
           await invoke("launch_vm", { id, envVars });
           runningVmId = id;
-          showToast("Virtual machine started. Click inside the classic desktop to capture the mouse. Press Ctrl-F5 to release.", "info", 8000);
+          vmLaunchTimestamps.set(id, Date.now());
+          showToast("VM started. Click inside the classic desktop to capture the mouse. Ctrl-F5 to release.", "info", 8000);
           render();
         } catch (err) {
           showToast(`Failed to launch: ${err}`, "error");
@@ -1064,6 +1114,7 @@ async function handleAction(e: Event) {
     case "stop":
       try {
         await invoke("stop_vm");
+        if (runningVmId) vmLaunchTimestamps.delete(runningVmId);
         runningVmId = null;
         render();
       } catch (err) {
@@ -1112,6 +1163,7 @@ async function handleAction(e: Event) {
       if (id && confirm("Remove this virtual machine and its files?")) {
         try {
           await invoke("delete_vm", { id });
+          emit("vm-deleted", { id });
           vms = await loadVms();
           render();
         } catch (err) {
@@ -1289,6 +1341,46 @@ async function pollRunningStatus() {
   }
 }
 
+function showContextMenu(e: MouseEvent, vmId: string, vmName: string) {
+  const existing = document.getElementById("context-menu");
+  if (existing) existing.remove();
+
+  const isRunning = vmId === runningVmId;
+  const menu = document.createElement("div");
+  menu.id = "context-menu";
+  menu.className = "context-menu";
+  menu.innerHTML = `
+    ${isRunning
+      ? `<button class="context-menu__item" data-action="stop" data-id="${escapeAttr(vmId)}">◼ Shut Down</button>`
+      : `<button class="context-menu__item" data-action="launch" data-id="${escapeAttr(vmId)}">▶ Start</button>`
+    }
+    <button class="context-menu__item" data-action="settings" data-id="${escapeAttr(vmId)}">⚙ Configure</button>
+    <div class="context-menu__sep"></div>
+    <button class="context-menu__item" data-action="duplicate" data-id="${escapeAttr(vmId)}" data-name="${escapeAttr(vmName)}">⎘ Duplicate</button>
+    <button class="context-menu__item" data-action="reveal" data-id="${escapeAttr(vmId)}">📂 Show in Finder</button>
+    <div class="context-menu__sep"></div>
+    <button class="context-menu__item context-menu__item--danger" data-action="delete" data-id="${escapeAttr(vmId)}">✕ Delete</button>
+  `;
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  document.body.appendChild(menu);
+
+  menu.querySelectorAll("[data-action]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      menu.remove();
+      handleAction(ev);
+    });
+  });
+
+  const dismiss = (ev: Event) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener("click", dismiss);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", dismiss), 0);
+}
+
 async function handleFileDrop(paths: string[]) {
   for (const path of paths) {
     const lower = path.toLowerCase();
@@ -1357,6 +1449,28 @@ async function init() {
     await loadVmPrefs(settingsVmId);
     currentView = "settings";
     isSettingsWindow = true;
+
+    // P0.1: Unsaved changes confirmation on window close
+    const thisWindow = getCurrentWindow();
+    thisWindow.onCloseRequested(async (event) => {
+      captureCurrentSectionSettings();
+      if (Object.keys(pendingSettings).length > 0) {
+        const discard = confirm("You have unsaved changes. Discard them?");
+        if (!discard) {
+          event.preventDefault();
+          return;
+        }
+      }
+    });
+
+    // P0.2: Auto-close if the VM is deleted from the Control Center
+    listen("vm-deleted", (event) => {
+      const deletedId = (event.payload as { id: string })?.id;
+      if (deletedId === settingsVmId) {
+        thisWindow.close();
+      }
+    });
+
     render();
     return;
   }

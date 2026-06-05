@@ -319,6 +319,31 @@ function renderWizardStep(): string {
 let settingsSection = "general";
 let pendingSettings: Record<string, string> = {};
 
+interface PrefEntry {
+  key: string;
+  value: string;
+  comment: string | null;
+}
+
+let vmPrefs: PrefEntry[] = [];
+
+async function loadVmPrefs(id: string) {
+  try {
+    vmPrefs = (await invoke("get_vm_prefs", { id })) as PrefEntry[];
+  } catch {
+    vmPrefs = [];
+  }
+}
+
+function getPref(key: string): string {
+  const entry = vmPrefs.find((e) => e.key === key);
+  return entry?.value ?? "";
+}
+
+function getPrefs(key: string): string[] {
+  return vmPrefs.filter((e) => e.key === key).map((e) => e.value);
+}
+
 function renderSettings(): string {
   const vm = vms.find((v) => v.id === selectedVmId);
   if (!vm) return renderLibrary();
@@ -384,8 +409,8 @@ function renderSettings(): string {
       <div class="form-group">
         <label>Networking</label>
         <select class="input" id="setting-ether">
-          <option value="slirp" selected>slirp (NAT — outbound only)</option>
-          <option value="">None</option>
+          <option value="slirp" ${getPref("ether") === "slirp" ? "selected" : ""}>slirp (NAT — outbound only)</option>
+          <option value="" ${!getPref("ether") ? "selected" : ""}>None</option>
         </select>
         <p class="text-muted" style="margin-top: 8px;">In the guest, open TCP/IP in Control Panels and set Configure to "Using DHCP Server".</p>
       </div>
@@ -394,17 +419,30 @@ function renderSettings(): string {
       <div class="form-group">
         <label>Sound</label>
         <select class="input" id="setting-nosound">
-          <option value="true">Disabled</option>
-          <option value="false">Enabled</option>
+          <option value="true" ${getPref("nosound") === "true" ? "selected" : ""}>Disabled</option>
+          <option value="false" ${getPref("nosound") !== "true" ? "selected" : ""}>Enabled</option>
         </select>
       </div>
       <div class="form-group">
         <label>JIT Cache Size <span class="hot-reload-badge restart">Requires restart</span></label>
         <select class="input" id="setting-jitcache" ${isRunning ? "disabled" : ""}>
-          <option value="64M">64 MB</option>
-          <option value="128M">128 MB</option>
-          <option value="256M" selected>256 MB</option>
-          <option value="512M">512 MB</option>
+          ${["64M", "128M", "256M", "512M"]
+            .map((v) => `<option value="${v}" ${getPref("jitcachesize") === v ? "selected" : ""}>${v.replace("M", " MB")}</option>`)
+            .join("")}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Shared Folder (ExtFS)</label>
+        <div class="file-input">
+          <span class="file-path">${escapeHtml(getPref("extfs") || "None")}</span>
+          <button class="btn btn-secondary btn-sm" data-action="pick-setting-extfs">Browse</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Boot Driver <span class="hot-reload-badge restart">Requires restart</span></label>
+        <select class="input" id="setting-bootdriver" ${isRunning ? "disabled" : ""}>
+          <option value="0" ${getPref("bootdriver") !== "-62" ? "selected" : ""}>Hard Disk</option>
+          <option value="-62" ${getPref("bootdriver") === "-62" ? "selected" : ""}>CD-ROM</option>
         </select>
       </div>
     `,
@@ -476,6 +514,7 @@ function captureCurrentSectionSettings() {
     ["setting-ether", "ether", (v) => v],
     ["setting-nosound", "nosound", (v) => v],
     ["setting-jitcache", "jitcachesize", (v) => v],
+    ["setting-bootdriver", "bootdriver", (v) => v],
   ];
   for (const [elId, key, transform] of fields) {
     const el = document.getElementById(elId) as HTMLInputElement | HTMLSelectElement | null;
@@ -618,6 +657,7 @@ async function handleAction(e: Event) {
         selectedVmId = id;
         settingsSection = "general";
         pendingSettings = {};
+        await loadVmPrefs(id);
         currentView = "settings";
         render();
       }
@@ -742,6 +782,19 @@ async function handleAction(e: Event) {
         } catch (err) {
           showToast(`Failed to add disk: ${err}`, "error");
         }
+      }
+      break;
+    }
+
+    case "pick-setting-extfs": {
+      const folderResult = await open({ title: "Select Shared Folder", directory: true, multiple: false });
+      const folderPath = typeof folderResult === "string" ? folderResult : null;
+      if (folderPath && selectedVmId) {
+        await invoke("update_vm_setting", { id: selectedVmId, key: "extfs", value: folderPath });
+        await loadVmPrefs(selectedVmId);
+        vms = await loadVms();
+        showToast("Shared folder set", "success");
+        render();
       }
       break;
     }

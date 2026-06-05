@@ -80,8 +80,16 @@ harness that can't catch mistakes just produces the next silent bug.
   the scored **arithmetic** word-ops: regenerate with **distinct AND carry-inducing** operands
   (small-distinct still masks byteswap-carry; see A2 testing-gap note). Needed before any *broad*
   VR change.
-- 🟡 **Vacuousness guard** on `run.sh` — now narrowed to **memory-only / otherwise-unobservable**
-  results (FP/VR are captured). Still needs a sentinel/mutation design; lower urgency now.
+- 🟡 **Vacuousness guard** on `run.sh` — **shallow tier ✅ landed (2026-06-05)**: both harness
+  preflights (`SheepShaver/jit-test/run.sh` + `BasiliskII/jit-test/run.sh`) now reject an
+  **all-NOP body** (PPC `60000000` / 68K `4E71`) — exercises only decode/dispatch, asserts
+  nothing — with `nop`/`nop_triplet` allow-listed (verified: rejects synthetic all-NOP, zero
+  false positives across SS 264 / B2 452 vectors; CHANGELOG 2026-06-05). **Deep tier still
+  open**, and narrowed to **memory-only / otherwise-unobservable** results (FP/VR are captured;
+  the generators already build FP/VR results into a GPR). Evaluated and *deliberately not
+  pursued now*: the highest-value case (FP/VR observability) is already defended at generation
+  time, leaving only the trivial-operand / store-without-load-back residue, which needs a
+  sentinel/mutation harness design for modest incremental yield. Lower urgency.
 - 🟡 **Broaden AltiVec coverage** — the suite has ~13 scored AltiVec + 9 quarantined ops out of
   ~100+; most AltiVec ops are still untested. Grow `gen-altivec-vectors.py` alongside A2.
 - 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
@@ -204,11 +212,13 @@ the OTH rule, prune `/tmp` logs, quiet-mode env gate).
 **From colleague review (2026-06-04):**
 - ✅ **`jitcachesize` unit bug** — pref value (bytes after K/M/G parse) was passed as KB to the
   JIT init, causing `256M` → 256 TB. Fixed with byte→KB conversion + bounds (min 1 MB, max 1 GB).
-- 🟡 **VERIFY suppression latch decay** — the cascade suppression can become permanent if no
-  clean block follows a divergence. Add a block-count decay (~10 lines). Tracked in
-  OPTIMIZATION-PLAN 0b-extra5.
-- 🟡 **Bench diagnostics unmasked** — `2>/dev/null` in rom-harness bench target hides
-  stale-baseline warnings. Remove/guard so warnings are visible.
+- ✅ **VERIFY suppression latch decay** (2026-06-05) — the latch was in fact *unconditionally*
+  permanent (the `!verify_suppressed` entry gate guarded its own clearing branch), silencing the
+  oracle after the first divergence of every run. Replaced with an in-range-only
+  `verify_suppress_blocks` countdown. Tracked in OPTIMIZATION-PLAN 0b-extra5; CHANGELOG 2026-06-05.
+- ✅ **Bench diagnostics unmasked** (2026-06-05) — `make bench` now shows JIT chatter by default
+  (masking is opt-in via `BENCH_QUIET=1`), and the bench's own warnings/errors (incl. the
+  stale-baseline warning) moved to **stdout** so they survive any masking. CHANGELOG 2026-06-05.
 
 **Detail:** `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` Tier D
 (+ correctness items A6/A7 there: duplicate SMC-invalidation call, XO63 FP-control semantics).

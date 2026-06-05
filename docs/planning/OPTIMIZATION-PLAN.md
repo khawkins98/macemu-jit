@@ -79,7 +79,13 @@ on it.
    **jit mode** (`SS_HARNESS_MODE=jit`); the default `make test-opcodes` runs
    interpreter-determinism and does not exercise it.
 2. **Run `SS_JIT_VERIFY=1` boot** — the only check that exercises eviction +
-   cross-block flush on a real workload.
+   cross-block flush on a real workload. **This gate is now trustworthy:** the
+   verify oracle previously latched silent after its first divergence (see
+   0b-extra5, fixed 2026-06-05), so a pre-2026-06-05 "clean" sweep proved nothing
+   past the first finding. It now runs the whole boot. Expected residual on a clean
+   sweep is **exactly one** false positive (the `blr`/`bclr`-into-Mixed-Mode return
+   block — see 0b-extra4), **not zero**. This boot is the remaining step to close
+   P1a; steps 1 and 4 are done, step 3 stays parked (unreachable on a 32-bit guest).
 3. **Document/fix the 64-bit accessor coherence hole.** `emit_load_gpr64` /
    `emit_store_gpr64` read/write `PPCR_GPR(n)` (the low word) **directly**,
    bypassing the RA's low-word cache. A 32-bit op leaves a dirty low word in
@@ -93,7 +99,7 @@ on it.
    `emit_load_gpr`/`emit_store_gpr`) corrupts the high word because `a64_mov_reg`
    is a 64-bit move. The actual RA-routing fix is **deferred** until a G5/PPC64
    path makes it reachable *and* `SS_JIT_VERIFY`-testable.
-4. **Pin the real invariant** (comment near `RA_NUM_REGS`): the allocator is safe
+4. ✅ **DONE — Pin the real invariant** (comment at `ppc-jit.cpp` `RA_NUM_REGS`): the allocator is safe
    because **`RA_NUM_REGS` (8) ≥ simultaneously-live RA operands in a single
    *emitted* instruction (≤3, e.g. `ADD hD,hA,hB`)** — NOT "distinct GPRs per
    opcode." `lmw` touches 12 GPRs and is still safe precisely because only one
@@ -195,7 +201,7 @@ codegen defect). Takes the residual 1 → 0.
 *reduces* oracle coverage (return blocks stop being checked) — only worth doing if
 the single residual is causing noise; otherwise leave it documented.
 
-### 0b-extra5. SS_JIT_VERIFY suppression latch decay (colleague review #1)
+### 0b-extra5. SS_JIT_VERIFY suppression latch decay — DONE (2026-06-05)
 
 **Concern (from colleague review, 2026-06-04):** the cascade suppression latch
 (`verify_suppressed`) is cleared when a clean block is verified, but if no
@@ -203,11 +209,18 @@ verifiable block follows a divergence (e.g. the remaining blocks are all
 link-call-terminated and skipped), suppression becomes permanent for the rest
 of the boot — silently disabling the oracle.
 
-**Fix:** add a block-count decay: unsuppress after N blocks regardless
-(e.g. `verify_suppress_countdown = 100; if (--countdown <= 0) suppressed = false;`).
-This bounds the blind window while still suppressing the immediate cascade.
-**Effort**: Low (<10 lines).  **Risk**: None (worst case: a few more false
-positives in the decay window).
+**Result:** the latch was in fact *unconditionally* permanent, not just in the
+edge case described — the `!verify_suppressed` entry gate guarded its own clearing
+branch, so the `else { verify_suppressed = false }` was unreachable and the oracle
+went silent after the **first** divergence of every run. Replaced the `bool` with a
+`verify_suppress_blocks` countdown (`ppc-cpu.cpp`). Key correctness detail beyond the
+proposed fix: the countdown is decremented **only on in-range (RAM, 0x10000000–
+0x20000000) blocks** — execution is overwhelmingly ROM (0x50xxxxxx), so an
+unconditional per-block decay (the originally-proposed `countdown=100`) would drain
+during ROM before suppressing any RAM block, making it a no-op. Window is short
+(N=2) and flagged as a tunable with a symptom guide in the code comment.
+**Effort**: Low.  **Risk**: None (tooling-only; gated behind `SS_JIT_VERIFY=1`).
+CHANGELOG 2026-06-05.
 
 ### 0c. isync: inline BLR instead of block break
 

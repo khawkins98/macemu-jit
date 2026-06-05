@@ -417,50 +417,35 @@ sdl3 pkg-config **is** available (3.4.10). One-command fix when desired:
 find a "Save as text"/export action, write it to the disk, read + parse the file on the host for an
 exact PR/CPU number. Until then the duration proxy + `benchmark-result.png` cover the perf signal.
 
-## 18. SDL3 shutdown deadlock — investigation (2026-06-05, IN PROGRESS / blocked on host restart)
+## 18. SDL3 shutdown crash — RESOLVED (2026-06-05, commit 3daa9c98)
 
 Switching the build to the intended **SDL3** backend (see §17; `NO_CONFIGURE=1 ./autogen.sh` fixed
-the stale `configure` that had silently built SDL2) surfaced a real bug: **SDL3 boots to Finder
-fine, but the E2E shutdown hangs.** SDL2 runs the identical sequence to a clean `exit 0`.
+the stale `configure` that had silently built SDL2) surfaced a real bug: SDL3 booted to Finder fine
+but the E2E shutdown failed (`code=-9`). SDL2 ran the identical sequence to a clean `exit 0`.
 
-**Diagnosis (multi-agent static analysis + instrumented runtime markers `[SD]`):**
-- **NOT the keyboard.** The harness injects the ADB Power key + Return straight into `adb.cpp`,
-  never through SDL. The guest *does* reach `OP_POWEROFF` (`emul_op.cpp`): a `[SD]` marker there
-  prints. ("Shutdown complete." is `printf`→stdout, block-buffered, so it's lost when the harness
-  `kill -9`s the hung process — its absence was a red herring.)
-- **The teardown runs almost to the end.** Flushed `[SD]` markers show: `OP_POWEROFF` → `Quit()` →
-  `video_close` (redraw-thread join returns FINE) → `delete drv` → `VideoExit` → `exit_emul_ppc` →
-  `tick_thread`/`nvram_thread` stopped → a 2nd `video_close` (from `ExitAll`, `main.cpp:283`) →
-  then **hang**.
-- **Root cause: destroying the SDL3 Metal window/renderer wedges at teardown, wherever it's called.**
-  `Quit()` ends in `exit(0)` (`main_unix.cpp`), which runs `atexit(SDL_Quit)` (`main_unix.cpp:782`).
-  `SDL_Quit` destroys the still-live SDL3 Metal `SDL_Renderer`/`SDL_Window` and **blocks**. The
-  renderer is Metal on macOS (`video_sdl3.cpp:789` `SDL_HINT_RENDER_DRIVER`). SDL2 doesn't hit this
-  (its `~driver_base` already comments out `shutdown_sdl_video()` for an OSX bug — see
-  `video_sdl2.cpp:1440`; the SDL3 port at `video_sdl3.cpp:1191` dropped that, but commenting it out
-  there only **defers** the same destroy to `SDL_Quit`, which still hangs). So the destroy itself is
-  the problem, not its location. The process is in state `R` (spinning), not blocked on a lock —
-  suspected `dispatch_sync(dispatch_get_main_queue(), …)` from the main thread (instant self-deadlock)
-  inside SDL3's Cocoa/Metal teardown, or a Metal drawable/command-buffer left outstanding by the
-  redraw thread's last present. **UNCONFIRMED** — needs an lldb backtrace of the hung main thread.
+**Root cause — a double-`SDL_DestroyMutex` (idempotency bug), pinned by a user-captured crash
+backtrace:**
+```
+BUG IN CLIENT OF LIBPLATFORM: os_unfair_lock is corrupt, or owner thread exited without unlocking
+  pthread_mutex_destroy → SDL_DestroyMutex → VideoExit() (video_sdl3.cpp:1682)
+  → ExitAll() (main.cpp:312) → Quit() (main_unix.cpp:1344)
+```
+`Quit()` calls `VideoExit()` **twice** — directly (`main_unix.cpp:1301`) and again via `ExitAll()`
+(`main_unix.cpp:1344` → `main.cpp:312`). `VideoExit()` destroyed `frame_buffer_lock`/
+`sdl_palette_lock`/`sdl_events_lock` but never NULLed them, so the second pass double-destroyed
+already-freed mutexes. SDL2 tolerated this; SDL3's mutexes are os_unfair_lock-backed and abort.
 
-**Blocked by host-environment degradation.** After ~13 h and dozens of emulator launches this
-session, boots now hang **intermittently → near-always** in early SCSI/disk init (`jRAM≈0`, the "?"
-no-boot-disk icon) — the documented multi-launch VBL/timer degradation (CLAUDE.md). This prevents
-both the lldb diagnosis and any fix verification. **A host restart is required to continue.**
+**Fix:** NULL each mutex pointer after `SDL_DestroyMutex` in `VideoExit()` (`video_sdl3.cpp`), so the
+second pass is a no-op — completing the idempotency the existing `if (lock)` guards already intended.
 
-**Exact next step (after a host restart):**
-1. Confirm SDL3 boots reliably again (a few `make e2e` runs).
-2. Get the deadlock stack: launch SDL3, boot to Finder, `SIGUSR1`, let it hang, then `lldb -p <pid>`
-   → `thread backtrace all`. Look at the main thread inside `SDL_Quit`/Metal — confirm
-   `dispatch_sync`-to-main vs a Metal/GPU teardown wait.
-3. Fix candidates (pick per the stack): (a) destroy renderer/window earlier while the main thread is
-   still pumping the Cocoa run loop; (b) pump events during the destroy; (c) force the **opengl**
-   renderer on macOS (`video_sdl3.cpp:789`) and re-test — if opengl teardown is clean, that's a
-   mitigation; (d) marshal the destroy onto a serviced main-thread run-loop turn.
+**Process-history note (so the next reader isn't misled):** while the host was VBL-degraded (dozens
+of launches in a ~13 h session → boots hanging in SCSI init), this was mis-theorized as a Metal
+window/renderer teardown deadlock in `SDL_Quit`. That was WRONG — the host degradation masked the
+real crash. After a **host restart** restored reliable boots, the user's crash report localized it
+immediately. Lessons: (a) `printf("Shutdown complete.")` →stdout is block-buffered and lost on a
+`kill -9`/crash, so its absence proves nothing; (b) don't trust shutdown diagnostics while boots are
+degraded — restart first. Keyboard delivery was correctly ruled out throughout (ADB injection never
+traverses SDL).
 
-**Working-tree state at pause (UNCOMMITTED diagnostics — revert or build on):** temporary flushed
-`[SD]` markers in `emul_op.cpp` (OP_POWEROFF), `main_unix.cpp` (`Quit()` stages), and
-`video_sdl3.cpp` (`video_close` steps), plus a trial `//shutdown_sdl_video()` comment-out in
-`video_sdl3.cpp` `~driver_base` (resolves the `delete drv` deadlock but moves the hang to
-`SDL_Quit`). The build is currently SDL3; revert to a green gate with `./configure … --with-sdl2`.
+**Verified:** `make e2e` (smoke) PASS ×2 on SDL3 (boot → Finder → clean shutdown, exit 0);
+`make test-jit` 264/264 score=100. SDL3 is now the validated default backend on macOS.

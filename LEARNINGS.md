@@ -3,6 +3,26 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-05 — SDL3 shutdown crash = double-`SDL_DestroyMutex` in `VideoExit()` (+ two process lessons)
+
+Switching to the SDL3 backend surfaced a clean-shutdown crash (E2E `code=-9`). Root cause: `Quit()`
+calls `VideoExit()` **twice** — directly (`main_unix.cpp:1301`) and via `ExitAll()`
+(`:1344`→`main.cpp:312`). `VideoExit()` (`video_sdl3.cpp`) destroyed `frame_buffer_lock`/
+`sdl_palette_lock`/`sdl_events_lock` but never NULLed them, so the 2nd pass double-destroyed freed
+mutexes → `os_unfair_lock is corrupt` abort in `pthread_mutex_destroy`. SDL2 tolerated it; SDL3's
+mutexes are os_unfair_lock-backed. Fix: NULL each pointer after `SDL_DestroyMutex` (commit 3daa9c98).
+The `if (lock)` guards already intended idempotency — they just never completed it.
+
+**Process lesson 1 — don't trust shutdown/boot diagnostics on a VBL-degraded host.** A ~13 h, dozens-
+of-launches session degrades the macOS VBL timer until boots hang in SCSI init (the "?" no-boot
+icon). I burned a long time mis-diagnosing this crash as a Metal/`SDL_Quit` teardown deadlock because
+the degraded env masked the real failure. A **host restart** restored reliable boots and the actual
+crash backtrace appeared instantly. When boots are flaky, stop and restart before theorizing.
+
+**Process lesson 2 — `printf` absence proves nothing.** "Shutdown complete." is `printf`→stdout,
+block-buffered when piped, so it's LOST on a `kill -9`/crash. Its absence is not evidence the code
+didn't run. Use `fprintf(stderr, …); fflush` for teardown markers, or read the crash report.
+
 ## 2026-06-05 — The `make build-ss` binary links SDL2, not SDL3 (stale generated `configure`)
 
 Despite `configure.ac` and the docs defaulting to **SDL3**, the built SheepShaver links

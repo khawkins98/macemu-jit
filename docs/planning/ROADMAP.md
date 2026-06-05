@@ -245,10 +245,11 @@ offline unit tests. Run it locally: `SheepShaver/e2e/README.md`.
 - ☐ **Score parsing (the one open item, now unblocked).** Boot works, so drive Speedometer's
   File/Analysis menus over VNC to **export results as text**, read + parse the file off the disk for
   an exact PR/CPU number (OCR excluded; "Machine Records" resource fork is not cleanly parseable).
-- ☐ **Reconfigure to SDL3 (config hygiene).** The harness has been validating **SDL2**, not the
-  intended SDL3 default — the generated `configure` is stale (predates the `configure.ac` SDL3 flip).
-  Re-bootstrap (`NO_CONFIGURE=1 ./autogen.sh && ./configure …`, no `--with-sdl2`) + re-verify
-  `make e2e` boots on SDL3. See LEARNINGS 2026-06-05.
+- ✅ **SDL3 is now the validated default backend (2026-06-05).** Re-bootstrapped the stale
+  `configure` (`NO_CONFIGURE=1 ./autogen.sh`) so the build actually links SDL3 (it had silently
+  built SDL2). Fixed the one SDL3-only shutdown crash this surfaced — a double-`SDL_DestroyMutex` in
+  `VideoExit()` (commit 3daa9c98, spec §18). `make e2e` smoke PASS ×2 on SDL3 (boot → Finder → clean
+  shutdown, exit 0); `make test-jit` 264/264. Opt back to SDL2 with `--with-sdl2` if needed.
 - **P3** — declarative scenario DSL ("Playwright-for-VNC").
 - *(deferred)* **Bootable benchmark ISO** — a read-only bootable HFS CD version of the above
   (harder: needs blessing + HFS mastering on modern macOS). The writable small disk covers the need

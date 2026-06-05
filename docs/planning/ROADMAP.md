@@ -108,8 +108,12 @@ harness that can't catch mistakes just produces the next silent bug.
     block's path + real terminator** (kills the chaining/return/loop/conditional/PC classes);
     (ii) **snapshot+restore the touched guest memory** around the replay (kills the memory-RMW
     class — the one that fools a PC-match filter); (iii) a **targeted/sampled** verify scoped to
-    register-pressure blocks so coverage doesn't require booting verify-everything. Diagnostic
-    knobs already landed: `SS_JIT_NO_CHAIN` (now logs a marker), `SS_JIT_VERIFY_BUDGET`.
+    register-pressure blocks so coverage doesn't require booting verify-everything.
+    **Sequencing — build (ii)+(iii) first:** memory-snapshot + targeted scope together give a
+    memory-correct, whole-boot-clean oracle for a fraction of the (i) replay-rework effort
+    (chaining already has the `SS_JIT_NO_CHAIN` workaround), so they're the high-value slice;
+    (i) is the larger follow-on. Diagnostic knobs already landed: `SS_JIT_NO_CHAIN` (now logs a
+    marker), `SS_JIT_VERIFY_BUDGET`.
 
 **Verifiable here** (harness/build, no boot needed). **Unblocks A2 and de-risks all of Track B.**
 **Detail:** `docs/TESTING.md`; harness `SheepShaver/jit-test/run.sh`; generators `gen-*-vectors.py`.

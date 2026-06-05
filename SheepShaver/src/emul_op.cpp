@@ -233,44 +233,67 @@ static void e2e_emit_idle_signals(void)
 // Execute68kTrap) is non-reentrant: the guest shuts down from its own top-level event loop.
 //
 // Sequence (driven across idle-hook cycles, each >= ~1 VBL apart):
-//   1. ADB Power key down+up (with dwell) -> Mac OS raises the "Shut Down / Restart / Sleep"
-//      confirmation dialog (verified on Mac OS 9.0.4).
-//   2. wait for the dialog to appear, then press Return -> activates the default "Shut Down"
-//      button -> the OS runs its real shutdown (procs + flush/unmount) -> patched PowerOff() ->
-//      OP_POWEROFF -> "Shutdown complete." -> clean exit.
-// Technique: ADB key DWELL — ADBKeyDown/Up buffer into key_buffer, drained in one pass by
-// ADBInterrupt on the 60 Hz VBL (adb.cpp); back-to-back down+up = instantaneous press the OS
-// ignores, so we hold across cycles. Return's Mac key code is 0x24. Posting events (vs
-// Execute68kTrap) is non-reentrant: the guest acts from its own top-level/modal event loop.
+//   1. ADB Power key down, hold a few cycles, up -> Mac OS raises the "Shut Down / Restart / Sleep"
+//      confirmation dialog (verified on Mac OS 8.6 and 9.0.4).
+//   2. WAIT for that dialog to actually be modal (windowKind==2), then press Return -> activates the
+//      default "Shut Down" button -> the OS runs its real shutdown (procs + flush/unmount) ->
+//      patched PowerOff() -> OP_POWEROFF -> "Shutdown complete." -> clean exit.
+//   3. if the dialog is still up shortly after, the keystroke didn't take -> RESEND the Return.
+// This is self-correcting (gate on the dialog + resend), mirroring the Python harness's _drive_until,
+// rather than pressing Return blindly after a fixed delay. Return's Mac key code is 0x24, Power 0x7f.
+// Posting events (vs Execute68kTrap) is non-reentrant: the guest acts from its own modal event loop.
 static void e2e_check_host_shutdown(void)
 {
-	static int phase = 0;		// 0=idle 1=hold power 2=wait-for-dialog 3=done
+	enum { PH_IDLE, PH_HOLD_POWER, PH_WAIT_DIALOG, PH_VERIFY, PH_DONE };
+	static int phase = PH_IDLE;
 	static int counter = 0;
-	switch (phase) {
-	case 0:
+	static int returns_sent = 0;
+
+	if (phase == PH_IDLE) {
 		if (!host_shutdown_requested)
 			return;
 		host_shutdown_requested = 0;
 		fprintf(stderr, "[BOOT] host shutdown requested — ADB Power key down\n");
 		fflush(stderr);
 		ADBKeyDown(0x7f);
-		phase = 1; counter = 0;
-		break;
-	case 1:				// hold the power key a few cycles, then release
+		phase = PH_HOLD_POWER; counter = 0;
+		return;
+	}
+
+	// Is a modal dialog up front? (the Shut Down confirmation — WindowList head, windowKind==2.)
+	uint32 fw = ReadMacInt32(0x9d6);
+	bool dialog_up = fw && ((int16)ReadMacInt16(fw + 0x6c) == 2);
+
+	switch (phase) {
+	case PH_HOLD_POWER:			// hold the power key a few cycles, then release
 		if (++counter < 4)
 			break;
 		ADBKeyUp(0x7f);
 		fprintf(stderr, "[BOOT] Power key up; waiting for Shut Down dialog\n");
 		fflush(stderr);
-		phase = 2; counter = 0;
+		phase = PH_WAIT_DIALOG; counter = 0; returns_sent = 0;
 		break;
-	case 2:				// let the dialog appear (~1s of idle cycles), then confirm with Return
-		if (++counter < 45)
+	case PH_WAIT_DIALOG:		// gate on the dialog being modal, then confirm with Return
+		// Wait for the dialog to actually be up (not a blind cycle count); fall back after ~150 idle
+		// cycles so a missed modal probe can never wedge the shutdown.
+		if (!dialog_up && ++counter < 150)
 			break;
-		fprintf(stderr, "[BOOT] confirming Shut Down dialog (Return)\n");
+		fprintf(stderr, "[BOOT] confirming Shut Down dialog (Return, attempt %d)\n", returns_sent + 1);
 		fflush(stderr);
-		ADBKeyDown(0x24); ADBKeyUp(0x24);	// Return = default "Shut Down" button
-		phase = 3;
+		ADBKeyDown(0x24); ADBKeyUp(0x24);	// Return = the default "Shut Down" button
+		returns_sent++;
+		phase = PH_VERIFY; counter = 0;
+		break;
+	case PH_VERIFY:				// if the dialog didn't clear, the keystroke didn't take -> resend
+		if (++counter < 30)		// give the OS ~0.5 s to act on the keystroke
+			break;
+		if (dialog_up && returns_sent < 4) {
+			fprintf(stderr, "[BOOT] dialog still modal; re-pressing Return\n");
+			fflush(stderr);
+			phase = PH_WAIT_DIALOG; counter = 0;
+		} else {
+			phase = PH_DONE;	// dialog cleared (shutting down) or out of retries
+		}
 		break;
 	}
 }

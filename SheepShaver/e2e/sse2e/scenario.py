@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import observe
-from .bench_export import REPORT_NAME
 from .runner import Runner
 from .vnc import Vnc
 
@@ -208,17 +207,41 @@ def run_benchmark(
         vnc.capture(img)                         # capture the results (with the "All Done!" alert up)
         vnc.key("enter"); time.sleep(1.5)        # dismiss "All Done!" -> guest returns to idle
 
-        # Save Speedometer's text report onto the (throwaway) run-copy disk so the host can
-        # extract the numbers after shutdown. Cmd-T = "Save Text Report"; the dialog opens with
-        # the name field selected, so typing replaces the default with our deterministic name
-        # (no "replace existing?" prompt on a pristine copy). Best-effort: any failure here must
-        # NOT fail the benchmark — the report export is purely additive (collect+report only).
+        # Save Speedometer's text report onto the (throwaway) run-copy disk, then quit to the
+        # Finder so the host-side extraction (after shutdown) has a file to read. Cmd-T opens a
+        # MODAL "Save Text Report" dialog; accept its DEFAULT name ("Power Macintosh Report") with
+        # Return — typing a custom name proved unreliable (keys dropped/leaked, and it saved under
+        # the default name anyway), so we don't type; the host matches the default name.
+        # All best-effort: a hiccup here must not fail the benchmark (export is additive).
         report_saved = False
         try:
-            vnc.key("super-t"); time.sleep(1.0)           # File > Save Text Report...
-            vnc.type_text(REPORT_NAME); time.sleep(0.3)   # replace the selected default name
-            vnc.key("enter"); time.sleep(1.5)             # Return = Save (default button)
-            report_saved = True
+            since = _nlines(runner)
+            vnc.key("super-t")                            # File > Save Text Report...
+            if _await_since(runner, since, lambda e: e.modal, 8.0, "save-dialog") is not None:
+                since = _nlines(runner)
+                vnc.key("enter")                          # Return = Save (accept default name)
+                if _await_since(runner, since, lambda e: not e.modal, 8.0, "save-commit") is not None:
+                    report_saved = True
+                else:
+                    since = _nlines(runner)
+                    vnc.key("esc")                        # cancel a lingering dialog so it can't
+                    _await_since(runner, since, lambda e: not e.modal, 5.0, "save-cancel")  # block shutdown
+            # Quit Speedometer back to the Finder so the Power-key shutdown hook works (it only
+            # raises the Shut Down dialog at the Finder, not over a frontmost app). KEYBOARD-ONLY:
+            # VNC mouse *clicks* don't register in the guest (a deep ADB absolute-mouse bug — the
+            # button fires at the right coords but the Toolbox doesn't act on it; see
+            # memory/e2e-vnc-click-injection). So Cmd-Q, then answer each modal that follows with
+            # Return: "Save before quitting?" -> Yes (save the Machine Record) -> the record save
+            # dialog -> accept default name -> (any replace prompt) -> Speedometer quits to Finder.
+            since = _nlines(runner)
+            vnc.key("super-q")                            # Cmd-Q = Quit
+            for _ in range(4):
+                if _await_since(runner, since, lambda e: e.modal, 3.0, "quit-modal") is None:
+                    break
+                since = _nlines(runner)
+                vnc.key("enter")                          # default button (Yes / Save / Replace)
+            _await_since(runner, since, lambda e: "Finder" in e.app, 12.0, "back-to-finder")
+            time.sleep(1.5)                               # let the Finder settle before shutdown
         except Exception:
             pass                                          # leave report_saved False; PASS unaffected
         vnc.close()

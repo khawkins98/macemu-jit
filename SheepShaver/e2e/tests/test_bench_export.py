@@ -41,6 +41,21 @@ def test_find_in_listing_ignores_folder_entries_named_like_target():
     assert bench_export._find_in_listing(listing, "e2ereport") is None
 
 
+def test_find_report_default_matches_report_named_file():
+    # No explicit name -> match Speedometer's default 'Power Macintosh Report' by substring.
+    listing = ":Desktop Folder:\nMachine Records\nPower Macintosh Report\nSpeedometer 4.02*\n"
+    assert bench_export._find_report(listing, None) == ("Desktop Folder", "Power Macintosh Report")
+
+
+def test_find_report_default_none_when_no_report_file():
+    listing = ":Desktop Folder:\nMachine Records\nSpeedometer 4.02*\n"
+    assert bench_export._find_report(listing, None) is None
+
+
+def test_find_report_exact_name_when_given():
+    assert bench_export._find_report(_LISTING, "e2ereport") == ("Desktop Folder", "e2ereport")
+
+
 def test_walk_listing_yields_files_with_folders_skipping_subdir_entries():
     # Shared walk behind both _find_in_listing and list_files: files only, with their folder.
     got = list(bench_export._walk_listing(_LISTING))

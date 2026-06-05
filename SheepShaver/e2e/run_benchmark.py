@@ -51,6 +51,9 @@ def main() -> int:
         prefs=str(prefs),
         vncport=VNCPORT,
         artifact_dir=artifacts,
+        # Diagnostic knob: keep the window up longer at the shutdown stage so a stuck shutdown
+        # can be inspected on-screen before the harness force-kills it (default 30s).
+        shutdown_timeout=float(os.environ.get("SS_E2E_SHUTDOWN_TIMEOUT", "30")),
     )
     print(f"{'PASS' if res.ok else 'FAIL'}: {res.reason}")
     if res.result_image:
@@ -67,12 +70,11 @@ def main() -> int:
                 if not bench_export.hfsutils_available():
                     print("  history: report not extracted (hfsutils missing — `make e2e-setup`)")
                 else:
-                    print(f"  history: report not extracted (no '{bench_export.REPORT_NAME}' on the disk "
+                    print("  history: report not extracted (no Speedometer text report on the disk "
                           "— Cmd-T save may not have taken)")
-                    # Diagnostic: show what DID land, so a mangled save name vs no-save is obvious.
+                    # Diagnostic: show what DID land, so a missing vs misnamed report is obvious.
                     files = bench_export.list_files(str(run_disk))
-                    hits = [f for f in files if bench_export.REPORT_NAME in f.lower()
-                            or "report" in f.lower()]
+                    hits = [f for f in files if bench_export.REPORT_MATCH in f.lower()]
                     if hits:
                         print(f"           files that look related: {hits}")
             else:

@@ -16,9 +16,10 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Deterministic in-guest save name. Pure alphanumeric so typing it over VNC needs no shifted
-# or special keys, and it never pre-exists on a pristine clonefile copy (so no "replace?" prompt).
-REPORT_NAME = "e2ereport"
+# Speedometer's "Save Text Report" (Cmd-T) saves under its own default name — "Power Macintosh
+# Report" on a Power Mac. We accept that default in-guest (typing a custom name proved unreliable
+# over VNC), and match it host-side by this case-insensitive substring of the filename.
+REPORT_MATCH = "report"
 
 _HMOUNT = "/opt/homebrew/bin/hmount"
 _HUMOUNT = "/opt/homebrew/bin/humount"
@@ -67,9 +68,25 @@ def _find_in_listing(listing: str, name: str) -> str | None:
     return None
 
 
-def extract_report(disk_path: str, name: str = REPORT_NAME) -> str | None:
+def _find_report(listing: str, name: str | None) -> tuple[str, str] | None:
+    """Locate the report's (folder, filename) in `hls -R -F` output.
+
+    With an explicit `name`, match it exactly. Otherwise match the first file whose name contains
+    REPORT_MATCH case-insensitively (Speedometer's default 'Power Macintosh Report').
+    """
+    if name:
+        folder = _find_in_listing(listing, name)
+        return (folder, name) if folder is not None else None
+    for folder, entry in _walk_listing(listing):
+        if REPORT_MATCH in entry.lower():
+            return folder, entry
+    return None
+
+
+def extract_report(disk_path: str, name: str | None = None) -> str | None:
     """Pull the saved text report off an unmounted HFS image; return its text, or None.
 
+    With no `name`, finds Speedometer's default-named report (any file matching REPORT_MATCH).
     None means: hfsutils missing, mount failed, the report was not found, or the copy
     failed. Callers treat None as "no history this run" (never a benchmark failure).
     """
@@ -82,10 +99,11 @@ def extract_report(disk_path: str, name: str = REPORT_NAME) -> str | None:
         try:
             vol = _run([_HPWD], home).stdout.strip().rstrip(":")
             listing = _run([_HLS, "-R", "-F"], home).stdout
-            folder = _find_in_listing(listing, name)
-            if folder is None:
+            match = _find_report(listing, name)
+            if match is None:
                 return None
-            src = f"{vol}:{folder}:{name}" if folder else f"{vol}:{name}"
+            folder, fname = match
+            src = f"{vol}:{folder}:{fname}" if folder else f"{vol}:{fname}"
             out = Path(home) / "report.txt"
             if _run([_HCOPY, "-t", src, str(out)], home).returncode != 0 or not out.exists():
                 return None

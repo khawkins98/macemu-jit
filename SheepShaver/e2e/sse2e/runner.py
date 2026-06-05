@@ -1,11 +1,48 @@
 """Spawn the emulator, capture stderr, and guarantee teardown."""
 from __future__ import annotations
 
+import datetime
 import os
 import signal
 import subprocess
 import threading
 import time
+from pathlib import Path
+
+
+def binary_build_info(emulator: str) -> str:
+    """One-line "when was this binary built" line, printed at the start of a run so you can confirm
+    you're testing the binary you just built — not a stale one. Uses the binary's mtime (set by the
+    link step) and warns if any emulator source file is newer (you forgot to `make build-ss`)."""
+    p = Path(emulator)
+    if not p.exists():
+        return f"emulator binary not found: {emulator} — run `make build-ss`"
+    mtime = p.stat().st_mtime
+    built = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    age = max(0.0, time.time() - mtime)
+    age_str = (f"{age/60:.0f} min ago" if age < 3600
+               else f"{age/3600:.1f} h ago" if age < 86400 else f"{age/86400:.1f} d ago")
+    msg = f"emulator: built {built} ({age_str})"
+    try:
+        if _source_newer_than(mtime, p):
+            msg += "  — WARNING: emulator source is NEWER; run `make build-ss` (or `make e2e`)"
+    except Exception:
+        pass  # staleness check is best-effort; never block a run on it
+    return msg
+
+
+def _source_newer_than(mtime: float, emulator: Path) -> bool:
+    """True if any emulator .cpp/.h is newer than the binary. emulator = …/SheepShaver/src/Unix/SheepShaver."""
+    unix = emulator.resolve().parent                       # …/SheepShaver/src/Unix
+    roots = [unix.parent, unix.parents[2] / "BasiliskII" / "src" / "SDL"]  # SheepShaver/src, BasiliskII/src/SDL
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for pattern in ("*.cpp", "*.h"):
+            for f in root.rglob(pattern):
+                if f.stat().st_mtime > mtime:
+                    return True
+    return False
 
 
 def _sheepshaver_pids() -> list[int]:

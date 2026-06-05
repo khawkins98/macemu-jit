@@ -18,6 +18,7 @@ VNCPORT = 5950
 
 
 def main() -> int:
+    print(runner.binary_build_info(str(EMULATOR)))  # which binary are we testing, and how fresh?
     assets = config.resolve_assets()
     # Fail fast with a clear, doc-pointing message if an asset is missing (vs a cryptic boot failure).
     try:

@@ -1,7 +1,22 @@
 import sys
 import time
 
+from sse2e import runner as runner_mod
 from sse2e.runner import Runner
+
+
+def test_binary_build_info_missing(tmp_path):
+    msg = runner_mod.binary_build_info(str(tmp_path / "SheepShaver-nope"))
+    assert "not found" in msg and "make build-ss" in msg
+
+
+def test_binary_build_info_present_reports_build_time(tmp_path):
+    p = tmp_path / "SheepShaver"
+    p.write_text("x")  # stand-in binary; its mtime is "now"
+    msg = runner_mod.binary_build_info(str(p))
+    assert msg.startswith("emulator: built ") and "ago)" in msg
+    # No real source tree next to a tmp file -> no false staleness warning.
+    assert "WARNING" not in msg
 
 
 def test_runner_captures_stderr_and_exit_code():

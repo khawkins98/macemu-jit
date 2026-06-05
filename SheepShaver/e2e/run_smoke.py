@@ -20,6 +20,7 @@ VNCPORT = 5950
 
 
 def main() -> int:
+    print(runner.binary_build_info(str(EMULATOR)))  # which binary are we testing, and how fresh?
     assets = config.resolve_assets()
     medium = os.environ.get("SS_E2E_MEDIUM", "iso")  # "iso" (read-only, default) or "disk"
     boot_image, kind = (assets.disk, "disk") if medium == "disk" else (assets.iso, "iso")

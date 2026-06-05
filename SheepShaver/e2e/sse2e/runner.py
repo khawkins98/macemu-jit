@@ -45,6 +45,31 @@ def _source_newer_than(mtime: float, emulator: Path) -> bool:
     return False
 
 
+def gui_session_ok() -> bool:
+    """True if a GUI (Aqua) session is available for the emulator's SDL window.
+
+    CONSERVATIVE — returns True on any uncertainty so it never false-blocks a legitimate run; only
+    returns False when macOS clearly reports a non-GUI context (a bare SSH session, a launchd
+    daemon). `launchctl managername` reports "Aqua" inside a logged-in desktop session and
+    "Background"/"System"/etc. otherwise. Lets a run fail fast with a clear message instead of
+    waiting out the 90s boot timeout (the SDL window can't open without an active WindowServer)."""
+    try:
+        out = subprocess.run(["launchctl", "managername"], capture_output=True, text=True, timeout=3)
+        name = out.stdout.strip()
+        if name and name != "Aqua":
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def is_configured(emulator: str) -> bool:
+    """True if the autoconf build tree has been configured (config.status sits next to the binary).
+    `make build-ss` FAILS on an un-configured tree, so the doctor / run can point at the one-time
+    `configure` step instead of a cryptic build error."""
+    return (Path(emulator).resolve().parent / "config.status").exists()
+
+
 def _sheepshaver_pids() -> list[int]:
     """PIDs of running SheepShaver instances (empty if none / pgrep absent)."""
     try:

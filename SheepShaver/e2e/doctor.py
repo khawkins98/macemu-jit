@@ -39,9 +39,23 @@ def check_binary() -> bool:
     ok = EMULATOR.exists()
     if ok:
         _line(True, "Emulator binary", runner.binary_build_info(str(EMULATOR)).replace("emulator: ", ""))
+    elif not runner.is_configured(str(EMULATOR)):
+        # `make build-ss` FAILS on an un-configured tree — point at the one-time configure step.
+        _line(False, "Emulator binary", "not built and the tree is NOT configured — run the one-time "
+              "configure first (see e2e README 'Building the emulator'), then `make build-ss`")
     else:
-        _line(False, "Emulator binary", "not built — run `make build-ss` (first time also needs configure; see CLAUDE.md)")
+        _line(False, "Emulator binary", "not built — run `make build-ss`")
     return ok
+
+
+def check_gui_session() -> None:
+    """The emulator opens a real SDL window; without an Aqua (GUI) session a run hangs/fails. Optional
+    (informational) — not part of the readiness gate, since the check is conservative."""
+    if runner.gui_session_ok():
+        _line(True, "GUI session", "Aqua session present (the SDL window can open)")
+    else:
+        _line(False, "GUI session", "no Aqua session — `make e2e`/`e2e-bench` need a logged-in desktop, "
+              "not a bare SSH session (Prerequisite 1)")
 
 
 def check_brew_libs() -> bool:
@@ -125,6 +139,7 @@ def check_assets() -> bool:
 def main() -> int:
     print("SheepShaver E2E — setup check\n")
     results = [check_venv(), check_binary(), check_brew_libs(), check_assets()]
+    check_gui_session()  # informational (conservative check) — not part of the readiness gate
     check_hfsutils()  # optional — informational only, not part of the readiness gate
     print()
     if all(results):

@@ -156,6 +156,23 @@ Tooling-only (no runtime/codegen change); hardens the signals used to judge the 
   in an FPR/VR/memory the REGDUMP can't see) remains deferred to the `gen-*-vectors.py`
   generators / a future sentinel-mutation redesign.
 
+### [SheepShaver] E2E harness — first-run DX: shared entry scaffolding, GUI-session + configure preflight
+
+From a developer-advocate review of the onboarding cliff:
+
+- **New `sse2e/harness.py`** — shared entry-point scaffolding so each run script (and any new
+  scenario) is a thin "check preconditions, run the drive fn": `hard_exit(code)` (the os._exit that
+  stops a stuck vncdotool reactor from hanging the process — previously duplicated verbatim with a
+  long comment in each script) and `check_preconditions(need_iso/need_disk)` (build + GUI + assets,
+  failing fast with actionable messages). `run_smoke.py`/`run_benchmark.py` now use it.
+- **GUI-session fast-fail** (`runner.gui_session_ok`, `launchctl managername == "Aqua"`,
+  conservative) — a headless/SSH run now fails immediately with "no GUI session" instead of waiting
+  out the 90s boot timeout on a cryptic disk error. Surfaced in `make e2e-setup` too.
+- **`configure`-not-run detection** (`runner.is_configured`) — `make build-ss` fails on an
+  un-configured tree; the doctor + a tracked README **"Building the emulator"** section now carry
+  the one-time `configure` incantation (it previously lived only in gitignored `CLAUDE.md`,
+  invisible to a fresh clone). README also gains an env-var reference table. +8 unit tests.
+
 ### [SheepShaver] E2E harness — trustworthy gates: FakeRunner tests, settle-based gate, honest PASS
 
 Hardens the *integrity* of the benchmark's pass/fail signal (this session exposed runs printing

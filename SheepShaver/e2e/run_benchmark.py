@@ -13,7 +13,7 @@ import time
 import tempfile
 from pathlib import Path
 
-from sse2e import bench_export, config, disk, runner, scenario
+from sse2e import bench_export, disk, harness, runner, scenario
 
 HERE = Path(__file__).parent
 EMULATOR = HERE.parent / "src" / "Unix" / "SheepShaver"
@@ -85,14 +85,9 @@ def _run_once(*, assets, artifacts: Path, shutdown_timeout: float):
 
 def _single_run() -> int:
     """Resolve assets and run ONE benchmark cycle (one process == one vncdotool reactor)."""
-    print(runner.binary_build_info(str(EMULATOR)))  # which binary are we testing, and how fresh?
-    assets = config.resolve_assets()
-    # Fail fast with a clear, doc-pointing message if an asset is missing (vs a cryptic boot failure).
-    try:
-        config.require_asset(assets.rom, "rom")
-        config.require_asset(assets.disk, "disk")
-    except FileNotFoundError as e:
-        print(f"FAIL: {e}")
+    # Build info + fail-fast preflight (build / GUI session / required assets) with actionable errors.
+    assets = harness.check_preconditions(need_disk=True)
+    if assets is None:
         return 1
     artifacts = HERE / "artifacts"
     artifacts.mkdir(exist_ok=True)
@@ -129,9 +124,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    code = main()
-    # See run_smoke.py: vncdotool's non-daemon reactor thread blocks a normal interpreter exit if a
-    # VNC connect failed (close()/api.shutdown() skipped). Force a clean immediate exit.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(code)
+    harness.hard_exit(main())   # os._exit so a stuck vncdotool reactor can't hang the process

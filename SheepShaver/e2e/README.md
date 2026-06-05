@@ -156,8 +156,23 @@ fix for any gap, and — in a terminal — **offers to symlink ROM/ISO/disk file
 run** (cached, like `npm install`) — no manual `venv`/`pip`; `make e2e` builds the emulator for you.
 `make e2e-clean` removes the venv.
 
-> First-ever build also needs a one-time `configure` — see the SheepShaver build commands in
-> `CLAUDE.md` / the repo build docs. After that, `make e2e` is incremental.
+### Building the emulator (first time)
+
+`make e2e` builds the emulator for you, but a **fresh clone needs a one-time `configure`** first
+(`make build-ss` fails on an un-configured tree; `make e2e-setup` detects this and points you here).
+From the repo root:
+
+```bash
+brew install sdl3 vde libvncserver hfsutils          # runtime + harness deps (one time)
+cd SheepShaver/src/Unix
+NO_CONFIGURE=1 ./autogen.sh                           # regenerate ./configure (first time only)
+./configure --enable-sdl-video --enable-sdl-audio --enable-jit \
+            --without-gtk --without-x --without-esd --with-vdeplug \
+            CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib
+```
+
+(SDL3 is the default; add `--with-sdl2` to opt into SDL2.) After configuring once, `make e2e` /
+`make build-ss` are incremental — no need to re-run `configure`.
 
 Variants:
 
@@ -183,7 +198,7 @@ screenshots are written; `make e2e-bench` also writes `artifacts/benchmark-resul
 ### Offline unit tests (no boot, no assets)
 
 ```bash
-make e2e-test          # from SheepShaver/ — 67 tests: observe / runner / disk / config / imagecmp / bench_export / scenario
+make e2e-test          # from SheepShaver/ — 79 tests: observe / runner / disk / config / imagecmp / bench_export / scenario / harness
 ```
 
 These run anywhere (CI included) — they exercise the signal parsing, teardown, and prefs logic with

@@ -7,12 +7,11 @@ Boots SheepShaver in the repo-tracked isolated config, waits for the determinist
 Requires a logged-in macOS GUI session (SDL needs a live WindowServer). Asset paths
 (ROM/disk) come from SS_E2E_ROM / SS_E2E_DISK or local-dev defaults (see sse2e/config.py).
 """
-import sys
 import os
 import tempfile
 from pathlib import Path
 
-from sse2e import config, disk, runner, scenario
+from sse2e import disk, harness, runner, scenario
 
 HERE = Path(__file__).parent
 EMULATOR = HERE.parent / "src" / "Unix" / "SheepShaver"
@@ -20,17 +19,13 @@ VNCPORT = 5950
 
 
 def main() -> int:
-    print(runner.binary_build_info(str(EMULATOR)))  # which binary are we testing, and how fresh?
-    assets = config.resolve_assets()
     medium = os.environ.get("SS_E2E_MEDIUM", "iso")  # "iso" (read-only, default) or "disk"
-    boot_image, kind = (assets.disk, "disk") if medium == "disk" else (assets.iso, "iso")
-    # Fail fast with a clear, doc-pointing message if an asset is missing (vs a cryptic boot failure).
-    try:
-        config.require_asset(assets.rom, "rom")
-        config.require_asset(boot_image, kind)
-    except FileNotFoundError as e:
-        print(f"FAIL: {e}")
+    # Build info + fail-fast preflight (build / GUI session / required assets), with actionable
+    # messages instead of a cryptic late failure.
+    assets = harness.check_preconditions(need_iso=(medium != "disk"), need_disk=(medium == "disk"))
+    if assets is None:
         return 1
+    boot_image = assets.disk if medium == "disk" else assets.iso
     work = Path(tempfile.mkdtemp(prefix="ss-e2e-"))
     if medium == "disk":
         # Writable disk boot: copy the pristine master per run (instant APFS clonefile) so the
@@ -74,12 +69,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    code = main()
-    # vncdotool starts a NON-daemon Twisted reactor thread on first connect. If a VNC connect failed
-    # mid-run (so its close()/api.shutdown() was skipped), that thread blocks a normal interpreter
-    # exit — the process prints PASS then hangs forever, needing ^C, and leaves a lingering Python
-    # process. The emulator is already terminated by the scenario's finally, so nothing is left to
-    # flush/clean up here. Force an immediate, clean process exit.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(code)
+    harness.hard_exit(main())   # os._exit so a stuck vncdotool reactor can't hang the process

@@ -51,13 +51,16 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - Run guide: `SheepShaver/e2e/README.md`; design: `docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md`
   (§12–§15).
 
-### [SheepShaver] Live JIT stats in SDL window title bar
+### [SheepShaver] Live JIT stats in SDL window title bar — periodic update reverted (boot-breaking on macOS)
 
-- Window title now shows JIT block count and code cache usage, updated every ~2s:
-  `SheepShaver — JIT: 847 blocks, cache 1234K/262144K (0%)`. New
-  `ppc_jit_aarch64_get_stats()` API exposes block count, pool size, cache used/total.
-  Applied to both SDL2 and SDL3 video backends. Guarded by `USE_AARCH64_JIT`.
-  Foundation for a future SDL overlay status bar (option 3 in the plan).
+- New `ppc_jit_aarch64_get_stats()` API exposes block count, pool size, cache used/total;
+  `set_window_name()` gained an optional `status_suffix`. **The periodic title update in
+  `do_video_refresh()` was removed** (both SDL2 and SDL3 backends): `do_video_refresh()` runs on
+  the "Redraw Thread", and `SDL_SetWindowTitle` calls into Cocoa, which asserts *"NSWindow … should
+  only be modified on the main thread!"* — aborting the emulator (SDL2) or stalling the redraw
+  thread so the 60 Hz VBL stops and the guest hangs in early boot (SDL2-default build; `SS_JIT_VERIFY`
+  run reproduced the abort). The getter + param are retained for a future reimplementation that
+  applies the title on the **main thread** (e.g. a pending-title mailbox drained by the main loop).
 
 ### [docs] Silicon Sheep — Tauri v2 launcher scaffolded + plan expanded
 

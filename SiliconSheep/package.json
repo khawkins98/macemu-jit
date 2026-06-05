@@ -8,7 +8,10 @@
     "build": "tauri build",
     "preview": "vite preview",
     "vite:dev": "vite",
-    "vite:build": "vite build"
+    "vite:build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "cd src-tauri && cargo test",
+    "check": "npm run typecheck && npm run test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -59,6 +59,27 @@ means a stray SheepShaver still holds the disk image — the runner's pre-flight
 refuses to launch if the image is held; if it still hangs, a host restart clears graphics/VBL
 degradation from many prior launches.
 
+### Benchmark history
+
+After a passing `make e2e-bench`, the harness saves Speedometer's **text report** in-guest
+(Cmd-T → "Save Text Report"), extracts it host-side with **hfsutils** (no extra boot, reading
+the unmounted run-copy image directly), and archives each run to the gitignored
+`artifacts/benchmark-history/<timestamp>/` (raw `report.txt`, `scores.csv`, result PNG) plus an
+append-only `history.csv`. It prints the delta vs the previous run:
+
+```
+benchmark history: 2026-06-05T16-16-03  (vs 2026-06-04T09-02-11)
+  PR             30.103 ->      31.402  (+4.3%)
+  CPU            64.265 ->      66.010  (+2.7%)
+  ...
+archived: artifacts/benchmark-history/2026-06-05T16-16-03/
+```
+
+This is **collect + report only** — the numbers never fail the run; they're for tracking
+JIT/boot performance over time. Because the benchmark runs on a throwaway per-run clonefile
+copy of the disk, nothing accumulates on the master image. Needs `brew install hfsutils`
+(checked by `make e2e-setup`; without it the run still passes, just skips history).
+
 ---
 
 ## Prerequisites

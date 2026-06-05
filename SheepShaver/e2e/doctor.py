@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 EMULATOR = HERE.parent / "src" / "Unix" / "SheepShaver"
 
 sys.path.insert(0, str(HERE))
-from sse2e import config, runner  # noqa: E402
+from sse2e import bench_export, config, runner  # noqa: E402
 
 OK, BAD = "[\033[32m✓\033[0m]", "[\033[31m✗\033[0m]"
 if not sys.stdout.isatty():
@@ -62,6 +62,15 @@ def check_brew_libs() -> bool:
         return False
     _line(True, "Homebrew libs", "sdl3, vde, libvncserver present")
     return True
+
+
+def check_hfsutils() -> None:
+    """Optional: hfsutils enables benchmark-history export (Cmd-T report extraction). Its absence
+    does NOT block readiness — the smoke and benchmark still run, just without saved history."""
+    if bench_export.hfsutils_available():
+        _line(True, "hfsutils (opt)", "present — benchmark history export enabled")
+    else:
+        _line(False, "hfsutils (opt)", "missing — benchmark history export disabled. `brew install hfsutils`")
 
 
 def _scan_candidates(glob: str) -> list[Path]:
@@ -116,6 +125,7 @@ def check_assets() -> bool:
 def main() -> int:
     print("SheepShaver E2E — setup check\n")
     results = [check_venv(), check_binary(), check_brew_libs(), check_assets()]
+    check_hfsutils()  # optional — informational only, not part of the readiness gate
     print()
     if all(results):
         print("Ready — run `make e2e` (smoke) or `make e2e-bench` (Speedometer benchmark).")

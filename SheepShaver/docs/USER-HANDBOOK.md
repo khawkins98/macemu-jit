@@ -143,6 +143,12 @@ image) run the emulator as a *system* and return a clean pass/fail — the regre
 change still boot/run/shut-down cleanly?" Full guide, signals, knobs, and troubleshooting:
 **`SheepShaver/e2e/README.md`**.
 
+`make e2e-bench` also archives **benchmark history**: it saves Speedometer's text report in-guest,
+extracts it host-side via `hfsutils` (`brew install hfsutils`), and writes each run to the gitignored
+`SheepShaver/e2e/artifacts/benchmark-history/` (per-run `report.txt`/`scores.csv` + an append-only
+`history.csv` trend table), printing the PR/CPU/… delta vs the previous run. It's collect-and-report
+only — the numbers never fail the run.
+
 ### Diagnosing a "?" boot disk
 
 A flashing **`?` floppy** means classic Mac OS found no bootable System — almost always a **stray

@@ -11,6 +11,19 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-05
 
+### [SheepShaver] E2E benchmark history export
+
+`make e2e-bench` now saves Speedometer's text report in-guest (Cmd-T), extracts it
+host-side via hfsutils (no extra boot — reads the unmounted run-copy image directly,
+MacRoman-decoded, hfsutils state isolated via a throwaway HOME), and archives each run
+under gitignored `SheepShaver/e2e/artifacts/benchmark-history/<timestamp>/` (raw
+`report.txt` + `scores.csv` + result PNG) plus an append-only `history.csv`, printing the
+PR/CPU/Graphics/Disk/Math delta vs the previous run. Collect+report only — a save/extract
+failure never flips a PASS to FAIL. New `sse2e/bench_export.py` (+15 unit tests);
+`make e2e-setup` gains an optional hfsutils check. Design + plan:
+`docs/superpowers/specs/2026-06-05-benchmark-result-export-design.md`,
+`docs/superpowers/plans/2026-06-05-benchmark-result-export.md`.
+
 ### [docs] BasiliskII → SheepShaver JIT cross-pollination triage
 
 - Added `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`: which techniques

@@ -47,6 +47,7 @@
 #include <errno.h>
 #include <vector>
 #include <string>
+#include <atomic>
 #include <math.h>
 
 #ifdef SDL_PLATFORM_MACOS
@@ -69,6 +70,7 @@
 #include "video.h"
 #include "video_defs.h"
 #include "video_blit.h"
+#include "vnc_server.h"		// VNC server (ported to SDL3 2026-06-05; mirrors video_sdl2.cpp)
 #include "vm_alloc.h"
 #include "cdrom.h"
 
@@ -149,6 +151,10 @@ static int keycode_table[256];						// X keycode -> Mac keycode translation tabl
 SDL_Window * sdl_window = NULL;				        // Wraps an OS-native window
 static SDL_Surface * host_surface = NULL;			// Surface in host-OS display format
 static SDL_Surface * guest_surface = NULL;			// Surface in guest-OS display format
+// Referenced by vnc_server.cpp's VNCServerUpdate to skip surface access during a mode switch.
+// video_sdl2.cpp defines its own; the SDL3 backend needs this copy to link. (The SDL3 redraw thread
+// is paused during mode changes too, so this is belt-and-suspenders against a host_surface UAF.)
+std::atomic<bool> video_mode_changing{false};
 static SDL_Renderer * sdl_renderer = NULL;			// Handle to SDL2 renderer
 static SDL_ThreadID sdl_renderer_thread_id = 0;		// Thread ID where the SDL_renderer was created, and SDL_renderer ops should run (for compatibility w/ d3d9)
 static SDL_Texture * sdl_texture = NULL;			// Handle to a GPU texture, with which to draw guest_surface to
@@ -967,6 +973,11 @@ static int present_sdl_video()
 			}
 	SDL_UnlockTexture(sdl_texture);
 
+	// Mirror the freshly-updated region to any connected VNC clients. host_surface holds the
+	// current frame for sdl_update_video_rect, and we're still under sdl_update_video_mutex so the
+	// rect is stable. No-op unless vncserver=true. (Mirrors video_sdl2.cpp's VNCServerUpdate call.)
+	VNCServerUpdate(host_surface, sdl_update_video_rect);
+
     // We are done working with pixels in host_surface.  Reset sdl_update_video_rect, then let
     // other threads modify it, as-needed.
     sdl_update_video_rect.x = 0;
@@ -1449,6 +1460,7 @@ bool VideoInit(bool classic)
 	mouse_wheel_lines = PrefsFindInt32("mousewheellines");
 	mouse_wheel_reverse = mouse_wheel_lines < 0;
 	if (mouse_wheel_reverse) mouse_wheel_lines = -mouse_wheel_lines;
+	VNCServerInitFromPrefs();		// start the VNC server if vncserver=true (mirrors video_sdl2.cpp)
 
 	// Get screen mode from preferences
 	migrate_screen_prefs();
@@ -1672,6 +1684,8 @@ void SDL_monitor_desc::video_close(void)
 
 void VideoExit(void)
 {
+	VNCServerShutdown();	// stop the VNC server + its thread first (idempotent; safe on the 2nd call)
+
 	// Close displays
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i)

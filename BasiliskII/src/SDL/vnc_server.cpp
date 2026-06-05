@@ -11,14 +11,45 @@ extern std::atomic<bool> video_mode_changing;
 #include <vector>
 #include <cstring>
 
-#if SDL_VERSION_ATLEAST(2, 0, 0) && !SDL_VERSION_ATLEAST(3, 0, 0)
+#if SDL_VERSION_ATLEAST(2, 0, 0)
 
 #ifdef HAVE_LIBVNCSERVER
 extern "C" {
 #include <rfb/rfb.h>
 #include <rfb/keysym.h>
 }
-#include <SDL_thread.h>
+#endif
+
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+// --- SDL3 compatibility shims for the SDL2-era VNC code below ---
+// The libvncserver pixel-push + SDL event-injection code was written against SDL2. SDL3 renamed the
+// key-modifier and condition-variable symbols and changed the event structs / pixel-format access.
+// SDL3's <SDL3/SDL_oldnames.h> defines these old names as deliberate ERROR tokens (e.g.
+// KMOD_NONE -> KMOD_NONE_renamed_SDL_KMOD_NONE) to force migration. We #undef each, then #define a
+// working alias to the SDL3 name — keeping this SDL2-era file unforked. (The struct/format
+// differences SDL3 introduced are handled by the `#if SDL_VERSION_ATLEAST(3,0,0)` blocks below.)
+#undef KMOD_NONE
+#define KMOD_NONE            SDL_KMOD_NONE
+#undef KMOD_SHIFT
+#define KMOD_SHIFT           SDL_KMOD_SHIFT
+#undef KMOD_CTRL
+#define KMOD_CTRL            SDL_KMOD_CTRL
+#undef KMOD_ALT
+#define KMOD_ALT             SDL_KMOD_ALT
+#undef KMOD_GUI
+#define KMOD_GUI             SDL_KMOD_GUI
+#undef SDL_mutex
+#define SDL_mutex            SDL_Mutex
+#undef SDL_cond
+#define SDL_cond             SDL_Condition
+#undef SDL_CreateCond
+#define SDL_CreateCond       SDL_CreateCondition
+#undef SDL_DestroyCond
+#define SDL_DestroyCond      SDL_DestroyCondition
+#undef SDL_CondSignal
+#define SDL_CondSignal       SDL_SignalCondition
+#undef SDL_CondWaitTimeout
+#define SDL_CondWaitTimeout  SDL_WaitConditionTimeout
 #endif
 
 namespace {
@@ -144,11 +175,19 @@ static void vnc_push_key_event(bool down, SDL_Keycode key)
 
 	SDL_Event ev;
 	memset(&ev, 0, sizeof(ev));
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	ev.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+	ev.key.down = down;
+	ev.key.repeat = false;
+	ev.key.key = key;			// event2keycode() in video_sdl3.cpp reads event.key.key
+	ev.key.mod = vnc_mod_state;
+#else
 	ev.type = down ? SDL_KEYDOWN : SDL_KEYUP;
 	ev.key.state = down ? SDL_PRESSED : SDL_RELEASED;
 	ev.key.repeat = 0;
 	ev.key.keysym.sym = key;
 	ev.key.keysym.mod = static_cast<Uint16>(vnc_mod_state);
+#endif
 	SDL_PushEvent(&ev);
 }
 
@@ -156,11 +195,19 @@ static void vnc_push_pointer_button(Uint8 sdl_button, bool down, int x, int y)
 {
 	SDL_Event ev;
 	memset(&ev, 0, sizeof(ev));
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	ev.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+	ev.button.down = down;
+	ev.button.button = sdl_button;
+	ev.button.x = (float)x;
+	ev.button.y = (float)y;
+#else
 	ev.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
 	ev.button.state = down ? SDL_PRESSED : SDL_RELEASED;
 	ev.button.button = sdl_button;
 	ev.button.x = x;
 	ev.button.y = y;
+#endif
 	SDL_PushEvent(&ev);
 }
 
@@ -168,12 +215,21 @@ static void vnc_push_pointer_motion(int x, int y)
 {
 	SDL_Event ev;
 	memset(&ev, 0, sizeof(ev));
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	ev.type = SDL_EVENT_MOUSE_MOTION;
+	ev.motion.state = 0;
+	ev.motion.x = (float)x;
+	ev.motion.y = (float)y;
+	ev.motion.xrel = (float)(x - vnc_pointer_x);
+	ev.motion.yrel = (float)(y - vnc_pointer_y);
+#else
 	ev.type = SDL_MOUSEMOTION;
 	ev.motion.state = 0;
 	ev.motion.x = x;
 	ev.motion.y = y;
 	ev.motion.xrel = x - vnc_pointer_x;
 	ev.motion.yrel = y - vnc_pointer_y;
+#endif
 	SDL_PushEvent(&ev);
 	vnc_pointer_x = x;
 	vnc_pointer_y = y;
@@ -183,9 +239,15 @@ static void vnc_push_wheel(int y)
 {
 	SDL_Event ev;
 	memset(&ev, 0, sizeof(ev));
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	ev.type = SDL_EVENT_MOUSE_WHEEL;
+	ev.wheel.x = 0.0f;
+	ev.wheel.y = (float)y;
+#else
 	ev.type = SDL_MOUSEWHEEL;
 	ev.wheel.x = 0;
 	ev.wheel.y = y;
+#endif
 	SDL_PushEvent(&ev);
 }
 
@@ -530,8 +592,20 @@ void VNCServerUpdate(SDL_Surface *surface, const SDL_Rect &updated_rect)
 	if (video_mode_changing.load(std::memory_order_acquire))
 		return;
 
-	if (!vnc_ensure_server(surface->w, surface->h,
-						   surface->format->BytesPerPixel, surface->pitch))
+	// Pixel format. SDL2: surface->format is a SDL_PixelFormat* struct. SDL3: it's an enum value
+	// and the masks/bpp come from SDL_GetPixelFormatDetails().
+	int bpp; Uint32 rmask, gmask, bmask;
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	const SDL_PixelFormatDetails *pfd = SDL_GetPixelFormatDetails(surface->format);
+	if (!pfd)
+		return;
+	bpp = pfd->bytes_per_pixel; rmask = pfd->Rmask; gmask = pfd->Gmask; bmask = pfd->Bmask;
+#else
+	bpp = surface->format->BytesPerPixel; rmask = surface->format->Rmask;
+	gmask = surface->format->Gmask; bmask = surface->format->Bmask;
+#endif
+
+	if (!vnc_ensure_server(surface->w, surface->h, bpp, surface->pitch))
 		return;
 
 	if (updated_rect.w <= 0 || updated_rect.h <= 0)
@@ -555,10 +629,14 @@ void VNCServerUpdate(SDL_Surface *surface, const SDL_Rect &updated_rect)
 	// Snapshot the dirty region of the surface into our private buffer.
 	// This is a fast memcpy per scanline — much cheaper than per-pixel conversion.
 	const bool needs_lock = SDL_MUSTLOCK(surface) != 0;
+#if SDL_VERSION_ATLEAST(3, 0, 0)
+	if (needs_lock && !SDL_LockSurface(surface))	// SDL3: returns true on success
+		return;
+#else
 	if (needs_lock && SDL_LockSurface(surface) != 0)
 		return;
+#endif
 
-	const int bpp = surface->format->BytesPerPixel;
 	if (!vnc_thread || !vnc_mutex || !vnc_cond) {
 		const int row_bytes = clipped.w * bpp;
 		for (int y = clipped.y; y < clipped.y + clipped.h; ++y) {
@@ -570,10 +648,7 @@ void VNCServerUpdate(SDL_Surface *surface, const SDL_Rect &updated_rect)
 		if (needs_lock)
 			SDL_UnlockSurface(surface);
 
-		vnc_convert_region(clipped, bpp, surface->pitch,
-					   surface->format->Rmask,
-					   surface->format->Gmask,
-					   surface->format->Bmask,
+		vnc_convert_region(clipped, bpp, surface->pitch, rmask, gmask, bmask,
 					   vnc_snapshot.data());
 		rfbMarkRectAsModified(vnc_server, clipped.x, clipped.y, clipped.x + clipped.w, clipped.y + clipped.h);
 		/* Do NOT call rfbProcessEvents here — the background thread handles it.
@@ -595,9 +670,9 @@ void VNCServerUpdate(SDL_Surface *surface, const SDL_Rect &updated_rect)
 
 	vnc_snapshot_bpp = bpp;
 	vnc_snapshot_pitch = surface->pitch;
-	vnc_snapshot_rmask = surface->format->Rmask;
-	vnc_snapshot_gmask = surface->format->Gmask;
-	vnc_snapshot_bmask = surface->format->Bmask;
+	vnc_snapshot_rmask = rmask;
+	vnc_snapshot_gmask = gmask;
+	vnc_snapshot_bmask = bmask;
 	// Merge with any existing pending rect
 	if (vnc_pending_frame && vnc_pending_rect.w > 0 && vnc_pending_rect.h > 0) {
 		int x1 = std::min((int)vnc_pending_rect.x, (int)clipped.x);

@@ -20,7 +20,15 @@ from pathlib import Path
 
 @dataclass
 class WorkloadSpec:
-    """Declarative description of one app workload. Drive-steps are screenshot/pHash-gated."""
+    """Declarative description of one app workload. Drive-steps are screenshot/pHash-gated.
+
+    Per-app tuning: `menubar_change` / `launch_diverge` are pHash hamming *thresholds* and MUST be
+    measured against a real launch frame of THIS app — don't inherit Fractal Carbon's blindly. FC is
+    the easy case (its menus are sharply unlike the Finder's and it goes straight to a fullscreen
+    render). Two cases stress the menu-bar discriminator (see `scenario._await_launch`): a Carbon app
+    with a SPLASH screen that diverges the screen *before* its menu bar activates (could read as a
+    false launch-failure — raise patience or add a splash step), and an app whose menu bar resembles
+    the Finder's (small Δ near the threshold). Non-Carbon apps escape both via `app_signal`/`[APP]`."""
     name: str                       # history key, e.g. "fractal-carbon"
     volume: str                     # Finder type-select volume name, e.g. "E2E"
     app: str                        # Finder type-select app name, e.g. "AltiVec"

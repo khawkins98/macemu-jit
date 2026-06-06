@@ -194,6 +194,13 @@ preventing the nanokernel from preempting."**
 more faithful 9.x. **Payoff is a long tail** — most software people run on 8.6–9.0.4 is cooperative
 and works today.
 
+> **Multi-core angle.** Once MP tasks exist, they're the *only* guest-sanctioned unit that could be
+> placed on **separate host cores** (the cooperative Blue world cannot be split). That's the gated
+> "true guest SMP" idea — Tier 3 of [`MULTICORE-OFFLOAD-PLAN.md`](MULTICORE-OFFLOAD-PLAN.md), which
+> needs this sub-plan *plus* a cross-core memory-coherence project (real `lwarx`/`stwcx.` + PPC→ARM64
+> barriers). The cheaper multi-core wins (background compilation, async devices) are in that doc's
+> Tiers 0–2 and need none of this.
+
 ---
 
 ## Sequencing & relationship to New World ROM

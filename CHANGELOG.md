@@ -11,6 +11,19 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Multi-core offload plan ("multithreading light")
+
+- Added `docs/planning/MULTICORE-OFFLOAD-PLAN.md`: what guest/emulator work can move to other host
+  cores. Core finding: the guest is one logical cooperative CPU, so the high-ROI wins are
+  emulator-*internal* parallelism (background JIT compile R9, dual W^X R8, Metal compositing R10,
+  async devices) — not splitting guest execution; and games/large apps benefit more from getting the
+  emulator's housekeeping *off* the hot core than from any guest SMP. Tiered 0–3 with
+  effort/payoff/risk; "true guest SMP" (MP tasks on separate cores) is Tier 3, gated on the
+  supervisor-fidelity plan's MP work + a cross-core coherence project (real `lwarx`/`stwcx.` +
+  PPC→ARM64 barriers).
+- Wired bidirectionally: ROADMAP B4 pointer; back-pointer from `MMU-NANOKERNEL-MP-PLAN.md` sub-plan C
+  (Tier 3 is its multi-core extension).
+
 ### [docs] Supervisor-fidelity plan (MMU / nanokernel / MP) + New World ROM "second wall"
 
 - Added `docs/planning/MMU-NANOKERNEL-MP-PLAN.md`: specs the three privileged layers SheepShaver

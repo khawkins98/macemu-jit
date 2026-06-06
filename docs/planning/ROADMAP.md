@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-05
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-06
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -117,6 +117,15 @@ harness that can't catch mistakes just produces the next silent bug.
   span-gate coverage by running the interp for the JIT's instruction count. Neither is a JIT bug;
   both are rom-harness polish. **Net: the rom-harness has served its purpose for the integer path —
   pivot effort to AltiVec/FP vectors (higher residual-bug density).**
+- 🟡 **Unified test-session instrumentation** *(design, 2026-06-06)* — the four oracles (test-jit,
+  rom-harness, `SS_JIT_VERIFY`, E2E/bench) + diagnostics each write ad-hoc text to a manually-chosen
+  path; there's no shared run-stamp, schema, or cross-oracle reconciliation. Spec proposes one
+  `SS_RUN_DIR` convention + a JSONL record schema (with an `oracle`-trust field) + a reconciliation
+  analyzer that **auto-referees disagreements via `SS_TEST_HEX`** (automating the manual triage done
+  2026-06-06) and **joins HOT-PC "what's hot" with microbench "what's slow"** for optimization leads.
+  Builds on the benchmark-export run-stamp pattern + `jit-analyze.py`. **Phase 0+2 (schema + auto-
+  referee) are the must-haves; 1/3 are convenience.** Not started; does not block the AltiVec/FP work.
+  Design: `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`.
 - 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered
@@ -462,6 +471,12 @@ Runtime link stack (R1b), **dual W^X mapping** (R8 — ~27% compile speedup meas
 background JIT compilation (R9, Cemu model), Metal framebuffer compositing (R10), JIT-residency
 gate restructure (C1), selective HLE of hot routines.
 **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` (research section + HLE) + `IMPLEMENTATION-BACKLOG.md` Tier C.
+
+**Multi-core offload ("multithreading light").** R8/R9/R10 above are the safe, high-ROI slice of a
+broader parallelism story: what work can move off the hot emulation core (background compile, async
+devices, Metal compositing) vs. what can't (the cooperative guest is one logical CPU). Tiered by
+feasibility, with the gated "true guest SMP" end (MP tasks on separate cores) tied back to D3's
+supervisor-fidelity work. **Detail:** `docs/planning/MULTICORE-OFFLOAD-PLAN.md`.
 
 **Regression tracking:** baselines + how to A/B → `docs/BENCHMARKS.md` (Speedometer baseline
 recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still TODO) and

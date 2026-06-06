@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1, "backend": "A", "nonce": "test1", "ticks": 1000,
+  "sysVersion": "8.6.0", "coords": "global", "text": "utf-8",
+  "screen": { "width": 1024, "height": 768, "depth": 0 },
+  "modalActive": true, "frontWindowIndex": 0,
+  "windows": [
+    { "index": 0, "ptr": "0x00abe340", "title": "", "windowClass": "dialog",
+      "modality": "modal", "isDialog": true, "active": true, "visible": true,
+      "collapsed": false,
+      "contentBounds": { "left": 312, "top": 300, "right": 712, "bottom": 460 },
+      "structBounds":  { "left": 312, "top": 280, "right": 712, "bottom": 460 } },
+    { "index": 1, "ptr": "0x00abc120", "title": "Macintosh HD", "windowClass": "document",
+      "modality": "none", "isDialog": false, "active": false, "visible": true,
+      "collapsed": false,
+      "contentBounds": { "left": 100, "top": 100, "right": 500, "bottom": 400 },
+      "structBounds":  { "left": 100, "top": 80, "right": 500, "bottom": 400 } }
+  ]
+}

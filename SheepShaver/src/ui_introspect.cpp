@@ -29,6 +29,24 @@ enum { kDlgItems = 0x9C, kDlgDefItem = 0xA8 };   // DialogRecord fields, past th
 
 struct Rect16 { int16 top, left, bottom, right; bool ok; };
 
+// Read the main screen's pixel depth from the main GDevice via low-mem MainDevice ($08A4).
+// Returns a sane depth (one of 1,2,4,8,16,32) or 0 if any deref fails or the value is garbage.
+// Offsets: GDHandle@0x08A4 -> GDevice; gdPMap (PixMapHandle) @ GDevice+0x16;
+// PixMap -> pixelSize (int16) @ PixMap+0x20. These are standard Mac toolbox structs.
+static int read_screen_depth() {
+    uint32 gdH = ReadMacInt32(0x08A4);                 // MainDevice (GDHandle)
+    if (!gdH || !guest_ptr_ok(gdH)) return 0;
+    uint32 gd = ReadMacInt32(gdH);                     // -> GDevice
+    if (!gd || !guest_ptr_ok(gd) || !guest_ptr_ok(gd + 0x16)) return 0;
+    uint32 pmH = ReadMacInt32(gd + 0x16);              // gdPMap (PixMapHandle)
+    if (!pmH || !guest_ptr_ok(pmH)) return 0;
+    uint32 pm = ReadMacInt32(pmH);                     // -> PixMap
+    if (!pm || !guest_ptr_ok(pm + 0x22)) return 0;
+    int d = (int16)ReadMacInt16(pm + 0x20);            // pixelSize
+    if (d==1||d==2||d==4||d==8||d==16||d==32) return d;
+    return 0;                                          // not a sane depth -> placeholder
+}
+
 // Read a Region handle's bounding box (global coords). ok=false if any deref is wild.
 static Rect16 region_bbox(uint32 rgnHandle) {
     Rect16 r = {0,0,0,0,false};
@@ -175,12 +193,16 @@ static std::string serialize_snapshot(const std::string &nonce) {
         json_escape(nonce).c_str(), ticks, sv_maj, sv_min, sv_bug);
     j += hdr;
 
-    // screen from CrsrPin (Rect). depth filled in Plan 2.
+    // screen from CrsrPin (Rect) + real depth from main GDevice.
+    int screenW = 0, screenH = 0;
     {
         int16 t = (int16)ReadMacInt16(kCrsrPin + 0), l = (int16)ReadMacInt16(kCrsrPin + 2);
         int16 b = (int16)ReadMacInt16(kCrsrPin + 4), rt = (int16)ReadMacInt16(kCrsrPin + 6);
+        screenW = rt - l;
+        screenH = b - t;
+        int depth = read_screen_depth();
         char sc[96];
-        snprintf(sc, sizeof(sc), "\"screen\":{\"width\":%d,\"height\":%d,\"depth\":0},", rt - l, b - t);
+        snprintf(sc, sizeof(sc), "\"screen\":{\"width\":%d,\"height\":%d,\"depth\":%d},", screenW, screenH, depth);
         j += sc;
     }
 
@@ -223,6 +245,14 @@ static std::string serialize_snapshot(const std::string &nonce) {
         Rect16 cb = region_bbox(ReadMacInt32(win + kWinCont));
         bool suspect = !sb.ok || !cb.ok || !tvalid;
 
+        // Geometry-based desktop detection: a non-dialog window whose bounds span essentially the
+        // full screen (within a small tolerance). The Finder desktop window always occupies the
+        // entire screen below the menu bar. This is v1 heuristic — good enough for a backdrop tag.
+        const Rect16 &boundsRef = cb.ok ? cb : sb;
+        bool isDesktop = !isDialog && screenW > 0 && screenH > 0
+                      && boundsRef.left <= 0 && boundsRef.top <= 40
+                      && boundsRef.right >= screenW - 1 && boundsRef.bottom >= screenH - 1;
+
         if (idx) windows_json += ",";
         char w[256];
         snprintf(w, sizeof(w),
@@ -238,6 +268,7 @@ static std::string serialize_snapshot(const std::string &nonce) {
         append_rect(windows_json, "contentBounds", cb.ok ? cb : sb);
         windows_json += ",";
         append_rect(windows_json, "structBounds", sb.ok ? sb : cb);
+        if (isDesktop) windows_json += ",\"role\":\"desktop\"";
         if (suspect) windows_json += ",\"suspect\":true";
         if (isDialog) {
             int32 refcon = (int32)ReadMacInt32(win + kWinRefCon);

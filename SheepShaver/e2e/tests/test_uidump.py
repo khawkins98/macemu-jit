@@ -138,3 +138,10 @@ def test_has_params_flag():
     snap = _load()
     txt = uidump.find_item(snap.windows[0], text_contains="Save changes to")
     assert txt.has_params is True
+
+
+def test_screen_depth_and_role():
+    snap = _load()
+    assert snap.screen_depth == 8
+    assert snap.windows[1].role == "desktop"
+    assert snap.windows[0].role is None

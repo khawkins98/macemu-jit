@@ -80,6 +80,7 @@ class Window:
         self.items = [Item(it) for it in d.get("items", [])]
         self.ref_con = d.get("refCon")
         self.default_item = d.get("defaultItem")
+        self.role: Optional[str] = d.get("role")  # e.g. "desktop" for the Finder backdrop; None for normal windows
 
     def __repr__(self):
         cb = self.content_bounds
@@ -102,6 +103,11 @@ class Snapshot:
     def __repr__(self):
         return (f"Snapshot(backend={self.backend} windows={len(self.windows)} "
                 f"modal={self.modal_active} front={self.front_index})")
+
+    @property
+    def screen_depth(self) -> int:
+        """Pixel depth of the main screen (e.g. 8, 16, 32), or 0 if unknown."""
+        return (self.raw.get("screen") or {}).get("depth", 0)
 
     def front_window(self) -> Optional[Window]:
         if 0 <= self.front_index < len(self.windows):

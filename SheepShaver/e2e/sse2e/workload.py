@@ -25,8 +25,10 @@ class WorkloadSpec:
     volume: str                     # Finder type-select volume name, e.g. "E2E"
     app: str                        # Finder type-select app name, e.g. "AltiVec"
     app_signal: str = ""            # optional [APP] front-app substring that also confirms launch
-    launch_diverge: int = 12        # pHash hamming from baseline that means "app took the screen"
-    launch_timeout: float = 45.0    # max wait for launch (divergence or app_signal)
+    menubar_change: int = 14        # menu-bar-strip pHash hamming that means an app owns the menu bar
+                                    #   (FC menus vs Finder ~30; a Finder error dialog vs Finder ~4)
+    launch_diverge: int = 12        # full-frame pHash hamming meaning "the screen changed" (dialog/app)
+    launch_timeout: float = 45.0    # max wait for launch (menu-bar change or app_signal)
     poll_interval: float = 3.0      # seconds between render-progress screenshots
     stable_threshold: int = 6       # pHash hamming under which two frames count as "unchanged"
     stable_frames: int = 2          # consecutive unchanged frames that mean "render done"
@@ -57,6 +59,23 @@ class WorkloadResult:
 def launched(distance_from_baseline: int, diverge_threshold: int) -> bool:
     """The app has taken the screen once the live frame diverges far enough from the Finder baseline."""
     return distance_from_baseline >= diverge_threshold
+
+
+def classify_launch(menubar_dist: int, full_dist: int, menubar_change: int,
+                    launch_diverge: int) -> str:
+    """Classify a launch-poll frame from its menu-bar-strip and full-frame pHash distances to the
+    (volume-open Finder) baseline. Classic Mac OS gives the menu bar to the frontmost app, so:
+      'launched' — the menu bar changed: an app is frontmost (it owns the menu bar).
+      'dialog'   — the screen changed but the Finder menu bar is intact: a Finder-level dialog is up
+                   with NO app frontmost; sustained, this is a launch failure (e.g. a missing-library
+                   alert — which services no idle hook, so the screenshot is the only signal for it).
+      'pending'  — nothing decisive yet.
+    Menu-bar change is checked first so a real launch always wins over the screen-changed heuristic."""
+    if menubar_dist >= menubar_change:
+        return "launched"
+    if full_dist >= launch_diverge:
+        return "dialog"
+    return "pending"
 
 
 def stable_run(distances: list[int], threshold: int, frames: int) -> bool:

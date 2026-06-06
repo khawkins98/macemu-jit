@@ -239,3 +239,29 @@ def test_benchmark_verdict_fails_on_exit0_without_shutdown_signatures():
 def test_benchmark_verdict_fails_on_nonzero_exit():
     ok, _ = scenario._benchmark_verdict(3, _CLEAN_LOG)
     assert ok is False
+
+
+# --- _await_finder_via_ui (the introspection-backed Finder gate) ---------------------------
+
+def test_await_finder_via_ui_detects_finder(monkeypatch, fast_clock):
+    from sse2e import scenario
+    class _W:
+        def __init__(self, title, is_dialog=False): self.title=title; self.is_dialog=is_dialog
+    class _Snap:
+        def __init__(self, wins, front): self._w=wins; self._f=front
+        def find(self, *, title=None, title_contains=None, window_class=None, visible=None):
+            return [w for w in self._w if title_contains is None or title_contains in w.title]
+        def front_window(self): return self._f
+    seq = iter([
+        _Snap([_W("Speedometer 4.02")], _W("Speedometer 4.02")),   # still up
+        _Snap([_W("Desktop")], _W("Desktop")),                      # Speedometer gone, Finder front
+    ])
+    monkeypatch.setattr(scenario.uidump, "snapshot", lambda *a, **k: next(seq))
+    assert scenario._await_finder_via_ui(None, "/tmp/x", timeout=5.0) is True
+
+
+def test_await_finder_via_ui_falls_back_when_unavailable(monkeypatch, fast_clock):
+    from sse2e import scenario
+    def _boom(*a, **k): raise TimeoutError("no snapshot")
+    monkeypatch.setattr(scenario.uidump, "snapshot", _boom)
+    assert scenario._await_finder_via_ui(None, "/tmp/x", timeout=2.0) is None   # signals fallback

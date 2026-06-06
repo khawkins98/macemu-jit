@@ -268,11 +268,11 @@ function renderDetailPane(): string {
       <div class="detail-tab-content">
         ${renderSettingsSection(vm, isRunning)}
       </div>
-      <div class="detail-save-bar">
-        <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
-        <button class="btn btn-primary" data-action="save-settings">Save</button>
-      </div>
     </div>
+    ${Object.keys(pendingSettings).length > 0 ? `<div class="detail-save-bar">
+      <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
+      <button class="btn btn-primary" data-action="save-settings">Save</button>
+    </div>` : ""}
   `;
 }
 
@@ -944,10 +944,10 @@ function renderSettings(): string {
         ${renderSettingsSectionContent(vm, isRunning, settingsSection)}
       </div>
     </div>
-    <div class="detail-save-bar">
+    ${Object.keys(pendingSettings).length > 0 ? `<div class="detail-save-bar">
       <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
       <button class="btn btn-primary" data-action="save-settings">Save</button>
-    </div>
+    </div>` : ""}
   `;
 }
 
@@ -970,6 +970,24 @@ function render() {
 function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((el) => {
     el.addEventListener("click", handleAction);
+  });
+
+  // Dirty detection: capture settings on any input change, re-render to show/hide save bar
+  document.querySelectorAll(".detail-tab-content input, .detail-tab-content select").forEach((el) => {
+    el.addEventListener("change", () => {
+      captureCurrentSectionSettings();
+      // Only re-render the save bar area, not the whole page (avoids losing focus)
+      const existing = document.querySelector(".detail-save-bar");
+      if (Object.keys(pendingSettings).length > 0 && !existing) {
+        render();
+      }
+    });
+    el.addEventListener("input", () => {
+      captureCurrentSectionSettings();
+      if (Object.keys(pendingSettings).length > 0 && !document.querySelector(".detail-save-bar")) {
+        render();
+      }
+    });
   });
 
   // Keyboard navigation: arrow keys in VM list, Return to boot

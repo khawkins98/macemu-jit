@@ -1185,6 +1185,17 @@ static void k_compute(uint8_t *p, int n) {
 	for (int i = 0; i < n; i++) write_be32(p + i*4, grp[i % 6]);
 }
 
+/* slwi/srwi shift kernel — the rlwinm single-instruction fast path (hot: 4× slwi
+ * in the 0x1ed6e310 matrix block). Pre-fast-path each was EXTR+AND (2 insns);
+ * after, each is one UBFM, so a64/op should read ~1.0. */
+static void k_shift(uint8_t *p, int n) {
+	const uint32_t grp[2] = {
+		0x5463103Au,  /* slwi r3,r3,2  (rlwinm r3,r3,2,0,29)  */
+		0x5463F87Eu,  /* srwi r3,r3,1  (rlwinm r3,r3,31,1,31) */
+	};
+	for (int i = 0; i < n; i++) write_be32(p + i*4, grp[i % 2]);
+}
+
 struct BenchKernel { const char *name; const char *desc; void (*emit)(uint8_t*,int); };
 static const BenchKernel BENCH_KERNELS[] = {
 	{ "carry-chain", "adde r3,r3,r4  (0b/0f carry ops)", k_carry     },
@@ -1193,6 +1204,7 @@ static const BenchKernel BENCH_KERNELS[] = {
 	{ "fp-add",      "fadd f1,f1,f2  (FP add latency)",  k_fp_add    },
 	{ "fp-fma",      "fmadd recurrence (FMA latency)",   k_fp_fma    },
 	{ "compute",     "mullw/divw/add chain (0x1ed7befc Speedometer hot)", k_compute },
+	{ "shift",       "slwi/srwi (rlwinm single-insn fast path)",         k_shift   },
 	/* load-store (k_loadstore) deferred to v2: guest data access goes through
 	 * RMEMBASE, which on macOS needs the DIRECT_ADDRESSING base set up so EAs land
 	 * in `mem` (low 4 GB is unmappable here). The emitter is kept for that work. */

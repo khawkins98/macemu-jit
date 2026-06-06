@@ -2783,6 +2783,24 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		uint32_t me = (op >> 1) & 0x1F;
 		int hS = ra_load(rs);
 		int hA = ra_store(ra);
+		/* Single-instruction fast paths for the two most common rlwinm forms
+		 * (hot in array-index / shift code — e.g. 4× slwi in the 0x1ed6e310
+		 * matrix block). Both replace the general EXTR(rotate)+AND(mask) pair
+		 * with one ARM64 UBFM. Conditions are exact: the (SH,MB,ME) triple fully
+		 * determines the op, so no false positives.
+		 *   slwi rA,rS,n : sh∈[1,31], mb==0,      me==31-sh  ->  LSL Wd,Wn,#sh
+		 *   srwi rA,rS,n : sh∈[1,31], me==31,     mb==32-sh  ->  LSR Wd,Wn,#(mb) */
+		if (sh >= 1 && sh <= 31 && mb == 0 && me == 31 - sh) {
+			uint32_t immr = (32 - sh) & 0x1F, imms = 31 - sh;
+			emit32(0x53000000 | (immr << 16) | (imms << 10) | (hS << 5) | hA); /* LSL Wd,Wn,#sh */
+			if (op & 1) lazy_update_cr0(hA);
+			return true;
+		}
+		if (sh >= 1 && sh <= 31 && me == 31 && mb == 32 - sh) {
+			emit32(0x53000000 | (mb << 16) | (31 << 10) | (hS << 5) | hA); /* LSR Wd,Wn,#(32-sh) */
+			if (op & 1) lazy_update_cr0(hA);
+			return true;
+		}
 		if (sh) {
 			uint32_t ror_amt = (32 - sh) & 0x1F;
 			emit32(0x13800000 | (hS << 16) | (ror_amt << 10) | (hS << 5) | hA); /* EXTR */

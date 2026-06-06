@@ -397,6 +397,20 @@ Note: `mulhw`/`mulhwu` are **not** hot (absent from the boot + Speedometer profi
 so this is a correctness-neutral tidy-up completing 0f — not a hot-path win. The 0f
 family is now fully swept.
 
+### 0h. rlwinm `slwi`/`srwi` → single ARM64 UBFM — DONE (2026-06-06)
+
+`rlwinm` always emitted **EXTR (rotate) + AND (mask)** (2 insns). The two most common
+forms are a single ARM64 bitfield op: `slwi rA,rS,n` (`mb==0 && me==31-sh`) → `LSL`
+(UBFM), `srwi rA,rS,n` (`me==31 && mb==32-sh`) → `LSR` (UBFM). Added exact-condition
+fast paths (the (SH,MB,ME) triple fully determines the op — no false positives), general
+EXTR+AND path unchanged for the rest. **Hot, unlike 0f/divw's follow-ups**: the
+`0x1ed6e310` matrix block alone has 4× `slwi` (array-index ×2/×4), and `0x10643c54` has
+`slwi`/`clrlwi`. Validated: test-jit 302/302; **exhaustive differential interp-vs-JIT
+248/248** (slwi+srwi × sh=1..31 × {0x80000001,0xFFFFFFFF,0x12345678,0x1}, CR0 via Rc=1);
+deterministic A/B on a new `shift` microbench kernel — **a64/op 2.000 → 1.000 (−50%)**,
+zero-noise (timing corroborated ~3× faster on that kernel). Follow-up (separate, measured):
+`clrlwi`/`clrrwi`/`extrwi`/`extlwi` are also single-UBFM candidates.
+
 ### 0g. Lazy CR0 Re-enable
 
 > **Cross-pollination (X2):** intra-block backward CR0-liveness — borrowed from BasiliskII's

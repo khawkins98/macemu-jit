@@ -1,6 +1,6 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** ⏸ Not started — pick-up-later plan · **Created:** 2026-06-03 · **Updated:** 2026-06-04
+> **Status:** ⏸ Not started — pick-up-later plan · **Created:** 2026-06-03 · **Updated:** 2026-06-06
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -154,6 +154,17 @@ For each failing `find_rom_data` pattern:
 Even a fully-patched parcels ROM may not boot — nanokernel/Mac OS differences beyond ROM
 patching can surface. Use the existing diagnostics (heartbeat + warnings, trace ring,
 `SS_JIT_*` env vars; see `SheepShaver/docs/DIAGNOSTICS.md`). Treat as a normal boot-bringup.
+
+> **The possible "second wall" — supervisor-level fidelity.** Getting the parcels ROM to
+> *patch and load* (Phases 0–2) is the first wall. A distinct one may sit behind it: 9.1+/9.2.x
+> could depend on supervisor machinery SheepShaver deliberately **stubs** — the MMU (it fakes
+> virtual=physical), the nanokernel exception/interrupt model (it bypasses the real PPC exception
+> table and uses a host-signal timer instead of a real decrementer), and preemptive
+> Multiprocessing tasks (absent). Phase 3 is exactly where that would show up. If a patched 9.2.2
+> ROM loads but won't boot — or boots but MP-using software misbehaves — the diagnosis and the
+> (large, exploratory) emulation options are spec'd in
+> [`MMU-NANOKERNEL-MP-PLAN.md`](MMU-NANOKERNEL-MP-PLAN.md). That plan's cheap "stub-pressure"
+> probe can be run *now*, before this phase, to gauge how load-bearing the stubs are.
 
 ---
 

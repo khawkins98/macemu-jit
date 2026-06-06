@@ -540,6 +540,23 @@ modernization (`650d3a82`), `linux/sched.h` guard (`6787dce8`), etherhelpertool 
 rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 **Detail:** `docs/UPSTREAM-LINEAGE-SYNC.md` §6 / §6.1.
 
+## D3. ⏸ Break the Mac OS 9.0.4 ceiling — newer guest OS compatibility (exploratory)
+
+SheepShaver tops out at ~9.0.4. Getting to 9.1/9.2.2 is **two walls in sequence**, both
+deferred/exploratory:
+- **First wall — New World "parcels" ROM support.** The newer ROMs 9.1+/9.2.x need are
+  parcels-format, which `PatchROM()` rejects. A cheap, decisive Phase-0 diagnostic is ready to run.
+  **Detail:** `docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md`.
+- **Second wall (maybe) — supervisor-level fidelity.** 9.2.x may also depend on machinery SS
+  deliberately stubs: the **MMU** (faked V=P), the **nanokernel** exception/interrupt model
+  (bypassed; host-signal timer instead of a real decrementer), and **preemptive MP tasks**
+  (absent). Specced with a dependency analysis (MP rides on nanokernel fidelity, which mostly
+  *doesn't* need the MMU) + a cheap "stub-pressure" probe runnable now.
+  **Detail:** `docs/planning/MMU-NANOKERNEL-MP-PLAN.md`.
+
+Run the New World Phase 0 (and optionally the stub-pressure probe) before committing to either —
+the first wall may be the only one. Large, exploratory, low priority vs. Tracks A/C.
+
 ---
 
 ## ✅ Done (recent — for context, newest first)

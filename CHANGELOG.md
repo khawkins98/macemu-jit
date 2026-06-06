@@ -11,6 +11,20 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Supervisor-fidelity plan (MMU / nanokernel / MP) + New World ROM "second wall"
+
+- Added `docs/planning/MMU-NANOKERNEL-MP-PLAN.md`: specs the three privileged layers SheepShaver
+  deliberately *stubs* (MMU faked V=P; nanokernel exception/interrupt model bypassed; preemptive
+  MP tasks absent), grounded in the actual stub sites (`rom_patches.cpp` `patch_nanokernel*`,
+  `main_unix.cpp` `sigill_handler`/`tick_func`, `ppc-execute.cpp` `sc`→illegal). Key finding: the
+  dependency order is *not* MMU→nanokernel→MP — MP rides on nanokernel exception/decrementer
+  fidelity, which mostly does **not** need real MMU translation (identity mapping suffices), so the
+  cheapest path to MP/timing fidelity skips the MMU. Includes effort/payoff/risk per sub-plan and a
+  cheap "stub-pressure" probe to run before committing.
+- Linked it as the possible "second wall" behind `NEW-WORLD-ROM-SUPPORT-PLAN.md` (Phase 3 pointer),
+  and added **ROADMAP D3** ("break the 9.0.4 ceiling") tying the two plans together. New World ROM
+  support was previously unlinked from the roadmap; now it is.
+
 ### [SheepShaver] rom-harness — span gate cleans the differential signal (~46 → ~7–8 failures/seed)
 
 Follow-up to the skip-not-abort fix: the harness's failures were dominated by a **block-model

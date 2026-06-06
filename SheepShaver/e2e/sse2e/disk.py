@@ -34,4 +34,8 @@ def copy_pristine(master: Path, dest_dir: Path) -> Path:
         subprocess.run(["cp", "-c", str(master), str(run_copy)], check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         shutil.copyfile(master, run_copy)
+    # Loudly signal the disk-safety guarantee on every run: the emulator boots THIS throwaway copy,
+    # never the master, so the master image can never be dirtied/corrupted (even on a force-kill).
+    print(f"  \U0001f6e1  disk-safety: booting a pristine per-run copy of {master.name!r} "
+          f"(clonefile -> {run_copy}); your master image is never opened for write.", flush=True)
     return run_copy

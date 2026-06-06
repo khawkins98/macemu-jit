@@ -11,6 +11,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] AltiVec variable BYTE shifts fixed — vslb/vsrb/vsrab (3 confirmed bugs)
+
+Fixed the first family of the AltiVec shift bugs found below — the **byte** ops, which are
+byte-order-safe (each lane independent). `ppc-jit.cpp` case 260/516/772, capstone-verified NEON:
+
+- **Mask the shift amount mod element width** (`DUP #7`→v2, `AND`) before the shift — AltiVec wraps
+  the amount mod 8; the old code passed it raw so amount ≥ 8 shifted the bits out (`vslb` by 9 gave
+  0 instead of `<<1`).
+- **Use truncating, correctly-signed shifts**: `vslb`→`USHL`; `vsrb` (logical right)→`NEG`+`USHL`
+  (was a signed *left* shift — wrong direction); `vsrab` (arith right)→`NEG`+`SSHL` (was `SRSHL`,
+  which *rounds* — AltiVec truncates). The old code used rounding/signed variants throughout.
+
+Validated: the `SS_TEST_HEX` repros now agree interp==JIT; **3 strong committed vectors added**
+(`av_vslb`/`av_vsrb`/`av_vsrab`, distinct high-bit data + amounts 0..15 exercising the mask — 11–12
+distinct result bytes, non-vacuous), `make test-jit` **273/273** (was 270). **Still open** (tracked,
+`docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`): halfword/word variants (same fix, but the ev_mixed
+byte order needs lvx-built byte-asymmetric validation) and the rotates `vrl{b,h,w}`.
+
 ### [SheepShaver] AltiVec shift/rotate codegen bugs found (hunt paid off) — repros recorded, fix pending (`c7b0c98c`)
 
 Acting on the "AltiVec/FP is the highest residual-bug surface" strategy verdict, led a differential

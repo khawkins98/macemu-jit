@@ -2,9 +2,17 @@
 
 **Status:** CONFIRMED real JIT codegen bugs (found by the test-jit/`SS_TEST_HEX` hunt, ROADMAP
 A1 "AltiVec/FP operand coverage"). Repros below are oracle-validated against the **real emulator**
-interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`). **Fix not yet done** — needs a focused,
-differentially-validated pass (the NEON encodings + inline comments in the current code are
-unreliable/scrambled; trust the repros, not the comments).
+interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`).
+
+> **PROGRESS — byte ops FIXED 2026-06-06** (`ppc-jit.cpp` case 260 `vslb`, 516 `vsrb`, 772 `vsrab`):
+> mask amount mod 8 (`DUP #7`→v2, `AND`), then the correct **truncating** NEON shift
+> (`USHL`/`SSHL`, `+NEG` for right). Capstone-verified encodings — the old code emitted
+> *rounding* (`SRSHL`/`URSHL`) and *signed* shifts, and `vsrb` shifted the wrong direction.
+> Validated: the `SS_TEST_HEX` repros now agree, plus 3 strong committed vectors (`av_vslb`,
+> `av_vsrb`, `av_vsrab` — distinct high-bit data + amounts 0..15), `make test-jit` 273/273.
+> **STILL OPEN:** halfword/word variants (`vslh/vslw`, `vsr{h,w}`, `vsra{h,w}` — same fix but the
+> **ev_mixed byte order** makes the per-element mask + operands byte-order-sensitive, so they need
+> lvx-built byte-*asymmetric* validation, not `vspltisb`), and the rotates (Bug 3).
 
 > How found: whole AltiVec families had **zero** test coverage (shifts, rotates, unpacks,
 > saturating, integer-compares). This is the same lane/width-sensitive category that produced the

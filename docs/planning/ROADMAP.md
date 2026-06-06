@@ -102,9 +102,12 @@ harness that can't catch mistakes just produces the next silent bug.
     JIT 0, interp 0x08); (2) logical right shifts `vsr{b,h,w}` emit the wrong shift (`vsrb` shifts
     *left*; `vsrh/vsrw` arithmetic not logical); (3) rotates `vrl{b,h,w}` use plain shift (suspected,
     needs lvx repro). Full repros + fix plan: `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
-    **Fix pending** (focused, differentially-validated pass: add xfail repros → fix `ppc-jit.cpp`
-    ~3320–3331/3446–3447 op-by-op → `make test-jit` + boot smoke). This is the proof the
-    AltiVec/FP surface is *live*, not theater.
+    ✅ **Byte ops FIXED (2026-06-06):** `vslb/vsrb/vsrab` — mask mod 8 + correct truncating
+    `USHL/SSHL` (capstone-verified); 3 strong vectors added, `make test-jit` **273/273**.
+    🟡 **Remaining:** halfword/word variants (same fix but ev_mixed byte order needs lvx-built
+    byte-asymmetric validation) + rotates `vrl{b,h,w}`. This was the proof the AltiVec/FP surface
+    is *live*, not theater — and the fix loop (capstone encodings → `SS_TEST_HEX` repro → vector →
+    `test-jit`) is now established for the rest.
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at

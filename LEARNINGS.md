@@ -42,6 +42,9 @@ with introspection** (`SheepShaver/e2e/run_carbonlib_install.py`) and it worked 
   (`hcopy -m ":System Folder:Extensions:CarbonLib" CarbonLib_1.6_extension.bin`) → future installs are a
   one-line `hcopy -m` into Extensions, no SMI/boot. CarbonLib 1.6 source: **archive.org**
   (`download/tucows_207427_CarbonLib/carbonlib.sit` — token-free; macintoshgarden links 410 to `curl`).
+  **Validated** (2026-06-06): baked the artifact into a clean clonefile of `macos9_fresh.dsk`, upgrading
+  its bundled 1.0.x → 1.6 (`hdir` confirmed). **Caveat:** `hfsutils` writes **HFS only** (`BD` sig @ byte
+  1024) — `macos9_fresh` is HFS so `hcopy` works; an **HFS+** (`H+`) boot disk would need a boot, not `hcopy`.
 
 ## 2026-06-05 — E2E benchmark auto-shutdown (keyboard quit-to-Finder); VNC clicks were never broken (misdiagnosis)
 

@@ -158,9 +158,15 @@ hcopy -m ":System Folder:Extensions:CarbonLib" /Users/Shared/macemu/CarbonLib_1.
 humount
 # reuse forever (clean, host-side, no installer):
 hmount /path/to/target_boot.dsk
-hcopy -m /Users/Shared/macemu/CarbonLib_1.6_extension.bin ":System Folder:Extensions:CarbonLib"
+hcd ":System Folder:Extensions"; hdel "CarbonLib"   # drop the older bundled CarbonLib first
+hcopy -m /Users/Shared/macemu/CarbonLib_1.6_extension.bin ":CarbonLib"
 humount   # hdir should show  INIT/cbon  602351  3521150  CarbonLib   (1.6, Jun 2002)
 ```
+**Validated end-to-end (2026-06-06):** a clean clonefile of `macos9_fresh.dsk` + the one `hcopy -m`
+above upgraded its bundled CarbonLib 1.0.x (Feb 2000) → 1.6 (Jun 2002), confirmed by `hdir`. **Caveat:**
+`hfsutils` writes **HFS only** (`BD` volume signature at byte 1024); `macos9_fresh` is HFS so this works.
+An **HFS+** (`H+`) boot disk can't be written by `hcopy` — there, boot the SMI installer (path (b)) or
+copy the extension in the emulator. Check the format with `hexdump -s 1024 -n 2 <disk>`.
 `/Users/Shared/macemu/CarbonLib_1.6_extension.bin` is kept in the shared asset dir (alongside the
 ROMs/disks — not in git) for exactly this; the `.sit` it came from is at `CarbonLib_1.6.sit`.
 Source for the .smi if you ever need to re-extract: **archive.org** has a *token-free* direct download

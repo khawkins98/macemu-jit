@@ -20,12 +20,30 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   do-anyway: dual-W^X (R8). Records what's already shipped (chaining, AltiVec byte-mults) so it's
   not re-chased, defers the persistent-ROM-cache idea (re-file under Silicon Sheep snapshot/resume),
   and logs strategic anchors (TSO-for-SMP, record/replay time-travel, static AOT recomp).
-- Wired: ROADMAP B4 + OPTIMIZATION-PLAN (HLE section) point to the idea bank.
+- Wired: ROADMAP B4 + OPTIMIZATION-PLAN (HLE section) point to the idea bank; the two nominees are
+  promoted to first-class tracked items **ROADMAP B5 (`CopyBits` HLE)** and **B6 (idle-skipping)**.
 - **Fixed OPTIMIZATION-PLAN R3 stale note** — it claimed "no W^X toggling exists"; the code uses
   `MAP_JIT` + `pthread_jit_write_protect_np` (`jit-target-cache.hpp:34-39`), superseded by R8.
 - Surfaced (for the JIT owner, not fixed here): two stale `ppc-jit.cpp` comments (chaining
   "default OFF"; AltiVec "STILL BROKEN: vmuloub") and a latent bug (unregistered LR-prediction
   `B chain_code` at ~:3052). Handoff prompt prepared.
+
+### [SheepShaver] AltiVec shift/rotate family COMPLETE — halfword/word shifts + all rotates fixed
+
+Finished the family started with the byte ops below. `ppc-jit.cpp` case 324/388 (`vsl{h,w}`),
+580/644 (`vsr{h,w}` logical right), 836/900 (`vsra{h,w}` arith right), 4/68/132 (`vrl{b,h,w}`):
+
+- **Halfword/word shifts:** same fix as the byte ops at `.8H`/`.4S` (mask mod 16/32, truncating
+  `USHL`/`SSHL`, `+NEG` for right). Validated against byte-**asymmetric** lvx operands with amounts
+  exceeding the element width — so the **ev_mixed byte order is empirically covered** (a non-issue
+  for per-element shifts: `vslw` already passed asymmetric data pre-fix).
+- **Rotates:** NEON has no vector rotate — synthesized `rol(x,k) = (x<<k)|(x>>>(w-k))` with
+  `k=amt&(w-1)` (mask, copy, left `USHL`, `SUB` width, right `USHL` by the negative, `ORR`). The old
+  code emitted a plain shift (dropped the wrapped bits) and didn't mask.
+
+All capstone-verified. **9 more strong committed vectors** (`av_vsl{h,w}`/`av_vsr{h,w}`/`av_vsra{h,w}`
+/`av_vrl{b,h,w}`); `make test-jit` **282/282** (was 273). The full 12-op variable shift/rotate
+family is now correct and covered. `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md` marked ✅ ALL FIXED.
 
 ### [SheepShaver] AltiVec variable BYTE shifts fixed — vslb/vsrb/vsrab (3 confirmed bugs)
 

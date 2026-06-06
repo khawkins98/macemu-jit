@@ -4,15 +4,19 @@
 A1 "AltiVec/FP operand coverage"). Repros below are oracle-validated against the **real emulator**
 interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`).
 
-> **PROGRESS — byte ops FIXED 2026-06-06** (`ppc-jit.cpp` case 260 `vslb`, 516 `vsrb`, 772 `vsrab`):
-> mask amount mod 8 (`DUP #7`→v2, `AND`), then the correct **truncating** NEON shift
-> (`USHL`/`SSHL`, `+NEG` for right). Capstone-verified encodings — the old code emitted
-> *rounding* (`SRSHL`/`URSHL`) and *signed* shifts, and `vsrb` shifted the wrong direction.
-> Validated: the `SS_TEST_HEX` repros now agree, plus 3 strong committed vectors (`av_vslb`,
-> `av_vsrb`, `av_vsrab` — distinct high-bit data + amounts 0..15), `make test-jit` 273/273.
-> **STILL OPEN:** halfword/word variants (`vslh/vslw`, `vsr{h,w}`, `vsra{h,w}` — same fix but the
-> **ev_mixed byte order** makes the per-element mask + operands byte-order-sensitive, so they need
-> lvx-built byte-*asymmetric* validation, not `vspltisb`), and the rotates (Bug 3).
+> **✅ ALL FIXED 2026-06-06** (`ppc-jit.cpp` case 4/68/132 rotates, 260/324/388 left, 516/580/644
+> logical-right, 772/836/900 arith-right). The whole 12-op family:
+> - **Shifts:** mask amount mod element width (`DUP (w-1)`→v2, `AND`), then the correct
+>   **truncating** NEON op — `USHL` (left / logical-right with `NEG`), `SSHL` (arith-right with
+>   `NEG`). The old code emitted *rounding* (`SRSHL`/`URSHL`), *signed* logical shifts, and `vsrb`
+>   shifted the wrong direction; nothing masked the amount.
+> - **Rotates:** NEON has no vector rotate — synthesized `rol(x,k)=(x<<k)|(x>>>(w-k))`, `k=amt&(w-1)`.
+> - All capstone-verified encodings, validated against byte-**asymmetric** lvx operands (so the
+>   ev_mixed byte order is covered — empirically a non-issue for these per-element ops). **12 strong
+>   committed vectors** (`av_vsl{b,h,w}`, `av_vsr{b,h,w}`, `av_vsra{b,h,w}`, `av_vrl{b,h,w}`),
+>   `make test-jit` **282/282**. Boot smoke: see CHANGELOG.
+>
+> The sections below are the original discovery record (repros, root cause) — kept for provenance.
 
 > How found: whole AltiVec families had **zero** test coverage (shifts, rotates, unpacks,
 > saturating, integer-compares). This is the same lane/width-sensitive category that produced the

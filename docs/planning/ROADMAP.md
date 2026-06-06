@@ -102,12 +102,13 @@ harness that can't catch mistakes just produces the next silent bug.
     JIT 0, interp 0x08); (2) logical right shifts `vsr{b,h,w}` emit the wrong shift (`vsrb` shifts
     *left*; `vsrh/vsrw` arithmetic not logical); (3) rotates `vrl{b,h,w}` use plain shift (suspected,
     needs lvx repro). Full repros + fix plan: `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
-    ✅ **Byte ops FIXED (2026-06-06):** `vslb/vsrb/vsrab` — mask mod 8 + correct truncating
-    `USHL/SSHL` (capstone-verified); 3 strong vectors added, `make test-jit` **273/273**.
-    🟡 **Remaining:** halfword/word variants (same fix but ev_mixed byte order needs lvx-built
-    byte-asymmetric validation) + rotates `vrl{b,h,w}`. This was the proof the AltiVec/FP surface
-    is *live*, not theater — and the fix loop (capstone encodings → `SS_TEST_HEX` repro → vector →
-    `test-jit`) is now established for the rest.
+    ✅ **FULLY FIXED (2026-06-06) — all 12 ops:** byte/halfword/word shifts (`vsl/vsr/vsra{b,h,w}`,
+    mask mod width + truncating `USHL/SSHL`) + rotates (`vrl{b,h,w}`, synthesized
+    `(x<<k)|(x>>>(w-k))`). Capstone-verified, validated byte-asymmetric (ev_mixed byte order
+    covered); **12 strong vectors added, `make test-jit` 282/282** + boot smoke. Proof the AltiVec/FP
+    surface is *live*, not theater — and it establishes the fix loop (capstone encoding →
+    `SS_TEST_HEX` repro → committed vector → `test-jit`) for the remaining untested families
+    (saturating add/sub, integer compares, unpacks — likely lower yield per NEON's closer mapping).
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at
@@ -491,11 +492,31 @@ feasibility, with the gated "true guest SMP" end (MP tasks on separate cores) ti
 supervisor-fidelity work. **Detail:** `docs/planning/MULTICORE-OFFLOAD-PLAN.md`.
 
 **Cross-emulator idea bank (Dolphin/RPCS3/Cemu/QEMU/Rosetta).** A reality-checked lateral-ideation
-pass with an effort/payoff/blocked grid. Near-term nominees: **`CopyBits` HLE** (games/media, →Metal)
-and **idle-skipping** (battery/thermal/desktop citizenship); plus dual-W^X (R8, do-anyway),
-constant-prop, carry-via-NZCV, fastmem-SIGBUS. Several brainstormed "wins" were already shipped
-(chaining, AltiVec byte-mults) — the doc records those so they aren't re-chased.
+pass with an effort/payoff/blocked grid. The two near-term nominees are promoted to tracked items
+**B5 (`CopyBits` HLE)** and **B6 (idle-skipping)** below; the bank also holds do-anyway dual-W^X (R8),
+constant-prop, carry-via-NZCV, and fastmem-SIGBUS, and records brainstormed "wins" that were already
+shipped (chaining, AltiVec byte-mults) so they aren't re-chased.
 **Detail:** `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md`.
+
+## B5. 🔜 `CopyBits` HLE — native/Metal blitter *(nominated from the idea bank)*
+
+Replace the hottest QuickDraw raster op with a native ARM64/NEON blit via the existing NativeOp
+mechanism (the path the ethernet driver + video accel already use), instead of running it through
+the PPC-JIT-emulating-the-ROM's-68K-DR-emulator (the worst layer in the stack). **Effort:** Med ·
+**Payoff:** High (games/media — the workloads that justify throughput) · **Blocked by:** a half-day
+call-frequency + rect-size histogram (go/no-go). Safe (no SMC risk, unlike `BlockMove`-for-code);
+the natural on-ramp to Metal-accelerated blits (R10).
+**Detail:** `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md` (keeper #1) +
+OPTIMIZATION-PLAN "Selective HLE".
+
+## B6. 🔜 Idle-skipping / busy-wait detection *(nominated from the idea bank)*
+
+Detect the cooperative guest's hot idle spins (the `0x5031040c` VBL spin, `WaitNextEvent` null-event
+poll) and `WFE`/nanosleep to the next 60 Hz tick instead of spinning at full ARM64 speed (reuses the
+existing spcflags poll points). **Effort:** Med · **Payoff:** High (battery/thermal — a backgrounded
+VM shouldn't peg a P-core) · **Blocked by:** none. Primarily serves **Track C** (a "behaves like a
+real macOS app" win) but is JIT-implemented, so it lives here.
+**Detail:** `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md` (keeper #2).
 
 **Regression tracking:** baselines + how to A/B → `docs/BENCHMARKS.md` (Speedometer baseline
 recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still TODO) and

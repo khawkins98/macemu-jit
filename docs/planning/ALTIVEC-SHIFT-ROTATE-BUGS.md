@@ -124,3 +124,37 @@ decode table, NEON disassembled with capstone). Outcome:
   2^scale factor — incomplete, not a wrong-opcode bug.
 - Note: sweep XOs 910/354/418/1038/1356/1420/1932 are **not real AltiVec opcodes** (the matching
   JIT `case` labels are dead code at the wrong XO) — test artifacts, not bugs.
+
+## Pack-saturate fix design (2026-06-06, derived — ready for a focused pass)
+
+Canonical XOs (decode table, authoritative): `vpkshss=398` (signed→signed sat),
+`vpkshus=270` (signed→unsigned sat), `vpkswss=462`, `vpkswus=334`, `vpkuhus=142`
+(unsigned→unsigned sat), `vpkuwus=206`. The JIT `case` comments are swapped, and **270/398 have
+the saturation signedness swapped** (270 emits `SQXTN`, should be `SQXTUN`; 398 emits `SQXTUN`,
+should be `SQXTN`). **But that's not the whole bug:** `vpkuhus` (142) emits the *correct* `UQXTN`
+yet still fails — because none of these do the ev_mixed normalize or the 2-source narrow.
+
+**Interp semantics** (`execute_vector_pack`, ppc-execute.cpp:1521): result element `i` =
+`saturate(vA.element[i])` for `i < n/2`, else `saturate(vB.element[i-n/2])`. So **vA fills the
+high-order half, vB the low-order half**, in PPC element order (element 0 = most significant),
+using the ev_mixed element accessors.
+
+**Correct NEON recipe** (per op, halfword→byte shown; word→half is `.4S`→`.4H`):
+1. `REV32.16B` normalize vA and vB into the natural element order (as `emit_vmrg` does).
+2. Narrow with the **signedness-correct** saturating op into the two halves of vD:
+   - `vpkshss`: `SQXTN  Vd.8B, vA.8H` + `SQXTN2  Vd.16B, vB.8H` (signed→signed)
+   - `vpkshus`: `SQXTUN Vd.8B, vA.8H` + `SQXTUN2 Vd.16B, vB.8H` (signed→unsigned)
+   - `vpkuhus`: `UQXTN  Vd.8B, vA.8H` + `UQXTN2  Vd.16B, vB.8H` (unsigned→unsigned)
+   - …matching word variants (`vpkswss/swus/uwus`).
+3. Place vA in the **high-order** half and vB in the low — mind that PPC element-0-is-high is the
+   reverse of NEON lane order, so the half assignment + a final `REV32` (or REV64) normalize must
+   be derived empirically against the interp (distinct operands per half + saturation boundaries).
+
+**Validation:** distinct, sign-crossing operands in *both* halves (so a half-swap or lane-order
+bug can't pass), values that saturate at the high and low clamps, signed vs unsigned sources.
+Reuse `gen-altivec-vectors.py` `load_bytes` for crafted operands. This is the same intricacy class
+as `emit_vmrg` (which took several rounds) — **do it as a focused pass, not inline**, validating
+each op against the real interp before moving on.
+
+(Pixel `vpkpx`/`vupkhpx`/`vupklpx` and sum-across `vsumsws`/`vsum2sws`/`vsum4sbs` remain separately
+— pixel needs 1-5-5-5 field expansion; sum-across has rotated case labels + missing saturation.)

@@ -67,16 +67,41 @@ make bench BARGS=--compare=/tmp/bb.txt       # show % deltas vs the baseline (af
 make bench BARGS=--bench-iters=1000000       # more iterations = less noise
 ```
 
-Output is `ns/call` (the 144-instruction kernel) and **`ns/insn`**, computed by
-**differential timing**: each kernel is compiled at two sizes (16 and 144 body
-instructions) and the fixed per-call cost (prologue/epilogue + register reset)
-cancels in `(call_big − call_small) / (144 − 16)`. Reported values are the min
-of 5 runs after a warm-up; run-to-run noise is typically <1%.
+Three columns, computed by **differential timing** — each kernel is compiled at
+two sizes (16 and 144 body instructions) and the fixed per-call cost
+(prologue/epilogue + register reset) cancels in `(big − small) / (144 − 16)`:
+
+| Column | What it is | Noise |
+|---|---|---|
+| **`ns/insn`** | wall-time per PPC op — **median** across `BENCH_ROUNDS` interleaved rounds (each round = min-of-5 after warm-up) | host-dependent (see below) |
+| **`cv%`** | coefficient of variation of `ns/insn` across rounds — the host-noise estimate | — |
+| **`a64/op`** | emitted **ARM64 instructions per PPC op** (from the JIT's own `code_size`) | **ZERO — deterministic** |
+
+**The noise gate.** Timing is only `<1%` on a *quiet, cool* machine. Under load
+(parallel builds/boots, a co-tenant agent, thermal pressure) it swings wildly —
+a fixed, unchanged binary has been measured at **±25%**. So:
+- a `cv%` above `BENCH_CV_NOISE_PCT` (3%) is flagged with `*`, and `--compare`
+  prints **`NOISY`** instead of a timing delta rather than reporting a number the
+  host already proves untrustworthy;
+- **`a64/op` is deterministic** — it is the JIT's exact emitted-instruction count,
+  identical run-to-run regardless of host load. It catches every
+  redundant-instruction-removal win (trailing-MOV elimination, leaner CR0, etc.)
+  with **zero noise**, and works on a loaded laptop or in CI. Use it as the
+  primary signal for codegen-size optimizations; use `ns/insn` (on a quiet host)
+  only for timing-only wins it can't see — instruction scheduling, equal-count
+  substitutions, latency reordering.
+
+On Apple Silicon the bench pins itself to a performance core via QoS
+(`QOS_CLASS_USER_INTERACTIVE` — thread affinity is a no-op there) and times with
+`CLOCK_THREAD_CPUTIME_ID` (excludes time a co-tenant preempted us). Neither
+corrects DVFS/thermal; that is what the `cv%` gate is for.
 
 Kernels target specific optimizations: `carry-chain` (adde — 0b/0f), `rc1`
 (add. — 0g lazy-CR0), `alu` (RA throughput), `fp-add`/`fp-fma` (FP latency —
 these run ~30× slower per insn than integer ALU because the JIT has no FP
-register allocator yet; every FP op round-trips the FPRs through the regs struct).
+register allocator yet; every FP op round-trips the FPRs through the regs struct),
+`compute` (mullw/divw/add recurrence — models the runtime-dominant Speedometer
+hot block `0x1ed7befc`).
 
 ### Maintenance (per `docs/TESTING.md`)
 - **Baselines are per-machine** (ns depends on the host CPU) — **do not commit

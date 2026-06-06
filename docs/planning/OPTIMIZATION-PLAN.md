@@ -379,9 +379,15 @@ Where the flag-read ordering permits, compute directly into the RA host reg:
 ```
 ADDS  W(hD), W(hA), W(hB)   ; sets NZCV, result already in hD
 ```
-Same opportunity in divw (SDIV into RTMP2, then MOV to hD) and the mulhw/mulhwu
-64-bit product (SMULL/UMULL + LSR into RTMP0, then MOV to hD).  The `addi`/`addis`
-with `ra==0` already demonstrates this pattern — extend it uniformly.
+**divw follow-up — DONE (2026-06-06).** `divw` built its result in RTMP2 then MOV'd
+to hD; the final CSEL now writes hD directly (commit on `p0-profiler`). Proven by
+the deterministic `a64/op` microbench metric: the `compute` kernel dropped exactly
+**−0.164 ARM64-insns/op** while all 5 untouched kernels read **+0.000** — a
+zero-noise, host-independent measurement (the timing columns were all `NOISY` on
+the loaded host at the time, which is precisely why the deterministic metric
+matters). Correctness: test-jit 302/302 + differential interp-vs-JIT on the
+div-by-0 / MIN÷-1 / normal paths. **Still open:** the same MOV in `mulhw`/`mulhwu`
+(SMULL/UMULL + LSR into RTMP0, then MOV to hD) — extend uniformly.
 
 ### 0g. Lazy CR0 Re-enable
 
@@ -834,11 +840,31 @@ converts the rest of this plan from priors into evidence.
 
 **Result**: `jit-bench` shipped as `rom-harness --bench` / `make bench`.
 Differential per-instruction timing (compile each kernel at 16 and 144 body
-instrs; `(call_big−call_small)/(144−16)` cancels prologue/epilogue), min-of-5,
-**<1% run-to-run noise**. Discriminating on first run: `alu` 0.10 < `rc1` 0.50 <
-`carry-chain` 0.95 ns/insn. `--save-baseline`/`--compare` A/B; per the TESTING.md
-contract, `--compare` warns if the baseline predates `ppc-jit.cpp`. Kernels:
-`carry-chain` (0b/0f), `rc1` (0g lazy-CR0), `alu` (RA).
+instrs; `(call_big−call_small)/(144−16)` cancels prologue/epilogue).
+`--save-baseline`/`--compare` A/B; `--compare` warns if the baseline predates
+`ppc-jit.cpp`. Kernels: `carry-chain` (0b/0f), `rc1` (0g lazy-CR0), `alu` (RA),
+`fp-add`/`fp-fma`, `compute` (the Speedometer hot block `0x1ed7befc`).
+
+**Noise correction + deterministic metric (2026-06-06).** The original "<1%
+run-to-run noise" claim holds only on a *quiet, cool* host. Under load
+(parallel builds/boots, a co-tenant agent, thermal pressure) a **fixed, unchanged
+binary swung ±25%** — P/E-core migration + DVFS, not a bench-algorithm bug. Tier-1
+methodology fixes (from 3 lateral benchmark subagents) now in `rom-harness.cpp`:
+1. **`a64/op` — deterministic ARM64-insns-per-PPC-op** from the JIT's own
+   `code_size`. **Zero noise, host-independent, CI-gateable.** This is the primary
+   signal for codegen-*size* wins (trailing-MOV removal, leaner CR0, etc.) — it
+   reads exactly +0.000 on untouched kernels and the exact delta on changed ones
+   (validated: the divw 0f follow-up = −0.164, while every timing column was
+   `NOISY`). It cannot see timing-only wins (scheduling, equal-count swaps).
+2. **Noise gate** — `BENCH_ROUNDS` interleaved rounds, median `ns/insn` + `cv%`;
+   `cv>3%` is flagged `*` and `--compare` prints `NOISY` instead of a bogus delta.
+3. **QoS P-core pin** (`QOS_CLASS_USER_INTERACTIVE` — the only Apple-Silicon
+   scheduling lever; affinity is a no-op) + `CLOCK_THREAD_CPUTIME_ID`.
+
+Takeaway: use **`a64/op` for codegen-size A/B (any host)**; use **`ns/insn` only on
+a quiet host** for timing-only wins. Deferred Tier-2/3 (subagent reports): two-binary
+interleaved timing A/B, deterministic hot-trace replay, fallback/block-count deltas,
+trend only Speedometer compute subtests.
 
 Surfaced + fixed two standalone-harness bugs: a missing `ppc_jit_interp_one`
 link stub, and a **missing `spcflags` field in `PPCRegs`** (the 0d atomic change

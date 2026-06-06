@@ -22,5 +22,19 @@
       "collapsed": false, "role": "desktop",
       "contentBounds": { "left": 100, "top": 100, "right": 500, "bottom": 400 },
       "structBounds":  { "left": 100, "top": 80, "right": 500, "bottom": 400 } }
-  ]
+  ],
+  "menuBar": {
+    "height": 20,
+    "menus": [
+      {"id": 128, "enabled": true, "role": "apple", "title": "", "items": [
+        {"index": 1, "enabled": true, "text": "About This Computer"}
+      ]},
+      {"id": 129, "enabled": true, "title": "File", "items": [
+        {"index": 1, "enabled": true, "text": "New Folder", "cmdKey": "N"},
+        {"index": 2, "enabled": true, "text": "Open", "cmdKey": "O"},
+        {"index": 3, "enabled": false, "text": "Print"}
+      ]},
+      {"id": 130, "enabled": true, "title": "Edit", "items": []}
+    ]
+  }
 }

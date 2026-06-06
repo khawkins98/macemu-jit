@@ -64,6 +64,40 @@ class Item:
         return self.hilite == 255
 
 
+class MenuItem:
+    def __init__(self, d: dict):
+        self.index: int = d["index"]
+        self.text: str = d.get("text", "")
+        self.enabled: bool = d.get("enabled", True)
+        self.cmd_key = d.get("cmdKey")        # e.g. "O" for Cmd-O; None if no key
+        self.submenu = d.get("submenu")       # submenu menu id, or None
+
+    def __repr__(self):
+        k = f" Cmd-{self.cmd_key}" if self.cmd_key else ""
+        return f"MenuItem[{self.index}] {self.text!r}{k}{'' if self.enabled else ' (disabled)'}"
+
+
+class Menu:
+    def __init__(self, d: dict):
+        self.id = d.get("id")
+        self.title: str = d.get("title", "")
+        self.enabled: bool = d.get("enabled", True)
+        self.role = d.get("role")
+        self.items = [MenuItem(it) for it in d.get("items", [])]
+
+
+class MenuBar:
+    def __init__(self, d: dict):
+        self.height = d.get("height")
+        self.menus = [Menu(m) for m in d.get("menus", [])]
+
+    def menu(self, title: str):
+        for m in self.menus:
+            if m.title == title:
+                return m
+        return None
+
+
 class Window:
     def __init__(self, d: dict):
         self._d = d
@@ -99,6 +133,7 @@ class Snapshot:
         self.modal_active: bool = data.get("modalActive", False)
         self.front_index: int = data.get("frontWindowIndex", -1)
         self.windows: list[Window] = [Window(w) for w in data.get("windows", [])]
+        self.menu_bar = MenuBar(data["menuBar"]) if "menuBar" in data else None
 
     def __repr__(self):
         return (f"Snapshot(backend={self.backend} windows={len(self.windows)} "
@@ -242,6 +277,21 @@ def find_item(win: "Window", *, text=None, text_contains=None, type=None, defaul
         raise AssertionError(f"no item text={text!r} text_contains={text_contains!r} type={type!r} "
                              f"in {win.title!r}; items: {[(i.type, i.text) for i in win.items]}")
     return out[0]
+
+
+def find_menu_item(snap: "Snapshot", text: str, *, menu=None) -> "MenuItem":
+    """Find a menu item by exact text (optionally within a named menu). Raises if not found.
+    Use `it.cmd_key` to fire it via a Cmd-key combo over VNC."""
+    if snap.menu_bar is None:
+        raise AssertionError("no menu bar in snapshot")
+    for m in snap.menu_bar.menus:
+        if menu is not None and m.title != menu:
+            continue
+        for it in m.items:
+            if it.text == text:
+                return it
+    raise AssertionError(f"no menu item {text!r}" + (f" in menu {menu!r}" if menu else "")
+                         + f"; menus: {[m.title for m in snap.menu_bar.menus]}")
 
 
 def click_item(vnc, snap: "Snapshot", win: "Window", **criteria) -> tuple[int, int]:

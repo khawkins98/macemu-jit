@@ -145,3 +145,22 @@ def test_screen_depth_and_role():
     assert snap.screen_depth == 8
     assert snap.windows[1].role == "desktop"
     assert snap.windows[0].role is None
+
+
+def test_menu_bar_parse():
+    snap = _load()
+    mb = snap.menu_bar
+    assert mb is not None and len(mb.menus) == 3
+    file_menu = mb.menu("File")
+    assert file_menu.id == 129 and len(file_menu.items) == 3
+    assert mb.menus[0].role == "apple"
+
+
+def test_find_menu_item_cmdkey():
+    snap = _load()
+    it = uidump.find_menu_item(snap, "Open")
+    assert it.cmd_key == "O" and it.enabled is True
+    assert uidump.find_menu_item(snap, "Print").cmd_key is None
+    import pytest
+    with pytest.raises(AssertionError):
+        uidump.find_menu_item(snap, "Nonexistent Command")

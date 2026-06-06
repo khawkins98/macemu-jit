@@ -7,9 +7,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import observe, uidump
+from . import imagecmp, observe, uidump, workload
 from .runner import Runner
 from .vnc import Vnc
+from .workload import WorkloadResult, WorkloadSpec
 
 
 @dataclass
@@ -500,3 +501,241 @@ def _await_app(runner: Runner, app: str, timeout: float) -> bool:
                 return True
         time.sleep(0.5)
     return False
+
+
+# --- Generic real-world workload scenario (S4-S5) ----------------------------------------
+#
+# Unlike the Speedometer benchmark (which auto-launches + reads a text report), a workload app is
+# launched by Finder type-select and its progress is read from the SCREEN, not the window list: a
+# Carbon/fullscreen app doesn't present a standard WindowRecord while it renders (LEARNINGS 2026-06-06),
+# so launch/render/quit are gated on the screenshot perceptual hash. See sse2e/workload.py.
+
+
+def _phash_dist(frame_path, baseline_hash) -> int:
+    """Masked-pHash hamming distance from a freshly captured frame to a precomputed baseline hash."""
+    return imagecmp.phash_masked(frame_path) - baseline_hash
+
+
+def _screen_size(dump_dir: str) -> tuple[int, int]:
+    try:
+        scr = uidump.snapshot(dump_dir, timeout=8.0).raw.get("screen") or {}
+        w, h = int(scr.get("width", 0)), int(scr.get("height", 0))
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    return 800, 600
+
+
+def _dialog_text(dlg) -> str:
+    """Join a dialog's static-text + button labels — used to report a launch-blocking alert."""
+    parts = [it.text.strip() for it in getattr(dlg, "items", [])
+             if it.text and it.type in ("staticText", "button")]
+    return " / ".join(p for p in parts if p)[:200]
+
+
+def _await_launch(runner: Runner, vnc: Vnc, spec: WorkloadSpec, baseline_hash, dump_dir: str,
+                  artifact_dir: Path, since: int) -> tuple[float | None, str | None]:
+    """Wait for the app to take the screen. Returns (launch_elapsed, error_text).
+
+    Order matters: screen DIVERGENCE (the app is rendering) wins first, so a real launch isn't
+    aborted by a transient modal. Only if the screen is still ~Finder do we treat a modal alert as a
+    launch failure (the CarbonLib 'could not be found' error is exactly such an alert, and it IS a
+    standard dialog introspection can read even though the launched app later isn't)."""
+    poll = artifact_dir / f"{spec.name}-launch-poll.png"
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < spec.launch_timeout:
+        # 1. screen diverged from the Finder baseline -> launched + rendering.
+        try:
+            vnc.capture(str(poll))
+            if workload.launched(_phash_dist(str(poll), baseline_hash), spec.launch_diverge):
+                return time.monotonic() - t0, None
+        except Exception:
+            pass
+        # 2. [APP] front-app signal (fires for non-Carbon apps; a bonus confirmation).
+        if spec.app_signal:
+            for ln in runner.log_text().splitlines()[since:]:
+                fa = observe.front_app(ln)
+                if fa is not None and spec.app_signal in fa:
+                    return time.monotonic() - t0, None
+        # 3. screen still ~Finder but a modal alert is up -> launch blocked (e.g. a missing library).
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=2.0)
+            if snap.modal_active:
+                dlg = snap.front_dialog()
+                if dlg is not None:
+                    return None, _dialog_text(dlg) or "(modal alert at launch)"
+        except Exception:
+            pass
+        time.sleep(1.0)
+    return None, None
+
+
+def _await_render_stable(vnc: Vnc, spec: WorkloadSpec, artifact_dir: Path) -> tuple[float, bool]:
+    """Poll screenshots until the render settles (pHash stops changing) or `max_render_s`.
+    Returns (elapsed_s, stabilized). A render that animates forever returns (max, False) — not a
+    failure, just an uncaptured-stable workload."""
+    poll = artifact_dir / f"{spec.name}-render-poll.png"
+    distances: list[int] = []
+    prev = None
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < spec.max_render_s:
+        time.sleep(spec.poll_interval)
+        try:
+            vnc.capture(str(poll))
+            h = imagecmp.phash_masked(str(poll))
+        except Exception:
+            continue
+        if prev is not None:
+            distances.append(h - prev)
+        prev = h
+        if workload.stable_run(distances, spec.stable_threshold, spec.stable_frames):
+            print(f"  [gate] render stable: {time.monotonic() - t0:.1f}s "
+                  f"(last distances {distances[-spec.stable_frames:]})", flush=True)
+            return time.monotonic() - t0, True
+    print(f"  [gate] render did not stabilize within {spec.max_render_s:.0f}s "
+          f"(distances {distances[-4:]})", flush=True)
+    return time.monotonic() - t0, False
+
+
+def _quit_workload(runner: Runner, vnc: Vnc, spec: WorkloadSpec, baseline_hash,
+                   artifact_dir: Path) -> bool:
+    """Cmd-Q, answer the save/confirm chain with Return, then confirm the screen converges back to the
+    Finder baseline (the fullscreen app vanished). Front-app settle is the fallback."""
+    since = _nlines(runner)
+    vnc.key("super-q")
+    for _ in range(4):
+        if _await_since(runner, since, lambda e: e.modal, 3.0, "quit-modal") is None:
+            break
+        since = _nlines(runner)
+        vnc.key("enter")
+    poll = artifact_dir / f"{spec.name}-quit-poll.png"
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < spec.quit_timeout:
+        try:
+            vnc.capture(str(poll))
+            if _phash_dist(str(poll), baseline_hash) <= spec.quit_converge:
+                print(f"  [gate] quit:Finder (screen back to baseline): "
+                      f"{time.monotonic() - t0:.1f}s", flush=True)
+                return True
+        except Exception:
+            pass
+        time.sleep(1.0)
+    return _await_front_app(runner, since, want="Finder", avoid=spec.app, timeout=4.0) is not None
+
+
+def run_workload(
+    *,
+    emulator: str,
+    prefs: str,
+    vncport: int,
+    spec: WorkloadSpec,
+    boot_timeout: float = 120.0,
+    shutdown_timeout: float = 60.0,
+    artifact_dir: Path,
+) -> WorkloadResult:
+    """Boot -> type-select launch `spec.app` from `spec.volume` -> screenshot/pHash-gated launch,
+    render-timing, and quit-to-Finder -> clean shutdown. The headline perf signal is `render_s`
+    (launch -> pHash-stable); the result frame's pHash is a visual fingerprint."""
+    dump_dir = tempfile.mkdtemp(prefix="ss-ui-")
+    os.environ["SS_UI_DUMP_DIR"] = dump_dir
+    res = WorkloadResult(False, "incomplete", "", workload=spec.name)
+
+    runner = Runner(argv=[emulator, "--config", prefs])
+    runner.start()
+    vnc = None
+    try:
+        ev = _await_boot_ready(runner, boot_timeout)
+        if ev is None:
+            res.reason = "boot timed out (no [BOOT] idle)"; res.log = runner.log_text()
+            return res
+        _await_ready(runner, READY_TIMEOUT)
+        time.sleep(3.0)
+
+        vnc = Vnc(port=vncport)
+        base = artifact_dir / f"{spec.name}-00-baseline.png"
+        vnc.capture(str(base))
+        baseline_hash = imagecmp.phash_masked(str(base))
+        w, h = _screen_size(dump_dir)
+        ex, ey = w // 2, h - 30
+
+        # Finder type-select launch: click empty desktop -> type volume -> Cmd-O -> type app -> Cmd-O.
+        since = _nlines(runner)
+        print(f"  [workload] launch {spec.app!r} from volume {spec.volume!r}", flush=True)
+        vnc.click(ex, ey); time.sleep(1.0)
+        vnc.type_text(spec.volume); time.sleep(1.2); vnc.key("super-o"); time.sleep(4.0)
+        vnc.type_text(spec.app); time.sleep(1.2); vnc.key("super-o")
+
+        launch_s, err = _await_launch(runner, vnc, spec, baseline_hash, dump_dir, artifact_dir, since)
+        if err is not None:
+            res.launch_error = err
+            res.reason = f"launch failed — on-screen alert: {err}"
+            try:
+                vnc.capture(str(artifact_dir / f"{spec.name}-launch-error.png"))
+            except Exception:
+                pass
+            res.log = runner.log_text()
+            return res
+        if launch_s is None:
+            res.reason = f"{spec.app!r} did not take the screen within {spec.launch_timeout:.0f}s"
+            res.log = runner.log_text()
+            return res
+        res.launched = True
+        res.launch_s = launch_s
+        print(f"  [workload] launched in {launch_s:.1f}s", flush=True)
+
+        render_s, stable = _await_render_stable(vnc, spec, artifact_dir)
+        res.render_s = render_s
+        res.stable = stable
+
+        result_img = artifact_dir / f"{spec.name}-result.png"
+        try:
+            vnc.capture(str(result_img))
+            res.result_image = str(result_img)
+            rh = imagecmp.phash_masked(str(result_img))
+            res.result_phash = str(rh)
+            if spec.golden_image and Path(spec.golden_image).exists():
+                _, dist = imagecmp.compare(str(result_img), spec.golden_image,
+                                           threshold=spec.regression_threshold)
+                res.regression_dist = dist
+        except Exception:
+            pass
+
+        try:
+            _quit_workload(runner, vnc, spec, baseline_hash, artifact_dir)
+        except Exception:
+            pass
+        vnc.close(); vnc = None
+
+        runner.request_shutdown()
+        code = runner.wait(timeout=shutdown_timeout)
+        log = runner.log_text()
+        res.log = log
+        res.clean_shutdown = (code == 0 and observe.saw_clean_shutdown(log))
+
+        reg = "" if res.regression_dist is None else f", regression={res.regression_dist}"
+        stab = "stable" if res.stable else f"capped at {spec.max_render_s:.0f}s"
+        if res.launched and res.clean_shutdown:
+            res.ok = True
+            res.reason = (f"{spec.name}: launched {launch_s:.1f}s, render {render_s:.1f}s ({stab}){reg}; "
+                          f"clean shutdown")
+        else:
+            res.reason = (f"{spec.name}: launched={res.launched} render={render_s:.1f}s "
+                          f"clean_shutdown={res.clean_shutdown} (exit={code})")
+        return res
+    finally:
+        if vnc is not None:
+            try:
+                vnc.close()
+            except Exception:
+                pass
+        try:
+            from vncdotool import api
+            api.shutdown()
+        except Exception:
+            pass
+        try:
+            (artifact_dir / f"{spec.name}-emulator.log").write_text(runner.log_text())
+        except Exception:
+            pass
+        runner.terminate()

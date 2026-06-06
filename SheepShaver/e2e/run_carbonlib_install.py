@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""One-time CarbonLib 1.6 install, driven over VNC by guest-UI introspection.
+"""[ONE-OFF EXAMPLE — not a standing gate; a worked example of installer-driving.]
+
+One-time CarbonLib 1.6 install, driven over VNC by guest-UI introspection.
 
 Boots the DEDICATED WRITABLE workload master (e2e-macos9-workload-boot.dsk — a copy of macos9_fresh, NOT
 any of Ken's masters; the install must persist so this is booted writable, not a per-run copy), with the

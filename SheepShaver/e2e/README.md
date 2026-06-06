@@ -13,12 +13,46 @@ config** (never your `~/.sheepshaver_prefs`) and checks the emulator actually wo
 complements `make test-jit` / `SS_JIT_VERIFY` (which test the JIT *per-instruction*) at the layer
 they can't reach: "does it still boot to the Finder, run, and shut down cleanly after my change?"
 
-Two scenarios:
+## The toolkit at a glance
 
-| `make e2e` (smoke) | `make e2e-bench` (benchmark) |
-|---|---|
-| Boot the read-only **ISO** → request a clean shutdown via the **host→guest hook** → assert clean exit. No GUI driving (VNC used only for an optional screenshot). | Boot the **Mac OS 9 + Speedometer disk** → drive the full Speedometer suite over **VNC** → capture the result image → clean shutdown. |
-| `PASS: clean lifecycle: booted to Finder, clean shutdown, exit 0` | `PASS: benchmark complete in 39s (gates: splash=6.4s choose=0.2s)` |
+**Three scenarios** (each a `make` target + a `run_*.py` entry + a `scenario.*` flow):
+
+| Target | Scenario | What it does |
+|---|---|---|
+| `make e2e` | `run_lifecycle` | Boot the read-only **ISO** → clean shutdown via the **host→guest hook** → assert clean exit. No GUI driving. |
+| `make e2e-bench` | `run_benchmark` | Boot **Mac OS 9 + Speedometer** → drive the full suite over **VNC** → capture results → clean shutdown. |
+| `make e2e-workload WL=<name>` | `run_workload` | Boot + attach apps disk → type-select **launch a real app** → **screenshot/pHash-gated** render-timing → quit → clean shutdown → per-workload perf row. (Fractal Carbon is entry #1.) |
+
+**Two sensors** for reading the guest — pick by app type:
+
+| Sensor | Module | Use when |
+|---|---|---|
+| **Structured introspection** (windows/dialogs/controls/menus as objects, click by *name*) | `sse2e.uidump` (+ C++ Backend A) | dialog / standard apps (Speedometer, installers). |
+| **Screenshot + perceptual hash** (menu-bar / render / convergence) | `sse2e.vnc.capture` + `sse2e.imagecmp` | **Carbon / fullscreen apps** — invisible to introspection (e.g. Fractal Carbon). |
+
+> **Decision line:** dialog/standard app → introspection (`uidump.find_item`/`click_item`); Carbon/fullscreen
+> app → screenshot (`run_workload`'s menu-bar/pHash gates). The hard-won reason: a Carbon app rendering
+> fullscreen returns degenerate windows and its alerts emit no signal (`LEARNINGS.md` 2026-06-06).
+
+**The layers:** `run_*.py` entry scripts → `scenario.py` flows → the `sse2e` library. Shared boot/drive/gate
+primitives (and the dedup'd quit / clean-shutdown-verdict / reactor-teardown) live in **`sse2e/drive.py`**;
+the guest-driving API an agent would use is documented in **`AGENT-API.md`**.
+
+**Entry points** (not every script is a standing gate):
+
+| Script | Target | Role |
+|---|---|---|
+| `run_smoke.py` | `make e2e` | durable gate (lifecycle) |
+| `run_benchmark.py` | `make e2e-bench` | durable gate (Speedometer perf) |
+| `run_workload.py` | `make e2e-workload` | durable gate (real-app render) |
+| `run_uidump_smoke.py` | — | introspection smoke / manual |
+| `run_fc_discover.py` | — | **one-off example** (discovery pattern) |
+| `run_carbonlib_install.py` | — | **one-off example** (installer-driving) |
+
+**Two perf-history reports (intentionally separate, not a shared primitive):** `bench_export` extracts +
+parses Speedometer's in-guest **text report** (per-metric columns, CV% across runs); `workload` appends a
+**render-time + result-pHash** row. Different shapes for different workloads — both land under
+`artifacts/*-history/history.csv`.
 
 ## How it works (the signal-driven design)
 

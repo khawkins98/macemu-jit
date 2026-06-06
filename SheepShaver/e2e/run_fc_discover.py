@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""DISCOVERY: boot OS 9 (to Finder) + attach the E2E Apps disk, launch AltiVec Fractal Carbon via
+"""[ONE-OFF EXAMPLE — not a standing gate; a worked example of the discovery pattern.]
+
+DISCOVERY: boot OS 9 (to Finder) + attach the E2E Apps disk, launch AltiVec Fractal Carbon via
 Finder keyboard type-select, and dump its UI (screen / windows / menus + cmd-keys) at each stage so we
 can build the real workload drive-steps from facts. Throwaway/iterative; not the final scenario.
 

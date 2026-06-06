@@ -1,6 +1,6 @@
 # E2E Toolkit — Lay of the Land, Gaps & Proposals (incl. an MCP server)
 
-> **Status:** 🟡 Active · **Created:** 2026-06-07 · **Updated:** 2026-06-07
+> **Status:** ✅ P0–P4a executed (P4b parked) · **Created:** 2026-06-07 · **Updated:** 2026-06-07
 > **Why this doc exists:** after a burst of E2E-harness work (lifecycle smoke, Speedometer benchmark,
 > guest-UI introspection, and the generic screenshot/pHash workload runner), take a lay of the land
 > before handing the harness to the other agent: is it a coherent toolkit or a pile of parallel
@@ -86,7 +86,10 @@ core that should be refactored before it's handed off** — *and* the positionin
 
 *(Reprioritized after review: P0 first, P4 parked. Effort/risk noted per item.)*
 
-### P0 ☐ Extract the duplicated drive helpers + split `scenario.py` (the real first job)
+### P0 ✅ Extract the duplicated drive helpers + split `scenario.py` (the real first job) — DONE (`f97310bd`)
+Shipped: `sse2e/drive.py` (boot/drive/gate primitives + `quit_app`/`clean_shutdown`/`reactor_shutdown`);
+`scenario.py` 753→609 ln, all duplication removed; tests patch `drive.time`. 122 offline + `make e2e` smoke
++ `make e2e-workload` all PASS (render 18.29s, Δ +0.00s vs pre-refactor — behavior identical).
 The highest-value, lowest-risk fix and the one the first draft missed. Pull the verbatim duplication into one
 place: a shared `quit_app(runner, vnc, confirm_fn)` (the Cmd-Q + modal-chain loop, parameterized on the
 post-quit check), a single `clean_shutdown_verdict(code, log)`, and a `reactor_shutdown()` teardown helper.
@@ -94,19 +97,26 @@ Then split `scenario.py` (753 ln) — e.g. `drive.py` (the `_await_*`/`_drive_un
 vs the three scenario flows. Net: less code, no behaviour change (it's covered by `test_scenario.py`), and a
 thinner base for any future MCP/agent wrapper. **Effort: ~half a day. Risk: low (offline tests gate it).**
 
-### P1 ☐ A one-page "E2E toolkit map" (cheap, high value)
+### P1 ✅ A one-page "E2E toolkit map" — DONE
+Added to `e2e/README.md` ("The toolkit at a glance"): the 3 scenarios, the 2 sensors + the decision line,
+the entry-point table (durable vs one-off), the `drive.py`/`AGENT-API.md` pointers, and the two-history note.
+Fixed the stale "Two scenarios"/"79 tests" rot in passing.
 A single `e2e/README.md` top section (or a short `docs/E2E-TOOLKIT.md` linked from it) that lays out: the two
 sensors, the three scenarios, the entry-point table (script → make target → what it's for → durable/example),
 and a **decision line** ("dialog/standard app → introspection `find_item`; Carbon/fullscreen → screenshot
 `run_workload`"). This is the "lay of the land" the other agent needs to *use* the harness without spelunking.
 
-### P2 ☐ Tag the one-off scripts in place (do NOT move them)
+### P2 ✅ Tag the one-off scripts in place (do NOT move them) — DONE
+`run_fc_discover.py` + `run_carbonlib_install.py` now carry a `[ONE-OFF EXAMPLE — not a standing gate]`
+header, and are marked "one-off example" in the README entry-point table. Not moved (would break imports).
 `run_fc_discover.py` + `run_carbonlib_install.py` use bare `from sse2e import ...` with no path shim, so
 moving them into `e2e/examples/` **breaks their imports** unless invoked via `python -m` / a `sys.path` shim.
 So: lead with a **header tag + a README line** ("worked examples of the discovery + installer-driving
 patterns, not standing gates"). Only do a physical move if paired with a `python -m examples.x` invocation.
 
-### P3 ☐ One-line note on the two history systems — do NOT build a shared primitive
+### P3 ✅ Note on the two history systems — DONE (no shared primitive)
+README now positions `bench_export` (Speedometer text report) and `workload` (render/pHash) as two report
+types, intentionally separate. No shared primitive built.
 The review is right that `bench_export` (host-side hfsutils report extractor with per-metric columns + CV%
 aggregation) and `workload` (in-process render/pHash appender) overlap on only ~4 lines ("append a CSV +
 format a delta") and even those signatures diverge. Factoring a shared `history` primitive would couple two
@@ -122,8 +132,8 @@ answered *before* any build:
   `find_menu_item`, `assert_window` (`uidump.py:239-316`) — plus `vnc` for input. An agent that can run repo
   Python just does `from sse2e import uidump, vnc`. **MCP only earns its keep for an agent that CANNOT execute
   repo Python** (a remote/sandboxed model). So the cheaper, higher-value step is **P4a: document the existing
-  Python API as the agent surface** (one page). Reach for the MCP server (P4b) only when a non-Python-executing
-  consumer is real.
+  Python API as the agent surface** — ✅ **DONE** (`SheepShaver/e2e/AGENT-API.md`). Reach for the MCP server
+  (**P4b**, still ⏸ parked) only when a non-Python-executing consumer is real.
 - **Load-bearing technical blocker (not "transport"): introspection is a LAUNCH-TIME contract.**
   `SS_UI_DUMP_DIR` must be set in the parent env *before* the emulator is spawned (`scenario.py:33/183/646`
   → `Runner.start()`); the idle hook only services snapshot requests when it was present at launch. Consequence:
@@ -162,15 +172,13 @@ service." That's fine as a goal, but name it honestly: it's not "attach to whate
 
 ## 4. Recommended order (post-review) & handoff note
 
-**Do in this order — NOT MCP-first:**
-1. **P0** — extract the duplicated quit/verdict/teardown helpers + split `scenario.py`. The real coherence
-   fix; offline tests gate it; makes everything after thinner.
-2. **P1** — the one-page toolkit map (fold the stale-count class of fix in; the `79→122` instance is already
-   fixed).
-3. **P2** — tag the two one-offs in place (do not move — it breaks their imports).
-4. **P3** — a one-line note on the two history systems. No shared primitive.
-5. **P4a** — document the existing `sse2e` Python API as the agent surface. Then **stop** unless a consumer
-   that *can't* `import sse2e` is real; only then scope **P4b** (boot-mode MCP server).
+**Executed in this order (2026-06-07) — NOT MCP-first:**
+1. ✅ **P0** — extracted `drive.py` (dedup quit/verdict/teardown), split `scenario.py` 753→609. Boot-verified.
+2. ✅ **P1** — the one-page toolkit map in `e2e/README.md` (+ fixed the stale "Two scenarios"/"79 tests" rot).
+3. ✅ **P2** — tagged the two one-offs in place (not moved — would break imports).
+4. ✅ **P3** — README note on the two history systems. No shared primitive.
+5. ✅ **P4a** — documented the `sse2e` Python API as the agent surface (`AGENT-API.md`). **Stopped there:**
+   no consumer that *can't* `import sse2e` exists yet, so **P4b** (boot-mode MCP server) stays ⏸ parked.
 
 **Trivial defects found by the audit, fixed in passing (2026-06-07):** README test count `79→122`; unused
 `field` import in `workload.py`.

@@ -48,8 +48,8 @@ lives in Python.
 
 ```
                     ┌─────────────────────────────────────────────┐
-   SIGUSR2 +        │  emul_op.cpp — serviced at next guest idle    │
-   request file ───▶│  (heap quiescent; Execute68kTrap is safe)     │
+   request file     │  emul_op.cpp — serviced at next guest idle    │
+   (polled at idle) │  (heap quiescent; Execute68kTrap is safe)     │
    {backends,nonce, │                                               │
     screenshot}     │   UISnapshotController                        │
                     │   ├── Backend A: memory-walk  ──┐             │
@@ -233,23 +233,33 @@ icon | picture | userItem`.
 
 ## 3. Trigger & transport
 
-**v1 transport = on-demand JSON file, designed so a socket/stream can wrap the same producer later**
-(no schema change) for Silicon Sheep.
+**v1 transport = on-demand JSON file via a polled request file, designed so a socket/stream can wrap
+the same producer later** (no schema change) for Silicon Sheep.
 
-### Handshake (nonce-based, race-free)
-1. Consumer writes a **request file** `/tmp/ss_ui.req` (JSON):
+**Why not a signal?** SheepShaver already uses both POSIX user signals: **`SIGUSR1`** is the E2E
+clean-shutdown hook (`main_unix.cpp`), and **`SIGUSR2` is the nanokernel's interrupt mechanism**
+(`main_unix.cpp:273` — *not* free). So the trigger is **signal-free**: the idle hook polls for a
+request file. This is also portable (no Darwin-only `SIGINFO`) and matches the repo's env-gated
+diagnostics pattern (`SS_JIT_DIAG_LOG`).
+
+### Handshake (file-poll, nonce-based, race-free)
+1. The feature is **off unless `SS_UI_DUMP_DIR` is set** (an absolute dir). When unset the idle hook
+   does nothing — zero added cost. When set, all artifacts live under that dir.
+2. Consumer writes a **request file** `$SS_UI_DUMP_DIR/ss_ui.req` **atomically** (write a temp file in
+   the same dir, then `rename()` into place), JSON:
    ```json
    { "nonce": "7f3a", "backends": ["A"], "screenshot": false }
    ```
-   Defaults if the file is absent/partial: `backends:["A"]`, `screenshot:false`, `nonce:""`.
-2. Consumer sends **`SIGUSR2`** to the emulator. (`SIGUSR1` is already the shutdown hook — do not
-   reuse it.)
-3. The signal handler sets a flag; the **idle hook** services it at the next guest idle (a quiescent,
-   `Execute68kTrap`-safe point). Latency ≈ one idle round-trip (typically < 100 ms).
+   Defaults if a field is absent: `backends:["A"]`, `screenshot:false`, `nonce:""`.
+3. The **idle hook**, when `SS_UI_DUMP_DIR` is set, `stat()`s for `ss_ui.req` each idle (a cheap host
+   syscall). On finding it, it **renames it away** (consumes it, so it services exactly once) and
+   produces the snapshot at that same quiescent, `Execute68kTrap`-safe point. Latency ≈ one idle
+   round-trip (typically < 100 ms). Servicing completes within the single idle call (Backend A is
+   synchronous reads; Backend B's accessor calls are synchronous too).
 4. The controller writes the requested artifacts, **each stamped with the request `nonce`**:
-   `/tmp/ss_ui.A.json`, `/tmp/ss_ui.B.json` (if `"B"` requested), `/tmp/ss_ui.png` (if `screenshot`).
-   Each is written to a temp name and **atomically renamed** into place.
-5. The controller writes the sentinel **`/tmp/ss_ui.done`** *last*, containing the same `nonce`.
+   `ss_ui.A.json`, `ss_ui.B.json` (if `"B"` requested), `ss_ui.png` (if `screenshot`). Each is written
+   to a temp name and **atomically renamed** into place.
+5. The controller writes the sentinel **`ss_ui.done`** *last*, containing the same `nonce`.
 6. Consumer polls for `ss_ui.done` **carrying the matching nonce**, then reads the artifacts. A stale
    `.done` from a prior request (wrong nonce) is ignored — no race, and `.json`/`.png` are guaranteed
    to come from the *same* idle frame.
@@ -261,8 +271,9 @@ icon | picture | userItem`.
   authors so they set sane timeouts).
 
 ### Paths
-Default `/tmp/ss_ui.*`; overridable via an env var (e.g. `SS_UI_DUMP_DIR`) so the isolated E2E config
-can keep its artifacts under its run dir. (Mirrors the existing `SS_JIT_DIAG_LOG` pattern.)
+All artifacts live under `$SS_UI_DUMP_DIR` (the same env that enables the feature), so the isolated
+E2E config keeps its artifacts under its own run dir. (Mirrors the existing `SS_JIT_DIAG_LOG`
+env-gating pattern.) No hardcoded `/tmp` path; the harness sets the dir per run.
 
 ---
 
@@ -370,8 +381,9 @@ human debugging artifact (immediately shows a globalization bug as a misaligned 
 - `SheepShaver/src/ui_introspect.cpp` / `.h` (new) — the `UISnapshotController`, both backends, JSON
   serializer, pure transforms. Keeps `emul_op.cpp` thin (it just calls `ui_introspect_service()` from
   the idle hook + sets the request flag from the `SIGUSR2` handler).
-- `SheepShaver/src/emul_op.cpp` (modify) — `SIGUSR2` handler sets a flag; idle hook calls the service
-  function; reuse existing `e2e_guest_ptr_ok` / Pascal-string helpers (factor them out if needed).
+- `SheepShaver/src/emul_op.cpp` (modify) — the idle hook calls `ui_introspect_service()` (which polls
+  for the request file when `SS_UI_DUMP_DIR` is set); reuse existing `e2e_guest_ptr_ok` / Pascal-string
+  helpers (factor them out into the new module so both files share them).
 - `SheepShaver/e2e/sse2e/uidump.py` (new) — snapshot/query/compare/overlay.
 - `SheepShaver/e2e/tests/test_uidump.py` (new) — offline parser/query/compare/occlusion tests.
 - `SheepShaver/e2e/tests/test_ui_transforms.*` — unit tests for the C++ pure transforms (mechanism per

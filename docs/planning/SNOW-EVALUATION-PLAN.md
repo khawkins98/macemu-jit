@@ -1,6 +1,6 @@
 # Plan: Snow comparative evaluation (classic-mac emulation + debugger tooling)
 
-> **Status:** 🟡 In progress — exploratory evaluation · **Created:** 2026-06-06 · **Updated:** 2026-06-06
+> **Status:** 🟡 In progress — S1 crosswalk done, S2 panels specified · **Created:** 2026-06-06 · **Updated:** 2026-06-06
 > **Why this doc exists:** Track a disciplined comparison against Snow so we can selectively adopt useful emulation and debugging ideas without derailing SheepShaver priorities.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -9,7 +9,9 @@
 ## TL;DR
 
 We treat [twvd/snow](https://github.com/twvd/snow) as a **reference emulator** with strong
-hardware-fidelity and debugging UX ideas, not as a port target.
+hardware-fidelity and debugging UX ideas, not as a port target. **Inspiration, not code lifting** —
+Snow is Rust + egui with an embedded 68K emulator; we're Tauri + web with a sidecar PPC emulator.
+What transfers is the *UX pattern* of per-panel debug widgets, not the implementation.
 
 > **Validated 2026-06-06 (web).** Snow is a **68K-only** Macintosh emulator (Mac 128K/512K/Plus/SE/
 > Classic/Macintosh II era; 68000/68020/68030 + FPU/PMMU), **Rust + egui**, **MIT-licensed**, and
@@ -17,130 +19,170 @@ hardware-fidelity and debugging UX ideas, not as a port target.
 > the ROM or intercept system calls" — the deliberate *opposite* of SheepShaver/BasiliskII's
 > paravirtualization). Consequences for us:
 > - **Snow's *emulation* lessons apply to BasiliskII (68K) only — never to SheepShaver's PowerPC
->   path.** Don't let "hardware fidelity" leak into SheepShaver design discussions; for us it's a
->   *contrast* (the road we deliberately didn't take — see `MMU-NANOKERNEL-MP-PLAN.md`), not a model.
+>   path.** Don't let "hardware fidelity" leak into SheepShaver design discussions.
 > - **Only Snow's *debugger/observability UX* transfers to SheepShaver** — and it's the highest-value
->   thing here (see "Build/debug presentation" below). Its debugger chrome is confirmed: breakpoints
->   (execution/bus-access/system-trap/exception/interrupt forms), watchpoints, single-step,
->   disassembly, register/memory viewers+editing, instruction-history export, system-trap history,
->   peripheral inspection — all in a live egui GUI.
-
-Snow is especially relevant to:
-1. **BasiliskII/68K resurrection planning** (if we reopen that track) — *emulation* fidelity, and
-2. **debug/triage tooling + build-debug presentation** for SheepShaver validation — *UX only*.
+>   thing here.
 
 ---
 
-## What looked immediately useful
+## Snow's 10 debug panels → SiliconSheep mapping
 
-From Snow's public docs/readme, the highest-signal ideas are:
+Snow (`frontend_egui/src/widgets/`): one module per panel, floating egui windows overlaid on the
+emulator framebuffer. State access via message-passing to the emulator thread — cached snapshots,
+never direct memory access from the UI.
 
-- Rich debugger surfaces with explicit operator UX:
-  breakpoints (including trap/interrupt/exception forms), watchpoints, disassembly, register/memory
-  editing, instruction history export, system-trap history, and peripheral state inspection.
-- Clear statement of debugging trace cost ("extra trace functionality impacts performance while open"),
-  which is a good model for making diagnostic overhead explicit.
-- Hardware-focused framing ("emulate at hardware level, avoid ROM patch/syscall intercept strategy"),
-  which is useful as a methodology contrast for design decisions in this repo.
+| # | Snow panel | What it shows | SiliconSheep feasibility | Data source |
+|---|-----------|---------------|------------------------|-------------|
+| 1 | **Registers** | CPU data/addr/SR/FPU, change highlighting | **Tier 2** — needs new emulator endpoint | New `dump_regs` signal handler or UDS command (~50 LOC) |
+| 2 | **Disassembly** | Live instruction disassembly at PC | **Tier 3** — needs memory read + disassembler | Guest RAM read + capstone WASM |
+| 3 | **Memory** | Hex viewer with navigable address | **Tier 2** — needs UDS memory read | `Mac2HostAddr()` via UDS command |
+| 4 | **Breakpoints** | Execution breakpoints | **Tier 3** — needs debug protocol | Significant new emulator work |
+| 5 | **Watchpoints** | Memory write/read watchpoints | **Already have** `SS_JIT_WATCH_ADDR` | Env var, log-based; UI in Debug tab |
+| 6 | **Instruction history** | Trace of recent instructions | **Already have** `SS_JIT_TRACE_RING` | Env var enables; ring dump on crash |
+| 7 | **Trap history** | A-trap call log | **Tier 1** — parse existing stderr | `[BOOT]`, `[SYSV]`, `[APP]` signals |
+| 8 | **Peripherals** | VIA/SCC/SCSI register state | **Tier 3** — needs emulator introspection | Not exposed; low value for PPC |
+| 9 | **Framebuffer** | Raw video memory | **Already have** VNC screenshots | `vnc_capture.py` every ~10s |
+| 10 | **Terminal** | Serial port output | ⏸ Not applicable | SheepShaver serial is rarely used |
+
+---
+
+## Adopt / defer / avoid (revised 2026-06-06)
+
+### Adopt now — Tier 1 (zero emulator changes, pure log/stats parsing)
+
+These can be built in SiliconSheep's Debug tab today:
+
+- [ ] **JIT Stats dashboard** — block count, cache usage/capacity, pool utilization, compile rate.
+  Source: `ppc_jit_aarch64_get_stats()` (already exists, already in SDL title bar). Render as
+  gauges or sparklines in the Debug tab. Parse from heartbeat `[HB ...]` lines in stderr.
+- [ ] **Diagnostic log viewer** — live-tail of the heartbeat/diagnostic log with category filtering
+  (heartbeat, HOT-PC, j2i, warnings). Source: `jit_diag.log` or stderr. Replace the current
+  `alert()` log viewer with a proper scrollable, filterable panel.
+- [ ] **Signal/event history** — structured timeline of `[BOOT]`, `[SYSV]`, `[APP]`, `[READY]`
+  signals with timestamps. Source: stderr parsing (already captured to `last_run.log`).
+- [ ] **Explicit cost model** — Snow-style note: "Debug panels impact performance while active."
+  Show a warning when debug env vars are set.
+
+### Adopt next — Tier 2 (minor emulator additions, ~50 lines each)
+
+These need small, bounded C++ additions to the emulator:
+
+- [ ] **Register inspector** — GPR (r0-r31), SPR (LR, CTR, XER, CR), PC snapshot on demand.
+  Needs: a signal handler (e.g. `SIGUSR2`) or UDS endpoint that dumps `powerpc_registers`
+  as JSON to a file or socket. SiliconSheep reads and displays with change highlighting
+  (Snow-style: yellow on changed values between snapshots).
+- [ ] **Memory hex viewer** — read N bytes of guest RAM at an arbitrary address. Needs: UDS
+  command that calls `Mac2HostAddr(guest_addr)`, reads N bytes, returns hex. SiliconSheep
+  renders a classic hex+ASCII grid. Navigable address input.
+- [ ] **Guest state sidebar** — CurApName, WindowList, Ticks, MBarHeight, SysVersion — the
+  low-memory globals from `HOST-GUEST-CHANNELS.md`. Already readable; just needs a periodic
+  dump via the idle hook or UDS.
+
+### Defer — Tier 3 (significant new emulator work)
+
+- [ ] **Live disassembly** — fetch + disassemble guest code at PC. Needs memory read (Tier 2)
+  plus a PPC disassembler (capstone). Could use a WASM capstone build in the web UI, or
+  a server-side disassembly endpoint.
+- [ ] **Execution breakpoints** — pause/resume/single-step. This is a *debugger*, not an
+  inspector. Needs a full debug command protocol. Large scope, deferred until the differential
+  verification (SS_JIT_VERIFY) workflow is mature enough to know what's needed.
+- [ ] **Peripheral state** — VIA/SCC/SCSI registers. Low value for PPC (SheepShaver
+  paravirtualizes most hardware). Only relevant for deep nanokernel debugging.
+
+### Avoid
+
+- Porting Snow code (wrong architecture, wrong CPU, wrong UI toolkit).
+- Building a step-debugger before the observability inspector proves its value.
+- Expanding to support Snow's hardware targets (68K-only, not PPC).
 
 ---
 
 ## Scope and non-goals
 
 **In scope**
-- Debugger and instrumentation ergonomics we can apply to SheepShaver test/triage workflows.
-- Hardware-model discipline lessons relevant to BasiliskII planning and long-horizon fidelity work.
-- Cross-pollination opportunities with DingusPPC debugger/profiler concepts.
+- Debugger and instrumentation ergonomics applied to SheepShaver triage workflows.
+- Snow's per-panel widget architecture as a *design reference* for SiliconSheep's Inspector.
+- Cross-pollination with DingusPPC debugger/profiler concepts.
 
 **Out of scope**
-- Porting Snow.
-- Replacing current SheepShaver architecture with Snow's architecture.
-- Expanding current product scope to support "everything Snow supports."
-
----
-
-## Adopt / defer / avoid (initial pass)
-
-### Adopt now (low risk, high leverage)
-- Add/standardize lightweight, explicit-cost diagnostics in our tooling docs and scripts.
-- Borrow debugger UX patterns for triage loops (history export, trap-focused views, quick watch setup).
-- Tighten "debug mode vs normal mode" expectations in docs/tests so perf impact is not ambiguous.
-
-### Defer (good ideas, wrong timing)
-- Deep hardware-fidelity initiatives tied to full 68K platform breadth until D1 scope is active.
-- Large debugger-UI feature work in the emulator core before A-track verification gates settle.
-
-### Avoid for now
-- Strategy shifts that trade current JIT throughput/roadmap momentum for broad architecture churn.
+- Porting Snow. Replacing SheepShaver architecture. Supporting Snow's target machines.
 
 ---
 
 ## Work plan
 
 ### S0. Baseline capture — ✅ done
-- Snow feature set reviewed for emulation scope and debugging/tooling capabilities.
-- Initial overlap mapped: debugger ergonomics + traceability tooling.
+- Snow feature set reviewed. 10 debug panels catalogued with SiliconSheep mapping.
+- Overlap: debugger ergonomics + traceability tooling.
 
-### S1. Debug-tooling crosswalk (Snow + Dingus + current repo) — 🟡 in progress
-- Build a compact matrix:
-  - current capability here,
-  - Snow capability,
-  - Dingus capability,
-  - and the smallest actionable upgrade.
+### S1. Debug-tooling crosswalk — ✅ done (revised 2026-06-06)
 
-### S2. Propose bounded first moves — ☐ todo
-- Pick 2-3 low-risk upgrades (docs + tooling first, core changes only if needed), each with:
-  - success criteria,
-  - rollback criteria,
-  - ownership in ROADMAP/A-track docs.
+| Capability | SheepShaver today | Snow | Gap / upgrade |
+|-----------|------------------|------|---------------|
+| JIT/CPU stats | `get_stats()` API, SDL title bar, `[HB]` heartbeat | N/A (interpreted) | **Present** SiliconSheep Inspector gauges |
+| Register view | None live; `SS_JIT_VERIFY` dumps on divergence | Live egui panel, change highlighting | **Tier 2** add `dump_regs` endpoint |
+| Memory view | `lldb` manual attach (disrupts VBL timer!) | Live hex viewer with address nav | **Tier 2** add UDS memory read |
+| Disassembly | Offline via capstone scripts | Live at PC | **Tier 3** UDS + capstone WASM |
+| Breakpoints | `SS_JIT_WATCH_ADDR` (address watchpoints, log-based) | Full execution/bus/trap/exception BPs | **Already have** watchpoints; execution BPs = Tier 3 |
+| Trace history | `SS_JIT_TRACE_RING` (ring buffer, dump on stall) | Live instruction history panel | **Already have** trace; improve presentation |
+| Trap history | `[BOOT]`/`[SYSV]`/`[APP]` signals in stderr | System trap history panel | **Tier 1** parse + timeline view |
+| Framebuffer | VNC screenshots every ~10s | Raw framebuffer overlay | **Already have** via VNC |
+| Perf profiling | `make bench` (offline), `[HB]` rates | N/A | **B1 profiler** is the next data source |
+| Guest state | `emul_op.cpp` reads CurApName/WindowList/SysVersion | Peripheral registers | **Tier 2** expose via UDS or periodic dump |
+
+### S2. Bounded first moves — 🟡 specified
+
+**Move 1: JIT Stats dashboard in SiliconSheep Debug tab**
+- Parse `[HB ...]` heartbeat lines from stderr (already captured to `last_run.log`)
+- Display: block count, cache usage %, compile rate, j2i/i2j ratio
+- Success: live-updating gauges visible during a running VM
+- Rollback: remove the panel; no emulator changes needed
+- Owner: Track C (SiliconSheep)
+
+**Move 2: Signal/event timeline**
+- Parse `[BOOT]`, `[SYSV]`, `[APP]`, `[READY]` from stderr
+- Display: chronological list with timestamps and payload
+- Success: visible boot-progress timeline for a running or recently-run VM
+- Rollback: remove the panel
+- Owner: Track C
+
+**Move 3: Replace alert() log viewer with scrollable panel**
+- The Debug tab's "View Logs" button currently shows an `alert()` dialog
+- Replace with an inline scrollable, filterable log viewer
+- Success: readable log output within the app
+- Rollback: revert to alert()
+- Owner: Track C
 
 ### S3. D1 tie-in decision — ☐ todo
 - If BasiliskII track D1 is reactivated, decide which Snow findings become concrete 68K tasks.
+- Snow's hardware-fidelity model is the natural reference for a from-scratch 68K emulator;
+  SheepShaver's paravirtualized PPC is the contrast case.
 
 ---
 
-## Build/debug presentation — should we adopt Snow-style "chrome"? (recommendation, 2026-06-06)
-
-**The question:** Snow launches with rich live chrome (registers, disassembly, memory, trap/interrupt
-history, watchpoints) so you see machine state on the fly. Should we adapt how *our* build/debug
-environment is presented?
+## Build/debug presentation — observability inspector, not step-debugger
 
 **Direction: yes — but build an *observability inspector*, not a Snow-style step-debugger, and host
-it in Silicon Sheep, not the emulator core.** *(Now folded into the Silicon Sheep plan as a tracked
-feature — see [`DESKTOP_INTEGRATION_PLAN.md`](DESKTOP_INTEGRATION_PLAN.md) → "Developer Inspector /
-Debug Chrome". This section is the rationale; that is the home.)* Reasoning:
+it in SiliconSheep, not the emulator core.**
 
-- **We already have the data, not the presentation.** SheepShaver emits a rich heartbeat (per-region
-  block rates `jNK/jDR/jRAM`, `comp` count, `j2i` transitions, `rss`, `cpu%`, a warning matrix), a
-  trace ring, HOT-PC sampling, `SS_JIT_WATCH_ADDR` watchpoints, and `jit-analyze.py` — plus live JIT
-  stats already pushed to the **SDL window title**. The gap is that it's stderr logs + offline Python,
-  not a live interactive view. Closing *that* gap is cheap and high-leverage.
-- **A full Snow-style debugger is the wrong target for us.** Snow is a hardware-level 68K emulator
-  where single-step/disassemble/edit-memory is the natural debugging model. Our debugging is
-  *differential* (SS_JIT_VERIFY, the harness, `jit-diff-sweep`) over a JIT + paravirtualized PPC —
-  a bespoke step-debugger over JITed blocks is expensive and lower-value. What pays off is **live
-  observability**: hot blocks (from the B1 profiler), per-region execution mix, fallback/`j2i` rates,
-  interrupt/spcflags state, watchpoint hits, HOT-PC. Borrow Snow's *answer to "which surfaces matter"*,
-  not its architecture.
-- **Host it in Silicon Sheep (Tauri), not the emulator.** Rich chrome in a web/Tauri panel is far
-  cheaper than a native egui debugger, Silicon Sheep is already the dev/power-user shell, and it keeps
-  debugger-UI churn **out of the emulator core** (which the Adopt/Defer/Avoid table above correctly
-  says to avoid before A-track gates settle). The data path: emulator diagnostics + B1 profiler →
-  structured stream → a Silicon Sheep "Inspector" tab.
-- **This is profiling-first, not a detour.** The recommended first technical step is still **B1, the
-  execution-weighted profiler** — the Inspector is simply its natural front-end. Snow/Dingus are the
-  ergonomics references for the panel's layout; B1 + existing diagnostics are the data layer.
+- **We already have the data, not the presentation.** The heartbeat, trace ring, HOT-PC, watchpoints,
+  `jit-analyze.py`, and the SDL title bar stats all exist. The gap is presentation.
+- **A full Snow-style debugger is the wrong target.** Our debugging is *differential* (SS_JIT_VERIFY,
+  the harness), not single-step. What pays off is **live observability**.
+- **Host it in SiliconSheep (Tauri), not the emulator.** Web panel is cheaper than native egui, keeps
+  debugger churn out of the emulator core.
+- **Profiling-first.** B1 (execution-weighted profiler) produces the data; the Inspector is its
+  natural front-end.
 
-**Sequence:** B1 profiler (data) → a minimal live view (extend the window-title stats, or a tiny
-stderr→Silicon Sheep bridge) → an Inspector tab in Silicon Sheep that grows as the profiler/diagnostics
-mature. No emulator-core debugger work. **Tracked under ROADMAP A1 (verification tooling) feeding
-Track C (Silicon Sheep).**
+**Sequence:** B1 profiler (data) → Tier 1 panels (stats + log + timeline) → Tier 2 panels (registers
++ memory + guest state) → Tier 3 only if earned. No emulator-core debugger work until Tier 2 proves
+its value.
 
-## Early recommendations
+## References
 
-1. Use Snow as a **debugger-ergonomics reference** now — for *which surfaces matter*, not its core.
-2. Keep Snow's hardware-fidelity strategy as a **design comparator/contrast**, not a near-term mandate
-   (and note it's 68K-only, so even that contrast lands on BasiliskII, not SheepShaver's PPC path).
-3. **Unify the tooling crosswalk:** Snow (S1), DingusPPC (P1), and Infinite Mac all propose a
-   debug-tooling matrix — these should feed **one** matrix, not three, converging on the Inspector
-   above. Owner: whoever picks up B1.
+- Snow source: `https://github.com/twvd/snow` (MIT)
+- Snow debug widgets: `frontend_egui/src/widgets/` (one module per panel)
+- Snow architecture: message-passing to emulator thread, cached `EmulatorState` snapshots
+- SiliconSheep host-guest channels: `docs/planning/HOST-GUEST-CHANNELS.md`
+- SiliconSheep desktop plan: `docs/planning/DESKTOP_INTEGRATION_PLAN.md`
+- SheepShaver diagnostics: `SheepShaver/docs/DIAGNOSTICS.md`

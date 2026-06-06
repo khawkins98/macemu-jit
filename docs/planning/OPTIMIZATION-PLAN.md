@@ -461,10 +461,35 @@ reverse engineering.
 **Risk**: Low (each can be independently tested)
 
 Currently falling through to interpreter:
-- `lwarx`/`stwcx.` (XO=20/150): Need reservation state from CPU object
+- `lwarx`/`stwcx.` (XO=20/150): Need reservation state from CPU object → **now P3a (top priority)**
 - `mftb` (XO=371): Need the interpreter's time-base model
 - `icbi` (XO=982): Could emit inline call to invalidate JIT blocks
 - `isync` (XO19=150): See P0c above
+
+### P3a: Native `lwarx`/`stwcx.` — TOP LEVER (P0-profiler evidence, 2026-06-06)
+
+**Expected impact**: large on the #1 hot path. The P0 boot profile shows the RAM atomic-primitive
+cluster `0x10643c30–0x10643c78` at **~8% of all block-executions**, and `lwarx`/`stwcx.` currently
+fall through to the interpreter (`return false` at `ppc-jit.cpp` cases 20/150). Each atomic-add
+iteration therefore makes **two JIT→interp transitions** (~29M across a boot) and breaks the block
+twice. Native codegen removes both transitions and lets the whole atomic loop stay in one chained
+native block. **Validate with `e2e-bench` (Speedometer) before/after** — the boot profile is
+boot/idle-weighted; confirm the atomics also dominate a compute workload.
+
+**Approach (single-threaded guest → cheap, but preserve reservation semantics):**
+- `lwarx rD,rA,rB`: compute EA, native load `rD = mem[EA]`, then store the reservation fields in the
+  CPU object (`reserve_valid = 1`, `reserve_addr = EA`) — exactly what the interpreter sets, emitted
+  natively. (Find the field offsets in the `powerpc_cpu`/registers struct used by the interpreter's
+  `lwarx`/`stwcx.` path.)
+- `stwcx. rS,rA,rB`: compute EA; if `reserve_valid && reserve_addr == EA` → store `mem[EA] = rS`,
+  set CR0 = `0x2|SO` (EQ = success); else CR0 = `SO` (fail); always clear `reserve_valid`. CR0 must
+  go through the lazy-CR0 path / explicit flush like other `.`-form ops.
+- `sync` between them is already a NOP (correct single-threaded) — no change.
+
+**Risk**: must match the interpreter's reservation model exactly (a context switch / intervening
+store can legitimately clear the reservation → `stwcx.` must report failure and the guest retries via
+the `bne`). Cross-check with `SS_JIT_VERIFY=1` on a boot and `make test-jit` after adding vectors for
+the lwarx/stwcx. success and reservation-cleared paths.
 
 ### P4: Code Cache Sizing — DONE (2026-06-03)
 
@@ -727,21 +752,33 @@ NZCV-neutral `ADD`). **Boot-validated** via the E2E smoke (isolated ISO boot →
 `SS_JIT_PROFILE=/path`: complete profile, **70936 blocks / 843M block-executions, 0 dropped**.
 
 **First boot-to-Finder-to-shutdown profile (the data this prereq existed to produce):**
-- **Hottest single hot spot — a tiny RAM integer-ALU loop** `0x10643c30–0x10643c54` (2–4-insn blocks,
-  ~1.8% *each*, ~6 blocks ≈ **~8% combined**) + the load/store block `0x106a9848` (1.8%). These are
-  the #1 disassemble-and-understand targets (likely a clear/copy/checksum or the core idle spin).
-- **ROM/DR 68k-dispatch core** `0x50467xxx`/`0x50466xxx` (integer + a hot 1-insn branch, ~1.2%→0.9%):
-  inherent 68k-interpretation cost → the **HLE / DR-path** levers (CROSS-EMULATOR `CopyBits`/idle).
+- **Hottest single hot spot — RAM `lwarx`/`stwcx.` atomic primitives** `0x10643c30–0x10643c78`
+  (2–4-insn blocks, ~1.8% *each*, ≈ **~8% combined**). Disassembled (`SS_JIT_PROFILE_DISASM`):
+  `0x10643c30–48` is an **atomic fetch-and-add** (`li r0,0; lwarx r5,0,r4; addc r5,r5,r3; sync;
+  stwcx. r5,0,r4; bne retry; …; blr`); `0x10643c54` an **atomic bit-set/test-and-set** (`lwarx …
+  slw …`); `0x10643c78` another store-conditional. The companion load/store block `0x106a9848`
+  (1.8%) is the **cross-TOC call glue** (`lwz r12,-0x578(r2); … mtctr; bctr`) that dispatches them.
+  These are OS refcount/lock atomics, hammered during boot **and** idle.
+- **ROM/DR 68k-dispatch core** `0x50467xxx`/`0x50466xxx` (`lha; rlwimi; mtlr; mtctr; bgtctr cr1`,
+  ~1.2%→0.9%): inherent 68k-interpretation cost → the **HLE / DR-path** levers.
 - **Broad RAM working set** `0x1060xxxx`/`0x106axxxx` at a *uniform* ~0.9% across ~25 blocks: the
-  steady-state OS **event/idle loop** — strong evidence for **idle-skipping** (CROSS-EMULATOR #2): a
-  backgrounded Finder VM is spinning these. Big "good citizen" win, well-supported by this data.
+  steady-state OS **event/idle loop** (regular C frames: `mflr/stmw/stwu` prologues + flag checks +
+  `bl`). Secondary **idle-skipping** lever, but smaller than the atomics.
 - **Caveat:** this is a boot→idle→shutdown profile (weighted to boot + idle, not a compute workload).
   For throughput-lever ranking, also capture an **`e2e-bench` (Speedometer) profile** — the
   workload-weighted complement. Routine-name attribution (hot PC → trap/NameRegistry) still TODO.
 
-**Next:** (1) disassemble the top RAM loop + `0x106a9848` to identify them; (2) `e2e-bench` profile
-for the compute-weighted view; then pick the lever the *combined* evidence supports (idle-skipping
-looks like the standout from the boot profile).
+**THE lever this surfaced — native `lwarx`/`stwcx.` codegen (see P3a below).** The #1 hot path is
+not idle-spin: it's atomic primitives, and **`lwarx` (case 20) and `stwcx.` (case 150) currently
+`return false` → fall through to the interpreter** (`ppc-jit.cpp`; only `sync` is already a NOP).
+So each atomic-add iteration crosses JIT→interp **twice** (~29M transitions for this one primitive
+across the boot) and breaks the block at each atomic. The guest is single-threaded, so the
+reservation can be modeled cheaply in the CPU object natively (load EA + set reservation fields for
+`lwarx`; conditional store + set CR0 + clear reservation for `stwcx.`) with no interpreter round-trip.
+
+**Next:** (1) implement native `lwarx`/`stwcx.` (P3a below) — highest-confidence win from this data;
+(2) `e2e-bench` (Speedometer) profile for the compute-weighted view to confirm the atomics dominate
+a real workload too, not just boot/idle.
 
 The priorities below are currently estimated from *compile frequency* (how often a
 block is compiled), which is biased — a block compiled once but executed a million

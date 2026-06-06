@@ -563,16 +563,28 @@ ori  r3, r3, 0x5678 ; r3 = 0x12345678
 Could detect `lis+ori` and emit a single `MOVZ+MOVK` pair.  Other patterns:
 `li + slwi`, `addi rX, rX, 0` (NOP), dead stores.
 
-### P5b: FP Register Allocator
+### P5b: FP Register Allocator — MVP DONE (2026-06-07)
 
-**Expected impact**: HIGH — jit-bench shows FP ops at 2.84 ns/insn vs integer
-ALU at 0.095 ns/insn (30x gap).  Every FP instruction reloads/stores FPRs
-through the `powerpc_registers` struct because there is no FP register cache.
-An FP RA mapping PPC FPRs to ARM64 d8-d15 (callee-saved) would eliminate
-this round-trip.
-**Effort**: High (new RA for FPR space, flush discipline, FP block exit)
-**Risk**: Medium
-**Measured by**: jit-bench `fp-add` / `fp-fma` kernels (2.84 ns/insn baseline)
+**Result**: block-local FP RA mapping PPC FPRs → ARM64 **V16–V23** (caller-saved,
+*not* d8–d15: the design verified all `ra_flush_all` sites are block-terminating, so
+caller-saved needs no prologue surgery → integer blocks stay byte-identical, zero
+regression). Structural copy of the integer RA (`ra_fp_*`); `emit_load_fpr`/
+`emit_store_fpr` made RA-aware (FMOV bridge) so unconverted FP handlers stay coherent →
+safe incremental conversion. `ra_fp_flush_all` coupled into `ra_flush_all`. **Converted
+the hot arithmetic** (fadd/fsub/fmul/fdiv + fmadd/fmsub/fnmadd/fnmsub) to zero-copy.
+- **Microbench**: `fp-add`/`fp-fma` a64/op **4/5 → 1.0** (ns/insn ~14×/~9×).
+- **Speedometer Math**: 13,000 → **15,075 (+16%)**, lifting JIT Math vs interpreter from
+  ~1.29× to **~1.89×** (in line with integer 2.2×).
+- **Correctness**: test-jit 302/302 (FP vectors use distinct FPRs across blocks → exercise
+  eviction/aliasing); Speedometer Math sane + improved; integer kernels byte-identical.
+
+**Landmine ruled out**: FP evict emits only `STR Dn` (no RTMP/NZCV), no lazy-FP state — the
+integer "RTMP/NZCV across ra_store" hazard cannot recur. **Follow-ups** (still coherent via
+the bridge): convert FP **moves** (fmr/fneg/fabs/fnabs/fsel/fsqrt/frsqrte/frsp) and **memory**
+(lfd/lfs/lfdu/lfsu/stfd/stfs + indexed) to zero-copy; later, cross-block FP pinning (would need
+callee-saved d8–d15 + prologue save — multi-session). Not yet SS_JIT_VERIFY-booted (Speedometer
+Math correctness is strong evidence; a VERIFY boot is the belt-and-suspenders follow-up).
+**Effort**: was High — landed in one session via the staged/bridge approach.
 
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 

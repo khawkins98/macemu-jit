@@ -3,6 +3,29 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — FP register allocator (P5b) landed in one session via a staged "RA-aware bridge"
+
+The FP RA looked like a High-effort multi-session job, but two design choices made it a safe single
+session — both worth reusing for future RAs:
+1. **Caller-saved V16–V23, not callee-saved d8–d15.** The textbook choice is callee-saved (survives
+   calls) but that needs prologue surgery (save/restore) → touches every block → regression risk.
+   Instead: verify that *every* `ra_flush_all` site is **block-terminating** (the FP cache never needs
+   to survive a BLR). It is → caller-saved V16–V23 works with **zero prologue change**, so integer
+   blocks stay byte-identical (provable: alu/shift/carry/rc1 microbench unchanged). The "do all flushes
+   terminate the block?" check is the hinge that turns a hard RA into an easy one.
+2. **Make the existing scratch helpers RA-aware (a "bridge"), then convert hot cases incrementally.**
+   `emit_load_fpr`/`emit_store_fpr` now MOV from/to the cache when present (else raw struct), exactly
+   like `emit_load_gpr`/`emit_store_gpr`. So *unconverted* FP ops stay coherent automatically, and you
+   can convert just the hot arithmetic to zero-copy `ra_fp_load`/`ra_fp_store` first, validating in
+   stages. Stage 1 (machinery + bridge, no conversions) is **behaviour-identical** (cache stays empty)
+   → a free checkpoint. NOTE: the bridge alone keeps the instruction COUNT the same (FMOV instead of
+   LDR/STR — a timing win, not an a64/op win); only zero-copy conversion drops a64/op (4→1).
+Result: fadd/fmul/fmadd zero-copy → fp-add/fp-fma a64/op 4/5→1.0 (ns ~14×/~9×), **Speedometer Math
++16% (13,000→15,075, ~1.89× interp, up from 1.29×)**, test-jit 302/302. Couple `ra_fp_flush_all` INTO
+`ra_flush_all` so the two RAs flush together at every barrier (and future barriers) without per-site
+edits. The integer RTMP/NZCV-across-ra_store landmine does NOT recur for FP (evict emits only STR Dn;
+no lazy-FP state).
+
 ## 2026-06-07 — AltiVec may be UNREACHABLE by real guest software (despite PVR=G4) — our vector codegen unexercised
 
 Profiling "AltiVec Fractal Carbon" (the canonical AltiVec workload) showed its hot loop is the

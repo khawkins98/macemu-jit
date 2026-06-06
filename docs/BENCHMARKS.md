@@ -62,11 +62,13 @@ The long-running dated progression (pre-RA → post-RA → post-B1/B2/A3 → cur
 interpreter floor. **Headline JIT-vs-interpreter (documented): ~1.88× overall, up to ~2.2–2.4×
 on integer compute** (Dhrystones/Puzzle/Bubble) — **but only 1.29× on Math.**
 
-**The data-driven next lever:** Math's weak 1.29× (vs 2.2× integer) is because the JIT has **no FP
-register allocator** — every FP op round-trips the FPRs through the regs struct (corroborated by the
-`fp-add`/`fp-fma` microbench kernels running ~30× slower per-insn than `alu`). So **P5b (FP register
-allocator)** is the highest-leverage *throughput* win that both the Speedometer ratio and the microbench
-point at. Power Fractal (AltiVec/FP-heavy) will stress this further.
+**The data-driven lever — DONE (2026-06-07, P5b FP RA MVP).** Math's weak 1.29× (vs 2.2× integer) was
+because the JIT had **no FP register allocator** — every FP op round-tripped the FPRs through the regs
+struct. The FP RA (V16–V23, block-local, zero-copy FP arithmetic) **lifted Math to +16% (13,000 →
+15,075), ≈1.89× the interpreter** — in line with integer. Microbench: `fp-add`/`fp-fma` a64/op 4/5 → 1.0
+(ns/insn ~14×/~9×). Remaining FP follow-ups (still coherent via the RA-aware bridge meanwhile): convert
+FP **moves** (fmr/fneg/fabs/fsel/frsp) and **memory** (lfd/lfs/stfd/stfs) to zero-copy for more; full
+cross-block FP pinning later.
 
 ---
 
@@ -169,17 +171,21 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 
 Fresh JIT run via `make e2e-bench` (Mac OS 9 + Speedometer disk, profiler OFF):
 
-| Category | JIT score |
-|----------|-----------|
-| CPU | 65.5 |
-| Graphics | 43.4 |
-| Disk | 8.9 |
-| **Math** | **13,000** |
+| Category | JIT (post-0h) | JIT + **P5b FP RA** | Δ |
+|----------|-----------|-----------|---|
+| CPU | 65.5 | 66.8 | +2% (noise) |
+| Graphics | 43.4 | 42.9 | −1% (noise) |
+| Disk | 8.9 | 8.9 | flat |
+| **Math** | **13,000** | **15,075** | **+16%** |
 
-In line with the post-B1/B2/A3 numbers below (the 0f/0h/P3a wins target boot/atomic
-paths and don't materially move Speedometer's large-block compute — consistent with the
-a64/op analysis). The e2e-bench harness's completion-detection (merged from the parent
-branch) now works — Speedometer reaches "All Done!" and the run records cleanly.
+CPU/Graphics/Disk are flat (0f/0h/P3a target boot/atomic paths, not Speedometer's
+large-block compute — consistent with the a64/op analysis). **Math +16%** is the **FP
+register allocator (P5b)** landing: it lifts JIT Math from ~1.29× the interpreter
+(7,974) to **~1.89×** — bringing the JIT's weakest area in line with integer (2.2×),
+exactly as the FP-microbench + Fractal-Carbon evidence predicted. (Boot-free corroboration:
+the `fp-add`/`fp-fma` microbench dropped 4/5 → 1.0 a64/op, ns/insn ~14×/~9×.) Sane,
+*improved* Math scores also confirm FP correctness on real FP code. The e2e-bench
+completion-detection (merged from parent) now works — Speedometer reaches "All Done!".
 
 **Interpreter floor (fresh M5) — BLOCKED on a harness false-negative.** `SS_USE_JIT=0`
 runs the full Speedometer suite (reaches Color Benchmarks) and shuts down cleanly

@@ -115,7 +115,7 @@ harness that can't catch mistakes just produces the next silent bug.
     vectors, `make test-jit` **296/296** + ISO boot smoke. Compares confirmed correct. **Remaining
     (structural, overlap A2):** pack-saturate/pixel-pack-unpack/sum-across (scrambled labels, 2-source
     ev_mixed narrows, pixel-field expansion, saturation) + FP-conv UIMM-scale. Worklist:
-    `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md` "Broad-sweep results". **26 AltiVec bugs fixed total.**
+    `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md` "Broad-sweep results". **(26 AltiVec subtotal; +1 FP below = 27 codegen fixes this session.)**
   - 🐛 **FP SWEEP (2026-06-06) — `fctiw`/`fctiwz` conversion FIXED; rest of FP clean.** Pivoted the
     method to the under-tested FP ops (vs real interp, edge-case operands). `fsel`/`fnabs`/single
     fused (`fmsubs`/`fnmadds`/`fnmsubs`) all clean. `fctiw`/`fctiwz` both emitted 64-bit `FCVTZS Xd`

@@ -1,8 +1,14 @@
-# AltiVec variable-shift / rotate codegen bugs (confirmed 2026-06-06)
+# AltiVec / FP JIT codegen bug hunt (2026-06-06)
 
-**Status:** CONFIRMED real JIT codegen bugs (found by the test-jit/`SS_TEST_HEX` hunt, ROADMAP
-A1 "AltiVec/FP operand coverage"). Repros below are oracle-validated against the **real emulator**
-interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`).
+*(Filename kept as `ALTIVEC-SHIFT-ROTATE-BUGS.md` for stable links; scope is now the whole
+2026-06-06 AltiVec/FP differential sweep — shift/rotate **and** saturating arith, averages, FP
+`fctiw`, and the still-open pack/pixel/sum families. The reusable sweep tool is
+`SheepShaver/tools/jit-diff-sweep.py`.)*
+
+**Status:** 27 codegen bugs found + fixed this session (26 AltiVec + 1 FP), each oracle-validated
+against the **real emulator** interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`); the pack/pixel/
+sum families + the `fctiw`/`fctid` non-default-RN gap remain (designs below). Found via the
+test-jit/`SS_TEST_HEX` hunt, ROADMAP A1 "AltiVec/FP operand coverage".
 
 > **✅ ALL FIXED 2026-06-06** (`ppc-jit.cpp` case 4/68/132 rotates, 260/324/388 left, 516/580/644
 > logical-right, 772/836/900 arith-right). The whole 12-op family:

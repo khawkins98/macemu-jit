@@ -42,6 +42,7 @@ Two caveats:
 | **JIT↔interp equivalence — THE codegen gate** | `cd SheepShaver && make test-jit` | score=100 — count: `make harness-count` |
 | Interpreter determinism (default) | `cd SheepShaver && make test-opcodes` | score=100 — *but see note* |
 | Single opcode vector (JIT path) | `SS_TEST_HEX=<hex> SS_TEST_JIT=1 make test-opcodes` | — |
+| **Differential op-sweep + auto-referee** (AltiVec/FP, interp-vs-JIT via the real emulator) | `cd SheepShaver && python3 tools/jit-diff-sweep.py` | FAIL=0 (run-stamped JSONL + repros under `$SS_RUN_DIR`) |
 | ROM harness (headless JIT exerciser) | `cd SheepShaver && make test-rom` | no failures |
 | Build | `cd SheepShaver && make build-ss` | clean |
 

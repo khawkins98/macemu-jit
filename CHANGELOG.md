@@ -11,6 +11,22 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver][e2e] Guest UI introspection — Plan 2a (dialog items) + harness integration
+
+Backend A now emits each **dialog** window's DITL items — `button`/`checkbox`/`radio`/`staticText`/
+`editText`/etc. with **globalized (VNC-clickable) rects**, titles, `enabled` (itemDisable), and the
+`default` item — plus the window `refCon` + `defaultItem`. Python `uidump.py` gains `Item`,
+`find_item`, and `click_item(vnc, snap, win, text="OK")` to click a named button. **Live-verified**
+against the Speedometer choose-disk dialog (8 items, `OK`/`Cancel` titles, `refCon='sped'`, plausible
+global coords). Review-driven Plan-1 hardening also landed: honest modality from the window *variant*
+(not `windowKind`), `frontWindowIndex`=first-visible, junk-title sanity. E2E harness now boots with
+`SS_UI_DUMP_DIR` and uses introspection in its gates — `run_lifecycle` logs the desktop window list,
+and the benchmark's quit-to-Finder is now a definitive "Speedometer gone + Finder front" check
+(heuristic kept as fallback). DX: `make ui-dump` CLI + `Snapshot.render()` ASCII layout,
+`wait_for_window`, `click_point`. Canonical reference `SheepShaver/docs/UI-INTROSPECTION.md` updated;
+action plan in `docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`. Plans: `…-p2a-dialog-items.md`.
+Commits 81c3f9e6, e901beb2, 320a0eb6, 57a8b9af, 80491e28, 325501c2, 06b68fce, 39afb740.
+
 ### [docs] Fold the "Developer Inspector" into SiliconSheep + correct DingusPPC license to GPL-3.0
 
 - **Folded the Snow-inspired build/debug "chrome" recommendation into the SiliconSheep plan** as a

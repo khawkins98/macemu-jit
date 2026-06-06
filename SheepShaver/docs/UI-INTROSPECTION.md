@@ -1,6 +1,6 @@
 # Guest UI Introspection — Canonical Reference
 
-> **Status:** Plan 1 shipped (2026-06-06) · **Track:** A5 (E2E harness) / Track C (Silicon Sheep)
+> **Status:** Plan 1 + Plan 2a (dialog items) shipped (2026-06-06) · **Track:** A5 (E2E harness) / Track C (Silicon Sheep)
 > **Canonical reference for the shipped feature.** Design history and the full aspirational schema
 > live in `docs/superpowers/specs/2026-06-06-guest-ui-introspection-design.md`.
 
@@ -139,8 +139,18 @@ other variant → `"modeless"`. This is **only applied to dialog windows** (`isD
 Non-dialogs are always `"none"`. Note: `movableModal` dialogs do **not** set `modalActive` —
 only `"modal"` modality triggers it.
 
-**Not yet emitted (Plan 2+):** `menuBar`, `parts`, dialog items/`DITL`, `dialogId`, `refCon`,
-`role:"desktop"` tag. `screen.depth` (GDevice). Control state (`value`/`hilite`). `ParamText`.
+**Dialog items (Plan 2a, shipped 2026-06-06):** dialog windows (`isDialog:true`) additionally emit
+`refCon` (int32), `defaultItem` (int16, the `aDefItem` number), and an `items` array — one entry per
+DITL item with `index` (1-based), `type` (`button`/`checkbox`/`radio`/`control`/`staticText`/
+`editText`/`icon`/`picture`/`userItem`), `rect` (**globalized**, VNC-clickable), `enabled` (false when
+the DITL `itemDisable` bit is set), `text` (for button/checkbox/radio/static/edit types), and
+`default:true` on the default item. Live-verified against the Speedometer choose-disk dialog (8 items,
+`OK`/`Cancel` titles, `refCon='sped'`). Consume via `Window.items` / `find_item` / `click_item`.
+
+**Not yet emitted (Plan 2b+):** `menuBar`, window `parts`, `dialogId` (numeric resource id — not
+reliably stored in a live `DialogRecord`; use the item set + `refCon` for identity), `role:"desktop"`
+tag, `screen.depth` (GDevice), control state (`value`/`hilite`), `ParamText` `^0`–`^3` resolution in
+static text.
 
 ---
 
@@ -261,7 +271,7 @@ are big-endian (PPC Mac OS convention).
 | `windowDefProc` | +0x7E | Handle (high byte) | High byte = `GetWVariant` code; used for `modality` on dialog windows |
 | `titleHandle` | +0x86 | StringHandle | Pascal string (Str255); decoded MacRoman→UTF-8 |
 | `nextWindow` | +0x90 | WindowPeek | Next window in z-order chain (front→back) |
-| `refCon` | +0x98 | int32 | Window refCon — read but not yet emitted (Plan 2) |
+| `refCon` | +0x98 | int32 | Window refCon — emitted for dialog windows (Plan 2a); part of dialog identity |
 
 **Region bounding-box read pattern:**
 A `Region` (pointed to by an `RgnHandle`) is `{int16 rgnSize; Rect rgnBBox; …}`. The
@@ -307,8 +317,10 @@ Backend B (Plan 3) will serve as a calibration oracle.
 Within the port, the offset that would give depth is ambiguous between mono `GrafPort` and
 color `CGrafPort`; this is deferred to Plan 2.
 
-**No menus, dialog items, or control state.** `menuBar`, `parts`, `DITL` items, `value`/`hilite`,
-`ParamText`, and `dialogId` are all Plan 2.
+**Dialog items shipped (Plan 2a); menus + control state not yet.** Dialog `DITL` items (button/text
+rects + titles + enable + default) ARE emitted (see §4). Still deferred: `menuBar`, window `parts`,
+control `value`/`hilite`, `ParamText` resolution, and a numeric `dialogId` (use the item set + `refCon`
+for identity — see §4).
 
 **`ptr` is not a stable identity.** The `WindowRecord` guest address changes between snapshots
 if the Memory Manager relocates handles. Do not use `ptr` as a persistent window key.
@@ -329,8 +341,10 @@ the spin-wait's exit — triggering the VBL-timer-starvation trap documented in 
 | Plan | Status | What it adds |
 |------|--------|-------------|
 | **Plan 1** | Shipped (2026-06-06) | Window list: title, class, modality, bounds, active/visible, suspect. Signal-free file poll. Python `uidump.py`. |
-| **Plan 2** | Deferred | Dialog items/DITL (type/rect/title/value/hilite/itemEnable), `dialogId`, control state, ParamText resolution, menu bar + items + `cmdChar`, window parts/hot-zones, `role:"desktop"` tag, `screen.depth` via GDevice, Backend B static recursion guard. |
-| **Plan 3** | Deferred | Backend B (Toolbox-trap oracle via `Execute68kTrap`), `compare(A,B)` divergence report, `overlay(snapshot, png)` pixel spot-check, socket transport. |
+| **Plan 2a** | Shipped (2026-06-06) | Dialog **items**/DITL: type + globalized clickable rect + title/text + `enabled` (itemDisable) + `default`; window `refCon` + `defaultItem`. Python `Item`/`find_item`/`click_item`. Live-verified vs the choose-disk dialog. Also: harness gates use it (`assert_window`/`click_window`, the benchmark quit-to-Finder check). |
+| **Plan 2b** | Deferred | Control state (`value`/`hilite` from `ControlRecord`), `ParamText` `^0`–`^3` resolution, popup/list contents. |
+| **Plan 2c** | Deferred | Menu bar + items + `cmdChar`, window parts/hot-zones, `role:"desktop"` tag, `screen.depth` via GDevice. |
+| **Plan 3** | Deferred | Backend B (Toolbox-trap oracle via `Execute68kTrap`) + static recursion guard, `compare(A,B)` divergence report, `overlay(snapshot, png)` pixel spot-check, socket transport. |
 
 `schemaVersion` stays `1` across all plans — additions are backward-compatible field additions.
 Feature-detect with `"menuBar" in snap.raw` rather than asserting on schema version.

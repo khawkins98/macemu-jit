@@ -34,9 +34,10 @@ Paid down tracked test-debt: the serializers (`serialize_snapshot`/`_window_cont
 `ui_introspect_serialize_test.cpp` now compiles the **real** `ui_introspect.cpp` against a flat
 big-endian **mock RAM** (stub `sysdeps.h`/`cpu_emulation.h` in `src/uitest/`, selected purely by `-I`
 order — the real build is untouched) and asserts the JSON for hand-built Toolbox structures, so each
-offset is a regression-tested fact. Fixtures: non-dialog `controlList` → items (titled button globalized,
-dimmed/untitled control, degenerate-rect skip) + dialog DITL items (text/rect/refCon/defaultItem/modality/
-default). Wired into `make ui-introspect-test`; standalone `make ui-introspect-serialize-test`. Commit `492607c4`.
+offset is a regression-tested fact. Fixtures cover all four serializers: non-dialog `controlList` → items (titled button globalized,
+dimmed/untitled control, degenerate-rect skip), dialog DITL items (text/rect/refCon/defaultItem/modality/
+default), and the `menuBar` walk (apple role + File ▸ New=⌘N / Open=⌘O). Wired into `make ui-introspect-test`;
+standalone `make ui-introspect-serialize-test`. Commits `492607c4`, `b6ee595c`.
 
 ### [e2e][docs] Real-world workload bring-up: Fractal Carbon install + CarbonLib via introspection
 

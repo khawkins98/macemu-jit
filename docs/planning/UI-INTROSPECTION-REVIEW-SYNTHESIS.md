@@ -188,7 +188,7 @@ only by booting, not by `make ui-introspect-test`. **Fixed** by `src/ui_introspe
 it compiles the **real** `ui_introspect.cpp` against a flat big-endian **mock RAM** (stub
 `sysdeps.h`/`cpu_emulation.h` in `src/uitest/`, selected purely by `-I` order so the real build is
 untouched) and asserts the JSON for hand-built Toolbox structures — each offset is now a regression-tested
-fact. Fixtures cover the **non-dialog `controlList` → items** branch (titled/active button globalized,
-dimmed/untitled control, degenerate-rect skip) and **dialog DITL items** (text/rect/refCon/defaultItem/
-modality/default-flag). Wired into `make ui-introspect-test`. *Still extendable:* a `menuBar` fixture
-(`MenuList` walk) is the obvious next addition now the scaffold exists.
+fact. Fixtures cover **all four serializers**: the **non-dialog `controlList` → items** branch
+(titled/active button globalized, dimmed/untitled control, degenerate-rect skip), **dialog DITL items**
+(text/rect/refCon/defaultItem/modality/default-flag), and the **`menuBar`** walk (apple role + File menu
+with New=⌘N / Open=⌘O). Wired into `make ui-introspect-test` (`b6ee595c`).

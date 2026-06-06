@@ -47,6 +47,7 @@
 #include "user_strings.h"
 #include "emul_op.h"
 #include "thunks.h"
+#include "ui_introspect.h"
 
 #define DEBUG 0
 #include "debug.h"
@@ -73,16 +74,6 @@ static uint32 MakeExecutableTvec;
 // fixed low-mem addresses are stable across classic Mac OS; SheepShaver maps guest low memory via
 // Mac2HostAddr/ReadMacIntN. The idle hook itself reuses SheepShaver's own SynchIdleTime ROM patch
 // (rom_patches.cpp), so this adds only the state read, not a new trap.
-// Is `a` a guest pointer we can safely dereference? Valid Mac pointers/handles are even-aligned and
-// live in mapped Mac RAM. A WILD handle (a background pseudo-window's titleHandle can be junk) outside
-// RAM would, under DIRECT_ADDRESSING, deref to UNMAPPED host memory and SIGSEGV the emulator — so
-// every guest deref below is gated on this. (Reads stay within [0, RAMBase+RAMSize), which the live
-// window pointers satisfy; anything beyond RAM is rejected before the deref.)
-static inline bool e2e_guest_ptr_ok(uint32 a)
-{
-	return (a & 1) == 0 && a >= 0x100 && a < RAMBase + RAMSize;
-}
-
 // Make a byte safe to drop into a single-quoted log field: non-printable -> '?' (and flags a junk
 // read via *bad); a literal single-quote -> '`' so it can't break the harness's frontApp='...' /
 // title='...' regexes (which capture with '[^']*').
@@ -105,17 +96,17 @@ static bool e2e_front_window_title(uint32 win, char *out, int outsz)
 	out[0] = '\0';
 	if (!win)
 		return true;			// bare desktop / no front window = a valid empty title
-	if (!e2e_guest_ptr_ok(win))
+	if (!guest_ptr_ok(win))
 		return false;
 	uint32 hdl = ReadMacInt32(win + 0x86);		// titleHandle
 	if (!hdl)
 		return true;			// untitled window = valid empty
-	if (!e2e_guest_ptr_ok(hdl))
+	if (!guest_ptr_ok(hdl))
 		return false;
 	uint32 ptr = ReadMacInt32(hdl);				// *titleHandle -> Str255
 	if (!ptr)
 		return true;
-	if (!e2e_guest_ptr_ok(ptr))
+	if (!guest_ptr_ok(ptr))
 		return false;
 	uint8 *s = Mac2HostAddr(ptr);
 	int len = s[0];

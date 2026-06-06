@@ -466,30 +466,36 @@ Currently falling through to interpreter:
 - `icbi` (XO=982): Could emit inline call to invalidate JIT blocks
 - `isync` (XO19=150): See P0c above
 
-### P3a: Native `lwarx`/`stwcx.` — VALIDATED TOP LEVER, unblocked (P0-profiler evidence, 2026-06-06)
+### P3a: Native `lwarx`/`stwcx.` — DONE (2026-06-06); correctness/architecture win, perf-neutral
 
-**Expected impact**: ~5% (compute, Speedometer) to ~8% (boot) of block-executions — **confirmed
-workload-independent** by the e2e-bench profile (see §P0): the atomic cluster is byte-identical and
-hot in *both* the boot (`0x10643c30`) and Speedometer (`0x10907720`) runs, so it is **work-driven,
-not idle-driven**. `lwarx`/`stwcx.` currently fall through to the interpreter (`return false` at
-`ppc-jit.cpp` cases 20/150). Each atomic-add iteration makes **two JIT→interp transitions** and
-breaks the block twice. Native codegen removes both transitions and lets the whole atomic loop stay
-in one chained native block. Concentrated (2–4-insn blocks) + low-risk → the clean, bounded first win.
+**What shipped** (commit on `p0-profiler`): `lwarx` (case 20) and `stwcx.` (case 150) now compile
+natively instead of falling through to the interpreter, for the single-CPU model (`KPX_MAX_CPUS==1`),
+matching `ppc-execute.cpp` exactly. Reservation state (`reserve_valid`/`reserve_addr`) lives in the
+shared regs struct (RSTATE+offset, offsets pinned by `static_assert`s in `ppc-cpu.cpp`:
+`reserve_valid==1060`, `reserve_addr==1064`), so a JIT-`lwarx` / interp-`stwcx.` pair stays consistent.
+- `lwarx rD,rA,rB`: `EA=(rA|0)+rB; rD=mem[EA]; reserve_valid=1; reserve_addr=EA`.
+- `stwcx. rS,rA,rB`: `EA=(rA|0)+rB; CR0=0; if(reserve_valid){ if(reserve_addr==EA){ mem[EA]=rS;
+  CR0.EQ=1 } reserve_valid=0 } CR0.SO=XER.SO`. CR0 written directly (bits 31:28, nibble 8·LT+4·GT+2·EQ+SO).
+- `sync` between them was already a NOP (correct single-threaded).
 
-**Approach (single-threaded guest → cheap, but preserve reservation semantics):**
-- `lwarx rD,rA,rB`: compute EA, native load `rD = mem[EA]`, then store the reservation fields in the
-  CPU object (`reserve_valid = 1`, `reserve_addr = EA`) — exactly what the interpreter sets, emitted
-  natively. (Find the field offsets in the `powerpc_cpu`/registers struct used by the interpreter's
-  `lwarx`/`stwcx.` path.)
-- `stwcx. rS,rA,rB`: compute EA; if `reserve_valid && reserve_addr == EA` → store `mem[EA] = rS`,
-  set CR0 = `0x2|SO` (EQ = success); else CR0 = `SO` (fail); always clear `reserve_valid`. CR0 must
-  go through the lazy-CR0 path / explicit flush like other `.`-form ops.
-- `sync` between them is already a NOP (correct single-threaded) — no change.
+**Validation** — correctness proven three ways:
+- `make test-jit` 302/302 (no regression).
+- Differential interp-vs-JIT (`SS_TEST_HEX`), all paths byte-identical: success (`CR=0x20000000`
+  EQ, store observed via `lwz` readback), fail-no-reservation (`CR=0`), fail-addr-mismatch (`CR=0`,
+  no store). The isolated JIT run reports `hit=2 miss=0` — the fallback is gone.
+- e2e smoke: boot → Finder → clean shutdown, exit 0 (the merged atomic loop with its backward `bne`
+  progresses; the block-structure change is safe).
 
-**Risk**: must match the interpreter's reservation model exactly (a context switch / intervening
-store can legitimately clear the reservation → `stwcx.` must report failure and the guest retries via
-the `bne`). Cross-check with `SS_JIT_VERIFY=1` on a boot and `make test-jit` after adding vectors for
-the lwarx/stwcx. success and reservation-cleared paths.
+**Performance — neutral within run-to-run noise; NOT a measured speedup.** e2e-bench (Speedometer,
+profiler off, n=3 each side, clean A/B): CPU 66.0→64.7, Graphics 42.8→42.9, Disk 9.34→9.57,
+Math 12504→12996 — a Math-up/CPU-down split that is the signature of variance, not signal (the
+distributions overlap, and P3a *cannot* mechanistically move the CPU/Math subtests: their hot path is
+the `0x1ed` compute blocks, which contain no atomics). Boot-to-splash was 6.5s both before and after.
+**Why neutral**: atomics are ~5–8% of *block-executions* but a small fraction of *instruction-time*
+(2–4-insn atomic blocks vs 20–163-insn compute blocks), so removing the fallback is real but sits
+below wall-clock noise. P3a earns its keep as **correctness + architecture** (completes a
+known-incomplete fallback on the #1 concentrated hot block, removes the interp transitions), not as a
+throughput lever. The throughput ceiling for compute workloads is large-block codegen (P1a/P5/P6/P8).
 
 ### P4: Code Cache Sizing — DONE (2026-06-03)
 
@@ -782,20 +788,23 @@ Speedometer scores: CPU 62.6, Graphics 39.7, Disk 9.2, Math 12020.8). The pictur
 - **The diffuse `0x1060xxxx` idle loop is GONE** under compute → it *was* idle-specific. So idle-skipping
   is a **boot / background-citizen** win (good for a backgrounded VM), **not a throughput lever**.
 
-**Confound resolved → two distinct, additive levers:**
-1. **Native `lwarx`/`stwcx.` (P3a) — VALIDATED, unblocked.** Atomics stay hot under real compute (~5%)
-   *and* boot (~8%); concentrated, low-risk, removes ~hundreds of millions of JIT→interp transitions
-   regardless of workload. `lwarx` (case 20) and `stwcx.` (case 150) currently `return false` → fall
-   through to the interpreter (`ppc-jit.cpp`; only `sync` is already a NOP), crossing JIT→interp twice
-   per atomic iteration and breaking the block each time. Single-threaded guest → reservation modeled
-   cheaply in the CPU object natively. **The clean, bounded first win.**
-2. **Large-block codegen quality** — the bigger *throughput* ceiling under compute (the `0x1ed`
-   cluster). Pursue via P1a/P5/P6/P8. Diffuse across many blocks, so lower per-item ROI but larger total.
+**Confound resolved → two distinct levers (and a measurement lesson):**
+1. **Native `lwarx`/`stwcx.` (P3a) — DONE, but perf-neutral.** Atomics stay hot under real compute
+   (~5%) *and* boot (~8%) *of block-executions*, so eliminating the interp fallback removes real
+   transitions (verified `hit=2 miss=0`). **But the e2e-bench A/B measured the wall-clock impact as
+   neutral within noise** — atomics are a small fraction of *instruction-time* (2–4-insn blocks vs the
+   20–163-insn compute blocks that dominate). The lesson: *block-execution share ≠ runtime share*; a
+   hot tiny block is a correctness/architecture target, not necessarily a throughput one. Shipped as a
+   correctness win (completes a known-incomplete fallback). Full result in §P3a above.
+2. **Large-block codegen quality** — the real *throughput* ceiling under compute (the `0x1ed`
+   cluster). Pursue via P1a/P5/P6/P8. Diffuse across many blocks, so lower per-item ROI but larger
+   total — and, unlike P3a, it actually sits on the runtime-dominant path.
 
 **Idle-skipping**: re-scoped to a boot/background-citizen optimization, not a throughput play.
 
-**Next:** implement P3a (native atomics) — highest-confidence, workload-independent win. Then attack
-large-block codegen quality (P1a/P5/P8) for the compute ceiling.
+**Next:** P3a (native atomics) is DONE — correctness win, perf-neutral (see §P3a). The remaining
+throughput lever is **large-block codegen quality** (P1a/P5/P6/P8) on the runtime-dominant `0x1ed`
+compute cluster — that, not fallback elimination, is where measurable Speedometer gains live.
 
 The priorities below are currently estimated from *compile frequency* (how often a
 block is compiled), which is biased — a block compiled once but executed a million

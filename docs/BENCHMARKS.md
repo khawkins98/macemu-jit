@@ -45,7 +45,8 @@ Representative (real chaining/everything) but needs a reasonably quiet host. The
 
 | date | profile | guest-MIPS | block-rate | a64/guest-op | mode |
 |------|---|---|---|---|---|
-| 2026-06-06 | boot→Finder (ISO) | 1037 | 148M/s | 14.6 | JIT |
+| 2026-06-06 | boot→Finder (ISO) | 1037 | 148M/s | 14.6 | JIT (pre-0h) |
+| 2026-06-07 | boot→Finder (ISO) | 1040 | 148M/s | 14.6 | JIT (post-0h) — flat, as expected: boot is I/O/timer-bound, not compute, so 0h shift/clrlwi wins don't move it |
 | _TODO_ | boot→Finder (ISO) | — | — | — | interpreter (`SS_USE_JIT=0`) — emulator-gated |
 | _TODO_ | Speedometer | — | — | — | JIT (bench completion-detection fix pending) |
 

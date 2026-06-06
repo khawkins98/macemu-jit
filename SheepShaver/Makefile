@@ -20,7 +20,7 @@ JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
         test test-opcodes test-jit test-rom harness-count ui-introspect-test ui-introspect-serialize-test \
-        e2e e2e-smoke e2e-bench e2e-test e2e-setup e2e-clean ui-dump \
+        e2e e2e-smoke e2e-bench e2e-workload e2e-test e2e-setup e2e-clean ui-dump \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean help \
@@ -171,6 +171,12 @@ e2e-smoke: e2e
 
 e2e-bench: build-ss e2e/.venv/.installed
 	cd e2e && .venv/bin/python run_benchmark.py
+
+# Real-world-app workload: boot the workload disk + apps disk, launch a real app and time its
+# render via screenshot/pHash, export a per-workload perf-history row. WL overrides the workload
+# (default fractal-carbon). Needs a GUI session + the workload/apps disks (see e2e/README.md).
+e2e-workload: build-ss e2e/.venv/.installed
+	cd e2e && SS_INPUT_LOCKOUT=1 .venv/bin/python run_workload.py $(WL)
 
 e2e-test: e2e/.venv/.installed
 	cd e2e && .venv/bin/python -m pytest -q

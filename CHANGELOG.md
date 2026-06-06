@@ -11,6 +11,19 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [e2e] Generic real-world-app workload scenario — Fractal Carbon is entry #1
+
+`scenario.run_workload` + `sse2e/workload.py`: the reusable framework for benchmarking a real app —
+boot a workload disk + attach the apps disk, launch by Finder type-select, and time the render via the
+**screenshot perceptual hash** (not the window list — a Carbon/fullscreen app has no standard
+`WindowRecord` while rendering). Gates: launch = screen diverges from the Finder baseline (a modal alert
+instead = launch failure, e.g. a missing library); render-done = pHash stabilizes; quit = pHash converges
+back to baseline; then the honest clean-shutdown verdict. Perf signal = `render_s` (launch→stable) + the
+result-frame pHash (visual fingerprint), appended to a per-workload `history.csv` with a trend line.
+Entry point `run_workload.py` (+ `make e2e-workload WL=<name>`); pure logic + history offline-unit-tested
+(`tests/test_workload.py`, 11 cases; suite 118). **Boot-validated against AltiVec Fractal Carbon: launched
+1.2 s, render stable 18.3 s, clean shutdown, result pHash + history recorded.** Commit `b4a0a594`.
+
 ### [SheepShaver][e2e] Guest UI introspection — window control-list items (non-dialog windows)
 
 **Dogfooding fix.** Driving the CarbonLib installer over VNC exposed a real hole: the Apple Installer's

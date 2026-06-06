@@ -154,8 +154,20 @@ cd SheepShaver
 make e2e-setup    # FIRST TIME: guided check — venv, build, Homebrew libs, assets (offers to link them)
 make e2e          # smoke: build, boot, clean-shutdown, assert exit 0   (PASS / non-zero FAIL)
 make e2e-bench    # benchmark: boot Mac OS 9 + Speedometer, drive the suite, capture results
+make e2e-workload # real-app workload: launch a real app, time its render via screenshot/pHash,
+                  #   export a per-workload perf row. WL=<name> picks the workload (default fractal-carbon)
 make e2e-test     # offline unit tests (no emulator / assets / GUI)
 ```
+
+**Workload runner (`make e2e-workload`).** Boots the workload boot disk + attaches the apps disk, launches
+a real app by Finder type-select, and times its render via the **screenshot perceptual hash** — a
+Carbon/fullscreen app has no standard `WindowRecord` while rendering, so the window list can't gate it.
+Launch = the screen diverges from the Finder baseline (a modal alert instead = launch failure, e.g. a
+missing library); render-done = the pHash stabilizes; quit = the pHash converges back to the Finder. The
+perf signal is `render_s` (launch→stable) plus the result-frame pHash, appended to
+`artifacts/workload-history/history.csv`. Workloads live in `run_workload.py`'s registry (Fractal Carbon
+is entry #1); the disks default to `e2e-macos9-workload-boot.dsk` (carries CarbonLib 1.6) + `e2e-apps.dsk`
+(override with `SS_E2E_DISK` / `SS_E2E_APPSDISK`). Both are clonefile-copied per run.
 
 **That's the whole setup.** `make e2e-setup` is the friendly front door: it verifies the build, the
 Homebrew libs (`sdl3`/`vde`/`libvncserver`), and the three assets, prints a ✓/✗ report with the exact

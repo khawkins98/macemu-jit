@@ -437,13 +437,16 @@ read straight from Toolbox structures at the idle hook — no screenshot/OCR.
 - ✅ **Plan 2** — dialog items/DITL (click named buttons), control state (value/hilite/checked/dimmed),
   menu bar + Command-keys, `screen.depth`, `role:"desktop"`, **and control-list items for non-dialog
   (document/movable-modal) windows** (`ac4363a2`) — so `find_item`/`click_item` work on any window.
-- 🟡 **S4 (in progress)** — first real-world workload: **Fractal Carbon installed + LAUNCHES & RENDERS**
-  (validated 2026-06-06, `e2e/artifacts/fc_discover.png`). Its **CarbonLib 1.6** dependency was resolved by
-  *driving the Apple SMI installer over VNC via introspection* (`run_carbonlib_install.py`), extracted for
-  reuse (`CarbonLib_1.6_extension.bin`), and baked host-side into the clean workload boot disk. *Next:* the
-  generic `scenario.run_workload` (drive render → time → masked-pHash → quit → export). *Finding:* a Carbon
-  app's fullscreen canvas isn't a standard `WindowRecord`, so gate on screenshot/pHash + app-change, not the
+- ✅ **S4 (first workload shipped)** — `scenario.run_workload` + `sse2e/workload.py` + `run_workload.py`
+  (`make e2e-workload`): generic boot+attach → type-select launch → **screenshot/pHash-gated** launch,
+  render-timing, quit → clean shutdown → per-workload `history.csv`. **Fractal Carbon is entry #1**,
+  boot-validated (launched 1.2 s, render stable 18.3 s, clean shutdown; `b4a0a594`). CarbonLib 1.6 was
+  resolved via the introspection-driven SMI installer + extracted/reused (`CarbonLib_1.6_extension.bin`)
+  and baked host-side into the workload boot disk. *Finding baked into the design:* a Carbon app's
+  fullscreen canvas isn't a standard `WindowRecord`, so the workload gates on screenshot/pHash, not the
   window list.
+- 🟡 **S5 (next)** — grow the workload library (POV-Ray, MacBench; Word once Office is installed) on the
+  same framework; perf-trend each; optional golden-image regression (`WorkloadSpec.golden_image`).
 - ⏸ **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()` calibration, ParamText, socket transport.
 See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference),
 `docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan), and

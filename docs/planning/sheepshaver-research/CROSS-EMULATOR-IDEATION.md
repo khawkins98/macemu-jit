@@ -17,6 +17,16 @@ than the brainstorm assumed (two "top picks" are already shipped), that several 
 comments mislead** (the same doc-rot we keep fixing), and one **latent bug**. Those byproduct
 findings are at the bottom; the verdicts below already bake in the corrections.
 
+**External corroboration (2026-06-06).** A separate external analysis (web-sourced) independently
+converged on the host-side-parallelism-not-guest-SMP thesis and the same device candidates, which is
+a useful validation. It added three items now folded into [`MULTICORE-OFFLOAD-PLAN.md`](../MULTICORE-OFFLOAD-PLAN.md):
+**hardware cursor** (grid #11 above), the **"synthetic devices"** framing for the HLE/Graphics-Packs
+layer, and **deterministic event queues** for interrupt/device-completion (which also serves
+record/replay). A code audit also **debunked its "pin the JIT to one core" claim** for this fork — our
+runtime is cleanly single-writer-guest; see the MULTICORE plan's "Concurrency baseline." (Its
+"no-MMU ⇒ no 9.1+" line is the common-wisdom version; our [`NEW-WORLD-ROM-SUPPORT-PLAN.md`](../NEW-WORLD-ROM-SUPPORT-PLAN.md)
+found the *first* blocker is parcels-ROM rejection, with the MMU only a possible second wall.)
+
 ---
 
 ## The grid — everything worth doing (or worth knowing is done)
@@ -35,6 +45,7 @@ Effort/Payoff: Low / Med / High. "Blocked by" = what must happen first. Verdict 
 | 8 | **Background compilation (R9/C5)** — E-core worker compiles while P-core runs (Cemu/Dolphin tiered) | Med | Low (boot/launch only) | **C1 residency gate** + R8 + measurement | multicore | ⏸ gated — not now |
 | 9 | **Bucket the SMC-invalidation scans** — range-key the two O(pool) loops | ~1 day | Low | profiled icbi-storm | optimization | ⏸ only if measured |
 | 10 | **Persistent JIT cache → VM snapshot/resume** (RPCS3 module cache / Rosetta .aot) | ~1 wk | Low as boot-speed / **High as snapshot** | re-scope; LR-pred bug (#L) | desktop-integration | 🔁 defer + re-file under Silicon Sheep |
+| 11 | **Hardware cursor** — host-overlay cursor, decoupled from guest 60 Hz redraw (external review) | Low-Med | Med-High (responsiveness) | none | desktop-integration | 🟡 do — strong "feels native" win (see MULTICORE Tier 2) |
 | — | **Block chaining + page-granular SMC invalidation** (Dolphin/QEMU link/unlink) | — | — | — | optimization | ✅ **ALREADY DONE** (default-on, boots; comment stale) |
 | — | **AltiVec byte-multiply ev_mixed fix** | — | — | — | optimization | ✅ **ALREADY DONE**; leftover = `vpkuwum` + signed/halfword test vectors (A1/A2) |
 

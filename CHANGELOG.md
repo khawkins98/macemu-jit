@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Fold external multicore analysis into the plans (+ code-verified concurrency baseline)
+
+- Reconciled a web-sourced external analysis against our plans. It **independently converged** on the
+  host-side-parallelism-not-guest-SMP thesis — validation for `MULTICORE-OFFLOAD-PLAN.md`. Folded in:
+  - **Concurrency baseline (code-verified):** debunked the external "pin the JIT to one core" claim
+    for this fork — the runtime is cleanly single-writer-guest (atomic spcflags, mutex'd framebuffer,
+    signal-driven interrupts). But the JIT cache is single-writer-*by-assumption* (no locks on
+    `jit_cache_wp`/`jit_bc_pool_next`/chain-site pool; per-thread `pthread_jit_write_protect_np`), so
+    Tier-1 background compile has named hard prerequisites: **R8 dual-W^X → atomic cache allocation →
+    cross-thread invalidation**. This makes the R8→R9 dependency mechanical, not aspirational.
+  - **New Tier-2 device ideas:** **hardware cursor** (host overlay, decoupled from guest 60 Hz
+    redraw — added as idea-bank grid #11) and the **"synthetic devices"** framing for the HLE layer.
+  - **Deterministic event-queue corollary** for interrupt/device-completion (also the record/replay
+    substrate).
+- Cross-EMULATOR-IDEATION.md gets the external-corroboration note + grid #11; noted that the external
+  "no-MMU ⇒ no 9.1+" line is common-wisdom — our New-World-ROM plan found parcels-ROM is the first wall.
+
 ### [SheepShaver] tools: jit-diff-sweep.py — differential op-sweep + auto-referee (instrumentation #11)
 
 The unified-instrumentation payoff (ROADMAP A1 #11, Phase 0+2 in practical form): a committed,

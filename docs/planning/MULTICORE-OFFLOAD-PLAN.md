@@ -9,8 +9,12 @@
 ## TL;DR / verdict
 
 The instinct — "use the dozens of idle cores" — is right that there's parallelism to exploit, but
-**the biggest, safest wins are emulator-*internal*, not splitting guest execution.** Three things to
-internalize before any work:
+**the biggest, safest wins are emulator-*internal*, not splitting guest execution.** *(An independent
+external review (2026-06-06) converged on this same thesis — "don't give Mac OS 9 four CPUs; give
+SheepShaver four kinds of help while the guest still believes it has one CPU" — and on the host-side
+candidates below. Its findings are folded in: the concurrency baseline + Tier-1 prerequisites, the
+hardware-cursor and synthetic-devices Tier-2 items, and the deterministic-event-queue corollary.)*
+Three things to internalize before any work:
 
 1. **The guest is one logical CPU running a cooperative OS.** You cannot naively spread guest
    execution across host cores: the cooperative "Blue" Mac OS world is a single thread of control,
@@ -64,6 +68,14 @@ all of these; they're why naive guest-SMP is Tier 3, not Tier 1:
 explicit synchronization** back to guest state. Never speculatively run guest execution concurrently
 outside Tier 3's controlled model.
 
+**Corollary — make interrupt/device-completion a deterministic event queue.** Today interrupts are a
+`SIGUSR2` + `InterruptFlags` shortcut. As worker threads (Tier 1/2) start returning completions
+(disk/network/blit done), route them through a **single deterministic event queue consumed at the
+guest CPU's safe-points** rather than ad-hoc signals. This keeps the single-CPU illusion exact under
+parallel helpers *and* is the substrate the **record/replay** longshot needs (the only nondeterminism
+to log becomes the queue's ordering). An external review independently recommended this same
+"one authoritative CPU thread + deterministic event queues" shape.
+
 ---
 
 ## What's already parallel (the honest baseline)
@@ -76,6 +88,34 @@ outside Tier 3's controlled model.
 So the literal "put sound/drawing on another core" is largely *already happening*. The opportunities
 are (a) doing it *better* (QoS, less main-thread coupling) and (b) moving *new* categories of work
 off the emulation core.
+
+### Concurrency baseline & Tier-1 prerequisites (code-verified 2026-06-06)
+
+External lore says "SheepShaver's JIT is multicore-sensitive — pin it to a single core for
+stability." **That is not true of this fork's current runtime.** A source audit found it cleanly
+single-threaded-guest with well-synchronized host helpers: `spcflags` is `std::atomic` with
+release/relaxed ordering (`spcflags.hpp:44-72`), `InterruptFlags` uses `atomic_or`/`atomic_and`
+(`main_unix.cpp:1814-1824`), the framebuffer is mutex-protected (`video_x.cpp:190`), and interrupts
+are async-signal-safe `SIGUSR2` delivery (`:1800`). The single-core-pinning advice is about
+older/upstream builds (likely host-scheduler thrash), not a guest-SMP race here.
+
+**But the JIT code cache is single-writer-*by-assumption*, not by lock** — and that is the concrete
+gate on Tier 1. Compilation only ever runs on `emul_thread` (`s_active_cpu`, `ppc-cpu.cpp:151`), so
+there are no locks on the write pointer (`jit_cache_wp`), the block-hash allocator
+(`jit_bc_pool_next`, `ppc-jit.cpp:234`), or the chain-site pool, and the W^X toggle
+`pthread_jit_write_protect_np` is **per-thread**. Adding a second (compile) thread therefore requires,
+**in this order, before R9 background compilation is safe:**
+1. **R8 dual W^X mapping** — the per-thread `pthread_jit_write_protect_np` collides between threads
+   (thread B's toggle flips thread A's region to executable mid-write → silent corruption). Dual
+   RW/RX aliases remove the per-thread state entirely. *Hard prerequisite.*
+2. **Atomic/locked cache allocation** — CAS (or a mutex) to claim `jit_cache_wp` space and to
+   `jit_bc_pool_next++` / bucket-list insert, so two compilers can't overwrite each other.
+3. **Cross-thread invalidation** — SMC/icbi invalidation must reach a thread executing stale code
+   (epoch or broadcast), part of the same R8 work.
+
+This is the named, mechanical reason the dependency is **R8 → R9** (not just "nice to have"). Tiers
+0 and 2 below do **not** hit this — Tier 0 only sets QoS; Tier 2 offloads *native* HLE work with
+explicit handoff, never a second JIT-cache writer.
 
 ---
 
@@ -135,6 +175,20 @@ on the emulation core — **if** it has a clean boundary. Candidates: bulk blitt
 
 This is the bridge between "emulator-internal" (Tier 1) and "guest-visible" (Tier 3): the work is
 native, not guest code, but it's doing the guest's job on another core.
+
+**Two concrete Tier-2 devices worth naming (from the 2026-06-06 external review):**
+- **Hardware cursor.** Today the mouse cursor is composited through the guest framebuffer, so cursor
+  motion is gated on the guest's 60 Hz redraw. Promote it to a **host overlay** (native NSCursor /
+  Metal sprite) driven directly from host pointer events — cursor responsiveness decouples from guest
+  frame rate. Low-risk, high-perceived-responsiveness, and squarely a Silicon Sheep "feels native"
+  win. (The external note flags this as a dramatic responsiveness improvement.)
+- **"Synthetic devices" framing.** SheepShaver already paravirtualizes (the patched nanokernel,
+  NativeOp drivers). The disciplined way to think about Tier-2 HLE is as *adding synthetic devices /
+  fast paths* (bulk memory copy, graphics primitives, decompression, networking) behind the existing
+  patch layer — the same lens as the **"Graphics-Packs"-style community manifest** theme in the idea
+  bank. Caveat (also the external note's): every synthetic shortcut moves us further from generic
+  emulation toward specialized paravirtualization — a compatibility/maintainability trade to make
+  *deliberately*, per routine, with the differential oracle proving each one.
 
 ---
 

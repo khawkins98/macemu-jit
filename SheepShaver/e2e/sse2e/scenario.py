@@ -61,7 +61,16 @@ def run_lifecycle(
             wins = ", ".join(f"[{w.index}]{w.title!r}({w.window_class})" for w in snap.windows) or "(none)"
             print(f"  [ui] desktop snapshot: {len(snap.windows)} windows, modal={snap.modal_active}: {wins}",
                   flush=True)
+            # The Finder installs File/Edit/View incrementally after the desktop settles, so poll a
+            # few seconds for the full menu bar before the self-check (non-fatal).
             mb = snap.menu_bar
+            deadline = time.monotonic() + 20.0
+            while (mb is None or mb.menu("File") is None) and time.monotonic() < deadline:
+                time.sleep(1.0)
+                try:
+                    mb = uidump.snapshot(dump_dir, timeout=8.0).menu_bar
+                except TimeoutError:
+                    pass  # emulator briefly non-idle; keep polling
             if mb is not None:
                 titles = [m.title for m in mb.menus]
                 fm = mb.menu("File")

@@ -141,6 +141,56 @@ boot a boot-to-Finder OS 9 disk → at the Finder, type the volume name (e.g. "E
 The guest-UI introspection (`SS_UI_DUMP_DIR`, `SheepShaver/docs/UI-INTROSPECTION.md`) confirms each
 window/app appears, so the scenario can gate on facts rather than fixed coordinates.
 
+## 7. Installing a *system library* that ships only as an SMI installer (e.g. CarbonLib)
+
+Some dependencies (notably **CarbonLib** — Carbon apps need ≥1.3; OS 9.0.4 ships ~1.0.x) come **only**
+as a self-mounting installer image (`.smi`, a *compressed NDIF*). You **cannot** crack it host-side —
+`unar` and `hmount` both fail on the compressed NDIF, and there's no droppable extension inside to
+`hcopy`. There are three viable paths, in order of reuse value:
+
+**(a) Reuse a pre-extracted extension (best — do this once, then never again).** Once CarbonLib is
+installed on *any* disk, extract the `CarbonLib` extension as a MacBinary and keep it as a shared
+asset; thereafter installing it is a one-line `hcopy -m` into a System Folder — no SMI, no boot:
+```bash
+# extract once (from a disk that already has it):
+hmount /path/to/disk_with_carbonlib.dsk
+hcopy -m ":System Folder:Extensions:CarbonLib" /Users/Shared/macemu/CarbonLib_1.6_extension.bin
+humount
+# reuse forever (clean, host-side, no installer):
+hmount /path/to/target_boot.dsk
+hcd ":System Folder:Extensions"; hdel "CarbonLib"   # drop the older bundled CarbonLib first
+hcopy -m /Users/Shared/macemu/CarbonLib_1.6_extension.bin ":CarbonLib"
+humount   # hdir should show  INIT/cbon  602351  3521150  CarbonLib   (1.6, Jun 2002)
+```
+**Validated end-to-end (2026-06-06):** a clean clonefile of `macos9_fresh.dsk` + the one `hcopy -m`
+above upgraded its bundled CarbonLib 1.0.x (Feb 2000) → 1.6 (Jun 2002), confirmed by `hdir`. **Caveat:**
+`hfsutils` writes **HFS only** (`BD` volume signature at byte 1024); `macos9_fresh` is HFS so this works.
+An **HFS+** (`H+`) boot disk can't be written by `hcopy` — there, boot the SMI installer (path (b)) or
+copy the extension in the emulator. Check the format with `hexdump -s 1024 -n 2 <disk>`.
+`/Users/Shared/macemu/CarbonLib_1.6_extension.bin` is kept in the shared asset dir (alongside the
+ROMs/disks — not in git) for exactly this; the `.sit` it came from is at `CarbonLib_1.6.sit`.
+Source for the .smi if you ever need to re-extract: **archive.org** has a *token-free* direct download
+(`archive.org/download/tucows_207427_CarbonLib/carbonlib.sit` — verified CarbonLib 1.6); macintoshgarden
+links are browser-session-token-protected and 410 to `curl`.
+
+**(b) Drive the SMI installer over VNC with introspection (how (a)'s artifact was produced).** Boot a
+*dedicated writable* workload master (a copy of your OS-9 disk — never a master you care about; the
+install must persist so it's booted writable, not a per-run clonefile copy). Then drive the standard
+Apple Installer flow. Two non-obvious gotchas, both learned the hard way:
+- **The SMI's license alert IS a `dialogKind` dialog** → introspection sees its "Agree" button, click it
+  by name. But the **Apple Installer's own "Continue"/"Install" panels are movable-modal/document
+  windows** whose controls the *dialog-only* introspection couldn't see — so drive those with **Return**
+  (they're the default button). (This gap motivated emitting window control-list items — see
+  `UI-INTROSPECTION.md`; with that, the panel buttons are now findable by name too.)
+- **Poll for each button, don't assume timing** — the self-mount + each installer panel appears
+  seconds apart; a one-shot "click Agree now" misses it. Re-create the writable master between attempts
+  (a forced-killed partial install leaves it dirty → next boot stalls in Disk First Aid).
+
+Working example: `SheepShaver/e2e/run_carbonlib_install.py`.
+
+**(c) Let a human run the `.smi` installer** in an interactive SheepShaver (~2 min) and hand you the
+disk — then do (a) to capture the reusable extension. Always the sure thing.
+
 ---
 
 ## Linux host notes (upstream ARM64 — to verify)

@@ -3,6 +3,19 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-06 — A running Carbon app's fullscreen canvas is invisible to Backend-A introspection
+
+Validating Fractal Carbon (it **launches + renders** with CarbonLib 1.6 — the old
+`CarbonLib--GetPortBitMapForCopyBits could not be found` error is gone), the guest-UI introspection
+returned **degenerate `(0,0,0,0)` + `suspect` windows** and the menu walk still showed *Finder* at the
+dump moment — yet the **screenshot showed the fractal rendering fullscreen with the app's own menus**. So
+a Carbon app drawing to a fullscreen canvas does **not** present a standard `WindowRecord`/`MenuList` that
+the Backend-A memory walk can read. Consequence for `scenario.run_workload`: for Carbon/fullscreen apps,
+**gate on the screenshot + masked-pHash + the app-change (`[APP]`) signal, not the window list**. (This is
+the LEARNINGS "look at the actual pixels, don't infer from state" rule paying off — the screenshot, not
+the introspection dump, was ground truth.) Plan-3 Backend B (trap oracle) or a CGrafPort/QD-global read
+may be needed to introspect such apps later.
+
 ## 2026-06-06 — Installing classic Mac apps onto HFS images host-side, with resource forks intact
 
 Populating an E2E "apps" disk host-side (no boot) the obvious way silently produces a **dead app** —
@@ -23,6 +36,28 @@ the resource fork and `APPL`/creator signature get dropped. Full procedure + cod
 
 Proof: AltiVec Fractal Carbon (download → `unar` → MacBinary → `hformat`/`hcopy -m`) installed onto
 `e2e-apps.dsk`, `hdir` = `APPL/ddPF 8126 169060`, boot-verified to mount cleanly.
+
+**Installing a system lib (CarbonLib) that ships only as an SMI installer + the dogfooding gap it
+exposed.** Fractal Carbon (Carbon) needs CarbonLib ≥1.3; OS 9.0.4 ships ~1.0.x. CarbonLib comes only as
+a `.smi` (compressed NDIF) — `unar`/`hmount` can't crack it. So we **drove the Apple Installer over VNC
+with introspection** (`SheepShaver/e2e/run_carbonlib_install.py`) and it worked (CarbonLib → 1.6,
+`hdir` `INIT/cbon 602351 3521150 Jun 17 2002`). Lessons:
+- **The SMI's license alert is a `dialogKind` dialog** (introspection finds its "Agree" button by name),
+  but the **Apple Installer's "Continue"/"Install" panels are movable-modal/document windows whose
+  controls the dialog-only introspection couldn't see** → drove them with **Return** (default button).
+  This gap is exactly what motivated emitting **window control-list items** (see `UI-INTROSPECTION.md` /
+  `ui_introspect.cpp` `serialize_window_controls`) — a real dogfooding loop: real use exposed the hole.
+- **Poll for each button** (the self-mount + panels appear seconds apart; one-shot clicks miss them).
+- **Boot a dedicated *writable* master for the install** (the install must persist — not a per-run
+  clonefile copy); **re-create it from clean between attempts** (a force-killed partial install leaves
+  it dirty → next boot stalls in Disk First Aid → boot timeout).
+- **Extract once, reuse forever:** pull the installed `CarbonLib` extension out as a MacBinary
+  (`hcopy -m ":System Folder:Extensions:CarbonLib" CarbonLib_1.6_extension.bin`) → future installs are a
+  one-line `hcopy -m` into Extensions, no SMI/boot. CarbonLib 1.6 source: **archive.org**
+  (`download/tucows_207427_CarbonLib/carbonlib.sit` — token-free; macintoshgarden links 410 to `curl`).
+  **Validated** (2026-06-06): baked the artifact into a clean clonefile of `macos9_fresh.dsk`, upgrading
+  its bundled 1.0.x → 1.6 (`hdir` confirmed). **Caveat:** `hfsutils` writes **HFS only** (`BD` sig @ byte
+  1024) — `macos9_fresh` is HFS so `hcopy` works; an **HFS+** (`H+`) boot disk would need a boot, not `hcopy`.
 
 ## 2026-06-05 — E2E benchmark auto-shutdown (keyboard quit-to-Finder); VNC clicks were never broken (misdiagnosis)
 

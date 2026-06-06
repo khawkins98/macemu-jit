@@ -28,6 +28,66 @@ codegen doesn't corrupt block results. Done on branch `p0-profiler` (git worktre
 boot run for true hot data + routine-name attribution. (Track B prereq; feeds the `jit-diff-sweep`
 perf-join — hot × microbench ns/insn.)
 
+### [e2e] Generic real-world-app workload scenario — Fractal Carbon is entry #1
+
+`scenario.run_workload` + `sse2e/workload.py`: the reusable framework for benchmarking a real app —
+boot a workload disk + attach the apps disk, launch by Finder type-select, and time the render via the
+**screenshot perceptual hash** (not the window list — a Carbon/fullscreen app has no standard
+`WindowRecord` while rendering). Gates: launch = screen diverges from the Finder baseline (a modal alert
+instead = launch failure, e.g. a missing library); render-done = pHash stabilizes; quit = pHash converges
+back to baseline; then the honest clean-shutdown verdict. Perf signal = `render_s` (launch→stable) + the
+result-frame pHash (visual fingerprint), appended to a per-workload `history.csv` with a trend line.
+Entry point `run_workload.py` (+ `make e2e-workload WL=<name>`); pure logic + history offline-unit-tested
+(`tests/test_workload.py`, 11 cases; suite 118). **Boot-validated against AltiVec Fractal Carbon: launched
+1.2 s, render stable 18.3 s, clean shutdown, result pHash + history recorded.** Commit `b4a0a594`.
+
+### [SheepShaver][e2e] Guest UI introspection — window control-list items (non-dialog windows)
+
+**Dogfooding fix.** Driving the CarbonLib installer over VNC exposed a real hole: the Apple Installer's
+"Continue"/"Install" buttons live in a movable-modal/document window, but Backend A only emitted dialog
+DITL `items` for `dialogKind` windows — so a non-dialog window's controls were absent from the JSON and
+the driver had to fall back to blind Return. Now `serialize_window_controls()` walks
+`WindowRecord.controlList` (+0x8C) → the `ControlRecord` chain (`nextControl`/`contrlRect`/`contrlHilite`/
+`contrlValue`/`contrlTitle`, reusing Plan 2b's layout) for **non-dialog** windows too, emitting each
+control as an `item` (type/rect/text/value/hilite, same schema) so `find_item`/`click_item` work on them
+unchanged. **Verified by re-running the installer on the new build**: its Continue button is now clicked
+**by name** via introspection (`click 'Continue'`) — a non-dialog window's controls now surface as `items`,
+where before the feature they were absent and the driver fell back to blind Return (`no dialog button;
+Return`, observed in earlier-session runs). `make test-jit` score=100; e2e offline suite 107 passed;
+`ui-introspect-test` ALL OK — and the branch is now **offline-unit-tested** against a mock RAM (see the
+serializer-harness entry below). Commit `ac4363a2`.
+
+### [SheepShaver][test] Offline unit harness for the memory-walking UI serializers
+
+Paid down tracked test-debt: the serializers (`serialize_snapshot`/`_window_controls`/`_dialog_items`/
+`_menu_bar`) read guest memory via `ReadMacInt*` and were validated **boot-only**.
+`ui_introspect_serialize_test.cpp` now compiles the **real** `ui_introspect.cpp` against a flat
+big-endian **mock RAM** (stub `sysdeps.h`/`cpu_emulation.h` in `src/uitest/`, selected purely by `-I`
+order — the real build is untouched) and asserts the JSON for hand-built Toolbox structures, so each
+offset is a regression-tested fact. Fixtures cover all four serializers: non-dialog `controlList` → items (titled button globalized,
+dimmed/untitled control, degenerate-rect skip), dialog DITL items (text/rect/refCon/defaultItem/modality/
+default), and the `menuBar` walk (apple role + File ▸ New=⌘N / Open=⌘O). Wired into `make ui-introspect-test`;
+standalone `make ui-introspect-serialize-test`. Commits `492607c4`, `b6ee595c`.
+
+### [e2e][docs] Real-world workload bring-up: Fractal Carbon install + CarbonLib via introspection
+
+First steps toward the S4/S5 real-app workload library. Installed **AltiVec Fractal Carbon** onto the
+E2E apps disk host-side (forks/type intact; `docs/HOST-SIDE-MAC-SOFTWARE-INSTALL.md`), then resolved its
+**CarbonLib ≥1.3** dependency the hard way — **drove the Apple `.smi` installer over VNC with guest-UI
+introspection** (`SheepShaver/e2e/run_carbonlib_install.py`): CarbonLib → 1.6 (`INIT/cbon … Jun 2002`).
+Extracted the installed extension as a reusable MacBinary (`/Users/Shared/macemu/CarbonLib_1.6_extension.bin`)
+so future installs are a one-line `hcopy -m` — no SMI, no boot. Procedure + the SMI/dialog-vs-document-window
+gotchas documented in the install doc; saga in `LEARNINGS.md`. Discovery harness commit `3c0368c8`;
+install driver committed with `ac4363a2`.
+
+**Validated end-to-end (2026-06-06):** baked CarbonLib 1.6 into a clean clonefile workload boot disk via
+the reuse artifact (host-side, no boot), then booted it + the apps disk — **AltiVec Fractal Carbon now
+launches and renders a live fractal** (`e2e/artifacts/fc_discover.png`), where it previously died on
+`CarbonLib--GetPortBitMapForCopyBits could not be found`. Finding for the workload-scenario build: the
+running Carbon app's fullscreen canvas is **not** a standard `WindowRecord`/`MenuList` (Backend-A returned
+degenerate windows), so a Carbon workload must gate on screenshot/pHash + the app-change signal, not the
+window list.
+
 ### [SheepShaver][e2e] Guest UI introspection — Plan 2c: menu bar + depth + desktop role
 
 The last app-automation enabler: a top-level `menuBar` (menus + items + **Command-key equivalents** +

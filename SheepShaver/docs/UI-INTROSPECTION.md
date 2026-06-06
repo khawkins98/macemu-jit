@@ -1,6 +1,6 @@
 # Guest UI Introspection — Canonical Reference
 
-> **Status:** Plan 1 + 2a (dialog items) + 2b (control state) + 2c (menu bar, depth, desktop role) shipped (2026-06-06) · **Track:** A5 (E2E harness) / Track C (Silicon Sheep)
+> **Status:** Plan 1 + 2a (dialog items) + 2b (control state) + 2c (menu bar, depth, desktop role) + control-list items for non-dialog windows shipped (2026-06-06) · **Track:** A5 (E2E harness) / Track C (Silicon Sheep)
 > **Canonical reference for the shipped feature.** Design history and the full aspirational schema
 > live in `docs/superpowers/specs/2026-06-06-guest-ui-introspection-design.md`.
 
@@ -162,6 +162,23 @@ when the item opens a hierarchical menu). `screen.depth` now reads the real valu
 GDevice; the Finder desktop window carries `role:"desktop"`. **Live-verified**: 7 Finder menus with
 File/Edit/View/Special and File's ⌘N/⌘O/⌘W. Consume via `Snapshot.menu_bar` / `find_menu_item(snap,
 "Open").cmd_key`.
+
+**Window control-list items (shipped 2026-06-06):** *non-dialog* windows (document, movable-modal —
+`isDialog:false`) now also emit an `items` array, built by walking `WindowRecord.controlList` (+0x8C) →
+the `ControlRecord` chain (`nextControl`/`contrlRect`/`contrlHilite`/`contrlValue`/`contrlTitle`, the
+same `ControlRecord` layout Plan 2b uses for dialog control state). Each control becomes an item with
+the **same schema** as dialog items — `type` (`button` when the control has a title, else `control`),
+`rect` (globalized, VNC-clickable), `enabled` (`hilite != 255`), `value`, `hilite`, and `text` — so
+`find_item`/`click_item`/`assert_window` work on any window, not just dialogs. (Dialog windows stay on
+the richer DITL path; this is the `else` branch.) This closes the gap that blind-Return papered over
+when driving the Apple Installer: its **"Continue"/"Install" buttons** are document-window controls,
+now surfaced as `items`. Verified by re-running the CarbonLib installer on the new build — its Continue
+is now clicked **by name** via introspection (`click 'Continue'`), where pre-feature a non-dialog
+window carried no items and the driver fell back to blind Return. Also **offline-unit-tested**:
+`ui_introspect_serialize_test.cpp` builds a non-dialog window with a `controlList` in a mock RAM and
+asserts the controls emit as globalized `items` (`make ui-introspect-serialize-test`). Guarded reads
+(`guest_ptr_ok` on each handle/record, `guest_range_ok` on the title extent, degenerate-rect skip,
+64-control cap). See `ui_introspect.cpp` `serialize_window_controls`.
 
 **Not yet emitted (Plan 3 / later):** window `parts` (close/zoom/grow rects), `dialogId` (numeric
 resource id — not reliably stored in a live `DialogRecord`; use the item set + `refCon` for identity),
@@ -361,6 +378,7 @@ the spin-wait's exit — triggering the VBL-timer-starvation trap documented in 
 | **Plan 2a** | Shipped (2026-06-06) | Dialog **items**/DITL: type + globalized clickable rect + title/text + `enabled` (itemDisable) + `default`; window `refCon` + `defaultItem`. Python `Item`/`find_item`/`click_item`. Live-verified vs the choose-disk dialog. Also: harness gates use it (`assert_window`/`click_window`, the benchmark quit-to-Finder check). |
 | **Plan 2b** | Shipped (2026-06-06) | Control state: `value`/`hilite`/`crect` (deref the item's `ControlHandle` → `ControlRecord`), `checked`/`dimmed` conveniences, `hasParams` flag on ParamText templates. Self-verified via `crect == rect` on the live dialog. |
 | **Plan 2c** | Shipped (2026-06-06) | **Menu bar** (menus + items + cmd-keys + enabled + apple role) via a read-only `MenuList` walk (handle-anchoring, no traps); `screen.depth` via the GDevice; `role:"desktop"` tag. Self-verified at boot (Finder File/Edit titles + ⌘N/⌘O/⌘W). Python `MenuBar`/`find_menu_item`. |
+| **Control list** | Shipped (2026-06-06) | **Non-dialog window controls** as `items` (`WindowRecord.controlList` → `ControlRecord` chain, reusing Plan 2b's reads): type/rect/text/value/hilite, same schema → `find_item`/`click_item` on any window. Dogfooding fix from the CarbonLib installer (document-window Continue/Install buttons now found by name). `serialize_window_controls`, commit `ac4363a2`. |
 | **Plan 2d** | Deferred | Window parts/hot-zones (close/zoom/grow rects), popup choice-lists / list rows, submenu recursion. |
 | **Plan 3** | Deferred | Backend B (Toolbox-trap oracle via `Execute68kTrap`) + static recursion guard, `compare(A,B)` divergence report, `overlay(snapshot, png)` pixel spot-check, socket transport, **`ParamText` resolution** (the `DAStrings` layout is uncertain — Backend B's canonical calibration case). |
 

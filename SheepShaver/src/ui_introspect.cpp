@@ -26,6 +26,7 @@ enum {                       // offsets within a WindowRecord (GrafPort = 0x6C)
     kWinRefCon = 0x98,       // int32
 };
 enum { kDlgItems = 0x9C, kDlgDefItem = 0xA8 };   // DialogRecord fields, past the 0x9C WindowRecord
+enum { kWinControlList = 0x8C };                  // WindowRecord.controlList (ControlHandle = head of chain)
 
 struct Rect16 { int16 top, left, bottom, right; bool ok; };
 
@@ -183,6 +184,84 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
         j += "}";
         uint32 adv = 14 + dlen + (dlen & 1);              // 14-byte header is even; pad dlen to even
         p += adv;
+    }
+    j += "]";
+}
+
+// Walk WindowRecord.controlList -> ControlRecord chain (non-dialog windows) and emit an "items":[...]
+// JSON array so find_item/click_item can address controls by name on any window kind.
+//
+// Source: classic Mac Toolbox Inside Macintosh Vol I, Chapter 7 (Control Manager).
+// Technique: walk the singly-linked ControlHandle chain at WindowRecord+0x8C (controlList), deref each
+// ControlHandle to its ControlRecord, and read contrlRect/contrlHilite/contrlValue/contrlTitle — the same
+// ControlRecord layout Plan 2b uses for dialog control state (already guarded+tested in
+// serialize_dialog_items). Non-dialog windows previously had no items array at all, so the installer's
+// Continue/Install buttons (which live in a movable-modal/document window, NOT a dialogKind=2 window)
+// were invisible to find_item/click_item. This walk is safe because every deref is guarded by
+// guest_ptr_ok/guest_range_ok, control bytes in titles are rejected, and we cap at 64 controls.
+static void serialize_window_controls(uint32 win, int ox, int oy, std::string &j) {
+    j += "\"items\":[";
+    uint32 ch = ReadMacInt32(win + kWinControlList);   // ControlHandle (head of chain; 0 = none)
+    if (!ch || !guest_ptr_ok(ch)) { j += "]"; return; }
+
+    int emitted = 0;
+    for (int guard = 0; guard < 64 && ch && guest_ptr_ok(ch); guard++) {
+        uint32 cr = ReadMacInt32(ch);                  // deref ControlHandle -> ControlRecord ptr
+        if (!cr || !guest_ptr_ok(cr) || !guest_ptr_ok(cr + 0x2A)) {
+            break;  // wild deref — stop walk entirely (chain may be corrupt)
+        }
+
+        // contrlRect: top@+8, left@+A, bottom@+C, right@+E (big-endian int16)
+        int16 rt  = (int16)ReadMacInt16(cr + 0x08);
+        int16 rl  = (int16)ReadMacInt16(cr + 0x0A);
+        int16 rb  = (int16)ReadMacInt16(cr + 0x0C);
+        int16 rr  = (int16)ReadMacInt16(cr + 0x0E);
+        // Skip degenerate/wild rects — protect against garbage reads that would mislead the driver.
+        // A legitimate on-screen rect must have positive dimensions and a plausible position.
+        bool degenerateRect = (rb <= rt || rr <= rl || rt < -4096 || rl < -4096 || rb > 8192 || rr > 8192);
+        if (degenerateRect) {
+            ch = ReadMacInt32(cr + 0x00);  // nextControl — advance even on skip
+            continue;
+        }
+
+        uint8 hilite = Mac2HostAddr(cr)[0x11];          // contrlHilite byte
+        int16 value  = (int16)ReadMacInt16(cr + 0x12);  // contrlValue
+
+        // contrlTitle: Str255 at cr+0x28 (length byte + MacRoman chars)
+        std::string text;
+        {
+            uint8 len = Mac2HostAddr(cr)[0x28];          // length byte
+            if (len > 0 && len <= 255 && guest_range_ok(cr + 0x29 + len)) {
+                uint8 *tp = Mac2HostAddr(cr + 0x29);
+                std::string raw;
+                bool titleOk = true;
+                for (int k = 0; k < (int)len; k++) {
+                    uint8 c = tp[k];
+                    if (c < 32) { titleOk = false; break; }  // control byte = junk read
+                    raw.push_back((char)c);
+                }
+                if (titleOk) text = macroman_to_utf8(raw);
+            }
+        }
+
+        // type: "button" when title is non-empty (makes _find_button / find_item match by text),
+        // "control" otherwise (anonymous control, e.g. scroll bar or custom widget).
+        const char *ctype = text.empty() ? "control" : "button";
+        bool enabled = (hilite != 255);
+
+        if (emitted++) j += ",";
+        char b[256];
+        snprintf(b, sizeof(b),
+            "{\"index\":%d,\"type\":\"%s\",\"rect\":{\"left\":%d,\"top\":%d,\"right\":%d,\"bottom\":%d},"
+            "\"enabled\":%s,\"value\":%d,\"hilite\":%d",
+            emitted, ctype,
+            (int)rl + ox, (int)rt + oy, (int)rr + ox, (int)rb + oy,
+            enabled ? "true" : "false", (int)value, (int)hilite);
+        j += b;
+        if (!text.empty()) { j += ",\"text\":\""; j += json_escape(text); j += "\""; }
+        j += "}";
+
+        ch = ReadMacInt32(cr + 0x00);   // nextControl (ControlHandle)
     }
     j += "]";
 }
@@ -357,6 +436,14 @@ static std::string serialize_snapshot(const std::string &nonce) {
             int ox = cb.ok ? cb.left : sb.left;            // content-region top-left = local->global origin
             int oy = cb.ok ? cb.top  : sb.top;
             serialize_dialog_items(win, ox, oy, defItem, windows_json);
+        } else {
+            // Non-dialog windows (document, movable-modal, etc.) may have controls (buttons, etc.)
+            // in their WindowRecord.controlList chain. Walk it and emit an "items" array so
+            // find_item/click_item work on these windows too. Dialog windows stay on the DITL path.
+            int ox = cb.ok ? cb.left : sb.left;
+            int oy = cb.ok ? cb.top  : sb.top;
+            windows_json += ",";
+            serialize_window_controls(win, ox, oy, windows_json);
         }
         windows_json += "}";
         idx++;

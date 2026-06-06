@@ -430,13 +430,27 @@ and shut down cleanly?" — is done and solid.** The genuinely-open work is **P2
   boot) *can* run on any runner today. A starter self-hosted workflow is sketched in the session
   notes; not committed pending the small-disk + asset-fetch pieces.
 
-**Guest UI introspection — Plan 1 shipped (2026-06-06).** A read-only, env-gated
-(`SS_UI_DUMP_DIR`) host-side dump of the guest `WindowList` with global (VNC-clickable)
-bounds, title, dialog class, modality, and active/visible state. Plans 2–3 deferred:
-- **Plan 2** — dialog items/DITL, `dialogId`, control state, menus, `role:"desktop"`, screen depth.
-- **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()`, socket transport.
-See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference) and
-`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan + prioritized queue).
+**Guest UI introspection — Plan 1 + Plan 2 shipped (2026-06-06).** A read-only, env-gated
+(`SS_UI_DUMP_DIR`) host-side dump of the guest UI with global (VNC-clickable) coordinates,
+read straight from Toolbox structures at the idle hook — no screenshot/OCR.
+- ✅ **Plan 1** — window list (bounds, title, dialog class, modality, active/visible).
+- ✅ **Plan 2** — dialog items/DITL (click named buttons), control state (value/hilite/checked/dimmed),
+  menu bar + Command-keys, `screen.depth`, `role:"desktop"`, **and control-list items for non-dialog
+  (document/movable-modal) windows** (`ac4363a2`) — so `find_item`/`click_item` work on any window.
+- ✅ **S4 (first workload shipped)** — `scenario.run_workload` + `sse2e/workload.py` + `run_workload.py`
+  (`make e2e-workload`): generic boot+attach → type-select launch → **screenshot/pHash-gated** launch,
+  render-timing, quit → clean shutdown → per-workload `history.csv`. **Fractal Carbon is entry #1**,
+  boot-validated (launched 1.2 s, render stable 18.3 s, clean shutdown; `b4a0a594`). CarbonLib 1.6 was
+  resolved via the introspection-driven SMI installer + extracted/reused (`CarbonLib_1.6_extension.bin`)
+  and baked host-side into the workload boot disk. *Finding baked into the design:* a Carbon app's
+  fullscreen canvas isn't a standard `WindowRecord`, so the workload gates on screenshot/pHash, not the
+  window list.
+- 🟡 **S5 (next)** — grow the workload library (POV-Ray, MacBench; Word once Office is installed) on the
+  same framework; perf-trend each; optional golden-image regression (`WorkloadSpec.golden_image`).
+- ⏸ **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()` calibration, ParamText, socket transport.
+See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference),
+`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan), and
+`docs/HOST-SIDE-MAC-SOFTWARE-INSTALL.md` (getting workload apps + system libs onto disks host-side).
 
 **🔜 New (2026-06-05) — connect the harness to per-instruction JIT correctness.** The lifecycle
 + benchmark harness proves the emulator runs *as a system*; it does not prove the JIT is

@@ -9,10 +9,10 @@ All tests on Mac OS 8.6 Internal Edition ISO, OldWorld ROM, 256MB RAM.
 
 ## Test Configuration
 
-- **Host**: macOS arm64 (Apple Silicon)
+- **Host**: M5 MacBook Air, 32 GB RAM (macOS arm64 / Apple Silicon) — *all guest-MIPS / ns/insn figures are host-specific to this machine; `a64/op` is host-independent*
 - **ROM**: 1998-07-21 Mac OS ROM 1.1 (OldWorld)
 - **Boot media**: Mac OS 8.6 Internal Edition ISO (CD boot) or macos86_fresh.dsk (4GB HD boot) — both work reliably
-- **RAM**: 256 MB
+- **Guest RAM**: 256 MB
 - **Display**: 800x600 windowed
 - **JIT config**: ROM=0x500000 (full DR emulator), chaining=1
 

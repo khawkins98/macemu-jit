@@ -466,15 +466,20 @@ Currently falling through to interpreter:
 - `icbi` (XO=982): Could emit inline call to invalidate JIT blocks
 - `isync` (XO19=150): See P0c above
 
-### P3a: Native `lwarx`/`stwcx.` — TOP LEVER (P0-profiler evidence, 2026-06-06)
+### P3a: Native `lwarx`/`stwcx.` — TOP CONCENTRATED TARGET, CONDITIONAL (P0-profiler evidence, 2026-06-06)
 
-**Expected impact**: large on the #1 hot path. The P0 boot profile shows the RAM atomic-primitive
-cluster `0x10643c30–0x10643c78` at **~8% of all block-executions**, and `lwarx`/`stwcx.` currently
-fall through to the interpreter (`return false` at `ppc-jit.cpp` cases 20/150). Each atomic-add
-iteration therefore makes **two JIT→interp transitions** (~29M across a boot) and breaks the block
-twice. Native codegen removes both transitions and lets the whole atomic loop stay in one chained
-native block. **Validate with `e2e-bench` (Speedometer) before/after** — the boot profile is
-boot/idle-weighted; confirm the atomics also dominate a compute workload.
+**Expected impact**: large on the #1 *concentrated* hot path — **but gated on an e2e-bench check
+first** (see §P0). The P0 boot profile shows the RAM atomic-primitive cluster `0x10643c30–0x10643c78`
+at **~8% of all block-executions**, and `lwarx`/`stwcx.` currently fall through to the interpreter
+(`return false` at `ppc-jit.cpp` cases 20/150). Each atomic-add iteration therefore makes **two
+JIT→interp transitions** (~29M across a boot) and breaks the block twice. Native codegen removes both
+transitions and lets the whole atomic loop stay in one chained native block.
+
+**Do NOT build this before the `e2e-bench` (Speedometer) profile.** The boot data is boot/idle-
+weighted, and the atomics may be *driven by* the idle/event loop (the TOC glue dispatches them ~2× the
+working-set rate). If they're idle-driven, idle-skipping subsumes this win and native atomics optimize
+a workload that shouldn't run. Native atomics pay off only if they stay hot under a real compute
+workload — which the e2e-bench profile confirms or refutes.
 
 **Approach (single-threaded guest → cheap, but preserve reservation semantics):**
 - `lwarx rD,rA,rB`: compute EA, native load `rD = mem[EA]`, then store the reservation fields in the
@@ -763,22 +768,32 @@ NZCV-neutral `ADD`). **Boot-validated** via the E2E smoke (isolated ISO boot →
   ~1.2%→0.9%): inherent 68k-interpretation cost → the **HLE / DR-path** levers.
 - **Broad RAM working set** `0x1060xxxx`/`0x106axxxx` at a *uniform* ~0.9% across ~25 blocks: the
   steady-state OS **event/idle loop** (regular C frames: `mflr/stmw/stwu` prologues + flag checks +
-  `bl`). Secondary **idle-skipping** lever, but smaller than the atomics.
+  `bl`). Per-block small, but **in aggregate ~22% — the single largest slice by far**, just diffuse.
 - **Caveat:** this is a boot→idle→shutdown profile (weighted to boot + idle, not a compute workload).
   For throughput-lever ranking, also capture an **`e2e-bench` (Speedometer) profile** — the
   workload-weighted complement. Routine-name attribution (hot PC → trap/NameRegistry) still TODO.
 
-**THE lever this surfaced — native `lwarx`/`stwcx.` codegen (see P3a below).** The #1 hot path is
-not idle-spin: it's atomic primitives, and **`lwarx` (case 20) and `stwcx.` (case 150) currently
-`return false` → fall through to the interpreter** (`ppc-jit.cpp`; only `sync` is already a NOP).
-So each atomic-add iteration crosses JIT→interp **twice** (~29M transitions for this one primitive
-across the boot) and breaks the block at each atomic. The guest is single-threaded, so the
-reservation can be modeled cheaply in the CPU object natively (load EA + set reservation fields for
-`lwarx`; conditional store + set CR0 + clear reservation for `stwcx.`) with no interpreter round-trip.
+**Two candidate levers — but the aggregate math and a confound matter:**
+- **By aggregate share**, the diffuse idle/event loop (~22%) dwarfs the concentrated atomics (~8%).
+  But diffuse = a worse *single* optimization target (25 separate blocks); concentrated = better ROI.
+- **The confound the boot data can't resolve:** the atomics may be *driven by* the idle loop — the
+  TOC glue `0x106a9848` dispatches them 14.8M times, ~2× the working-set block rate (~7.4M),
+  consistent with the idle loop doing a couple of refcounts per spin. If so, **idle-skipping
+  subsumes the atomic win** (skip the loop → the atomics never run), and native `lwarx`/`stwcx.`
+  would be optimizing a workload that shouldn't execute at all. Native atomics clearly pay off only
+  if they stay hot when the machine is *doing* something — which is exactly what the e2e-bench
+  profile tests.
 
-**Next:** (1) implement native `lwarx`/`stwcx.` (P3a below) — highest-confidence win from this data;
-(2) `e2e-bench` (Speedometer) profile for the compute-weighted view to confirm the atomics dominate
-a real workload too, not just boot/idle.
+**The concentrated codegen finding (→ P3a):** `lwarx` (case 20) and `stwcx.` (case 150) currently
+`return false` → fall through to the interpreter (`ppc-jit.cpp`; only `sync` is already a NOP). So
+each atomic iteration crosses JIT→interp **twice** (~29M transitions across the boot) and breaks the
+block at each atomic. Single-threaded guest → the reservation can be modeled cheaply in the CPU
+object natively. **Top concentrated target, but conditional** on the e2e-bench profile confirming the
+atomics dominate a compute workload (not just boot/idle).
+
+**Next:** (1) **`e2e-bench` (Speedometer) profile first** — it disambiguates idle-driven vs
+work-driven atomics and decides between P3a (native atomics) and idle-skipping; (2) then implement
+whichever the combined evidence supports.
 
 The priorities below are currently estimated from *compile frequency* (how often a
 block is compiled), which is biased — a block compiled once but executed a million

@@ -101,3 +101,24 @@ def test_click_window_clickable_and_blocked():
     import pytest
     with pytest.raises(AssertionError):
         uidump.click_window(vnc, snap, snap.windows[1])   # behind modal -> blocked
+
+
+def test_dialog_items_parse():
+    snap = _load()
+    dlg = snap.windows[0]
+    assert len(dlg.items) == 3
+    assert dlg.items[0].type == "button" and dlg.items[0].text == "Save" and dlg.items[0].is_default
+    assert dlg.default_item == 1
+    assert snap.windows[1].items == []          # non-dialog window has no items
+
+
+def test_find_and_click_item():
+    snap = _load()
+    vnc = _FakeVnc()
+    pt = uidump.click_item(vnc, snap, snap.windows[0], text="Don't Save")
+    assert pt == (510, 430) and vnc.clicks == [(510, 430)]   # center of (420,420,600,440)
+    import pytest
+    with pytest.raises(AssertionError):
+        uidump.find_item(snap.windows[0], text="Nonexistent")
+    with pytest.raises(AssertionError):
+        uidump.click_item(vnc, snap, snap.windows[0], text="Save changes?")  # disabled item

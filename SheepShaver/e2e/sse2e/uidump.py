@@ -36,6 +36,20 @@ class Rect:
                     or o.top >= self.bottom or o.bottom <= self.top)
 
 
+class Item:
+    def __init__(self, d: dict):
+        self.index: int = d["index"]
+        self.type: str = d.get("type", "")
+        self.rect = Rect.from_json(d["rect"])
+        self.text: str = d.get("text", "")
+        self.enabled: bool = d.get("enabled", True)
+        self.is_default: bool = d.get("default", False)
+
+    def __repr__(self):
+        r = self.rect
+        return f"Item[{self.index}] {self.type} {self.text!r} ({r.left},{r.top},{r.right},{r.bottom})"
+
+
 class Window:
     def __init__(self, d: dict):
         self._d = d
@@ -49,6 +63,9 @@ class Window:
         self.content_bounds = Rect.from_json(d["contentBounds"])
         self.struct_bounds = Rect.from_json(d["structBounds"])
         self.suspect: bool = d.get("suspect", False)
+        self.items = [Item(it) for it in d.get("items", [])]
+        self.ref_con = d.get("refCon")
+        self.default_item = d.get("defaultItem")
 
     def __repr__(self):
         cb = self.content_bounds
@@ -190,6 +207,33 @@ def assert_window(snap: "Snapshot", *, title=None, title_contains=None, window_c
         raise AssertionError(f"no window matching title={title!r} title_contains={title_contains!r} "
                              f"window_class={window_class!r}; on screen: {present}")
     return matches[0]
+
+
+def find_item(win: "Window", *, text=None, text_contains=None, type=None, default=None) -> "Item":
+    """Return the single matching dialog item, or raise AssertionError listing the items present."""
+    out = []
+    for it in win.items:
+        if text is not None and it.text != text: continue
+        if text_contains is not None and text_contains not in it.text: continue
+        if type is not None and it.type != type: continue
+        if default is not None and it.is_default != default: continue
+        out.append(it)
+    if not out:
+        raise AssertionError(f"no item text={text!r} text_contains={text_contains!r} type={type!r} "
+                             f"in {win.title!r}; items: {[(i.type, i.text) for i in win.items]}")
+    return out[0]
+
+
+def click_item(vnc, snap: "Snapshot", win: "Window", **criteria) -> tuple[int, int]:
+    """Click the center of the matching dialog item over VNC. Refuses if the dialog isn't clickable
+    (occluded/collapsed/behind a modal) or the item is disabled."""
+    if not snap.clickable(win):
+        raise AssertionError(f"dialog {win.title!r} not clickable right now")
+    it = find_item(win, **criteria)
+    if not it.enabled:
+        raise AssertionError(f"item {it.text!r} is disabled")
+    vnc.click(*it.rect.center)
+    return it.rect.center
 
 
 def click_window(vnc, snap: "Snapshot", win: "Window") -> tuple[int, int]:

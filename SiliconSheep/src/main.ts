@@ -738,6 +738,14 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         <input type="number" class="input" id="setting-mousewheellines" value="${escapeAttr(getPref("mousewheellines") || "3")}" min="1" max="20" />
       </div>
       <div class="form-group">
+        <label>Auto-Grab Mouse on Start</label>
+        <select class="input" id="setting-init_grab">
+          <option value="false" ${getPref("init_grab") !== "true" ? "selected" : ""}>No — click inside the window to capture</option>
+          <option value="true" ${getPref("init_grab") === "true" ? "selected" : ""}>Yes — grab cursor immediately on launch</option>
+        </select>
+        <p class="ss-text-muted">When off, the mouse stays free until you click inside the emulator window. Ctrl-F5 releases it.</p>
+      </div>
+      <div class="form-group">
         <label>Swap Option/Command Keys</label>
         <select class="input" id="setting-swap_opt_cmd">
           <option value="false" ${getPref("swap_opt_cmd") !== "true" ? "selected" : ""}>No (Option=Option, Command=Command)</option>
@@ -914,6 +922,14 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         <input type="text" class="input" id="debug-SS_JIT_SKIP_OPC" value="" placeholder="e.g. 31" />
         <p class="ss-text-muted">Force a specific primary opcode to fall back to the interpreter. For isolating a broken handler.</p>
       </div>
+      <div class="form-group">
+        <label>Input Lockout</label>
+        <select class="input" id="debug-SS_INPUT_LOCKOUT">
+          <option value="" selected>Off — host mouse/keyboard active</option>
+          <option value="1">On — ignore host input, VNC-only control</option>
+        </select>
+        <p class="ss-text-muted">Disables all host mouse and keyboard input to the emulator. VNC-injected events still work. Useful for automated testing or kiosk mode.</p>
+      </div>
       <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ss-border);">
         <label>Run Logs</label>
         <button class="btn btn-secondary btn-sm" data-action="view-logs">View Logs</button>
@@ -1034,6 +1050,7 @@ function bindEvents() {
         }],
         "setting-frameskip": ["frameskip", (v) => v],
         "setting-gfxaccel": ["gfxaccel", (v) => v],
+        "setting-init_grab": ["init_grab", (v) => v],
         "setting-mousewheelmode": ["mousewheelmode", (v) => v],
         "setting-mousewheellines": ["mousewheellines", (v) => v],
         "setting-swap_opt_cmd": ["swap_opt_cmd", (v) => v],
@@ -1162,6 +1179,7 @@ function captureDebugEnvVars() {
   const debugIds = [
     "SS_JIT_VERIFY", "SS_JIT_NO_CHAIN", "SS_JIT_NO_ROM", "SS_USE_JIT",
     "SS_JIT_TRACE_RING", "SS_JIT_DIAG_LOG", "SS_JIT_WATCH_ADDR", "SS_JIT_SKIP_OPC",
+    "SS_INPUT_LOCKOUT",
   ];
   for (const envKey of debugIds) {
     const el = document.getElementById(`debug-${envKey}`) as HTMLInputElement | HTMLSelectElement | null;

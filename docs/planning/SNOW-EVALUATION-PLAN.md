@@ -106,7 +106,9 @@ history, watchpoints) so you see machine state on the fly. Should we adapt how *
 environment is presented?
 
 **Direction: yes — but build an *observability inspector*, not a Snow-style step-debugger, and host
-it in Silicon Sheep, not the emulator core.** Reasoning:
+it in Silicon Sheep, not the emulator core.** *(Now folded into the Silicon Sheep plan as a tracked
+feature — see [`DESKTOP_INTEGRATION_PLAN.md`](DESKTOP_INTEGRATION_PLAN.md) → "Developer Inspector /
+Debug Chrome". This section is the rationale; that is the home.)* Reasoning:
 
 - **We already have the data, not the presentation.** SheepShaver emits a rich heartbeat (per-region
   block rates `jNK/jDR/jRAM`, `comp` count, `j2i` transitions, `rss`, `cpu%`, a warning matrix), a

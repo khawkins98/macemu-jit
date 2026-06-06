@@ -430,6 +430,14 @@ and shut down cleanly?" — is done and solid.** The genuinely-open work is **P2
   boot) *can* run on any runner today. A starter self-hosted workflow is sketched in the session
   notes; not committed pending the small-disk + asset-fetch pieces.
 
+**Guest UI introspection — Plan 1 shipped (2026-06-06).** A read-only, env-gated
+(`SS_UI_DUMP_DIR`) host-side dump of the guest `WindowList` with global (VNC-clickable)
+bounds, title, dialog class, modality, and active/visible state. Plans 2–3 deferred:
+- **Plan 2** — dialog items/DITL, `dialogId`, control state, menus, `role:"desktop"`, screen depth.
+- **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()`, socket transport.
+See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference) and
+`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan + prioritized queue).
+
 **🔜 New (2026-06-05) — connect the harness to per-instruction JIT correctness.** The lifecycle
 + benchmark harness proves the emulator runs *as a system*; it does not prove the JIT is
 *arithmetically* correct. Two items close that gap (and stop the shiny system harness from
@@ -498,8 +506,10 @@ buckets so they don't fall off the map:
 ## B1. 🟡 P0 — Execution-weighted profiler (gates everything below)
 
 **Why:** prioritize the remaining levers by *real* hot-block / instruction-mix data instead of
-guessing. Nothing else in Track B should be tuned blind. **Unblocks B2–B4.**
-**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P0.
+guessing. Nothing else in Track B should be tuned blind. **Unblocks B2–B4.** Also the **data layer
+for the SiliconSheep "Developer Inspector"** (Track C) — the recommended first concrete step toward a
+live build/debug-inspection UI. **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P0;
+`docs/planning/DESKTOP_INTEGRATION_PLAN.md` → "Developer Inspector / Debug Chrome".
 
 ## B2. 🟡 Medium levers — fallback & branch handling
 

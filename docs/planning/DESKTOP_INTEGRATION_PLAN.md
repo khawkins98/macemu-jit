@@ -1,6 +1,6 @@
 # SiliconSheep — Desktop Integration Feature Plan
 
-> **Status:** 🟡 Active — Tier 1 largely complete · **Created:** 2026-06-02 · **Updated:** 2026-06-05
+> **Status:** 🟡 Active — Tier 1 largely complete · **Created:** 2026-06-02 · **Updated:** 2026-06-06
 > **Why this doc exists:** "SiliconSheep" — a Tauri v2 launcher/VM manager for SheepShaver (first-run wizard, VM library, hot-reload, coherence-lite). Framework pivoted from Cocoa to Tauri (2026-06-05). Scaffold at `SiliconSheep/`.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -595,6 +595,44 @@ Parallels/VMware but not their *coherence/integration* features — and that's f
 one else has solved coherence for classic Mac OS either.
 
 ---
+
+## Developer Inspector / Debug Chrome (Snow-inspired) — 🟡 planned
+
+**The idea (2026-06-06):** [Snow](SNOW-EVALUATION-PLAN.md) launches with rich live "chrome" — registers,
+disassembly, memory, trap/interrupt history, watchpoints — so you see machine state on the fly.
+SiliconSheep is the right home to give *our* build/debug environment that kind of live visibility —
+but reshaped for what we actually are.
+
+**Build a live observability *inspector*, not a Snow-style step-debugger.** Snow is a hardware-level
+68K emulator where single-step/disassemble/edit-memory is the natural debugging model; ours is a JIT +
+paravirtualized PowerPC whose debugging is *differential* (`SS_JIT_VERIFY`, the harness,
+`jit-diff-sweep`). So we borrow Snow/DingusPPC's answer to *"which surfaces matter"*, not their
+architecture.
+
+- **Data layer (already mostly exists):** the rich diagnostics SheepShaver already emits — heartbeat
+  (per-region block rates `jNK/jDR/jRAM`, `comp`, `j2i`, `rss`, `cpu%`, warning matrix), trace ring,
+  HOT-PC sampling, `SS_JIT_WATCH_ADDR` watchpoints, and the live JIT stats already pushed to the SDL
+  window title — plus the **B1 execution-weighted profiler** (`OPTIMIZATION-PLAN.md` §P0) once built.
+  The gap is presentation, not data. **B1 is the prerequisite data source**; the inspector is its
+  natural front-end (ties to the profiling-first plan).
+- **Presentation layer (cheap, here in SiliconSheep):** a Tauri "Inspector" tab. Rich chrome in a web
+  panel is far cheaper than a native debugger and keeps debugger-UI churn **out of the emulator core**.
+  Surfaces to show: hot blocks (B1), per-region execution mix + rates, fallback/`j2i` counters,
+  interrupt/spcflags state, watchpoint hits, HOT-PC, and (later) disassembly of the current hot region.
+- **Transport:** rides the same **bidirectional launcher↔emulator RPC** that Tier 4 Layer A (A0)
+  establishes — a structured diagnostics stream from the emulator to the Tauri front-end. Until A0
+  exists, a minimal first cut can tail the diag log / extend the window-title stats.
+
+**Scope discipline:** observability-first; selectively expose *debugger affordances we already have
+backends for* (watchpoints via `SS_JIT_WATCH_ADDR`, PC history via the trace ring, HOT-PC) rather than
+building a new step-debugger. Defer anything needing emulator-core debugger machinery until the
+Track-A verification gates settle.
+
+**Dependencies / sequence:** B1 profiler (data) → minimal live view (log tail / window-title) → Tauri
+Inspector tab on the A0 RPC. **Cross-refs:** `SNOW-EVALUATION-PLAN.md` (ergonomics reference + the
+"why inspector not debugger" rationale), `DINGUSPPC-EVALUATION-PLAN.md` (CLI-debugger surface ideas),
+`OPTIMIZATION-PLAN.md` §P0/B1 (the data source), Tier 4 Layer A above (the RPC transport). Also folds
+the three eval plans' separate "debug-tooling crosswalks" into **one** matrix that lands here.
 
 ---
 

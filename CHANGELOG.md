@@ -11,6 +11,19 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Fold the "Developer Inspector" into SiliconSheep + correct DingusPPC license to GPL-3.0
+
+- **Folded the Snow-inspired build/debug "chrome" recommendation into the SiliconSheep plan** as a
+  tracked feature: `DESKTOP_INTEGRATION_PLAN.md` → "Developer Inspector / Debug Chrome". A live
+  *observability inspector* (not a step-debugger) in the Tauri UI, fed by the **B1 profiler + existing
+  diagnostics** (heartbeat/ring/HOT-PC/`SS_JIT_WATCH_ADDR`/window-title stats), riding the Tier-4
+  Layer-A launcher↔emulator RPC. Cross-linked from the Snow plan (rationale), ROADMAP B1 (data layer),
+  DingusPPC plan, and OPTIMIZATION-PLAN §P0. Unifies the three eval plans' debug-tooling crosswalks.
+- **License re-validation (primary source): DingusPPC is GPL-3.0, NOT BSD-3-Clause.** Verified against
+  the repo's root `LICENSE` (GPLv3 verbatim) and GitHub metadata (`spdx_id: GPL-3.0`). This **corrects
+  the prior CHANGELOG/plan note (`9affe3a4`)** that said BSD-3-Clause — that was a bad scrape; the
+  original plan's "similar GPL family" was right (same copyleft family as our GPL SheepShaver).
+
 ### [docs] Validate + sharpen the external-emulator evaluation plans (Snow / DingusPPC / Infinite Mac)
 
 Web-verified the factual claims in the three eval plans (`b2bf2c0e`) and corrected them:

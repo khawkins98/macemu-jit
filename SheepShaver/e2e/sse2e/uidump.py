@@ -44,10 +44,24 @@ class Item:
         self.text: str = d.get("text", "")
         self.enabled: bool = d.get("enabled", True)
         self.is_default: bool = d.get("default", False)
+        self.value = d.get("value")          # None unless a control
+        self.hilite = d.get("hilite")        # None unless a control; 255 = dimmed
+        self.has_params = d.get("hasParams", False)
+        self.crect = Rect.from_json(d["crect"]) if "crect" in d else None   # ControlRecord rect (self-check)
 
     def __repr__(self):
         r = self.rect
         return f"Item[{self.index}] {self.type} {self.text!r} ({r.left},{r.top},{r.right},{r.bottom})"
+
+    @property
+    def checked(self) -> bool:
+        """True if this is a checkbox/radio that is on (value != 0)."""
+        return self.type in ("checkbox", "radio") and bool(self.value)
+
+    @property
+    def dimmed(self) -> bool:
+        """True if the control is drawn inactive/dimmed (contrlHilite == 255)."""
+        return self.hilite == 255
 
 
 class Window:

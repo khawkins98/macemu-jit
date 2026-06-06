@@ -106,7 +106,7 @@ def test_click_window_clickable_and_blocked():
 def test_dialog_items_parse():
     snap = _load()
     dlg = snap.windows[0]
-    assert len(dlg.items) == 3
+    assert len(dlg.items) == 5
     assert dlg.items[0].type == "button" and dlg.items[0].text == "Save" and dlg.items[0].is_default
     assert dlg.default_item == 1
     assert snap.windows[1].items == []          # non-dialog window has no items
@@ -122,3 +122,19 @@ def test_find_and_click_item():
         uidump.find_item(snap.windows[0], text="Nonexistent")
     with pytest.raises(AssertionError):
         uidump.click_item(vnc, snap, snap.windows[0], text="Save changes?")  # disabled item
+
+
+def test_control_value_and_checked():
+    snap = _load()
+    dlg = snap.windows[0]
+    cb = uidump.find_item(dlg, type="checkbox")
+    assert cb.value == 1 and cb.hilite == 0 and cb.checked is True and cb.dimmed is False
+    assert cb.crect is not None and cb.crect.left == cb.rect.left   # crect parsed
+    btn = uidump.find_item(dlg, text="Don't Save")
+    assert btn.value is None and btn.checked is False               # non-control -> no value
+
+
+def test_has_params_flag():
+    snap = _load()
+    txt = uidump.find_item(snap.windows[0], text_contains="Save changes to")
+    assert txt.has_params is True

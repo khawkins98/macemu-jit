@@ -13,7 +13,9 @@
       "items": [
         {"index": 1, "type": "button", "rect": {"left":620,"top":420,"right":690,"bottom":440}, "enabled": true, "default": true, "text": "Save"},
         {"index": 2, "type": "button", "rect": {"left":420,"top":420,"right":600,"bottom":440}, "enabled": true, "text": "Don't Save"},
-        {"index": 3, "type": "staticText", "rect": {"left":330,"top":300,"right":700,"bottom":400}, "enabled": false, "text": "Save changes?"}
+        {"index": 3, "type": "staticText", "rect": {"left":330,"top":300,"right":700,"bottom":400}, "enabled": false, "text": "Save changes?"},
+        {"index": 4, "type": "checkbox", "rect": {"left":330,"top":250,"right":500,"bottom":270}, "enabled": true, "text": "Apply to all", "value": 1, "hilite": 0, "crect": {"left":330,"top":250,"right":500,"bottom":270}},
+        {"index": 5, "type": "staticText", "rect": {"left":330,"top":210,"right":700,"bottom":240}, "enabled": false, "text": "Save changes to ^0?", "hasParams": true}
       ] },
     { "index": 1, "ptr": "0x00abc120", "title": "Macintosh HD", "windowClass": "document",
       "modality": "none", "isDialog": false, "active": false, "visible": true,

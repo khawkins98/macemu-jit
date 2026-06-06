@@ -29,6 +29,15 @@ enum { kDlgItems = 0x9C, kDlgDefItem = 0xA8 };   // DialogRecord fields, past th
 
 struct Rect16 { int16 top, left, bottom, right; bool ok; };
 
+// Is the guest BYTE at `a` inside mapped Mac RAM? Range-only (no even-alignment requirement):
+// unlike guest_ptr_ok, this is for the END of an in-RAM extent (a title/item string's last byte),
+// which legitimately lands on an ODD address. Those bytes are read via Mac2HostAddr, never deref'd
+// as a pointer, so alignment is irrelevant — and requiring it wrongly rejected odd extents.
+static inline bool guest_range_ok(uint32 a)
+{
+    return a >= 0x100 && a < RAMBase + RAMSize;
+}
+
 // Read the main screen's pixel depth from the main GDevice via low-mem MainDevice ($08A4).
 // Returns a sane depth (one of 1,2,4,8,16,32) or 0 if any deref fails or the value is garbage.
 // Offsets: GDHandle@0x08A4 -> GDevice; gdPMap (PixMapHandle) @ GDevice+0x16;
@@ -73,7 +82,7 @@ static std::string window_title(uint32 win, bool *valid) {
     if (!guest_ptr_ok(ptr)) { *valid = false; return ""; }
     uint8 *s = Mac2HostAddr(ptr);
     int len = s[0];
-    if (len > 63 || !guest_ptr_ok(ptr + 1 + len)) { *valid = false; return ""; }
+    if (len > 63 || !guest_range_ok(ptr + 1 + len)) { *valid = false; return ""; }
     std::string raw;
     for (int i = 0; i < len; i++) {
         uint8 c = s[1 + i];
@@ -126,7 +135,7 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
         uint8 dlen = Mac2HostAddr(p)[13];
         std::string text;
         bool isTextItem = (type == 4 || type == 5 || type == 6 || type == 8 || type == 16);
-        if (isTextItem && guest_ptr_ok(p + 14 + dlen)) {
+        if (isTextItem && guest_range_ok(p + 14 + dlen)) {
             uint8 *d = Mac2HostAddr(p + 14);
             std::string raw;
             for (int k = 0; k < dlen; k++) { uint8 c = d[k]; if (c < 32) { raw.clear(); break; } raw.push_back((char)c); }
@@ -176,15 +185,6 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
         p += adv;
     }
     j += "]";
-}
-
-// Is the guest BYTE at `a` inside mapped Mac RAM? Range-only (no even-alignment requirement):
-// unlike guest_ptr_ok, this is for the END of an in-RAM extent (a title/item string's last byte),
-// which legitimately lands on an ODD address. Those bytes are read via Mac2HostAddr, never deref'd
-// as a pointer, so alignment is irrelevant — and requiring it wrongly rejected odd extents.
-static inline bool guest_range_ok(uint32 a)
-{
-    return a >= 0x100 && a < RAMBase + RAMSize;
 }
 
 // Walk the live menu bar (MenuList $0A1C) and append a "menuBar" JSON object. Read-only; every deref

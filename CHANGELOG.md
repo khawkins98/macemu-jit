@@ -20,9 +20,13 @@ the driver had to fall back to blind Return. Now `serialize_window_controls()` w
 `WindowRecord.controlList` (+0x8C) → the `ControlRecord` chain (`nextControl`/`contrlRect`/`contrlHilite`/
 `contrlValue`/`contrlTitle`, reusing Plan 2b's layout) for **non-dialog** windows too, emitting each
 control as an `item` (type/rect/text/value/hilite, same schema) so `find_item`/`click_item` work on them
-unchanged. **Live-verified against the very installer that exposed the gap**: its Continue button is now
-found by name (`click 'Continue'`) where it previously logged `no dialog button; Return`. `make test-jit`
-score=100; ui-introspect-test ALL OK; e2e offline suite 107 passed. Commit `ac4363a2`.
+unchanged. **Verified by re-running the installer on the new build**: its Continue button is now clicked
+**by name** via introspection (`click 'Continue'`) — a non-dialog window's controls now surface as `items`,
+where before the feature they were absent and the driver fell back to blind Return (`no dialog button;
+Return`, observed in earlier-session runs). `make test-jit` score=100; e2e offline suite 107 passed;
+`ui-introspect-test` ALL OK (note: that harness covers the text helpers only — the memory-walking
+serializers, this branch included, have no offline unit coverage yet; tracked as a follow-up in
+`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`). Commit `ac4363a2`.
 
 ### [e2e][docs] Real-world workload bring-up: Fractal Carbon install + CarbonLib via introspection
 

@@ -172,9 +172,12 @@ the **same schema** as dialog items — `type` (`button` when the control has a 
 `find_item`/`click_item`/`assert_window` work on any window, not just dialogs. (Dialog windows stay on
 the richer DITL path; this is the `else` branch.) This closes the gap that blind-Return papered over
 when driving the Apple Installer: its **"Continue"/"Install" buttons** are document-window controls,
-now found by name. Live-verified against the CarbonLib installer (`click 'Continue'` via introspection,
-not Return). Guarded reads (`guest_ptr_ok` on each handle/record, `guest_range_ok` on the title extent,
-degenerate-rect skip, 64-control cap). See `ui_introspect.cpp` `serialize_window_controls`.
+now surfaced as `items`. Verified by re-running the CarbonLib installer on the new build — its Continue
+is now clicked **by name** via introspection (`click 'Continue'`), where pre-feature a non-dialog
+window carried no items and the driver fell back to blind Return. (Like the other serializers, this path
+is live-verified, not yet offline-unit-tested — see the synthesis doc's follow-up.) Guarded reads
+(`guest_ptr_ok` on each handle/record, `guest_range_ok` on the title extent, degenerate-rect skip,
+64-control cap). See `ui_introspect.cpp` `serialize_window_controls`.
 
 **Not yet emitted (Plan 3 / later):** window `parts` (close/zoom/grow rects), `dialogId` (numeric
 resource id — not reliably stored in a live `DialogRecord`; use the item set + `refCon` for identity),

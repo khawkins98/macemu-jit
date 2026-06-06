@@ -179,3 +179,15 @@ run one timed operation → record duration to the existing benchmark-export per
 **Recommended next:** P0 correctness + P1 docs integration immediately (cheap, unblock-everything);
 then choose between **DX/S1 harness enrichment** (fast payoff on the *current* harness) and **Plan 2**
 (the real unlock for app automation) as the next substantial build.
+
+### ☐ Follow-up: offline unit coverage for the memory-walking serializers (tech debt)
+
+`ui_introspect_test.cpp` exercises only the pure text helpers (`macroman_to_utf8`, `json_escape`). The
+serializers themselves — `serialize_snapshot`/`_dialog_items`/`_menu_bar`/`_window_controls` — are
+validated **live (boot) only**, not by an offline unit test, because they read guest memory via
+`ReadMacInt*` against `RAMBase`/`RAMSize` and are `static` in the `.cpp`. This means a regression in any
+walk (e.g. the new control-list `else` branch) is caught only by a boot, not by `make ui-introspect-test`.
+**Fix:** factor the walks to take injectable `read32`/`read16`/`ptr_ok` accessors (or compile a test TU
+with a mock big-endian RAM buffer + stub `ReadMacInt*`/`guest_ptr_ok`), then add fixtures — incl. a
+**non-dialog window with a `controlList`** asserting its controls emit as `items`. Cheap relative to the
+payoff (turns every offset into a regression-tested fact); benefits all of Plan 1/2, not just one branch.

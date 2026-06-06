@@ -6,9 +6,37 @@ mod vm;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 use vm::{CreateVmRequest, VmProfile};
+
+#[derive(Default, Clone, serde::Serialize)]
+pub struct VmLiveStats {
+    pub timestamp: String,
+    pub blocks: String,
+    pub rate: String,
+    pub compiled: String,
+    pub jnk: String,
+    pub jdr: String,
+    pub jram: String,
+    pub j2i: String,
+    pub rss: String,
+    pub cpu: String,
+    pub warnings: String,
+}
+
+#[derive(Default, Clone, serde::Serialize)]
+pub struct VmSignal {
+    pub kind: String,
+    pub payload: String,
+}
+
+#[derive(Default, Clone, serde::Serialize)]
+pub struct VmInspectorState {
+    pub stats: VmLiveStats,
+    pub signals: Vec<VmSignal>,
+    pub log_tail: Vec<String>,
+}
 
 struct RunningVm {
     child: Child,
@@ -17,6 +45,7 @@ struct RunningVm {
 
 struct AppState {
     running: Mutex<HashMap<String, RunningVm>>,
+    inspector: Arc<Mutex<HashMap<String, VmInspectorState>>>,
 }
 
 #[tauri::command]
@@ -184,10 +213,11 @@ fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, Stri
             .unwrap_or(5900)
     };
 
-    // Spawn a thread to parse stderr for boot signals and OS version
+    // Spawn a thread to parse stderr for boot signals, OS version, and inspector stats
     let stderr = child.stderr.take();
     let vm_id = id.clone();
     let vm_dir_clone = vm_dir.clone();
+    let inspector = Arc::clone(&state.inspector);
     if let Some(stderr) = stderr {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
@@ -236,9 +266,61 @@ fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, Stri
                         }
                     }
                     // Detect boot-ready signal
-                    // Format: [BOOT] idle frontApp='Finder' modal=0
                     if line.contains("[BOOT]") && line.contains("frontApp='Finder'") {
                         let _ = vm::update_last_booted(&vm_id);
+                    }
+
+                    // Inspector: parse heartbeat + signals into live state
+                    if let Ok(mut map) = inspector.lock() {
+                        let state = map.entry(vm_id.clone()).or_default();
+
+                        // Keep last 200 log lines
+                        state.log_tail.push(line.clone());
+                        if state.log_tail.len() > 200 {
+                            state.log_tail.remove(0);
+                        }
+
+                        // Parse [HB] heartbeat
+                        if line.starts_with("[HB ") {
+                            let mut stats = VmLiveStats::default();
+                            // [HB 10.0s] blocks=1.2M (0.5M/s) comp=847 | jNK=... | rss=... cpu=...
+                            if let Some(ts) = line.get(4..line.find(']').unwrap_or(4)) {
+                                stats.timestamp = ts.trim().to_string();
+                            }
+                            for part in line.split_whitespace() {
+                                if let Some(v) = part.strip_prefix("blocks=") { stats.blocks = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("comp=") { stats.compiled = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("jNK=") { stats.jnk = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("jDR=") { stats.jdr = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("jRAM=") { stats.jram = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("j2i=") { stats.j2i = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("rss=") { stats.rss = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("cpu=") { stats.cpu = v.to_string(); }
+                            }
+                            if let Some(r) = line.find("M/s)") {
+                                if let Some(s) = line[..r].rfind('(') {
+                                    stats.rate = line[s+1..r].to_string() + "M/s";
+                                }
+                            }
+                            if let Some(w) = line.find("[WARN:").or(line.find("[SUSPECT:")) {
+                                stats.warnings = line[w..].to_string();
+                            }
+                            state.stats = stats;
+                        }
+
+                        // Parse signals: [BOOT], [SYSV], [APP], [READY], [STALL], [WARN]
+                        for tag in &["[BOOT]", "[SYSV]", "[APP]", "[READY]", "[STALL]", "[JIT"] {
+                            if line.contains(tag) {
+                                state.signals.push(VmSignal {
+                                    kind: tag.trim_matches(&['[', ']'] as &[char]).to_string(),
+                                    payload: line.clone(),
+                                });
+                                if state.signals.len() > 100 {
+                                    state.signals.remove(0);
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -302,6 +384,12 @@ fn read_vm_log(id: String, log_name: String) -> Result<String, String> {
     let vm_dir = vm::vm_dir_for(&id);
     let log_path = vm_dir.join("logs").join(&log_name);
     std::fs::read_to_string(&log_path).map_err(|e| format!("Cannot read log: {}", e))
+}
+
+#[tauri::command]
+fn get_vm_inspector(id: String, state: State<AppState>) -> Result<VmInspectorState, String> {
+    let map = state.inspector.lock().map_err(|e| e.to_string())?;
+    Ok(map.get(&id).cloned().unwrap_or_default())
 }
 
 fn find_capture_script() -> Option<std::path::PathBuf> {
@@ -497,6 +585,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             running: Mutex::new(HashMap::new()),
+            inspector: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             list_vms,
@@ -517,6 +606,7 @@ fn main() {
             check_emulator_status,
             import_from_prefs,
             get_vm_screenshot,
+            get_vm_inspector,
             capture_vm_screenshot,
             list_vm_logs,
             read_vm_log,

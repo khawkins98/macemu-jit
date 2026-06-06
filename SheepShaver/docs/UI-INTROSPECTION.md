@@ -174,8 +174,9 @@ the richer DITL path; this is the `else` branch.) This closes the gap that blind
 when driving the Apple Installer: its **"Continue"/"Install" buttons** are document-window controls,
 now surfaced as `items`. Verified by re-running the CarbonLib installer on the new build — its Continue
 is now clicked **by name** via introspection (`click 'Continue'`), where pre-feature a non-dialog
-window carried no items and the driver fell back to blind Return. (Like the other serializers, this path
-is live-verified, not yet offline-unit-tested — see the synthesis doc's follow-up.) Guarded reads
+window carried no items and the driver fell back to blind Return. Also **offline-unit-tested**:
+`ui_introspect_serialize_test.cpp` builds a non-dialog window with a `controlList` in a mock RAM and
+asserts the controls emit as globalized `items` (`make ui-introspect-serialize-test`). Guarded reads
 (`guest_ptr_ok` on each handle/record, `guest_range_ok` on the title extent, degenerate-rect skip,
 64-control cap). See `ui_introspect.cpp` `serialize_window_controls`.
 

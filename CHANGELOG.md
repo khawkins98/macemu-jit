@@ -24,9 +24,19 @@ unchanged. **Verified by re-running the installer on the new build**: its Contin
 **by name** via introspection (`click 'Continue'`) — a non-dialog window's controls now surface as `items`,
 where before the feature they were absent and the driver fell back to blind Return (`no dialog button;
 Return`, observed in earlier-session runs). `make test-jit` score=100; e2e offline suite 107 passed;
-`ui-introspect-test` ALL OK (note: that harness covers the text helpers only — the memory-walking
-serializers, this branch included, have no offline unit coverage yet; tracked as a follow-up in
-`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`). Commit `ac4363a2`.
+`ui-introspect-test` ALL OK — and the branch is now **offline-unit-tested** against a mock RAM (see the
+serializer-harness entry below). Commit `ac4363a2`.
+
+### [SheepShaver][test] Offline unit harness for the memory-walking UI serializers
+
+Paid down tracked test-debt: the serializers (`serialize_snapshot`/`_window_controls`/`_dialog_items`/
+`_menu_bar`) read guest memory via `ReadMacInt*` and were validated **boot-only**.
+`ui_introspect_serialize_test.cpp` now compiles the **real** `ui_introspect.cpp` against a flat
+big-endian **mock RAM** (stub `sysdeps.h`/`cpu_emulation.h` in `src/uitest/`, selected purely by `-I`
+order — the real build is untouched) and asserts the JSON for hand-built Toolbox structures, so each
+offset is a regression-tested fact. Fixtures: non-dialog `controlList` → items (titled button globalized,
+dimmed/untitled control, degenerate-rect skip) + dialog DITL items (text/rect/refCon/defaultItem/modality/
+default). Wired into `make ui-introspect-test`; standalone `make ui-introspect-serialize-test`. Commit `492607c4`.
 
 ### [e2e][docs] Real-world workload bring-up: Fractal Carbon install + CarbonLib via introspection
 

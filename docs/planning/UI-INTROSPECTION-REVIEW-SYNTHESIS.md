@@ -180,14 +180,15 @@ run one timed operation → record duration to the existing benchmark-export per
 then choose between **DX/S1 harness enrichment** (fast payoff on the *current* harness) and **Plan 2**
 (the real unlock for app automation) as the next substantial build.
 
-### ☐ Follow-up: offline unit coverage for the memory-walking serializers (tech debt)
+### ✅ Follow-up: offline unit coverage for the memory-walking serializers (tech debt) — DONE (`492607c4`)
 
-`ui_introspect_test.cpp` exercises only the pure text helpers (`macroman_to_utf8`, `json_escape`). The
-serializers themselves — `serialize_snapshot`/`_dialog_items`/`_menu_bar`/`_window_controls` — are
-validated **live (boot) only**, not by an offline unit test, because they read guest memory via
-`ReadMacInt*` against `RAMBase`/`RAMSize` and are `static` in the `.cpp`. This means a regression in any
-walk (e.g. the new control-list `else` branch) is caught only by a boot, not by `make ui-introspect-test`.
-**Fix:** factor the walks to take injectable `read32`/`read16`/`ptr_ok` accessors (or compile a test TU
-with a mock big-endian RAM buffer + stub `ReadMacInt*`/`guest_ptr_ok`), then add fixtures — incl. a
-**non-dialog window with a `controlList`** asserting its controls emit as `items`. Cheap relative to the
-payoff (turns every offset into a regression-tested fact); benefits all of Plan 1/2, not just one branch.
+Was: the serializers (`serialize_snapshot`/`_dialog_items`/`_menu_bar`/`_window_controls`) read guest
+memory via `ReadMacInt*` and were validated **live (boot) only** — a regression in any walk was caught
+only by booting, not by `make ui-introspect-test`. **Fixed** by `src/ui_introspect_serialize_test.cpp`:
+it compiles the **real** `ui_introspect.cpp` against a flat big-endian **mock RAM** (stub
+`sysdeps.h`/`cpu_emulation.h` in `src/uitest/`, selected purely by `-I` order so the real build is
+untouched) and asserts the JSON for hand-built Toolbox structures — each offset is now a regression-tested
+fact. Fixtures cover the **non-dialog `controlList` → items** branch (titled/active button globalized,
+dimmed/untitled control, degenerate-rect skip) and **dialog DITL items** (text/rect/refCon/defaultItem/
+modality/default-flag). Wired into `make ui-introspect-test`. *Still extendable:* a `menuBar` fixture
+(`MenuList` walk) is the obvious next addition now the scaffold exists.

@@ -14,8 +14,21 @@ reference**, not a product-direction mandate.
 High-value angle: host integration patterns (dynamic file injection, media loading, emulator
 multi-instance networking).
 
-Also worth noting: Infinite Mac’s emulator stack includes DingusPPC and Snow builds/submodules, so
-it is a useful discovery source for adjacent emulator work.
+> **Validated 2026-06-06 (web).**
+> - **Infinite Mac runs our *own* SheepShaver lineage** — it compiles the same cebix/kanjitalk755
+>   SheepShaver (plus Basilisk II, Mini vMac, DingusPPC, Previous, PearPC) to WASM. So it's a
+>   **downstream sibling**: a live, working example of host-integrating *the exact emulator core we
+>   fork*, just in a browser shell instead of native macOS. That makes it the most useful of the three
+>   references for Silicon Sheep's host/runtime integration.
+> - **"Includes Snow" — true but secondary.** DingusPPC is its core PowerPC engine; Snow was added
+>   later as an additional 68K core (not in the canonical "original emulators" set). Don't overweight
+>   the Snow tie.
+> - **Networking detail:** AppleTalk over **subdomain-defined zones** relayed through Cloudflare
+>   Durable Objects (`ether_js.cpp` → JS), **off by default**. It's a web-relay overlay — a *design
+>   comparator* for our native VDE/bridging, not a transferable mechanism.
+> - **Runtime media injection:** *build-time* disk/CD import is documented (`import-disks`/
+>   `import-cd-roms`); live drag-and-drop injection is a product feature but **not** spelled out in repo
+>   docs — verify before citing as an architecture pattern.
 
 ---
 

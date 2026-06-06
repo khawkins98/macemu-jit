@@ -9,8 +9,19 @@
 ## TL;DR
 
 We are treating [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc) as a **reference emulator**:
-not a port target and not a code-import target. It has a similar GPL license family, a solid
-interpreter/MMU modeling surface, and potentially strong ideas for correctness infrastructure.
+not a port target and not a code-import target. It has a solid interpreter/MMU modeling surface and
+potentially strong ideas for correctness infrastructure.
+
+> **Validated 2026-06-06 (web).** **License correction:** DingusPPC is **BSD-3-Clause (permissive),
+> NOT "a similar GPL family"** — so it's actually *more* permissive than our GPL, and code-level
+> borrowing would be legally possible (we still treat it ideas-first). It's a **pure C++ interpreter**
+> (no JIT) for PowerPC Macs (NuBus/Old World, early New World, Pippin; Power Mac 6100/7500/G3-Beige
+> most complete), with **real MMU translation, 601/FPU support, and CPU exceptions via setjmp/longjmp**,
+> plus modeled hardware devices and a **CLI debugger** (show code; dump memory as hex/68K/PPC asm;
+> view/edit NVRAM/registers/memory; step N). **This makes DingusPPC the single most directly relevant
+> external reference for SheepShaver** — same guest ISA (PowerPC), and it actually *implements* the
+> MMU/exception machinery SheepShaver stubs. If `MMU-NANOKERNEL-MP-PLAN.md` is ever pursued, DingusPPC
+> is the concrete reference implementation to study (how it models translation + exceptions).
 
 The intended output is a ranked matrix:
 1. **Adopt now** (low risk, high leverage for this repo).

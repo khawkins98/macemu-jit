@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Validate + sharpen the external-emulator evaluation plans (Snow / DingusPPC / Infinite Mac)
+
+Web-verified the factual claims in the three eval plans (`b2bf2c0e`) and corrected them:
+- **Snow** is **68K-only** (Mac 128K–II; 68000/020/030), **MIT**, Rust/egui, deliberately
+  hardware-level — so its *emulation* lessons apply to **BasiliskII only, never SheepShaver's PPC**;
+  only its *debugger/observability UX* transfers. Added a **"Build/debug presentation" recommendation**
+  answering "should we adopt Snow-style chrome": build a **live observability *inspector*** (not a
+  step-debugger) hosted in **Silicon Sheep (Tauri)**, fed by the **B1 profiler + existing diagnostics**
+  (heartbeat / ring / HOT-PC / `SS_JIT_WATCH_ADDR` / window-title stats) — profiling-first, no
+  emulator-core churn. Unify the three plans' separate debug-tooling crosswalks into one.
+- **DingusPPC license corrected: BSD-3-Clause (permissive), not "GPL family"** — and flagged as the
+  **most directly relevant** reference (PowerPC interpreter with real MMU + setjmp/longjmp exceptions);
+  cross-linked to `MMU-NANOKERNEL-MP-PLAN.md`.
+- **Infinite Mac** runs **our own SheepShaver lineage** (downstream WASM sibling) — best host-integration
+  reference for Silicon Sheep; "includes Snow" is true-but-secondary; AppleTalk-over-Cloudflare-Durable-
+  Objects zones, off by default; runtime media injection is a product feature not in repo docs.
+
 ### [SheepShaver][e2e] Guest UI introspection — Plan 1 walking skeleton (SS_UI_DUMP_DIR)
 
 A read-only, env-gated host-side dump of the guest `WindowList`: front→back window list with

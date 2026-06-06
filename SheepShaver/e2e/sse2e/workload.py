@@ -14,7 +14,7 @@ no emulator. `run_workload` (in scenario.py) supplies the live screenshots.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 

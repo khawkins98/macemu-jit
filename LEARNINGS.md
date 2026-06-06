@@ -24,6 +24,25 @@ the resource fork and `APPL`/creator signature get dropped. Full procedure + cod
 Proof: AltiVec Fractal Carbon (download → `unar` → MacBinary → `hformat`/`hcopy -m`) installed onto
 `e2e-apps.dsk`, `hdir` = `APPL/ddPF 8126 169060`, boot-verified to mount cleanly.
 
+**Installing a system lib (CarbonLib) that ships only as an SMI installer + the dogfooding gap it
+exposed.** Fractal Carbon (Carbon) needs CarbonLib ≥1.3; OS 9.0.4 ships ~1.0.x. CarbonLib comes only as
+a `.smi` (compressed NDIF) — `unar`/`hmount` can't crack it. So we **drove the Apple Installer over VNC
+with introspection** (`SheepShaver/e2e/run_carbonlib_install.py`) and it worked (CarbonLib → 1.6,
+`hdir` `INIT/cbon 602351 3521150 Jun 17 2002`). Lessons:
+- **The SMI's license alert is a `dialogKind` dialog** (introspection finds its "Agree" button by name),
+  but the **Apple Installer's "Continue"/"Install" panels are movable-modal/document windows whose
+  controls the dialog-only introspection couldn't see** → drove them with **Return** (default button).
+  This gap is exactly what motivated emitting **window control-list items** (see `UI-INTROSPECTION.md` /
+  `ui_introspect.cpp` `serialize_window_controls`) — a real dogfooding loop: real use exposed the hole.
+- **Poll for each button** (the self-mount + panels appear seconds apart; one-shot clicks miss them).
+- **Boot a dedicated *writable* master for the install** (the install must persist — not a per-run
+  clonefile copy); **re-create it from clean between attempts** (a force-killed partial install leaves
+  it dirty → next boot stalls in Disk First Aid → boot timeout).
+- **Extract once, reuse forever:** pull the installed `CarbonLib` extension out as a MacBinary
+  (`hcopy -m ":System Folder:Extensions:CarbonLib" CarbonLib_1.6_extension.bin`) → future installs are a
+  one-line `hcopy -m` into Extensions, no SMI/boot. CarbonLib 1.6 source: **archive.org**
+  (`download/tucows_207427_CarbonLib/carbonlib.sit` — token-free; macintoshgarden links 410 to `curl`).
+
 ## 2026-06-05 — E2E benchmark auto-shutdown (keyboard quit-to-Finder); VNC clicks were never broken (misdiagnosis)
 
 Automating the Speedometer benchmark to shut down **unattended** hit two non-obvious walls. The

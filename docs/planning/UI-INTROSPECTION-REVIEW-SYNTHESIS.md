@@ -1,6 +1,13 @@
 # Guest UI Introspection — Multi-Lens Review Synthesis & Action Plan
 
-> **Date:** 2026-06-06 · **Status:** 🟡 review complete, actions queued
+> **Date:** 2026-06-06 · **Updated:** 2026-06-06 · **Status:** 🟡 review actions landed; now in S4 (first real-world workload)
+>
+> **Progress (2026-06-06):** P0/P1 (correctness, docs, DX, S1 gate-wiring) ✅ · **Plan 2 fully shipped** —
+> 2a dialog items, 2b control state, 2c menu bar/depth/desktop, **plus control-list items for non-dialog
+> windows** (`ac4363a2`, the dogfooding fix below). **S4 underway:** Fractal Carbon installed + CarbonLib 1.6
+> resolved by *driving the SMI installer via introspection* (`run_carbonlib_install.py`) and extracted for
+> reuse. **Still open:** the generic `scenario.run_workload` + the Fractal Carbon run itself; Plan 3
+> (Backend B oracle + ParamText + socket).
 > **Scope:** Synthesis of a four-specialist review (technical writer, developer advocate, emulation
 > specialist, E2E test architect) of the shipped **Plan 1 (walking skeleton)** of guest UI
 > introspection. Source feature: spec `docs/superpowers/specs/2026-06-06-guest-ui-introspection-design.md`,
@@ -166,8 +173,8 @@ run one timed operation → record duration to the existing benchmark-export per
 | **P1** | DX: `make ui-dump` CLI + ASCII layout + `__repr__` + `wait_for_window` + `clickable→coords` | Med | Python | adoption + S1 |
 | **P1** | S1: wire v1 into `scenario.py` gates (structural asserts) | Med | Python | de-flake today |
 | **P2** | S2: v1 + masked-pHash co-assertion at each gate | Low | Python | render-regression catch |
-| **P2** | **Plan 2** (DITL items + dialogId + control state + menus + parts + ParamText; depth via GDevice; desktop role tag) | High | C++ + Python | real app automation |
-| **P3** | S4: first real-world app benchmark; then S5 workload library + Plan 3 | Med-High | Python | the end goal |
+| ✅ **P2** | **Plan 2** (DITL items + control state + menus + depth via GDevice + desktop role + **control-list items for non-dialog windows**). *Open:* parts/hot-zones (Plan 2d) + ParamText (Plan 3). | High | C++ + Python | real app automation |
+| 🟡 **P3** | **S4 underway**: Fractal Carbon installed + CarbonLib 1.6 via introspection-driven installer. *Next:* generic `scenario.run_workload` + the FC render run; then S5 library + Plan 3. | Med-High | Python | the end goal |
 
 **Recommended next:** P0 correctness + P1 docs integration immediately (cheap, unblock-everything);
 then choose between **DX/S1 harness enrichment** (fast payoff on the *current* harness) and **Plan 2**

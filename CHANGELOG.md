@@ -11,6 +11,30 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver][e2e] Guest UI introspection — window control-list items (non-dialog windows)
+
+**Dogfooding fix.** Driving the CarbonLib installer over VNC exposed a real hole: the Apple Installer's
+"Continue"/"Install" buttons live in a movable-modal/document window, but Backend A only emitted dialog
+DITL `items` for `dialogKind` windows — so a non-dialog window's controls were absent from the JSON and
+the driver had to fall back to blind Return. Now `serialize_window_controls()` walks
+`WindowRecord.controlList` (+0x8C) → the `ControlRecord` chain (`nextControl`/`contrlRect`/`contrlHilite`/
+`contrlValue`/`contrlTitle`, reusing Plan 2b's layout) for **non-dialog** windows too, emitting each
+control as an `item` (type/rect/text/value/hilite, same schema) so `find_item`/`click_item` work on them
+unchanged. **Live-verified against the very installer that exposed the gap**: its Continue button is now
+found by name (`click 'Continue'`) where it previously logged `no dialog button; Return`. `make test-jit`
+score=100; ui-introspect-test ALL OK; e2e offline suite 107 passed. Commit `ac4363a2`.
+
+### [e2e][docs] Real-world workload bring-up: Fractal Carbon install + CarbonLib via introspection
+
+First steps toward the S4/S5 real-app workload library. Installed **AltiVec Fractal Carbon** onto the
+E2E apps disk host-side (forks/type intact; `docs/HOST-SIDE-MAC-SOFTWARE-INSTALL.md`), then resolved its
+**CarbonLib ≥1.3** dependency the hard way — **drove the Apple `.smi` installer over VNC with guest-UI
+introspection** (`SheepShaver/e2e/run_carbonlib_install.py`): CarbonLib → 1.6 (`INIT/cbon … Jun 2002`).
+Extracted the installed extension as a reusable MacBinary (`/Users/Shared/macemu/CarbonLib_1.6_extension.bin`)
+so future installs are a one-line `hcopy -m` — no SMI, no boot. Procedure + the SMI/dialog-vs-document-window
+gotchas documented in the install doc; saga in `LEARNINGS.md`. Discovery harness commit `3c0368c8`;
+install driver committed with `ac4363a2`.
+
 ### [SheepShaver][e2e] Guest UI introspection — Plan 2c: menu bar + depth + desktop role
 
 The last app-automation enabler: a top-level `menuBar` (menus + items + **Command-key equivalents** +

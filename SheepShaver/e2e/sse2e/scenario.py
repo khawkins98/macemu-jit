@@ -216,8 +216,15 @@ def run_benchmark(
             snap = uidump.snapshot(dump_dir, timeout=8.0)
             dlg = snap.front_dialog()
             if dlg is not None:
-                items = ", ".join(f"{it.type}:{it.text!r}@({it.rect.left},{it.rect.top})"
-                                  for it in dlg.items) or "(none)"
+                def _fmt(it):
+                    s = f"{it.type}:{it.text!r}@({it.rect.left},{it.rect.top})"
+                    if it.value is not None:
+                        ok = (it.crect is not None
+                              and it.crect.left == it.rect.left and it.crect.top == it.rect.top
+                              and it.crect.right == it.rect.right and it.crect.bottom == it.rect.bottom)
+                        s += f" val={it.value} hil={it.hilite} crect_ok={ok}"
+                    return s
+                items = ", ".join(_fmt(it) for it in dlg.items) or "(none)"
                 print(f"  [ui] choose-disk dialog: refCon={dlg.ref_con} default={dlg.default_item} "
                       f"{len(dlg.items)} items: {items}", flush=True)
             else:

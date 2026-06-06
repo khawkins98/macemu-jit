@@ -585,6 +585,10 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
             .join("")}
         </select>
       </div>
+      <div class="form-group">
+        <label>Clipboard Sync</label>
+        <p class="ss-text-muted">✓ Bidirectional — copy and paste works between guest and host (text, images, styled text). Unicode text (utxt) is not yet supported; text uses Mac Roman encoding.</p>
+      </div>
     `,
     display: (() => {
       const currentScreen = getPref("screen") || vm.screen;
@@ -806,10 +810,10 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
           <div class="form-group">
             <label>Clipboard Conversion</label>
             <select class="input" id="setting-noclipconversion">
-              <option value="false" ${getPref("noclipconversion") !== "true" ? "selected" : ""}>Enabled (convert clipboard)</option>
-              <option value="true" ${getPref("noclipconversion") === "true" ? "selected" : ""}>Disabled (raw clipboard)</option>
+              <option value="false" ${getPref("noclipconversion") !== "true" ? "selected" : ""}>Convert formats (recommended)</option>
+              <option value="true" ${getPref("noclipconversion") === "true" ? "selected" : ""}>Raw (no conversion)</option>
             </select>
-            <p class="ss-text-muted">Converts text encoding (Mac Roman to Unicode) and image formats when copying between guest and host. Disable if clipboard sync causes issues.</p>
+            <p class="ss-text-muted">Format conversion translates Mac Roman text to Unicode and converts PICT images. On macOS, clipboard sync is always bidirectional and cannot be fully disabled. This setting only controls format conversion (on Linux/Windows it also gates the sync itself).</p>
           </div>
           <div class="form-group">
             <label>Hardware Cursor</label>

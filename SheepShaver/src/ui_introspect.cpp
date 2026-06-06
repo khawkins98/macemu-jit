@@ -178,6 +178,73 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
     j += "]";
 }
 
+// Walk the live menu bar (MenuList $0A1C) and append a "menuBar" JSON object. Read-only; every deref
+// guarded. Handle-anchoring: a menu whose MenuInfo/title looks wild stops the walk (a wrong stride
+// surfaces as a bad deref, not garbage output). cmd-keys are the inline cmdChar trailer byte.
+static void serialize_menu_bar(std::string &j) {
+    uint16 mbarHeight = ReadMacInt16(0x0BAA);
+    j += "\"menuBar\":{";
+    char hb[48]; snprintf(hb, sizeof(hb), "\"height\":%u,\"menus\":[", mbarHeight); j += hb;
+    uint32 listH = ReadMacInt32(0x0A1C);
+    if (!listH || !guest_ptr_ok(listH)) { j += "]}"; return; }
+    uint32 lp = ReadMacInt32(listH);
+    if (!lp || !guest_ptr_ok(lp)) { j += "]}"; return; }
+    uint16 lastMenu = ReadMacInt16(lp);                 // = numMenus * 6
+    if (lastMenu == 0 || (lastMenu % 6) != 0) { j += "]}"; return; }
+    int numMenus = lastMenu / 6;
+    if (numMenus > 64) { j += "]}"; return; }
+    int emitted = 0;
+    for (int i = 0; i < numMenus; i++) {
+        uint32 entry = lp + 6 + i * 6;
+        if (!guest_ptr_ok(entry + 6)) break;
+        uint32 mh = ReadMacInt32(entry);                // MenuHandle
+        if (!mh || !guest_ptr_ok(mh)) break;            // handle-anchoring: bad -> stop
+        uint32 mi = ReadMacInt32(mh);                   // -> MenuInfo
+        if (!mi || !guest_ptr_ok(mi + 0x0E)) break;
+        int16 menuID = (int16)ReadMacInt16(mi);
+        int32 enableFlags = (int32)ReadMacInt32(mi + 0x0A);
+        uint8 *tp = Mac2HostAddr(mi + 0x0E);
+        int titleLen = tp[0];
+        if (titleLen > 63 || !guest_ptr_ok(mi + 0x0F + titleLen)) break;   // anchoring sanity
+        bool isApple = (titleLen == 1 && tp[1] == 0x14);
+        std::string title;
+        { std::string raw((const char *)tp + 1, titleLen);
+          title = isApple ? std::string("\xef\xa3\xbf") /*U+F8FF*/ : macroman_to_utf8(raw); }
+        if (emitted++) j += ",";
+        char mb[160];
+        snprintf(mb, sizeof(mb), "{\"id\":%d,\"enabled\":%s%s,\"title\":\"",
+                 menuID, (enableFlags & 1) ? "true" : "false",
+                 isApple ? ",\"role\":\"apple\"" : "");
+        j += mb; j += json_escape(title); j += "\",\"items\":[";
+        uint32 p = mi + 0x0F + titleLen;
+        int k = 0;
+        while (true) {
+            if (!guest_ptr_ok(p + 1)) break;
+            int ilen = Mac2HostAddr(p)[0];
+            if (ilen == 0) break;                       // zero-length item = end of menu
+            if (ilen > 63 || !guest_ptr_ok(p + 1 + ilen + 4)) break;
+            k++;
+            uint8 *ip = Mac2HostAddr(p + 1);
+            std::string itext = macroman_to_utf8(std::string((const char *)ip, ilen));
+            uint8 *tr = Mac2HostAddr(p + 1 + ilen);     // 4-byte trailer
+            uint8 cmdChar = tr[1], markChar = tr[2];
+            bool itemEnabled = (k <= 31) ? ((enableFlags & (1 << k)) != 0) : true;
+            if (k > 1) j += ",";
+            char ib[96];
+            snprintf(ib, sizeof(ib), "{\"index\":%d,\"enabled\":%s,\"text\":\"",
+                     k, itemEnabled ? "true" : "false");
+            j += ib; j += json_escape(itext); j += "\"";
+            if (cmdChar > 0x20) { char c[24]; snprintf(c, sizeof(c), ",\"cmdKey\":\"%c\"", (char)cmdChar); j += c; }
+            else if (cmdChar == 0x1B) { char c[32]; snprintf(c, sizeof(c), ",\"submenu\":%d", (int)markChar); j += c; }
+            j += "}";
+            p += 1 + ilen + 4;
+            if (k > 255) break;
+        }
+        j += "]}";
+    }
+    j += "]}";
+}
+
 // Serialize the window list (Backend A) to JSON. nonce is the request nonce echoed into output.
 static std::string serialize_snapshot(const std::string &nonce) {
     std::string j = "{";
@@ -205,6 +272,8 @@ static std::string serialize_snapshot(const std::string &nonce) {
         snprintf(sc, sizeof(sc), "\"screen\":{\"width\":%d,\"height\":%d,\"depth\":%d},", screenW, screenH, depth);
         j += sc;
     }
+    serialize_menu_bar(j);
+    j += ",";
 
     // Walk the window list, building per-window JSON into windows_json.
     // modalActive and frontWindowIndex are determined during the walk.

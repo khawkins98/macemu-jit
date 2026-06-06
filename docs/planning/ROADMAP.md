@@ -121,9 +121,16 @@ harness that can't catch mistakes just produces the next silent bug.
     fused (`fmsubs`/`fnmadds`/`fnmsubs`) all clean. `fctiw`/`fctiwz` both emitted 64-bit `FCVTZS Xd`
     → `fctiw` ignored FPSCR rounding (cloned `fctiwz`), overflow mis-saturated, NaN→0. Fixed: 32-bit
     `FCVTAS Wd` (`fctiw`, round-half-away = `frin` = default RN) / `FCVTZS Wd` (`fctiwz`) + NaN→`0x80000000`
-    fixup; 5 vectors, **`make test-jit` 302/302**. Caveat: only default FPSCR RN=0 honored (non-default
-    dynamic modes unread — still strictly better). `fsqrt`/`fres`/`frsqrte` un-sweepable (interp lacks
+    fixup; 5 vectors, **`make test-jit` 302/302**. `fsqrt`/`fres`/`frsqrte` un-sweepable (interp lacks
     them / estimates). **27 codegen bugs fixed total this session.**
+    - 🟡 **OPEN (adversarial-review finding, filed) — `fctiw`/`fctid` non-default FPSCR[RN].** `fctiw`
+      hardcodes `FCVTAS` (ties-away), correct only for RN=0 (the practical default); RN=1/2/3 diverge
+      (review confirmed via `mtfsfi`). `fctid` is *also* wrong at RN=0 (uses fixed `FCVTNS`=ties-even,
+      but the interp's RN=0 is ties-**away**). **Fix:** runtime 4-way dispatch on FPSCR[RN] →
+      `FCVTAS`(0)/`FCVTZS`(1)/`FCVTPS`(2)/`FCVTMS`(3) (note PPC RN=0 is away, *not* ARM nearest-even,
+      so `FRINTI`+FPCR.RMode won't work — the `emit_sync_fpscr_rounding` map sends RN=0→ARM-even).
+      Validate all 4 modes vs interp. **Practical risk low** (Mac OS ABI default RN=0; compilers don't
+      emit RN changes) but genuine (the RN-sync machinery exists because RN *does* change at runtime).
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at

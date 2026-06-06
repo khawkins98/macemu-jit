@@ -3,6 +3,22 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-06 — A launch-failure modal alert emits NO signal; detect it via the menu bar
+
+Building `scenario.run_workload`, the launch-error path (boot the app on a disk with the *wrong*
+CarbonLib → the "application could not be opened because CarbonLib--GetPortBitMapForCopyBits could not be
+found" alert) was a false PASS at first. Why it's hard: that alert is thrown in a context that **services
+no idle hook** — the run logged **zero `[APP] modal=1`** signals and `uidump.snapshot` of it **times out**
+(introspection can't read it). So neither the log nor Backend-A can see a launch failure. The screenshot
+is the *only* evidence — and pHash can't read its text. The robust discriminator turned out to be the
+**menu bar**: classic Mac OS gives the menu bar to the frontmost app, so a region-pHash of the menu-bar
+strip vs the (volume-open) Finder baseline cleanly separates the cases — **app launched** (Fractal Carbon's
+menus, Δ≈28-30) vs **a Finder dialog with the menu bar intact** (Δ≈4-8). Threshold 14 with margin on both
+sides; boot-validated both directions. Lesson: for "did the app actually launch (vs error behind an
+alert)", don't trust `[APP]`/introspection — **the menu bar is the frontmost-app tell, and it's only
+visible in the screenshot** (`imagecmp.region_phash` / `workload.classify_launch`). Also: capture the
+launch baseline AFTER opening the volume window, so launch-divergence measures the app, not the window.
+
 ## 2026-06-06 — A running Carbon app's fullscreen canvas is invisible to Backend-A introspection
 
 Validating Fractal Carbon (it **launches + renders** with CarbonLib 1.6 — the old

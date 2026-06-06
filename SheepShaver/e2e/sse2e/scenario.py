@@ -61,6 +61,14 @@ def run_lifecycle(
             wins = ", ".join(f"[{w.index}]{w.title!r}({w.window_class})" for w in snap.windows) or "(none)"
             print(f"  [ui] desktop snapshot: {len(snap.windows)} windows, modal={snap.modal_active}: {wins}",
                   flush=True)
+            mb = snap.menu_bar
+            if mb is not None:
+                titles = [m.title for m in mb.menus]
+                fm = mb.menu("File")
+                fkeys = {it.text: it.cmd_key for it in fm.items if it.cmd_key} if fm else {}
+                file_ok = (len(titles) >= 3 and titles[1] == "File" and titles[2] == "Edit")
+                print(f"  [ui] menu bar: {len(mb.menus)} menus {titles} | File/Edit_ok={file_ok} "
+                      f"File keys={fkeys}", flush=True)
         except Exception as e:
             print(f"  [ui] snapshot unavailable (non-fatal): {e}", flush=True)
 

@@ -11,6 +11,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] AltiVec shift/rotate codegen bugs found (hunt paid off) — repros recorded, fix pending
+
+Acting on the "AltiVec/FP is the highest residual-bug surface" strategy verdict, led a differential
+hunt with the zero-coverage variable-shift family (where ARM64 NEON is *not* 1:1 with AltiVec).
+Found **real, oracle-validated** codegen bugs in minutes — same lane/width-sensitive category that
+produced the 9 `ev_mixed` bugs. Validated against the **real emulator** interp (`SS_TEST_HEX
+SS_TEST_JIT={0,1}`), not the rom-harness subset interp:
+
+- **Missing mod-element-width masking** — `vslb v2,v1,v3` with amount 9: interp `0x08` (9 mod 8 →
+  <<1), JIT `0x00` (NEON `USHL` by 9 ≥ 8 shifts out). Affects all variable shifts/rotates at
+  amount ≥ width.
+- **Logical right shifts emit the wrong shift** — `vsrb` `0xF0>>1`: interp `0x78` (logical), JIT
+  `0xe0` (shifted **left**!); `vsrh`/`vsrw` give arithmetic (sign-filled) results instead of
+  logical. `vsra{b,h,w}` (arithmetic right) are correct.
+- **Rotates `vrl{b,h,w}`** use a plain shift by inspection (lose wrapped bits) — suspected, needs an
+  lvx-built repro.
+
+The codegen's own inline comments are scrambled (`vsrb`↔`vsrab`), confirming this path was written
+without differential validation. **Repros + fix plan: `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.**
+Fix deferred to a focused, differentially-validated pass (add xfail repros → fix `ppc-jit.cpp`
+~3320–3331/3446–3447 op-by-op → `make test-jit` 270 + boot smoke). ROADMAP A1.
+
 ### [docs] Unified test-session instrumentation design + planning reconciliation
 
 - **New design spec** `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`:

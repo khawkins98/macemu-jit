@@ -96,6 +96,15 @@ harness that can't catch mistakes just produces the next silent bug.
   a residual codegen bug still hides. New curated vectors here are permanent CI assets (vs.
   throwaway triage). Grow `gen-altivec-vectors.py` (+ FP) alongside A2. *(Strategy-review verdict
   2026-06-06: ranked above the rom-harness GPR triage below.)*
+  - 🐛 **HUNT PAID OFF (2026-06-06) — confirmed AltiVec shift/rotate bug family.** Leading with the
+    zero-coverage variable-shift family (where NEON ≠ AltiVec 1:1) found **real, oracle-validated**
+    codegen bugs in minutes: (1) variable shifts lack mod-element-width masking (`vslb` shift 9 →
+    JIT 0, interp 0x08); (2) logical right shifts `vsr{b,h,w}` emit the wrong shift (`vsrb` shifts
+    *left*; `vsrh/vsrw` arithmetic not logical); (3) rotates `vrl{b,h,w}` use plain shift (suspected,
+    needs lvx repro). Full repros + fix plan: `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
+    **Fix pending** (focused, differentially-validated pass: add xfail repros → fix `ppc-jit.cpp`
+    ~3320–3331/3446–3447 op-by-op → `make test-jit` + boot smoke). This is the proof the
+    AltiVec/FP surface is *live*, not theater.
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at

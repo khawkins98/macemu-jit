@@ -162,7 +162,7 @@ function renderVmRow(vm: VmProfile): string {
       </div>
       <div class="vm-row__info">
         <span class="vm-row__name">${escapeHtml(vm.name)}</span>
-        <span class="vm-row__meta">${osLabel}${elapsed ? ` · ${elapsed}` : ""}</span>
+        <span class="vm-row__meta">${isRunning ? `● Running${elapsed ? " · " + elapsed : ""}` : osLabel}</span>
       </div>
     </div>
   `;
@@ -567,7 +567,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         </div>
       </div>
       <div class="form-group">
-        <label>RAM <span class="hot-reload-badge restart">Requires restart</span></label>
+        <label>RAM ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
         <select class="input" id="setting-ram" ${isRunning ? "disabled" : ""}>
           ${[64, 128, 256, 512]
             .map((m) => `<option value="${m}" ${vm.ram_mb === m ? "selected" : ""}>${m} MB</option>`)
@@ -590,7 +590,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
       const currentFrameskip = getPref("frameskip") || "1";
       return `
       <div class="form-group">
-        <label>Window Size <span class="hot-reload-badge restart">Requires restart</span></label>
+        <label>Window Size ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
         <select class="input" id="setting-screen-preset" ${isRunning ? "disabled" : ""}>
           ${presets
             .map((s) => `<option value="${s}" ${currentScreen === s ? "selected" : ""}>${s.replace("win/", "").replace("/", "×")}</option>`)
@@ -735,7 +735,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         </select>
       </div>
       <div class="form-group">
-        <label>JIT Cache Size <span class="hot-reload-badge restart">Requires restart</span></label>
+        <label>JIT Cache Size ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
         <select class="input" id="setting-jitcache" ${isRunning ? "disabled" : ""}>
           ${["64M", "128M", "256M", "512M"]
             .map((v) => `<option value="${v}" ${getPref("jitcachesize") === v ? "selected" : ""}>${v.replace("M", " MB")}</option>`)
@@ -750,7 +750,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         </div>
       </div>
       <div class="form-group">
-        <label>Boot Driver <span class="hot-reload-badge restart">Requires restart</span></label>
+        <label>Boot Driver ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
         <select class="input" id="setting-bootdriver" ${isRunning ? "disabled" : ""}>
           <option value="0" ${getPref("bootdriver") !== "-62" ? "selected" : ""}>Hard Disk</option>
           <option value="-62" ${getPref("bootdriver") === "-62" ? "selected" : ""}>CD-ROM</option>
@@ -784,7 +784,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
             <p class="ss-text-muted">Sleeps the host CPU when the guest is idle, reducing power and heat. Disable if the guest freezes during idle periods.</p>
           </div>
           <div class="form-group">
-            <label>JIT Compiler <span class="hot-reload-badge restart">Requires restart</span></label>
+            <label>JIT Compiler ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
             <select class="input" id="setting-jit" ${isRunning ? "disabled" : ""}>
               <option value="true" ${getPref("jit") !== "false" ? "selected" : ""}>Enabled</option>
               <option value="false" ${getPref("jit") === "false" ? "selected" : ""}>Disabled (interpreter)</option>

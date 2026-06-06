@@ -243,6 +243,7 @@ body {
 .vm-row:last-child { border-bottom: none; }
 .vm-row:hover { background: var(--ss-surface-hover); cursor: pointer; }
 .vm-row--running { background: var(--ss-surface-alt); }
+.vm-row--running .vm-row__meta { color: var(--ss-success); }
 .vm-row--selected { background: var(--ss-accent); color: white; }
 .vm-row--selected .vm-row__meta { color: rgba(255,255,255,0.7); }
 .vm-row--selected .vm-row__btn { color: rgba(255,255,255,0.8); }
@@ -426,8 +427,15 @@ body {
 .detail-save-bar {
   padding: var(--ss-space-sm) var(--ss-space-md);
   border-top: 1px solid var(--ss-border);
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ss-space-sm);
   flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  background: var(--ss-surface);
+  box-shadow: 0 -2px 4px var(--ss-bevel-dark);
+  z-index: 10;
 }
 
 /* Community links */

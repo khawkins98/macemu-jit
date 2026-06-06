@@ -20,7 +20,7 @@ JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
         test test-opcodes test-jit test-rom harness-count ui-introspect-test \
-        e2e e2e-smoke e2e-bench e2e-test e2e-setup e2e-clean \
+        e2e e2e-smoke e2e-bench e2e-test e2e-setup e2e-clean ui-dump \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
         screenshot kill clean help \
@@ -177,6 +177,10 @@ e2e-test: e2e/.venv/.installed
 
 e2e-clean:
 	rm -rf e2e/.venv
+
+ui-dump: e2e/.venv/.installed
+	@test -n "$(SS_UI_DUMP_DIR)" || { echo "Set SS_UI_DUMP_DIR (the dir the running emulator uses)"; exit 1; }
+	cd e2e && .venv/bin/python -m sse2e.uidump "$(SS_UI_DUMP_DIR)"
 
 test-rom: build-rom-harness
 	@echo ""

@@ -49,3 +49,30 @@ def test_front_dialog():
     dlg = snap.front_dialog()
     assert dlg is not None and dlg.is_dialog
     assert dlg.index == 0
+
+
+def test_repr_is_readable():
+    snap = _load()
+    assert "Snapshot(backend=A" in repr(snap)
+    assert "Macintosh HD" in repr(snap.windows[1])
+
+
+def test_render_layout():
+    out = _load().render()
+    assert "Macintosh HD" in out and "Screen 1024x768" in out
+    assert "FRONT" in out
+
+
+def test_click_point():
+    snap = _load()
+    front = snap.windows[0]          # modal dialog, active -> clickable
+    behind = snap.windows[1]         # behind the modal -> not clickable
+    assert snap.click_point(front) == front.content_bounds.center
+    assert snap.click_point(behind) is None
+
+
+def test_find_title_contains():
+    snap = _load()
+    assert len(snap.find(title_contains="Macintosh")) == 1
+    assert len(snap.find(title_contains="HD")) == 1
+    assert snap.find(title="HD") == []        # exact still works (no match)

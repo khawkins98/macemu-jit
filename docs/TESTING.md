@@ -63,11 +63,18 @@ note their blind spots** (below) — passing them is necessary, not sufficient.
 
 ### Known coverage gaps in the automated harness
 
-1. **The vectors are integer-heavy.** They concentrate on integer ALU,
-   loads/stores, and branches. **Floating point (51 JIT ops) and AltiVec (156
-   JIT ops) are comparatively under-tested**, and FP/vector encoding bugs are
-   subtle. This is the biggest gap — the fix is more `test-jit` vectors plus the
-   conformance apps below.
+1. **The vectors are integer-heavy, but AltiVec coverage is improving fast.** They
+   concentrate on integer ALU, loads/stores, and branches. **Floating point (51 JIT
+   ops) is still comparatively under-tested.** AltiVec coverage jumped in 2026-06: a
+   differential sweep (every untested VX op vs the real interpreter) found and fixed
+   **26 codegen bugs** — the whole variable shift/rotate family and the saturating
+   add/sub + signed-average family — each now with a strong committed vector
+   (`av_vsl*`/`av_vsr*`/`av_vrl*`/`av_vadd*s`/`av_vsub*s`/`av_vavgs*`). Integer
+   compares were swept and confirmed correct. **Still open** (structural, tracked in
+   `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md` + ROADMAP A2): the 2-source/ev_mixed
+   pack-saturate, pixel pack/unpack, and sum-across families, plus FP ops. The fix
+   loop that works: capstone-verify the encoding → `SS_TEST_HEX` referee vs the real
+   interp → committed vector → `test-jit` (see the AltiVec rules below).
 2. **Register-allocator eviction — now covered, but only in JIT mode.** The
    `lmw_stmw_wide` vector (12 GPRs > `RA_NUM_REGS=8`) forces mid-block `ra_evict`
    of both clean and dirty slots and passes under `make test-jit`. Caveat: it

@@ -193,7 +193,7 @@ harness that can't catch mistakes just produces the next silent bug.
 
 ---
 
-## A2. ✅ AltiVec `ev_mixed` correctness — element-order class COMPLETE (tested ops, boot-verified)
+## A2. 🟡 AltiVec `ev_mixed` correctness — tested ops COMPLETE; sweep (2026-06-06) reopened untested pack/pixel siblings
 
 **Why:** **silent data corruption in the emulator that works** (SheepShaver). AltiVec is live
 (the emulator advertises a G4). Only triggers when guest software uses the affected ops
@@ -226,10 +226,23 @@ non-widening op). xfail→xpass, scored gate 262→264. **The ev_mixed quarantin
 
 **Remaining siblings (untested, no test vector — NOT in quarantine):** halfword multiplies
 `vmul{o,e}{u,s}h` (need the hw→word analogue: `UZP` on `.8H` + `[SU]MULL.4S`; `word_element` is
-identity so no output rev), the word pack `vpkuwum` (ignores vA like `vpkuhum` did), and signed
-byte multiplies `vmulosb`/`vmulesb` (share `emit_vmul_byte` with `SMULL`, emitted as *prospective*
-— no signed test vector). All flagged in `ppc-jit.cpp` + tracked here. **Next A2 step:** write
-distinct/signed test vectors for these and verify (overlaps A1 "broaden AltiVec coverage").
+identity so no output rev), and signed byte multiplies `vmulosb`/`vmulesb` (share `emit_vmul_byte`
+with `SMULL`, emitted as *prospective* — no signed test vector). All flagged in `ppc-jit.cpp`.
+
+**🐛 REOPENED by the broad sweep (2026-06-06) — the pack/pixel family is broken, not "complete".**
+The A1 differential sweep proved several more `ev_mixed`/2-source ops are still wrong (they never had
+vectors, so the "class complete" claim only ever covered the *tested* ops):
+- **Pack-saturate** `vpkshss/swss` (398/462 emit a *FP* narrow `fcvtn` — wrong instruction),
+  `vpkshus/swus` (270/334), `vpkuhus/uwus` (142/206 wrong signed/unsigned narrow), `vpkuwum` (78):
+  all 2-source saturating narrows needing the `REV32` normalize like `vpkuhum` got.
+- **Pixel** `vpkpx` (782) pack and `vupkhpx`/`vupklpx` (846 — its XO is even *routed to a
+  float-convert case*! / 974): need the 1-5-5-5 channel expansion, not a width narrow/widen.
+- **Sum-across** `vsumsws`/`vsum2sws`/`vsum4sbs` (1928/1672/1800): the `case` labels are *rotated*
+  (each emits a neighbour's reduction) + no saturation.
+**Next A2 step:** fix these with the `emit_vmrg`/`REV32`-normalize approach + distinct vectors. Full
+verified worklist (canonical XO, emitted-vs-correct NEON): `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`
+"Broad-sweep results". Cheap adjacent cleanups: dead cases `1794/1858/1922` in `ppc-jit.cpp`
+(unreachable, misleading comments) and the missing `vsubuws` (XO 1664) JIT case (falls back to interp).
 
 **Root cause:** VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed
 within each word). `emit_load_vr` loads raw via `LDR Q`; the JIT then indexes NEON lanes with

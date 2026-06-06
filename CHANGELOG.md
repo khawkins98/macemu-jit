@@ -11,7 +11,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
-### [SheepShaver] AltiVec shift/rotate codegen bugs found (hunt paid off) — repros recorded, fix pending
+### [SheepShaver] AltiVec shift/rotate codegen bugs found (hunt paid off) — repros recorded, fix pending (`c7b0c98c`)
 
 Acting on the "AltiVec/FP is the highest residual-bug surface" strategy verdict, led a differential
 hunt with the zero-coverage variable-shift family (where ARM64 NEON is *not* 1:1 with AltiVec).
@@ -33,7 +33,7 @@ without differential validation. **Repros + fix plan: `docs/planning/ALTIVEC-SHI
 Fix deferred to a focused, differentially-validated pass (add xfail repros → fix `ppc-jit.cpp`
 ~3320–3331/3446–3447 op-by-op → `make test-jit` 270 + boot smoke). ROADMAP A1.
 
-### [docs] Unified test-session instrumentation design + planning reconciliation
+### [docs] Unified test-session instrumentation design + planning reconciliation (`88c3311d`)
 
 - **New design spec** `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`:
   one `SS_RUN_DIR` run-stamp convention + a JSONL record schema (with an `oracle`-trust field) so the
@@ -46,7 +46,7 @@ Fix deferred to a focused, differentially-validated pass (add xfail repros → f
   rom-harness arc (span gate + triage ✅, integer path clean) and AltiVec/FP promoted to 🔜;
   OPTIMIZATION-PLAN P0 cross-links the perf-join half of the spec; ROADMAP "Updated" → 2026-06-06.
 
-### [docs] Multi-core offload plan ("multithreading light")
+### [docs] Multi-core offload plan ("multithreading light") (`4e8cc8f8`)
 
 - Added `docs/planning/MULTICORE-OFFLOAD-PLAN.md`: what guest/emulator work can move to other host
   cores. Core finding: the guest is one logical cooperative CPU, so the high-ROI wins are
@@ -59,7 +59,7 @@ Fix deferred to a focused, differentially-validated pass (add xfail repros → f
 - Wired bidirectionally: ROADMAP B4 pointer; back-pointer from `MMU-NANOKERNEL-MP-PLAN.md` sub-plan C
   (Tier 3 is its multi-core extension).
 
-### [docs] Supervisor-fidelity plan (MMU / nanokernel / MP) + New World ROM "second wall"
+### [docs] Supervisor-fidelity plan (MMU / nanokernel / MP) + New World ROM "second wall" (`36e45a74`)
 
 - Added `docs/planning/MMU-NANOKERNEL-MP-PLAN.md`: specs the three privileged layers SheepShaver
   deliberately *stubs* (MMU faked V=P; nanokernel exception/interrupt model bypassed; preemptive
@@ -73,7 +73,7 @@ Fix deferred to a focused, differentially-validated pass (add xfail repros → f
   and added **ROADMAP D3** ("break the 9.0.4 ceiling") tying the two plans together. New World ROM
   support was previously unlinked from the roadmap; now it is.
 
-### [SheepShaver] rom-harness — span gate cleans the differential signal (~46 → ~7–8 failures/seed)
+### [SheepShaver] rom-harness — span gate cleans the differential signal (~46 → ~7–8 failures/seed) (`fe378c5d`, triage `980cf4df`)
 
 Follow-up to the skip-not-abort fix: the harness's failures were dominated by a **block-model
 mismatch**, not codegen bugs — the scanner ends a block at `bc` (opcode 16) but the JIT runs
@@ -101,7 +101,7 @@ same start PC (the same root cause as `SS_JIT_VERIFY` fix-(i)).
   coverage by running the interp for the JIT's instruction count. Higher-priority residual-bug
   surface remains AltiVec/FP operand vectors in `test-jit`.
 
-### [SheepShaver] rom-harness — skip-not-abort on fallback blocks (broad sweeps unblocked)
+### [SheepShaver] rom-harness — skip-not-abort on fallback blocks (broad sweeps unblocked) (`c1a10c0a`)
 
 The standalone differential rom-harness `abort()`ed the entire run the moment a JIT block that
 the compiler marked `complete == true` hit the inline-interp fallback bridge (`ppc_jit_interp_one`)
@@ -135,7 +135,7 @@ op handled only via fallback. Under random seeds this killed the run on the *fir
   fallback-ending blocks) is the same `ends_in_fallback` signal gap noted in `ppc-jit.cpp:4792`
   and `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`.
 
-### [SheepShaver] SS_JIT_VERIFY oracle — X1 fix (i): replay mirrors the JIT single-block exit
+### [SheepShaver] SS_JIT_VERIFY oracle — X1 fix (i): replay mirrors the JIT single-block exit (`5ac5e676`, dedup `7314bc9c`)
 
 The differential oracle's interp replay used "stop when pc leaves [start,end)", which
 re-iterated intra-block loops, followed blr returns, and ran into post-bc dead code — the
@@ -226,7 +226,7 @@ that inflates `n_insns`.
   (200/200, `GPR10` confirmed stepping by 2 — correct codegen, oracle double-apply); `SS_JIT_VERIFY_PC`
   scoping confirmed working. Harness unaffected (270/270).
 
-### [SheepShaver] Guest OS version detection via SysVersion low-memory global
+### [SheepShaver] Guest OS version detection via SysVersion low-memory global (`ce725b75`)
 
 - The emulator's idle hook now reads the guest's `SysVersion` ($015A) — a BCD-packed
   OS version set by Mac OS during boot. Emits `[SYSV] osVersion=0x0860 (8.6.0)` to
@@ -234,7 +234,7 @@ that inflates `n_insns`.
   (benchmark disk). This is a generic guest-state introspection hook, reusable for
   other runtime queries.
 
-### [shared] SavePrefs now preserves comments, blank lines, and ordering
+### [shared] SavePrefs now preserves comments, blank lines, and ordering (`99b9b720`)
 
 - Previously `SavePrefs()` dumped the in-memory prefs list, stripping all `#` comments
   and user ordering. New `SavePrefsToStreamMerging()` reads the original file, passes
@@ -270,7 +270,7 @@ SiliconSheep Tauri v2 launcher progressed from scaffold to functional app:
 - **Deps**: Vite 8.0, TypeScript 6.0, all Tauri packages at latest (2.11.x).
 - **Renamed** "Silicon Sheep" → "SiliconSheep" (one word, like SheepShaver).
 
-### [SheepShaver][BasiliskII] JIT harness & diagnostic integrity hardening
+### [SheepShaver][BasiliskII] JIT harness & diagnostic integrity hardening (`d52d4103`, `8d101b2e`, `c5cc8b0d`)
 
 Tooling-only (no runtime/codegen change); hardens the signals used to judge the JIT:
 
@@ -296,7 +296,7 @@ Tooling-only (no runtime/codegen change); hardens the signals used to judge the 
   in an FPR/VR/memory the REGDUMP can't see) remains deferred to the `gen-*-vectors.py`
   generators / a future sentinel-mutation redesign.
 
-### [SheepShaver] E2E harness — first-run DX: shared entry scaffolding, GUI-session + configure preflight
+### [SheepShaver] E2E harness — first-run DX: shared entry scaffolding, GUI-session + configure preflight (`3ab8bd59`)
 
 From a developer-advocate review of the onboarding cliff:
 
@@ -313,7 +313,7 @@ From a developer-advocate review of the onboarding cliff:
   the one-time `configure` incantation (it previously lived only in gitignored `CLAUDE.md`,
   invisible to a fresh clone). README also gains an env-var reference table. +8 unit tests.
 
-### [SheepShaver] E2E harness — trustworthy gates: FakeRunner tests, settle-based gate, honest PASS
+### [SheepShaver] E2E harness — trustworthy gates: FakeRunner tests, settle-based gate, honest PASS (`daaa1965`)
 
 Hardens the *integrity* of the benchmark's pass/fail signal (this session exposed runs printing
 PASS when the automation hadn't actually worked unattended):
@@ -331,7 +331,7 @@ PASS when the automation hadn't actually worked unattended):
   signatures (`saw_clean_shutdown`: "Shutdown complete." + the atexit session line), not just a 0
   exit code — so PASS means the harness genuinely drove an unattended shutdown. 67 unit tests pass.
 
-### [SheepShaver] E2E benchmark history export
+### [SheepShaver] E2E benchmark history export (`cad1af88`, SS_E2E_RUNS `0dc302cf`)
 
 `make e2e-bench` now saves Speedometer's text report in-guest (Cmd-T → Return, accepting
 the default name "Power Macintosh Report"), extracts it host-side via hfsutils (no extra
@@ -356,7 +356,7 @@ check. Design + plan:
 `docs/superpowers/specs/2026-06-05-benchmark-result-export-design.md`,
 `docs/superpowers/plans/2026-06-05-benchmark-result-export.md`.
 
-### [docs] BasiliskII → SheepShaver JIT cross-pollination triage
+### [docs] BasiliskII → SheepShaver JIT cross-pollination triage (`33ffbea6`)
 
 - Added `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`: which techniques
   from the BasiliskII 68K JIT (the more mature, same-host ARM64 lineage) are worth borrowing for
@@ -373,7 +373,7 @@ check. Design + plan:
   the two throughput borrows (X2 lazy-CR0, X3 bcctr) defer — also premature by our own rule
   (gated on the unbuilt B1 execution-weighted profiler). Re-ranked order: X1 → X6 → X4 → X5.
 
-### [shared] Repository tidy-up — relocate the BasiliskII harness, remove the superseded VNC-QA scaffold, document `cxmon/`
+### [shared] Repository tidy-up — relocate the BasiliskII harness, remove the superseded VNC-QA scaffold, document `cxmon/` (`22710b39`)
 
 - **Moved `jit-test/` → `BasiliskII/jit-test/`.** The root `jit-test/` was the *BasiliskII*
   68K opcode harness (distinct from `SheepShaver/jit-test/`, the PPC one — they only shared a
@@ -512,7 +512,7 @@ check. Design + plan:
 
 ## 2026-06-04
 
-### [docs] Doc hygiene sweep — stale-claim fixes, /workspace paths, archive
+### [docs] Doc hygiene sweep — stale-claim fixes, /workspace paths, archive (`61306fa5`)
 
 - **Corrected misleading status claims.** SheepShaver `AARCH64_JIT_GOLDEN_WORKLOADS.md`
   Workload 3 said the JIT only "reaches the Mac OS Welcome splash" — updated to the verified
@@ -527,7 +527,7 @@ check. Design + plan:
 - Added `docs/superpowers/README.md` namespace index; fixed OPTIMIZATION-PLAN reference links
   to point at local copies (`PERFORMANCE_AUDIT.md`, `JIT-FPU-PLAN.md`).
 
-### [docs] Documentation lifecycle convention + status/provenance headers
+### [docs] Documentation lifecycle convention + status/provenance headers (`e7b444c9`)
 
 - **New `CONTRIBUTING.md` → "Documentation Lifecycle" section**: how to keep docs honest when
   work lands — log to `CHANGELOG.md` (component-tagged), flip the item's status marker instead
@@ -538,7 +538,7 @@ check. Design + plan:
   ⏸ blocked/deferred · ☐ todo). Created dates recovered from git history (following renames);
   existing rich intros (ROADMAP, NEW-WORLD plan) harmonized, not clobbered.
 
-### [SheepShaver] AltiVec even/odd byte multiplies fix — ev_mixed class complete (vmuloub/vmuleub)
+### [SheepShaver] AltiVec even/odd byte multiplies fix — ev_mixed class complete (vmuloub/vmuleub) (`ed1fb0bd`)
 
 - **Bug fix.** `vmuloub`/`vmuleub` (odd/even unsigned byte multiply → halfword products) had two
   bugs: they emitted a **non-widening `MUL.8B`** (must widen 8×8→16) and ignored the `ev_mixed`
@@ -557,7 +557,7 @@ check. Design + plan:
   multiplies (only the documented `blr`-boundary GPR false positive). The whole ev_mixed class is
   now boot-confirmed.
 
-### [SheepShaver] AltiVec vpkuhum pack fix (ev_mixed)
+### [SheepShaver] AltiVec vpkuhum pack fix (ev_mixed) (`d43313ac`)
 
 - **Bug fix.** `vpkuhum` (pack 8+8 halfwords to their low bytes, modulo) was doubly wrong: it
   **ignored vA entirely** (loaded only vB) and used the wrong NEON op. PPC keeps each halfword's
@@ -569,7 +569,7 @@ check. Design + plan:
   not yet vectored. Remaining in the `ev_mixed` class: the even/odd byte multiplies
   (`vmuleub`/`vmuloub`).
 
-### [SheepShaver] AltiVec byte/halfword merge fix (vmrgh/l b,h) + distinct-operand test strengthening
+### [SheepShaver] AltiVec byte/halfword merge fix (vmrgh/l b,h) + distinct-operand test strengthening (`023870cd`)
 
 - **Bug fix — completes the merge family.** Following the word-merge fix below, the byte and
   halfword merges (`vmrghb`/`vmrglb`/`vmrghh`/`vmrglh`) needed more than a correct ZIP
@@ -592,7 +592,7 @@ check. Design + plan:
   multiplies `vmuleub`/`vmuloub` (also need `UMULL.8H`, not `MUL.8B`) — still quarantined
   (xfail). See `docs/planning/ROADMAP.md` A2.
 
-### [SheepShaver] AltiVec word-merge codegen fix (vmrghw/vmrglw)
+### [SheepShaver] AltiVec word-merge codegen fix (vmrghw/vmrglw) (`b1bb6b52`)
 
 - **Bug fix.** The JIT's AltiVec merge cases (`vmrgh*/vmrgl*`) emitted `0x..C400`/
   `0x..C800` — bit 15 set makes those three-same *arithmetic* encodings, not the
@@ -608,7 +608,7 @@ check. Design + plan:
   quarantine lane (xfail/xpass, not scored) so known-diverging vectors are tracked
   as regressions-in-waiting rather than silently dropped.
 
-### [SheepShaver] Wayland detection (upstream backport)
+### [SheepShaver] Wayland detection (upstream backport) (`f5a96e0e`)
 
 - **Wayland detection without GTK** (backport of kanjitalk755/macemu `91d58b12`, Dave
   Vasilevsky): `init_sdl()` previously forced `SDL_VIDEODRIVER=x11` only under
@@ -624,7 +624,7 @@ check. Design + plan:
   Linux/Wayland target; runtime Wayland behavior is not verifiable on macOS.
   Harness unaffected: `make test-jit` 257/257, score=100.
 
-### [shared] Networking
+### [shared] Networking (`3bfa680a`)
 
 - **VDE virtual networking** (backport of kanjitalk755/macemu `06d8bc02`): SheepShaver can now use
   a VDE switch for Ethernet. The destination VDE link is configured directly in the
@@ -639,7 +639,7 @@ check. Design + plan:
   `vde`, header `libvdeplug.h`). The bare `vde` ether pref (no destination) still works.
   Boot/packet-flow on real hardware is unverified by this change.
 
-### [SheepShaver] Video backend
+### [SheepShaver] Video backend (`dda61521`)
 
 - **SDL3 is now the default video backend** (was SDL2). `configure` selects SDL 3.x
   when no `--with-sdlN` flag is given; pass `--with-sdl2` to opt back to SDL 2.x.
@@ -677,7 +677,7 @@ check. Design + plan:
   `(vB & vC) | (vA & ~vC)`, returning vA wherever the mask bit was set. This would
   silently corrupt any AltiVec software that uses `vsel` (the emulator advertises a
   G4, so AltiVec is live). One-token operand swap; caught and regression-tested by
-  a new differential vector.
+  a new differential vector. (`086226f3`)
 
 - **AltiVec `vspltb`/`vsplth` element-order fix (ev_mixed)**: byte/halfword splats
   selected the WRONG element. VRs are stored in the interpreter's `ev_mixed` byte
@@ -688,38 +688,38 @@ check. Design + plan:
   element-symmetric ops were already correct. The same mismatch still affects
   `vmrg*`/`vpk*`/even-odd multiplies — parked and signposted in code (`emit_load_vr`)
   and tracked as **P1b** in OPTIMIZATION-PLAN.md (two fix approaches documented).
-  Repro vectors in `jit-test/gen-altivec-vectors.py`.
+  Repro vectors in `jit-test/gen-altivec-vectors.py`. (`9117e789`)
 
 - **`emit_update_cr0` cleanup (B1)**: CR0 field construction reduced from 19 to
   11 ARM64 instructions.  Replaced 3x `emit_load_imm32` + 3x CSEL + LSL + AND +
-  ORR with 3x CSET + 3x shifted ADD + BFI.  Every Rc=1 instruction benefits.
+  ORR with 3x CSET + 3x shifted ADD + BFI.  Every Rc=1 instruction benefits. (`fd616e5b`)
 
 - **LogicalImm encoder (B2)**: ARM64 bitmask-immediate encoding for AND masks in
   rlwinm, rlwimi, rlwnm, andi., andis.  Saves 1-2 instructions per masked op
-  (992/1024 PPC masks are encodable).  Encoder from `ppc-logical-imm.hpp`.
+  (992/1024 PPC masks are encodable).  Encoder from `ppc-logical-imm.hpp`. (`c71cd0f2`)
 
 - **mullwo overflow detection (A3)**: Case label was 715 (wrong XO), should be
   747.  The instruction was never JIT-compiled — silently fell to interpreter.
-  Now uses SMULL + ASR/CMP to detect 32-bit overflow and sets XER OV/SO.
+  Now uses SMULL + ASR/CMP to detect 32-bit overflow and sets XER OV/SO. (`c71cd0f2`)
 
 - **SS_JIT_VERIFY cascade fix**: Reduced false divergences from 20+ to 1 per
   boot.  Skips verifying blocks ending with link-setting branches (bl/bctrl),
   and suppresses cascade after any divergence until a clean block is found.
   Mixed Mode Manager dispatch causes unavoidable interpreter/JIT path divergence
-  that is not a codegen bug.
+  that is not a codegen bug. (`0cda0257`)
 
 - **Software link stack (R1, partial)**: Compile-time infrastructure for
   Dolphin/RPCS3-style blr return prediction added.  Finding: `bl` always
   terminates a block, so the compile-time stack is empty by the callee's `blr`
   — the fast-path never fires.  Runtime variant (R1b) documented in the
-  optimization plan as a follow-up.
+  optimization plan as a follow-up. (`e256c871`)
 
 ### Code Quality
 
 - **Technique attribution**: Added source credits (Dolphin, RPCS3, MAME,
   upstream PERFORMANCE_AUDIT) to all major JIT optimizations as inline code
   comments — RA, CR0 cleanup, LogicalImm, ADCS carry, mullwo, atomic spcflags,
-  link stack.
+  link stack. (`2f2347cd`)
 
 ### [SheepShaver] Testing & benchmarking
 
@@ -733,7 +733,7 @@ check. Design + plan:
   from "idle blocked on a modal dialog". Python + `vncdotool`, env-resolved asset paths for CI,
   pristine-disk-per-run isolation, 12 offline unit tests. A host→guest shutdown *hook*
   (`ShutDwnPower` trap / ADB power-key) was explored and reverted — see spec §12. Requires a
-  logged-in macOS GUI session (SDL needs a WindowServer; no Xvfb equivalent). `SheepShaver/e2e/`.
+  logged-in macOS GUI session (SDL needs a WindowServer; no Xvfb equivalent). `SheepShaver/e2e/`. (`acd37114`)
 
 - **18 real FP-arithmetic test vectors**: the pre-existing `fp_*` vectors were
   *vacuous* — they ended at `stfd` and never loaded the result into a GPR, but the
@@ -743,7 +743,7 @@ check. Design + plan:
   the fma family, frsp/fctiwz/fneg/fabs/fmr, and single-precision forms). Generated
   by `jit-test/gen-fp-vectors.py` (documented, reproducible). The 9 vacuous `fp_*`
   originals were then removed (kept `fp_lfd_stfd`/`fp_lfs_stfs` — those *do* round-
-  trip the value back into a GPR, so they are real load/store tests).
+  trip the value back into a GPR, so they are real load/store tests). (`c1e26ee2`)
 
 - **AltiVec coverage rebuilt (corrected over several review rounds)**: an initial
   15-vector batch (14 vacuous — VX-form doubled-XO no-ops) *and* all 12 pre-existing
@@ -762,25 +762,25 @@ check. Design + plan:
   `orc_basic`) where the second `T_` definition shadowed the first, so one vector of
   each pair never ran (silent lost coverage); fixed by renaming the shadowed ones.
   Vacuousness itself is not caught (a vacuous vector still touches scratch GPRs) —
-  the `gen-*-vectors.py` generators are the practical defense there.
+  the `gen-*-vectors.py` generators are the practical defense there. (`f49df948`)
 
 - **`make harness-count`**: single source of truth for the harness vector count,
   derived from `jit-test/run.sh` (the count had drifted across several docs). The
   *gate* references in the testing docs (TESTING.md, OPTIMIZATION-PLAN.md,
   CLAUDE.md, CONTRIBUTING.md) were de-hardcoded to reference it; dated historical
-  snapshots in session logs and baseline tables are intentionally left as-is.
+  snapshots in session logs and baseline tables are intentionally left as-is. (`797a9242`)
 
 - **FP microbench kernels**: `make bench` gains `fp-add`/`fp-fma`. They measure the
   FPR store/load round-trip (the JIT has no FP register allocator), not raw FP-unit
-  latency — useful as the baseline an FP register allocator would improve against.
+  latency — useful as the baseline an FP register allocator would improve against. (`64258de7`)
 
 ### [docs] Documentation
 
 - **Paranoia FP conformance**: concrete manual run steps documented in TESTING.md,
-  with the honest caveat that automation needs a guest binary + boot.
+  with the honest caveat that automation needs a guest binary + boot. (`6ab3f194`)
 
 - **IMPROVEMENT-CYCLE-1.md**: prioritized, collision-aware improvement plan from a
-  multi-agent audit (read-only auditors → adversarial verification → synthesis).
+  multi-agent audit (read-only auditors → adversarial verification → synthesis). (`4053d111`)
 
 ## 2026-06-03
 

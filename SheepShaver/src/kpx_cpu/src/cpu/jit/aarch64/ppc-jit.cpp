@@ -3354,9 +3354,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 1282: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E201400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsb SRHADD.16B (signed rounding average; was SMAXP pairwise-max) */
 		case 1346: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E601400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsh SRHADD.8H */
 		case 1410: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA01400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsw SRHADD.4S */
-		case 1794: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E201400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsb SRHADD.16B */
-		case 1858: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E601400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsh */
-		case 1922: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0EA01400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsw */
+		/* (removed dead cases 1794/1858/1922: duplicate vavg handlers at non-existent
+		   XOs — the real vavgs* are 1282/1346/1410 above; no PPC op decodes to these.) */
 		case 768: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E200C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsbs SQADD.16B (signed saturating add; was SABA/UABA abs-diff) */
 		case 832: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E600C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddshs SQADD.8H */
 		case 896: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA00C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsws SQADD.4S */
@@ -3368,6 +3367,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 640: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA00C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vadduws UQADD.4S */
 		case 1536: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsububs UQSUB.16B (UNSIGNED sat sub; was signed SQSUB) */
 		case 1600: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubuhs UQSUB.8H */
+		case 1664: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA02C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubuws UQSUB.4S (was missing -> interp fallback; completes the sat-sub family) */
 		/* AltiVec merges (vmrgh / vmrgl, byte/halfword/word) -- two bugs, both FIXED
 		 * 2026-06-04:
 		 *

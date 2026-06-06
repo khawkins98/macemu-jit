@@ -64,6 +64,11 @@ class Snapshot:
             return self.windows[self.front_index]
         return None
 
+    def front_dialog(self) -> Optional[Window]:
+        """The front window if it is a dialog, else None (the dialog accepting input right now)."""
+        fw = self.front_window()
+        return fw if (fw is not None and fw.is_dialog) else None
+
     def find(self, *, title=None, window_class=None, visible=None) -> list[Window]:
         out = []
         for w in self.windows:

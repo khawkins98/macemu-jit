@@ -26,10 +26,18 @@ same start PC (the same root cause as `SS_JIT_VERIFY` fix-(i)).
   artifacts from the span mismatch, so they're worth refereeing via `SS_TEST_HEX`.
 - **Tactical hardening:** `alarm(0)` now cancels the per-block timeout on all exit paths (normal,
   SIGSEGV, fallback longjmp). In-code block-model notes at the compare site + `is_block_terminator`.
-- **Open follow-ups (ROADMAP A1):** (a) *recover* the dropped coverage by running the interp for
-  the JIT's instruction count instead of skipping; (b) triage the ~7–8 survivors (likely
-  harness-interp branch-target handling, but now refereeable). Higher-priority residual-bug surface
-  remains AltiVec/FP operand vectors in `test-jit`.
+- **Survivor triage done — integer path differentially CLEAN, zero real JIT bugs.** Refereed 3
+  distinct span-matched survivors against the real emulator (`SS_TEST_HEX`/`SS_TEST_INIT`,
+  `SS_TEST_JIT={0,1}`): pure `bl`, `extsh r3,r7`+`bl` (harness claimed `jit` clobbered source r7),
+  `mr;addi;li;bl` (harness claimed `jit` zeroed untouched r9/r11). In all three real-interp == JIT
+  == correct (e.g. `extsh r3,r7` → r3=`0000197d`, r7 unchanged). Every survivor is a **harness
+  artifact**: all `b`/`bl`-terminated, the harness's *JIT* run follows the branch at runtime (into
+  real ROM at the relative target, which mutates registers) while its reference interp stops at the
+  block end — a *runtime* branch-follow the *compile-time* span gate doesn't catch.
+- **Open follow-ups (ROADMAP A1, both rom-harness polish, neither a JIT bug):** stop the harness JIT
+  following the branch (disable chaining / snapshot at block exit); and/or recover the span-gate
+  coverage by running the interp for the JIT's instruction count. Higher-priority residual-bug
+  surface remains AltiVec/FP operand vectors in `test-jit`.
 
 ### [SheepShaver] rom-harness — skip-not-abort on fallback blocks (broad sweeps unblocked)
 

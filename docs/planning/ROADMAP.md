@@ -104,11 +104,19 @@ harness that can't catch mistakes just produces the next silent bug.
   blocks as `Span mismatch` (visible, not silent) — on the OldWorld ROM this cut ~46 failures/seed
   to **~7–8 span-matched, trustworthy failures** (≈711 bc-terminated blocks skipped). The remaining
   failures are now genuine span-matched divergences (PC/CR-dominated), no longer cascade artifacts.
-  **Next, two independent follow-ups:** (a) 🟡 *recover the dropped coverage* — run the interpreter
-  for the JIT's instruction count instead of skipping (the fix-(i) analog proper); (b) 🟡 *triage
-  the ~7–8 survivors* via the real-emulator referee (`SS_TEST_HEX … SS_TEST_JIT={0,1}`) — likely
-  harness-interp branch-target handling, but now refereeable; expect few/zero real JIT bugs, but a
-  defensible "integer path differentially clean" claim.
+  ✅ **Survivor triage done (2026-06-06) — integer path differentially CLEAN, zero real JIT bugs.**
+  Refereed 3 distinct survivor patterns via the real emulator (`SS_TEST_HEX`/`SS_TEST_INIT`,
+  `SS_TEST_JIT={0,1}`): a pure `bl` (`4bffd1b9`), `extsh r3,r7`+`bl` (harness claimed `jit` clobbered
+  source r7), and `mr;addi;li;bl` (harness claimed `jit` zeroed untouched r9/r11). In **all three**
+  real-interp == JIT == correct (e.g. `extsh r3,r7` leaves r7 intact, r3=`0000197d`). So every
+  survivor is a **harness-side artifact**: all are `b`/`bl`-terminated, and the harness's *JIT* run
+  follows the branch at runtime (into the relative target = real ROM code that mutates registers)
+  while its reference interp stops at the block end — a *runtime* branch-follow the *compile-time*
+  span gate doesn't catch. **Remaining harness-side follow-up:** stop the JIT following the branch in
+  the harness (disable chaining / snapshot regs at block exit before any follow), OR (a) recover the
+  span-gate coverage by running the interp for the JIT's instruction count. Neither is a JIT bug;
+  both are rom-harness polish. **Net: the rom-harness has served its purpose for the integer path —
+  pivot effort to AltiVec/FP vectors (higher residual-bug density).**
 - 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered

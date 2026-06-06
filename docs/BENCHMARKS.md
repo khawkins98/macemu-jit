@@ -149,6 +149,7 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 - [ ] **Interpreter boot guest-MIPS** (`SS_USE_JIT=0`) — the JIT-vs-interpreter headline ratio; emulator-gated
 - [ ] **Fresh Speedometer (JIT + interpreter)** — pending the e2e bench completion-detection fix
 - [ ] **Fractal Carbon (AltiVec) run-profile** — the third workload profile, once the emulator is free
+- [ ] **Power Fractal 1.4.1 (Carbon CFM) — absolute-GFLOPS reference** (Dauger Research). Self-reports GigaFlops, so it yields a citable number against real PowerPC hardware: **G4/450 ≈ 1.5 GFLOPS, DPG5/2GHz ≈ 13.5 GFLOPS** (single-machine). AltiVec when present but computes on single-CPU too → runs on our guest. Carbon CFM build needs OS 8.5+/CarbonLib 1.2+ (we have 1.6). Install host-side onto the apps disk like Fractal Carbon. See `MACOS9-STRESS-WORKLOADS.md` (AltiVec pick 1b). The "our JIT vs a real G4" headline.
 - [ ] MacBench 5.0 benchmark (requires HD install)
 - [ ] Application launch timing (SimpleText, TeachText)
 - [ ] Compare with upstream Linux ARM64 (rcarmo/macemu-jit)

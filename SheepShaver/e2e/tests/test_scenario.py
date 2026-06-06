@@ -7,7 +7,7 @@ timeouts deterministic and instant.
 """
 import pytest
 
-from sse2e import scenario
+from sse2e import drive, scenario
 
 
 # --- doubles -------------------------------------------------------------------------------
@@ -61,10 +61,16 @@ class FakeVnc:
 
 @pytest.fixture
 def fast_clock(monkeypatch):
-    """Deterministic, instant time: monotonic reads a counter that `sleep` advances (no real wait)."""
+    """Deterministic, instant time: monotonic reads a counter that `sleep` advances (no real wait).
+
+    Patches BOTH scenario.time and drive.time so call chains that dip into drive.py (where the gate
+    helpers now live) see the same fake clock as scenario.py.
+    """
     clock = [0.0]
     monkeypatch.setattr(scenario.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(scenario.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(drive.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(drive.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
     return clock
 
 

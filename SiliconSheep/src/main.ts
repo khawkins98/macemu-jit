@@ -684,10 +684,11 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
       <div class="form-group">
         <label>Networking</label>
         <select class="input" id="setting-ether">
-          <option value="slirp" ${getPref("ether") === "slirp" ? "selected" : ""}>Internet (NAT)</option>
+          <option value="slirp" ${getPref("ether") === "slirp" ? "selected" : ""}>Internet (NAT) — outbound access, no local sharing</option>
+          <option value="vde" ${getPref("ether") === "vde" || getPref("ether")?.startsWith("vde:") ? "selected" : ""}>VDE Bridge — full networking incl. AppleTalk (experimental)</option>
           <option value="" ${!getPref("ether") ? "selected" : ""}>None</option>
         </select>
-        <p class="ss-text-muted" style="margin-top: 8px;">In the guest, open TCP/IP in Control Panels and set Configure to "Using DHCP Server".</p>
+        <p class="ss-text-muted" style="margin-top: 8px;">NAT: outbound internet, configure guest TCP/IP to "Using DHCP Server". VDE: full bridged networking via VDE switch (requires <code>brew install vde</code>). VDE supports AppleTalk and local network access but is less tested.</p>
       </div>
       <div class="form-group">
         <label>VNC Server</label>

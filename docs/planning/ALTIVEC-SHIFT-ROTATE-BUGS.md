@@ -158,3 +158,24 @@ each op against the real interp before moving on.
 
 (Pixel `vpkpx`/`vupkhpx`/`vupklpx` and sum-across `vsumsws`/`vsum2sws`/`vsum4sbs` remain separately
 — pixel needs 1-5-5-5 field expansion; sum-across has rotated case labels + missing saturation.)
+
+### Attempt log (2026-06-06) — what NOT to repeat
+
+A first implementation (`emit_vpk`: `REV` normalize → `[SU]QXTN`/`QXTN2` 2-source narrow → `REV`
+back) was written, validated against the interp, and **reverted** because the byte-order model was
+wrong. Hard-won findings for the next attempt:
+1. **The saturating-operand trap (cost me a false "PASS").** Operands like vA=`0x00..0x0F` make
+   every narrowed element saturate to `0x7f`/`0xff`, so any lane permutation is invisible and a
+   wrong impl looks correct. **Always test with small, distinct, non-saturating operands** (e.g. vA
+   halfwords 1..8, vB 0x11..0x18) so the full lane map is observable.
+2. **The byte-order premise was wrong.** I reasoned "VR raw bytes = the memory bytes `lvx` loaded",
+   but `emit_load_vr` is a raw `LDR Q` of the **interpreter's ev_mixed-stored VR** — and `lvx`
+   itself applies the ev_mixed transform at *load* time. So the JIT's `v0` is NOT the natural memory
+   layout; reasoning from the `SS_TEST_HEX` operand bytes to the NEON lane values is invalid.
+   Symptom: every byte-pack narrowed to `0x7f` (NEON read each small halfword byte-unswapped as a
+   large value). Neither `REV32.16B` nor `REV16.16B` input-normalize fixed it.
+3. **Do this first next time:** empirically map the ev_mixed layout the JIT actually sees — e.g. a
+   tiny `lvx; stvx` round-trip vector, or dump `v0` after `emit_load_vr` for a known operand — and
+   derive the normalize from *observed* lane values, not from a model. Then `emit_vmrg`'s working
+   `REV32.16B`-for-permute precedent + the `vmul_byte` `REV32.8H`-output precedent are the anchors.
+   Validate each of the 6 ops against the interp with the non-saturating operands from (1).

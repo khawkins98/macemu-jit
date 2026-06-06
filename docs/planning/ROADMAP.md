@@ -627,6 +627,15 @@ and Tauri architecture all researched; findings synthesized into the plan.
   impact. Gated only on the P0 window-management bugs (unsaved-changes confirmation, orphaned
   settings window on delete).
 
+- **C6. 🔜 Bidirectional UDS RPC (C2.0).** Flip the emulator from RPC client to server on
+  the existing `rpc_unix.cpp` framework. Non-blocking poll in the 60 Hz video refresh gives
+  sub-16ms command latency. New method IDs: SET_PREF, INPUT_LOCKOUT, FRAMESKIP, MOUSE_GRAB,
+  GET_STATE, READ_MEMORY, DUMP_REGISTERS, INSERT_DISK. SiliconSheep connects as a UDS client.
+  Replaces the env-var, prefs-file, and runtime_control file-polling mechanisms with one clean
+  channel. ~150 LOC emulator + ~100 LOC Tauri. **Unblocks all Tier 2 items, Inspector Tier 2
+  panels, hot-reload, hot disk insertion, Tier 4 automation.** Same pattern as QEMU QMP and
+  VirtualBox COM/XPCOM. **Detail:** `DESKTOP_INTEGRATION_PLAN.md` §C2.0.
+
 **Framework:** Tauri v2 (Rust + pnpm + TypeScript). **Repo strategy:** hard-fork decision
 deferred but recognized as increasingly inevitable with Track C divergence.
 **Detail:** `docs/planning/DESKTOP_INTEGRATION_PLAN.md`, `docs/planning/HOST-GUEST-CHANNELS.md`.

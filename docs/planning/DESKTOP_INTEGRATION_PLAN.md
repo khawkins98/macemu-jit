@@ -210,9 +210,55 @@ Pure launcher/wrapper work. SheepShaver binary is a sidecar child process; Tauri
 
 ### Tier 2 — Enhanced Desktop Integration (emulator IPC/hooks needed)
 
-Requires C++ changes to the emulator alongside Tauri frontend work. Key enabler: SheepShaver
-already has a Unix-domain-socket RPC layer (`rpc_unix.cpp`, activated via `--gui-connection
-<path>`) with `RPC_METHOD_EXIT`, `RPC_METHOD_ERROR_ALERT`, `RPC_METHOD_WARNING_ALERT`. Extend
+Requires C++ changes to the emulator alongside Tauri frontend work.
+
+#### C2.0 Bidirectional UDS RPC — the foundation for all Tier 2 work ← 🔜 next
+
+**Status:** designed, not started. **Effort:** ~150 LOC emulator + ~100 LOC Tauri. **Risk:** low.
+
+**The problem:** We currently have three ad-hoc IPC mechanisms (env vars at launch, prefs file
+at startup, file-polling every ~5s for runtime control). Each is one-directional, high-latency,
+and doesn't scale. The Inspector panels, hot-reload, and runtime toggles all need sub-second
+bidirectional communication between SiliconSheep and the running emulator.
+
+**The solution:** Flip the emulator from RPC *client* to RPC *server* on its existing
+`rpc_unix.cpp` UDS framework. This is the same pattern QEMU (QMP) and VirtualBox (COM/XPCOM)
+converged on independently.
+
+**What exists today (`rpc_unix.cpp`):**
+- Full UDS RPC with typed messages (int32, bool, string, byte arrays), method dispatch tables
+- 3 methods: ERROR_ALERT, WARNING_ALERT, EXIT — emulator → GUI only
+- Activated via `--gui-connection <path>` — emulator is the client
+- Wire format: network-byte-order int32 framing, method IDs, typed args, ACK/REPLY
+
+**What to build:**
+1. Emulator becomes the server — `rpc_init_server()` on `/tmp/sheepshaver-<pid>.sock`
+   (path written to `.sheepvm/rpc_socket` for discovery)
+2. Non-blocking poll in `do_video_refresh()` — `rpc_wait_dispatch(conn, 0)` once per frame
+   at 60 Hz. Sub-16ms command latency, zero extra threads.
+3. New method IDs in `rpc.h`:
+   - `RPC_METHOD_SET_PREF` (key, value) — runtime pref change
+   - `RPC_METHOD_INPUT_LOCKOUT` (bool) — instant toggle
+   - `RPC_METHOD_FRAMESKIP` (int32) — instant change
+   - `RPC_METHOD_MOUSE_GRAB` (bool) — instant toggle
+   - `RPC_METHOD_GET_STATE` → reply with heartbeat stats
+   - `RPC_METHOD_READ_MEMORY` (addr, len) → reply with bytes (Tier 2 Inspector)
+   - `RPC_METHOD_DUMP_REGISTERS` → reply with GPR/SPR/CR/PC (Tier 2 Inspector)
+   - `RPC_METHOD_INSERT_DISK` (path) — hot disk insertion
+4. SiliconSheep Rust backend connects as UDS client via `std::os::unix::net::UnixStream`,
+   sends binary RPC frames matching the existing wire format.
+
+**Replaces:** env var launch mechanism (still useful for agents/CLI), runtime_control file
+polling (retire once C2.0 lands), the stale `--gui-connection` GTK path.
+
+**Unblocks:** all Tier 2 items below, Inspector Tier 2 panels (registers, memory), hot-reload,
+hot disk insertion, Tier 4 automation layers.
+
+**Sequence:** C2.0 first → then all other Tier 2 items ride on it.
+
+---
+
+Key enabler: the existing `rpc_unix.cpp` UDS framework (extended via C2.0 above). Extend
 this with new methods rather than inventing a new protocol.
 
 - [ ] **True hot-reload** for frameskip/mouse/display: Add `SIGHUP` handler +

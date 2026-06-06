@@ -148,10 +148,10 @@ spuriously and desync interp/JIT). Frequency-probe first; payoff is small unless
    "green harness, broken app" failure mode.
 
 ## Byproduct findings (surfaced by the deep-dives — see handoff)
-- **`#C1` Stale comment** `ppc-jit.cpp` ~113–122: says chaining is "default OFF / the define stays 0"
-  — but it's `1`, on, and boots. Misleads contributors (it misled a research agent).
-- **`#C2` Stale comment** `ppc-jit.cpp` ~838–860 (`KNOWN AltiVec BUG (PARKED)`): lists "STILL BROKEN:
-  vmuloub/vmuleub" — they're wired and fixed (cases 8/520/264/776).
+- **`#C1` Stale comment — ✅ FIXED (2026-06-06, `72c5e525`).** The chaining comment said "default
+  OFF / the define stays 0" — but it's `1`, on, and boots. Refreshed in the same code-review pass as #L.
+- **`#C2` Stale comment — ✅ FIXED (2026-06-06, `72c5e525`).** The `KNOWN AltiVec BUG (PARKED)` header
+  listed "STILL BROKEN: vmuloub/vmuleub" — they're wired/fixed (cases 8/520/264/776). Refreshed too.
 - **`#C3` Stale plan note** OPTIMIZATION-PLAN **R3**: claimed "no W^X toggling exists" — wrong;
   `MAP_JIT` + `pthread_jit_write_protect_np` is live. **✅ Fixed 2026-06-06** (this pass).
 - **`#L` Latent bug — ✅ FIXED (2026-06-06, `72c5e525`).** The LR-prediction path emitted a raw

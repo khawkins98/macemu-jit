@@ -11,6 +11,17 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Canonical concurrency-model reference — "SheepShaver is not multicore-sensitive, and why"
+
+Added `SheepShaver/docs/CONCURRENCY-MODEL.md`: the citable, code-grounded answer to a recurring
+question. States plainly that this fork runs the guest on one host thread (single logical guest CPU)
+with synchronized host helpers (atomic `spcflags`/P0d, `atomic_or` `InterruptFlags`, mutex'd
+framebuffer, signal-driven `SIGUSR2` interrupts) — so it is **not** multicore-sensitive and needs no
+core-pinning (that folklore is upstream/older builds). Documents the one real caveat: the JIT cache
+is single-writer *by construction, not by lock* (no locks on `jit_cache_wp`/`jit_bc_pool_next`/chain
+pool; per-thread W^X), a property to preserve — adding a compiler thread needs R8→R9 first. Linked
+from `docs/ARCHITECTURE.md` and the MULTICORE plan's concurrency baseline.
+
 ### [SheepShaver] LR-prediction icbi-safety fix + two stale-comment refreshes (code review)
 
 A code-review pass (`72c5e525`) found one latent bug + two stale comments in `ppc-jit.cpp`:

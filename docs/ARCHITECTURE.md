@@ -50,6 +50,11 @@ LDRB/STRB at individual byte offsets (so=900, ca=902).
 
 See also `docs/planning/SheepShaver-AARCH64_JIT_PLAN.md` (plan + status).
 
+**Concurrency model:** SheepShaver runs the guest on a single host thread (one logical guest CPU)
+with synchronized host helper threads for I/O — it is **not** multicore-sensitive and needs no
+core-pinning. The canonical, code-grounded statement (and the one caveat for future multithreading)
+is `SheepShaver/docs/CONCURRENCY-MODEL.md`.
+
 ## macOS arm64 Constraints
 
 These apply on the `macos-arm64` branch and are not present in the upstream Linux build:

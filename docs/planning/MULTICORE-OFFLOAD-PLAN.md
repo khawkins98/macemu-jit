@@ -91,6 +91,10 @@ off the emulation core.
 
 ### Concurrency baseline & Tier-1 prerequisites (code-verified 2026-06-06)
 
+> **Canonical statement:** the "is SheepShaver multicore-sensitive / why no core-pinning" question
+> has its own reference doc — [`SheepShaver/docs/CONCURRENCY-MODEL.md`](../../SheepShaver/docs/CONCURRENCY-MODEL.md).
+> Point people there; the summary below is the plan-local version.
+
 External lore says "SheepShaver's JIT is multicore-sensitive — pin it to a single core for
 stability." **That is not true of this fork's current runtime.** A source audit found it cleanly
 single-threaded-guest with well-synchronized host helpers: `spcflags` is `std::atomic` with

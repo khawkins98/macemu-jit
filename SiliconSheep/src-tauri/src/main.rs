@@ -78,6 +78,29 @@ fn add_vm_disk(id: String, path: String, is_cdrom: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn resize_disk(path: String, size_gb: f64) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Disk image not found: {}", path));
+    }
+    let current_size = std::fs::metadata(p).map_err(|e| e.to_string())?.len();
+    let new_size = (size_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+    if new_size < current_size {
+        return Err(format!(
+            "Cannot shrink: current size is {:.1} GB. Only growing is supported.",
+            current_size as f64 / (1024.0 * 1024.0 * 1024.0)
+        ));
+    }
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(p)
+        .map_err(|e| format!("Cannot open disk: {}", e))?;
+    f.set_len(new_size)
+        .map_err(|e| format!("Resize failed: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn remove_vm_disk(id: String, index: usize) -> Result<(), String> {
     let vm_dir = vm::vm_dir_for(&id);
     let prefs_path = vm_dir.join("prefs");
@@ -483,6 +506,7 @@ fn main() {
             save_vm_prefs,
             update_vm_setting,
             add_vm_disk,
+            resize_disk,
             remove_vm_disk,
             launch_vm,
             stop_vm,

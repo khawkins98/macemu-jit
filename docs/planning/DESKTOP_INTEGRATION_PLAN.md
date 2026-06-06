@@ -239,6 +239,21 @@ this with new methods rather than inventing a new protocol.
   Finder `odoc` AppleEvent via `Execute68kTrap(AESend)`. Medium complexity.
 - [ ] **Direct framebuffer screenshot** (non-VNC): Read `ScrnBase` (0x824) + `ScreenRow`
   (0x106) + depth from `GDevice` list (0xCC8) — raw framebuffer blit. Faster than VNC.
+- [ ] **Clipboard enhancements** (emulator-side C++ changes to `clip_macosx64.mm`):
+  - **Directional control**: new prefs `clipboardDirection` (both/host-to-guest/guest-to-host/off)
+    gating `GetScrap`/`PutScrap` independently. Currently macOS clipboard sync is always
+    bidirectional with no off switch (~30 lines in `clip_macosx64.mm`).
+  - **Unicode support** (`utxt`/`UT16`): the clipboard handler explicitly skips Unicode scrap
+    types with a "sometime, it might be interesting" comment. Implement UTF-16 ↔ Mac Roman
+    converter for Carbon apps (AppleWorks, BBEdit). Mac OS 8.5+ supports `utxt` natively.
+  - **Clipboard status feedback**: expose last-sync direction and content type to the launcher
+    via stderr signal or UDS RPC for a live "Last synced: text / image" indicator.
+- [ ] **Disk image resize**: extend an existing raw `.dsk` image (append zeros via `truncate`
+  or `dd`). The HFS partition inside doesn't auto-expand — the guest must re-initialize or
+  use a disk utility. The UI should warn: "The disk file will grow but the Mac OS partition
+  inside must be reformatted to use the new space." Safe for blank/fresh disks; risky for
+  disks with existing data (backup first). Implementation: Rust `File::set_len()` for the
+  raw extend, SiliconSheep Storage tab "Resize" button next to each disk.
 
 ### Tier 3 — Coherence Lite (significant research, novel work)
 

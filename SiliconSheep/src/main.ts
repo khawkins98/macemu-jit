@@ -587,6 +587,8 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
       </div>
       <div class="form-group">
         <label>Clipboard Sync</label>
+        <!-- Roadmap: DESKTOP_INTEGRATION_PLAN.md Tier 2 "Clipboard enhancements" — directional
+             control, Unicode utxt, status feedback. Requires emulator-side changes to clip_macosx64.mm. -->
         <p class="ss-text-muted">✓ Bidirectional — copy and paste works between guest and host (text, images, styled text). Unicode text (utxt) is not yet supported; text uses Mac Roman encoding.</p>
       </div>
     `,
@@ -652,6 +654,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
           : disks.map((d, i) => `
             <div class="file-input" style="margin-bottom: 8px;">
               <span class="file-path">${escapeHtml(d)}</span>
+              <button class="btn btn-secondary btn-sm" data-action="resize-disk" data-disk="${escapeAttr(d)}" title="Resize" ${isRunning ? "disabled" : ""}>Resize</button>
               <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="remove-disk" data-index="${i}" title="Remove">✕</button>
             </div>
           `).join("")
@@ -1454,6 +1457,32 @@ async function handleAction(e: Event) {
         await invoke("update_vm_setting", { id: selectedVmId, key: "rom", value: path });
         vms = await loadVms();
         render();
+      }
+      break;
+    }
+
+    case "resize-disk": {
+      const diskPath = target.dataset.disk;
+      if (diskPath) {
+        const newSizeStr = prompt(
+          "New disk size in GB (e.g. 4).\n\n" +
+          "Warning: the disk file will grow but the Mac OS partition inside\n" +
+          "must be reformatted to use the new space. Safe for new/blank disks.\n" +
+          "Back up existing data first."
+        );
+        if (newSizeStr) {
+          const newSizeGb = parseFloat(newSizeStr);
+          if (newSizeGb > 0 && newSizeGb <= 100) {
+            try {
+              await invoke("resize_disk", { path: diskPath, sizeGb: newSizeGb });
+              showToast(`Disk resized to ${newSizeGb} GB`, "success");
+            } catch (err) {
+              showToast(`Resize failed: ${err}`, "error");
+            }
+          } else {
+            showToast("Invalid size — enter a number between 0.1 and 100", "error");
+          }
+        }
       }
       break;
     }

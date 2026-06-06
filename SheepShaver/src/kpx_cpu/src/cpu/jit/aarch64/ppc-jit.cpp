@@ -335,13 +335,15 @@ static int jit_mix_classify(uint32_t insn) {
 	}
 	return MIX_INT;
 }
-/* Sized to match JIT_BC_POOL (the JIT's distinct-block envelope) so a real boot's
- * full working set fits without dropping late-compiled hot blocks (review 2026-06-06). */
-#define JIT_PROF_SLOTS 65536   /* power of two for masked open-addressing */
+/* A real boot touches >65536 distinct block PCs (incl. the ROM DR-emulator's per-68k
+ * dispatch PCs), so JIT_BC_POOL-sized (65536) still overflowed — measured 2026-06-06.
+ * 256K slots (~5 MB BSS, profiling builds only) holds a full boot with headroom. */
+#define JIT_PROF_SLOTS 262144  /* power of two for masked open-addressing */
 struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insns; };
 static struct jit_prof_slot jit_prof_slots[JIT_PROF_SLOTS];
 static int  jit_prof_n = 0;
 static bool jit_profile_enabled = false;
+static void jit_profile_dump(void);   /* fwd decl: registered via atexit() in init */
 /* find-or-create the slot for `pc` (compile-time only, open-addressed by pc). */
 static struct jit_prof_slot *jit_prof_get(uint32_t pc) {
 	uint32_t h = (pc >> 2) & (JIT_PROF_SLOTS - 1);
@@ -4418,8 +4420,13 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 {
 	{ const char *e = getenv("SS_JIT_PROFILE");
 	  jit_profile_enabled = (e && *e && strcmp(e, "0") != 0);
-	  if (jit_profile_enabled)
-	      fprintf(stderr, "[JIT] SS_JIT_PROFILE on — execution-weighted hot-block profile at exit\n"); }
+	  if (jit_profile_enabled) {
+	      fprintf(stderr, "[JIT] SS_JIT_PROFILE on — execution-weighted hot-block profile at exit\n");
+	      /* The normal emulator shutdown (Quit -> exit(0)) does NOT call
+	       * ppc_jit_aarch64_exit() — that's only on the SS_TEST_HEX path. Register the
+	       * dump with atexit so a real boot's clean shutdown still produces the profile. */
+	      atexit(jit_profile_dump);
+	  } }
 	jit_cache_size = cache_size_kb * 1024;
 	jit_cache_base = (uint8_t *)jit_cache_alloc(jit_cache_size);
 	if (!jit_cache_base) {
@@ -4449,6 +4456,9 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
  * exact; the counts are the real per-block execution totals for the run. */
 static void jit_profile_dump(void)
 {
+	static bool dumped = false;   /* idempotent: atexit + the SS_TEST_HEX exit path can both call */
+	if (dumped) return;
+	dumped = true;
 	if (!jit_profile_enabled || jit_prof_n == 0) return;
 	/* collect non-empty slots */
 	int n = 0;

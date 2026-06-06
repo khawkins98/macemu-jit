@@ -2905,6 +2905,48 @@ static inline void do_video_refresh(void)
 	}
 #endif
 
+	// Runtime control: poll a .sheepvm/runtime_control file every ~5s for live toggles.
+	// SiliconSheep writes this file; the emulator re-reads it. Cheap stat() + small read.
+	{
+		static int control_counter = 0;
+		if (++control_counter >= 300) { // ~5s at 60 Hz
+			control_counter = 0;
+			// The control file lives next to the prefs file in the .sheepvm bundle.
+			// Format: one "key value" per line (same as prefs, subset of toggleable keys).
+			FILE *cf = fopen("runtime_control", "r");
+			if (cf) {
+				char line[256];
+				while (fgets(line, sizeof line, cf)) {
+					char key[64], val[64];
+					if (sscanf(line, "%63s %63s", key, val) == 2) {
+						if (!strcmp(key, "input_lockout")) {
+							bool new_val = (val[0] == '1' || !strcmp(val, "true"));
+							if (new_val != input_lockout) {
+								input_lockout = new_val;
+								fprintf(stderr, "[input] input_lockout toggled to %s\n",
+								        input_lockout ? "ON (host input ignored)" : "OFF");
+							}
+						} else if (!strcmp(key, "frameskip")) {
+							uint32 new_fs = atoi(val);
+							if (new_fs != frame_skip) {
+								frame_skip = new_fs;
+								fprintf(stderr, "[video] frameskip changed to %u\n", frame_skip);
+							}
+						} else if (!strcmp(key, "mouse_grab")) {
+							bool want = (val[0] == '1' || !strcmp(val, "true"));
+							if (want && !mouse_grabbed) {
+								if (drv) drv->grab_mouse();
+							} else if (!want && mouse_grabbed) {
+								if (drv) drv->ungrab_mouse();
+							}
+						}
+					}
+				}
+				fclose(cf);
+			}
+		}
+	}
+
 	// Set new palette if it was changed
 	handle_palette_changes();
 }

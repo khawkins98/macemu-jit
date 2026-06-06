@@ -924,11 +924,11 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
       </div>
       <div class="form-group">
         <label>Input Lockout</label>
-        <select class="input" id="debug-SS_INPUT_LOCKOUT">
+        <select class="input" id="debug-SS_INPUT_LOCKOUT" data-action="runtime-toggle" data-rkey="input_lockout">
           <option value="" selected>Off — host mouse/keyboard active</option>
           <option value="1">On — ignore host input, VNC-only control</option>
         </select>
-        <p class="ss-text-muted">Disables all host mouse and keyboard input to the emulator. VNC-injected events still work. Useful for automated testing or kiosk mode.</p>
+        <p class="ss-text-muted">Disables all host mouse and keyboard input to the emulator. VNC-injected events still work. <strong>Live-toggleable</strong> — changes take effect within ~5 seconds.</p>
       </div>
       <div class="form-group" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ss-border);">
         <label>Run Logs</label>
@@ -1025,6 +1025,24 @@ function render() {
 function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((el) => {
     el.addEventListener("click", handleAction);
+  });
+
+  // Runtime control toggles: write to .sheepvm/runtime_control for live changes
+  document.querySelectorAll("[data-action='runtime-toggle']").forEach((el) => {
+    el.addEventListener("change", async () => {
+      if (!selectedVmId) return;
+      const input = el as HTMLSelectElement;
+      const rkey = input.dataset.rkey;
+      if (rkey) {
+        const val = input.value === "1" ? "1" : "0";
+        try {
+          await invoke("set_runtime_control", { id: selectedVmId, key: rkey, value: val });
+          showToast(`${rkey} ${val === "1" ? "enabled" : "disabled"} — takes effect within ~5s`, "info", 3000);
+        } catch (err) {
+          showToast(`Failed: ${err}`, "error");
+        }
+      }
+    });
   });
 
   // Immediate-apply: settings save on change (Mac OS 9 HIG — modeless, no Save button)

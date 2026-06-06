@@ -514,6 +514,29 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+#[tauri::command]
+fn set_runtime_control(id: String, key: String, value: String) -> Result<(), String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let control_path = vm_dir.join("runtime_control");
+
+    // Read existing controls, update/add the key, write back
+    let mut controls: std::collections::HashMap<String, String> = HashMap::new();
+    if let Ok(content) = std::fs::read_to_string(&control_path) {
+        for line in content.lines() {
+            let parts: Vec<&str> = line.splitn(2, ' ').collect();
+            if parts.len() == 2 {
+                controls.insert(parts[0].to_string(), parts[1].to_string());
+            }
+        }
+    }
+    controls.insert(key, value);
+
+    let content: String = controls.iter()
+        .map(|(k, v)| format!("{} {}\n", k, v))
+        .collect();
+    std::fs::write(&control_path, content).map_err(|e| e.to_string())
+}
+
 fn find_capture_script() -> Option<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
@@ -730,6 +753,7 @@ fn main() {
             get_vm_screenshot,
             get_vm_inspector,
             generate_bug_report,
+            set_runtime_control,
             capture_vm_screenshot,
             list_vm_logs,
             read_vm_log,

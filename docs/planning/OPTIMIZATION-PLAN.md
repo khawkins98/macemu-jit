@@ -386,8 +386,16 @@ the deterministic `a64/op` microbench metric: the `compute` kernel dropped exact
 zero-noise, host-independent measurement (the timing columns were all `NOISY` on
 the loaded host at the time, which is precisely why the deterministic metric
 matters). Correctness: test-jit 302/302 + differential interp-vs-JIT on the
-div-by-0 / MIN÷-1 / normal paths. **Still open:** the same MOV in `mulhw`/`mulhwu`
-(SMULL/UMULL + LSR into RTMP0, then MOV to hD) — extend uniformly.
+div-by-0 / MIN÷-1 / normal paths.
+
+**mulhw/mulhwu follow-up — DONE (2026-06-06).** Same pattern eliminated: the high
+word now shifts directly into hD (`LSR X(hD), X0, #32` after SMULL/UMULL) instead
+of `LSR RTMP0` + `MOV hD, RTMP0` — strictly −1 ARM64 insn/op (cannot regress).
+Correctness: test-jit 302/302 + differential interp-vs-JIT on the signed/unsigned
+high-word edge cases (−1×−1→0, 0x80000000×2→0xffffffff signed vs 1 unsigned, etc.).
+Note: `mulhw`/`mulhwu` are **not** hot (absent from the boot + Speedometer profiles),
+so this is a correctness-neutral tidy-up completing 0f — not a hot-path win. The 0f
+family is now fully swept.
 
 ### 0g. Lazy CR0 Re-enable
 

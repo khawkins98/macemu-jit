@@ -2067,17 +2067,19 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 75: /* mulhw rD,rA,rB (high word of signed multiply) */
 		{	int hA = ra_load(ra); int hB = ra_load(rb);
-			emit32(0x9B207C00 | (hB << 16) | (hA << 5) | RTMP0); /* SMULL X0 */
-			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP0); /* LSR X0, X0, #32 */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			emit32(0x9B207C00 | (hB << 16) | (hA << 5) | RTMP0); /* SMULL X0,WhA,WhB */
+			/* Shift the high word directly into hD — no trailing MOV (0f follow-up).
+			 * LSR X(hD),X0,#32: W(hD)=high32, upper bits zeroed; hA/hB already dead. */
+			int hD = ra_store(rd);
+			emit32(0xD360FC00 | (RTMP0 << 5) | hD); /* LSR X(hD), X0, #32 */
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
 		}
 		case 11: /* mulhwu rD,rA,rB (high word of unsigned multiply) */
 		{	int hA = ra_load(ra); int hB = ra_load(rb);
-			emit32(0x9BA07C00 | (hB << 16) | (hA << 5) | RTMP0); /* UMULL X0 */
-			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP0); /* LSR X0, X0, #32 */
-			int hD = ra_store(rd); a64_mov_reg(hD, RTMP0);
+			emit32(0x9BA07C00 | (hB << 16) | (hA << 5) | RTMP0); /* UMULL X0,WhA,WhB */
+			int hD = ra_store(rd);
+			emit32(0xD360FC00 | (RTMP0 << 5) | hD); /* LSR X(hD), X0, #32 — result direct, no MOV */
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
 		}

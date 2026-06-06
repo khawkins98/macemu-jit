@@ -48,6 +48,7 @@ Representative (real chaining/everything) but needs a reasonably quiet host. The
 | 2026-06-06 | boot→Finder (ISO) | 1037 | 148M/s | 14.6 | JIT (pre-0h) |
 | 2026-06-07 | boot→Finder (ISO) | 1040 | 148M/s | 14.6 | JIT (post-0h) — flat, as expected: boot is I/O/timer-bound, not compute, so 0h shift/clrlwi wins don't move it |
 | 2026-06-07 | **Speedometer (compute)** | **2413** | 141M/s | **9.79** | JIT — **2.3× the boot guest-MIPS** (compute isn't I/O-bound); a64/guest-op 9.79 ≪ boot's 14.6 because Speedometer's hot blocks are large (20–163 insns) so per-block prologue/epilogue amortizes far better |
+| 2026-06-07 | **Fractal Carbon** | 1046 | 111M/s | 12.88 | JIT — ⚠️ runs its **scalar-FP path, NOT AltiVec** (hot block 0x1e5bc0d0 = 19-insn **FP**, ~14.5%; top-3 ≈ 43% of execution). SheepShaver isn't exposing AltiVec to the guest (or FC's Velocity-Engine detection fails), so this is an **FP** benchmark here — reinforces P5b (FP RA), and means we have **no true AltiVec workload coverage yet** (investigate AltiVec gestalt advertisement) |
 | _TODO_ | boot→Finder (ISO) | — | — | — | interpreter (`SS_USE_JIT=0`) — produces no JIT profile (interpreter compiles no blocks); use Speedometer score ratio instead for the headline |
 
 The interpreter-vs-JIT guest-MIPS ratio is the headline "how much the JIT buys us" —

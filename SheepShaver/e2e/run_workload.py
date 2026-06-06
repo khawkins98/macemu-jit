@@ -47,6 +47,18 @@ def main(argv) -> int:
         print(f"FAIL: unknown workload {name!r} (known: {', '.join(WORKLOADS)})")
         return 1
 
+    # SS_E2E_TIMEOUT_SCALE: multiply launch/render/quit timeouts (default 1.0, no change).
+    # Useful when the guest runs slower than normal — e.g. SS_JIT_PROFILE adds per-block
+    # counter overhead (~2x), which otherwise trips the launch gate on a profiled run.
+    _scale = float(os.environ.get("SS_E2E_TIMEOUT_SCALE", "1"))
+    if _scale != 1.0:
+        from dataclasses import replace
+        spec = replace(spec, launch_timeout=spec.launch_timeout * _scale,
+                       max_render_s=spec.max_render_s * _scale,
+                       quit_timeout=spec.quit_timeout * _scale)
+        print(f"  [workload] timeouts x{_scale} (launch={spec.launch_timeout:.0f}s "
+              f"render={spec.max_render_s:.0f}s quit={spec.quit_timeout:.0f}s)")
+
     assets = harness.check_preconditions()       # ROM check; disks are explicit paths below
     if assets is None:
         return 1

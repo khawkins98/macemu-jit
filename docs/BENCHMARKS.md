@@ -57,8 +57,15 @@ A/B, not as a literal executed count.
 
 ### 3. Speedometer 4.02 (system-level, interpreter vs JIT) — see section below
 
-The long-running dated progression (pre-RA → post-RA → post-B1/B2/A3) with the
-interpreter floor (PR 21.485 vs JIT). Next entry pending the bench-harness completion fix.
+The long-running dated progression (pre-RA → post-RA → post-B1/B2/A3 → current M5) with the
+interpreter floor. **Headline JIT-vs-interpreter (documented): ~1.88× overall, up to ~2.2–2.4×
+on integer compute** (Dhrystones/Puzzle/Bubble) — **but only 1.29× on Math.**
+
+**The data-driven next lever:** Math's weak 1.29× (vs 2.2× integer) is because the JIT has **no FP
+register allocator** — every FP op round-trips the FPRs through the regs struct (corroborated by the
+`fp-add`/`fp-fma` microbench kernels running ~30× slower per-insn than `alu`). So **P5b (FP register
+allocator)** is the highest-leverage *throughput* win that both the Speedometer ratio and the microbench
+point at. Power Fractal (AltiVec/FP-heavy) will stress this further.
 
 ---
 

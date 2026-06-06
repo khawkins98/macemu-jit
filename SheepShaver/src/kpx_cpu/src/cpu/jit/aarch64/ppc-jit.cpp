@@ -97,7 +97,7 @@ static uint32_t *jit_cache_end  = NULL;
 #define JIT_BC_MASK     (JIT_BC_BUCKETS - 1)
 #define JIT_BC_POOL     65536               /* max total entries across all chains */
 
-/* ---- Block-to-block chaining (mechanism complete; default OFF) -------------
+/* ---- Block-to-block chaining (ON by default, boot-verified) ----------------
  *
  * JIT_BLOCK_CHAINING = 1: block exits whose target is already compiled branch
  * directly to the target's chain entry (B <chain_code>), bypassing the C
@@ -112,10 +112,10 @@ static uint32_t *jit_cache_end  = NULL;
  * (PPCR_SPCFLAGS_POLL_MASK = 0x0F) — SPCFLAG_JIT_EXEC_RETURN (bit 16) is not
  * cleared at the dispatch site and must not be polled (it would loop forever).
  *
- * With chaining ON both harness modes pass (227/227); what remains unproven is
- * a full boot in that configuration (boot verification is gated on the
- * 68k-region interrupt-timing work — see LEARNINGS.md).  Until a chained boot is
- * verified, the define stays 0; flip to 1 to test.
+ * STATUS: chaining is ON (`JIT_BLOCK_CHAINING 1`) and **boot-verified** — it boots
+ * Mac OS 8.6 to the Finder desktop with the spcflags poll at every chain entry
+ * (see CLAUDE.md / LEARNINGS.md). Do NOT flip it back to 0: that path is the slow
+ * dispatcher-per-block fallback and is no longer the tested configuration.
  *
  * History: chaining was originally written but never functional (a marking bug
  * excluded every chained block from execution).  Enabling it without the entry
@@ -841,26 +841,30 @@ static void emit_load_ea_base(int ra_num) {
  *     word_element(i) = i                          // word order preserved
  * This raw `LDR Q` therefore puts PPC element `i` in NEON lane byte_element(i), NOT
  * lane `i`. Any op whose semantics depend on sub-word *position* sees the wrong
- * lanes. Confirmed by differential vectors (gen-altivec-vectors.py):
- *   STILL BROKEN: vmuloub/vmuleub (even/odd byte multiplies — these ALSO emit the
- *           wrong NEON op: case 8 below emits MUL.8B, not the widening UMULL.8H).
- *           Quarantined (xfail) in the harness; ROADMAP A2. (vpkuwum/case 78 also
- *           ignores vA — same class, not yet vectored.)
- *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops.
+ * lanes. Status (verified by gen-altivec-vectors.py + tools/jit-diff-sweep.py):
  *   FIXED:  vspltb/vsplth (case 524/588 remap the DUP index via byte/half_element);
- *           vmrghw/vmrglw (cases 140/396, plain ZIP.4S); vmrgh/l {b,h} and vpkuhum
- *           (emit_vmrg: REV32.16B normalize -> ZIP/UZP.{16B,8H} -> REV32.16B back).
+ *           vmrghw/vmrglw (140/396, ZIP.4S); vmrgh/l {b,h} and vpkuhum (emit_vmrg:
+ *           REV32.16B normalize -> ZIP/UZP -> REV32.16B back); even/odd BYTE
+ *           multiplies vmuloub/vmuleub + signed vmulosb/vmulesb (emit_vmul_byte,
+ *           cases 8/520/264/776: REV32 -> UZP1/2 -> [SU]MULL.8H -> REV32.8H);
+ *           the variable shift/rotate, saturating add/sub, and signed-average
+ *           families (2026-06-06 sweep — 26 ops). Quarantine lane now empty.
+ *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops.
+ *   STILL BROKEN / remaining (all ev_mixed + 2-source; ROADMAP A2, full worklist in
+ *           docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md):
+ *           - vpkuwum (case 78) ignores vA (modulo word pack);
+ *           - saturating packs vpk{sh,sw,uh,uw}{ss,us} + pixel vpkpx/vupkhpx/vupklpx
+ *             + sum-across vsumsws/vsum2sws/vsum4sbs;
+ *           - HALFWORD multiplies vmul{o,e}{u,s}h (72/328/584/840);
+ *           - no committed test vectors yet for the *signed* (vmulosb/vmulesb) and
+ *             halfword multiplies — emitted prospectively.
  *
- * TWO FIX APPROACHES (neither done — needs a boot to verify real AltiVec software):
- *   (A) Systematic: make this LDR Q + REV32.16B (and store = REV32.16B + STR Q) so
- *       the NEON reg holds natural element order and every op can use raw lanes
- *       (then REVERT the vspltb/vsplth remap). Simplest, but +2 NEON ops per AltiVec
- *       op (a perf hit) and changes the in-JIT VR convention — re-verify everything,
- *       and lvx/stvx (which must keep producing ev_mixed vr[] for the interpreter).
- *   (B) Per-op: leave storage as-is and make each broken op's codegen ev_mixed-aware
- *       (like the splat remap). Perf-neutral, but a careful derivation per op, and
- *       the multiplies additionally need UMULL/UMULL2 + a deinterleave.
- * Repro vectors live in jit-test/gen-altivec-vectors.py (the BUG[] list). ==============
+ * FIX APPROACH — (B) per-op ev_mixed-aware codegen is the CHOSEN + SHIPPED one
+ * (the splat remap, emit_vmrg, emit_vmul_byte all follow it). **(A) REJECTED — do
+ * not re-attempt:** a global REV32.16B at load/store changes the in-JIT VR
+ * convention for every op at once and re-breaks the already-correct ones (tried on a
+ * throwaway branch 2026-06-04: all 9 quarantine vectors stayed xfail; ROADMAP A2).
+ * Repro vectors live in jit-test/gen-altivec-vectors.py. ==============================
  */
 static void emit_load_vr(int qd, int vr_num) {
 	uint32_t off = PPCR_VR(vr_num);
@@ -3038,7 +3042,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				have_prediction = link_stack_pop(&predicted_return);
 				if (have_prediction) {
 					const struct jit_bc_entry *ret_block = jit_bc_lookup(predicted_return);
-					if (ret_block && ret_block->chain_code) {
+					/* CORRECTNESS (icbi/SMC): the raw `B chain_code` below is NOT a registered
+					 * chain_site, so ppc_jit_aarch64_invalidate_range() cannot revert it — if the
+					 * target were RAM and got SMC/icbi-invalidated, this block would keep branching
+					 * into a stale translation (the historical icbi-hang class). It also sits
+					 * mid-hit-path, so it cannot use the standard revert-to-LDP path (that would
+					 * double the epilogue). So only direct-chain to NEVER-INVALIDATED (ROM) targets;
+					 * RAM returns fall back to the standard dispatcher. (Restoring RAM LR-prediction
+					 * needs a registered site with a revert-to-miss-path word — tracked, ROADMAP A1.) */
+					bool target_in_rom = (jit_rom_size != 0 &&
+					                      predicted_return >= jit_rom_base &&
+					                      predicted_return <  jit_rom_base + jit_rom_size);
+					if (ret_block && ret_block->chain_code && target_in_rom) {
 						/* RTMP2 already holds LR from the guard above */
 						emit_load_imm32(RTMP0, (int32_t)predicted_return);
 						emit32(0x6B00001F | (RTMP0 << 16) | (RTMP2 << 5)); /* CMP W(RTMP2), W(RTMP0) */

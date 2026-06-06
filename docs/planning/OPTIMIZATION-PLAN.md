@@ -1,6 +1,6 @@
 # SheepShaver ARM64 JIT Optimization Plan
 
-> **Status:** 🟡 Active · **Created:** 2026-06-03 · **Updated:** 2026-06-05
+> **Status:** 🟡 Active · **Created:** 2026-06-03 · **Updated:** 2026-06-06
 > **Why this doc exists:** SheepShaver JIT performance roadmap — done / open / deferred levers with measured baselines.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -580,10 +580,13 @@ Effort: ~1 day.  Risk: low (miss path is current behavior).
 machinery; also the practical workaround for P2 (native bcctr). See
 `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
 
-**R3. Batch W^X toggles** — N/A (2026-06-04)
-Investigated: SheepShaver's code cache uses plain `mmap(PROT_RWX)` without
-`MAP_JIT` or `pthread_jit_write_protect_np`.  No W^X toggling exists to batch.
-Only relevant if the project migrates to MAP_JIT for hardened distribution.
+**R3. Batch W^X toggles** — superseded by R8 (corrected 2026-06-06)
+~~Investigated: SheepShaver's code cache uses plain `mmap(PROT_RWX)`...~~ **That note
+was wrong.** The code cache *does* use `MAP_JIT` + per-thread `pthread_jit_write_protect_np`
+toggling (`jit-target-cache.hpp:34` `JIT_CACHE_MAP_FLAGS = …|MAP_JIT`; `jit_cache_begin_write`/
+`end_write` at :35-39; live calls at `ppc-jit.cpp:260/4457/4639`). So a real W^X toggle exists
+and *could* be batched — but the better fix is **R8 (dual RW/RX mapping)**, which removes the
+per-thread toggle entirely (and is required for background compilation, R9). See R8.
 
 **R4. mach_absolute_time for event scheduling** (Dolphin)
 Replace gettimeofday/clock_gettime with direct CNTVCT_EL0 reads via
@@ -632,6 +635,14 @@ Effort: 1 week.  Risk: moderate (new rendering path alongside SDL).
 ---
 
 ## Open — Orthogonal: Selective HLE (high-level emulation of hot routines)
+
+> **Concrete first target (2026-06-06):** `CopyBits` HLE — the hottest QuickDraw raster op, today
+> run via the PPC-JIT emulating the ROM's 68K DR-emulator (the worst layer in the stack). Safe (no
+> SMC risk, unlike `BlockMove`-for-code, which bypasses the icbi/isync flush path) and the on-ramp
+> to Metal blits (R10). Histogram-probe first. Nominated alongside **idle-skipping** (a desktop-
+> citizenship win) and constant-propagation / carry-via-NZCV as backlog levers. Full reality-checked
+> idea bank + effort/payoff/blocked grid:
+> `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md`.
 
 This is a *different axis* from everything above: instead of making the JIT's
 translated output better, replace a few specific, hot, well-understood guest

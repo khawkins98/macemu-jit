@@ -11,6 +11,22 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Cross-emulator ideation capture + effort/payoff grid + R3 stale-note fix
+
+- Added `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md`: a reality-checked capture
+  of a 6-persona lateral-ideation workflow (Dolphin/RPCS3/Cemu = PowerPC; QEMU; Rosetta/FEX = same
+  host; wildcard), 88 ideas distilled to an effort/payoff/blocked **grid**. Nominated first picks:
+  `CopyBits` HLE (games/media, →Metal) and idle-skipping (battery/thermal/desktop citizenship);
+  do-anyway: dual-W^X (R8). Records what's already shipped (chaining, AltiVec byte-mults) so it's
+  not re-chased, defers the persistent-ROM-cache idea (re-file under Silicon Sheep snapshot/resume),
+  and logs strategic anchors (TSO-for-SMP, record/replay time-travel, static AOT recomp).
+- Wired: ROADMAP B4 + OPTIMIZATION-PLAN (HLE section) point to the idea bank.
+- **Fixed OPTIMIZATION-PLAN R3 stale note** — it claimed "no W^X toggling exists"; the code uses
+  `MAP_JIT` + `pthread_jit_write_protect_np` (`jit-target-cache.hpp:34-39`), superseded by R8.
+- Surfaced (for the JIT owner, not fixed here): two stale `ppc-jit.cpp` comments (chaining
+  "default OFF"; AltiVec "STILL BROKEN: vmuloub") and a latent bug (unregistered LR-prediction
+  `B chain_code` at ~:3052). Handoff prompt prepared.
+
 ### [SheepShaver] AltiVec variable BYTE shifts fixed — vslb/vsrb/vsrab (3 confirmed bugs)
 
 Fixed the first family of the AltiVec shift bugs found below — the **byte** ops, which are

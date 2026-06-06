@@ -490,6 +490,13 @@ devices, Metal compositing) vs. what can't (the cooperative guest is one logical
 feasibility, with the gated "true guest SMP" end (MP tasks on separate cores) tied back to D3's
 supervisor-fidelity work. **Detail:** `docs/planning/MULTICORE-OFFLOAD-PLAN.md`.
 
+**Cross-emulator idea bank (Dolphin/RPCS3/Cemu/QEMU/Rosetta).** A reality-checked lateral-ideation
+pass with an effort/payoff/blocked grid. Near-term nominees: **`CopyBits` HLE** (games/media, →Metal)
+and **idle-skipping** (battery/thermal/desktop citizenship); plus dual-W^X (R8, do-anyway),
+constant-prop, carry-via-NZCV, fastmem-SIGBUS. Several brainstormed "wins" were already shipped
+(chaining, AltiVec byte-mults) — the doc records those so they aren't re-chased.
+**Detail:** `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md`.
+
 **Regression tracking:** baselines + how to A/B → `docs/BENCHMARKS.md` (Speedometer baseline
 recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still TODO) and
 `SheepShaver/rom-harness/` (`make bench`).

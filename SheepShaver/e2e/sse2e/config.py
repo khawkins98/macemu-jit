@@ -23,12 +23,14 @@ ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
 
 # kind -> (env var, conventional in-project filename, glob fallback, legacy shared default)
 _SPECS = {
-    "rom":  ("SS_E2E_ROM",  "rom.rom",   "*.rom",
-             "/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom"),
-    "iso":  ("SS_E2E_ISO",  "smoke.iso", "*.iso",
-             "/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso"),
-    "disk": ("SS_E2E_DISK", "bench.dsk", "*.dsk",
-             "/Users/Shared/macemu/macos9_mini.dsk"),
+    "rom":      ("SS_E2E_ROM",      "rom.rom",   "*.rom",
+                 "/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom"),
+    "iso":      ("SS_E2E_ISO",      "smoke.iso", "*.iso",
+                 "/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso"),
+    "disk":     ("SS_E2E_DISK",     "bench.dsk", "*.dsk",
+                 "/Users/Shared/macemu/macos9_mini.dsk"),
+    # appsdisk is opt-in only: empty legacy default means "no apps disk" when nothing is configured.
+    "appsdisk": ("SS_E2E_APPSDISK", "apps.dsk",  "apps.dsk", ""),
 }
 
 
@@ -37,6 +39,7 @@ class Assets:
     rom: str
     iso: str
     disk: str
+    appsdisk: str = ""  # empty string means "no apps disk attached"
 
 
 def _resolve_one(kind: str) -> str:
@@ -52,18 +55,26 @@ def _resolve_one(kind: str) -> str:
     matches = sorted(ASSETS_DIR.glob(glob))
     if matches:
         return str(matches[0])
-    # 3. legacy shared default (back-compat)
-    if Path(legacy).exists():
+    # 3. legacy shared default (back-compat); appsdisk has legacy="" so this branch is skipped
+    if legacy and Path(legacy).exists():
         return legacy
-    # 4. unresolved — return the conventional in-project path so the not-found error points there
+    # 4. appsdisk: "not found" is the clean default (opt-in only) — return "" instead of a path
+    if kind == "appsdisk":
+        return ""
+    # 4. other kinds: return the conventional in-project path so the not-found error points there
     return str(cand)
 
 
 def resolve_assets() -> Assets:
-    """Resolve all three asset paths (env -> assets/ -> legacy default). Paths are NOT existence-
-    checked here (the smoke needs only the ISO, the benchmark only the disk) — call require_asset()
-    on the one(s) a scenario actually boots."""
-    return Assets(rom=_resolve_one("rom"), iso=_resolve_one("iso"), disk=_resolve_one("disk"))
+    """Resolve all asset paths (env -> assets/ -> legacy default). Paths are NOT existence-checked
+    here (the smoke needs only the ISO, the benchmark only the disk) — call require_asset() on the
+    one(s) a scenario actually boots. appsdisk resolves to "" when unconfigured (opt-in only)."""
+    return Assets(
+        rom=_resolve_one("rom"),
+        iso=_resolve_one("iso"),
+        disk=_resolve_one("disk"),
+        appsdisk=_resolve_one("appsdisk"),
+    )
 
 
 def require_asset(path: str, kind: str) -> None:

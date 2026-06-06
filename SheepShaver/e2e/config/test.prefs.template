@@ -12,6 +12,7 @@
 # same idle path. Shutdown is via SIGUSR1 (host->guest hook), not VNC, so no menu coordinates.
 rom {rom}
 disk {disk}
+{appsdisk_line}
 ramsize 268435456
 screen win/800/600
 displaycolordepth 8

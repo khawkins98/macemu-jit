@@ -44,3 +44,33 @@ def test_require_asset_ok_when_present(tmp_path):
     p = tmp_path / "rom.rom"
     p.write_text("x")
     config.require_asset(str(p), "rom")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# appsdisk — optional attached apps disk
+# ---------------------------------------------------------------------------
+
+def test_appsdisk_absent_by_default(monkeypatch, tmp_path):
+    """No SS_E2E_APPSDISK, no assets/apps.dsk -> appsdisk resolves to "" (clean "no apps disk")."""
+    monkeypatch.delenv("SS_E2E_APPSDISK", raising=False)
+    # Point ASSETS_DIR at an empty tmp dir so no apps.dsk can be found by glob either.
+    monkeypatch.setattr(config, "ASSETS_DIR", tmp_path)
+    assets = config.resolve_assets()
+    assert assets.appsdisk == "" or not assets.appsdisk  # empty when unconfigured
+
+
+def test_appsdisk_env_override(monkeypatch, tmp_path):
+    """SS_E2E_APPSDISK env var is returned verbatim (path need not exist — CI may pre-create it)."""
+    p = tmp_path / "apps.dsk"
+    p.write_text("x")
+    monkeypatch.setenv("SS_E2E_APPSDISK", str(p))
+    assert config.resolve_assets().appsdisk == str(p)
+
+
+def test_appsdisk_in_project_assets_dir(monkeypatch, tmp_path):
+    """assets/apps.dsk found in project assets dir -> resolved to that path."""
+    monkeypatch.delenv("SS_E2E_APPSDISK", raising=False)
+    monkeypatch.setattr(config, "ASSETS_DIR", tmp_path)
+    p = tmp_path / "apps.dsk"
+    p.write_text("x")
+    assert config.resolve_assets().appsdisk == str(p)

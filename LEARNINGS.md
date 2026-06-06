@@ -3,6 +3,19 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-06 — A running Carbon app's fullscreen canvas is invisible to Backend-A introspection
+
+Validating Fractal Carbon (it **launches + renders** with CarbonLib 1.6 — the old
+`CarbonLib--GetPortBitMapForCopyBits could not be found` error is gone), the guest-UI introspection
+returned **degenerate `(0,0,0,0)` + `suspect` windows** and the menu walk still showed *Finder* at the
+dump moment — yet the **screenshot showed the fractal rendering fullscreen with the app's own menus**. So
+a Carbon app drawing to a fullscreen canvas does **not** present a standard `WindowRecord`/`MenuList` that
+the Backend-A memory walk can read. Consequence for `scenario.run_workload`: for Carbon/fullscreen apps,
+**gate on the screenshot + masked-pHash + the app-change (`[APP]`) signal, not the window list**. (This is
+the LEARNINGS "look at the actual pixels, don't infer from state" rule paying off — the screenshot, not
+the introspection dump, was ground truth.) Plan-3 Backend B (trap oracle) or a CGrafPort/QD-global read
+may be needed to introspect such apps later.
+
 ## 2026-06-06 — Installing classic Mac apps onto HFS images host-side, with resource forks intact
 
 Populating an E2E "apps" disk host-side (no boot) the obvious way silently produces a **dead app** —

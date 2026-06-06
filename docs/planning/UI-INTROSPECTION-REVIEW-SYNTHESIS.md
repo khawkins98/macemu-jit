@@ -174,7 +174,7 @@ run one timed operation → record duration to the existing benchmark-export per
 | **P1** | S1: wire v1 into `scenario.py` gates (structural asserts) | Med | Python | de-flake today |
 | **P2** | S2: v1 + masked-pHash co-assertion at each gate | Low | Python | render-regression catch |
 | ✅ **P2** | **Plan 2** (DITL items + control state + menus + depth via GDevice + desktop role + **control-list items for non-dialog windows**). *Open:* parts/hot-zones (Plan 2d) + ParamText (Plan 3). | High | C++ + Python | real app automation |
-| 🟡 **P3** | **S4 underway**: Fractal Carbon installed + CarbonLib 1.6 via introspection-driven installer. *Next:* generic `scenario.run_workload` + the FC render run; then S5 library + Plan 3. | Med-High | Python | the end goal |
+| 🟡 **P3** | **S4 underway**: Fractal Carbon **launches + renders** (CarbonLib 1.6 baked into the workload disk via the reuse artifact). *Next:* generic `scenario.run_workload` (drive→time→pHash→quit→export); then S5 library + Plan 3. *Finding:* Carbon fullscreen canvas is invisible to Backend-A → gate on screenshot/pHash, not the window list. | Med-High | Python | the end goal |
 
 **Recommended next:** P0 correctness + P1 docs integration immediately (cheap, unblock-everything);
 then choose between **DX/S1 harness enrichment** (fast payoff on the *current* harness) and **Plan 2**

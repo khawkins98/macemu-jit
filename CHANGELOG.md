@@ -50,6 +50,14 @@ so future installs are a one-line `hcopy -m` — no SMI, no boot. Procedure + th
 gotchas documented in the install doc; saga in `LEARNINGS.md`. Discovery harness commit `3c0368c8`;
 install driver committed with `ac4363a2`.
 
+**Validated end-to-end (2026-06-06):** baked CarbonLib 1.6 into a clean clonefile workload boot disk via
+the reuse artifact (host-side, no boot), then booted it + the apps disk — **AltiVec Fractal Carbon now
+launches and renders a live fractal** (`e2e/artifacts/fc_discover.png`), where it previously died on
+`CarbonLib--GetPortBitMapForCopyBits could not be found`. Finding for the workload-scenario build: the
+running Carbon app's fullscreen canvas is **not** a standard `WindowRecord`/`MenuList` (Backend-A returned
+degenerate windows), so a Carbon workload must gate on screenshot/pHash + the app-change signal, not the
+window list.
+
 ### [SheepShaver][e2e] Guest UI introspection — Plan 2c: menu bar + depth + desktop role
 
 The last app-automation enabler: a top-level `menuBar` (menus + items + **Command-key equivalents** +

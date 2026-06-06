@@ -437,10 +437,13 @@ read straight from Toolbox structures at the idle hook — no screenshot/OCR.
 - ✅ **Plan 2** — dialog items/DITL (click named buttons), control state (value/hilite/checked/dimmed),
   menu bar + Command-keys, `screen.depth`, `role:"desktop"`, **and control-list items for non-dialog
   (document/movable-modal) windows** (`ac4363a2`) — so `find_item`/`click_item` work on any window.
-- 🟡 **S4 (in progress)** — first real-world workload: **Fractal Carbon installed**; its **CarbonLib 1.6**
-  dependency resolved by *driving the Apple SMI installer over VNC via introspection*
-  (`SheepShaver/e2e/run_carbonlib_install.py`) and extracted for reuse
-  (`/Users/Shared/macemu/CarbonLib_1.6_extension.bin`). Next: generic `scenario.run_workload` + the FC run.
+- 🟡 **S4 (in progress)** — first real-world workload: **Fractal Carbon installed + LAUNCHES & RENDERS**
+  (validated 2026-06-06, `e2e/artifacts/fc_discover.png`). Its **CarbonLib 1.6** dependency was resolved by
+  *driving the Apple SMI installer over VNC via introspection* (`run_carbonlib_install.py`), extracted for
+  reuse (`CarbonLib_1.6_extension.bin`), and baked host-side into the clean workload boot disk. *Next:* the
+  generic `scenario.run_workload` (drive render → time → masked-pHash → quit → export). *Finding:* a Carbon
+  app's fullscreen canvas isn't a standard `WindowRecord`, so gate on screenshot/pHash + app-change, not the
+  window list.
 - ⏸ **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()` calibration, ParamText, socket transport.
 See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference),
 `docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan), and

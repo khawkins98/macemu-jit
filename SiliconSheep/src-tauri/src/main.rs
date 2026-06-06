@@ -392,6 +392,128 @@ fn get_vm_inspector(id: String, state: State<AppState>) -> Result<VmInspectorSta
     Ok(map.get(&id).cloned().unwrap_or_default())
 }
 
+#[tauri::command]
+fn generate_bug_report(id: String, ui_screenshot_b64: Option<String>, state: State<AppState>) -> Result<String, String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let profile = vm::get_profile(&id)?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let report_dir = std::env::temp_dir().join(format!("siliconsheep-report-{}", ts));
+    std::fs::create_dir_all(&report_dir).map_err(|e| e.to_string())?;
+
+    // 1. VM profile (sanitized — remove absolute paths for privacy)
+    let profile_json = serde_json::to_string_pretty(&profile).unwrap_or_default();
+    std::fs::write(report_dir.join("vm-profile.json"), &profile_json).ok();
+
+    // 2. Prefs file
+    let prefs_path = vm_dir.join("prefs");
+    if prefs_path.exists() {
+        std::fs::copy(&prefs_path, report_dir.join("prefs.txt")).ok();
+    }
+
+    // 3. Last run log
+    let last_log = vm_dir.join("last_run.log");
+    if last_log.exists() {
+        if let Ok(target) = std::fs::read_link(&last_log) {
+            std::fs::copy(&target, report_dir.join("last_run.log")).ok();
+        } else {
+            std::fs::copy(&last_log, report_dir.join("last_run.log")).ok();
+        }
+    }
+
+    // 4. Guest screenshot (from VNC if available)
+    let guest_screenshot = vm_dir.join("screenshot.png");
+    if guest_screenshot.exists() {
+        std::fs::copy(&guest_screenshot, report_dir.join("guest-screen.png")).ok();
+    }
+
+    // 5. UI screenshot (from frontend, base64 PNG)
+    if let Some(ref b64) = ui_screenshot_b64 {
+        if let Some(data) = b64.strip_prefix("data:image/png;base64,") {
+            if let Ok(bytes) = base64_decode(data) {
+                std::fs::write(report_dir.join("ui-screenshot.png"), &bytes).ok();
+            }
+        }
+    }
+
+    // 6. Inspector stats snapshot
+    if let Ok(map) = state.inspector.lock() {
+        if let Some(inspector) = map.get(&id) {
+            let json = serde_json::to_string_pretty(inspector).unwrap_or_default();
+            std::fs::write(report_dir.join("inspector-stats.json"), &json).ok();
+        }
+    }
+
+    // 7. Host environment info
+    let mut env_info = String::new();
+    env_info.push_str(&format!("SiliconSheep version: {}\n", env!("CARGO_PKG_VERSION")));
+    env_info.push_str(&format!("OS: {}\n", std::env::consts::OS));
+    env_info.push_str(&format!("Arch: {}\n", std::env::consts::ARCH));
+    if let Ok(output) = std::process::Command::new("sw_vers").output() {
+        env_info.push_str(&format!("macOS: {}", String::from_utf8_lossy(&output.stdout)));
+    }
+    if let Some(emu) = find_emulator_binary() {
+        env_info.push_str(&format!("Emulator: {}\n", emu));
+    }
+    std::fs::write(report_dir.join("environment.txt"), &env_info).ok();
+
+    // 8. Create zip
+    let zip_path = std::env::temp_dir().join(format!("siliconsheep-report-{}.zip", ts));
+    let zip_file = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+
+    if let Ok(entries) = std::fs::read_dir(&report_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Ok(data) = std::fs::read(entry.path()) {
+                zip.start_file(&name, options).ok();
+                use std::io::Write;
+                zip.write_all(&data).ok();
+            }
+        }
+    }
+    zip.finish().map_err(|e| e.to_string())?;
+
+    // Cleanup temp dir
+    std::fs::remove_dir_all(&report_dir).ok();
+
+    Ok(zip_path.to_string_lossy().to_string())
+}
+
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    const TABLE: [u8; 128] = {
+        let mut t = [255u8; 128];
+        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut i = 0;
+        while i < 64 {
+            t[chars[i] as usize] = i as u8;
+            i += 1;
+        }
+        t
+    };
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let bytes: Vec<u8> = input.bytes().filter(|&b| b != b'\n' && b != b'\r' && b != b' ').collect();
+    for chunk in bytes.chunks(4) {
+        if chunk.len() < 2 { break; }
+        let a = TABLE.get(chunk[0] as usize).copied().unwrap_or(0);
+        let b = TABLE.get(chunk[1] as usize).copied().unwrap_or(0);
+        out.push((a << 2) | (b >> 4));
+        if chunk.len() > 2 && chunk[2] != b'=' {
+            let c = TABLE.get(chunk[2] as usize).copied().unwrap_or(0);
+            out.push((b << 4) | (c >> 2));
+            if chunk.len() > 3 && chunk[3] != b'=' {
+                let d = TABLE.get(chunk[3] as usize).copied().unwrap_or(0);
+                out.push((c << 6) | d);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn find_capture_script() -> Option<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
@@ -607,6 +729,7 @@ fn main() {
             import_from_prefs,
             get_vm_screenshot,
             get_vm_inspector,
+            generate_bug_report,
             capture_vm_screenshot,
             list_vm_logs,
             read_vm_log,

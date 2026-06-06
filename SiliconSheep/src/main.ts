@@ -3,6 +3,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import html2canvas from "html2canvas";
 
 import iconDisplayOn from "./icons/display_on.png";
 import iconDisplayOff from "./icons/display_off.png";
@@ -254,6 +255,7 @@ function renderDetailPane(): string {
         <button class="btn btn-secondary" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}">${ICON_DUPLICATE()}</button>
         <button class="btn btn-secondary" data-action="reveal" data-id="${escapeAttr(vm.id)}">${ICON_FOLDER()}</button>
         <button class="btn btn-secondary btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}">${ICON_TRASH()}</button>
+        <button class="btn btn-secondary" data-action="bug-report" data-id="${escapeAttr(vm.id)}" title="Report Bug">🐛</button>
       </div>
     </div>
     ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
@@ -1185,6 +1187,35 @@ async function handleAction(e: Event) {
         selectedVmId = id;
         await loadVmPrefs(id);
         render();
+      }
+      break;
+
+    case "bug-report":
+      if (id) {
+        showToast("Generating bug report...", "info", 3000);
+        try {
+          // Capture UI screenshot from the web layer
+          let uiScreenshot: string | null = null;
+          try {
+            const canvas = await html2canvas(document.getElementById("app")!, {
+              scale: 1,
+              useCORS: true,
+              logging: false,
+            });
+            uiScreenshot = canvas.toDataURL("image/png");
+          } catch {
+            // html2canvas may fail in some contexts — proceed without
+          }
+
+          const zipPath = (await invoke("generate_bug_report", {
+            id,
+            uiScreenshotB64: uiScreenshot,
+          })) as string;
+
+          showToast(`Bug report saved to ${zipPath}`, "success", 10000);
+        } catch (err) {
+          showToast(`Failed to generate report: ${err}`, "error");
+        }
       }
       break;
 

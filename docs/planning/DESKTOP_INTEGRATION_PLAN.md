@@ -670,6 +670,20 @@ Emulator stderr ──→ Rust background thread ──→ parse [HB]/[BOOT]/etc
 when UDS RPC exists. B1 remains the prerequisite for the *profiling* panels (hot blocks, instruction
 mix), but the *observability* panels use existing heartbeat data.
 
+### Bug Report Bundle — ✅ implemented
+
+One-click "Report Bug" button generates a `.zip` diagnostic bundle containing:
+- SiliconSheep UI screenshot (captured from the web layer via `html2canvas`, no system permissions)
+- Guest screen capture (from VNC, already implemented)
+- Last run log (from `.sheepvm/logs/`)
+- Inspector stats snapshot (from the live cache)
+- VM profile (prefs, OS version, RAM, screen config — sanitized)
+- Emulator build info (from stderr first line)
+- Host environment info (macOS version, architecture, Tauri version)
+
+All data sources already exist — no emulator changes needed. User can attach the zip to a GitHub
+issue or share for diagnosis.
+
 **Cross-refs:** `SNOW-EVALUATION-PLAN.md` (crosswalk + rationale), `HOST-GUEST-CHANNELS.md`,
 `OPTIMIZATION-PLAN.md` §P0/B1, Tier 4 Layer A (the RPC transport once it exists).
 

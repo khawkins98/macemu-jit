@@ -1,11 +1,13 @@
 """P1 lifecycle scenario: boot -> host->guest shutdown hook -> assert clean exit."""
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import observe
+from . import observe, uidump
 from .runner import Runner
 from .vnc import Vnc
 
@@ -26,6 +28,9 @@ def run_lifecycle(
     shutdown_timeout: float = 30.0,
     artifact_dir: Path | None = None,
 ) -> Result:
+    dump_dir = tempfile.mkdtemp(prefix="ss-ui-")
+    os.environ["SS_UI_DUMP_DIR"] = dump_dir
+
     runner = Runner(argv=[emulator, "--config", prefs])
     runner.start()
     try:
@@ -48,6 +53,16 @@ def run_lifecycle(
         #    fully settles), so the smoke can't hang waiting on it.
         if not _await_ready(runner, READY_TIMEOUT):
             time.sleep(2.0)
+
+        # Introspection corroboration (non-fatal): log the actual on-screen window list at the
+        # settled desktop. Proves the harness can "see" the guest UI; does not gate the result yet.
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=10.0)
+            wins = ", ".join(f"[{w.index}]{w.title!r}({w.window_class})" for w in snap.windows) or "(none)"
+            print(f"  [ui] desktop snapshot: {len(snap.windows)} windows, modal={snap.modal_active}: {wins}",
+                  flush=True)
+        except Exception as e:
+            print(f"  [ui] snapshot unavailable (non-fatal): {e}", flush=True)
 
         # 3. Request a clean shutdown via the host->guest hook (SIGUSR1 -> the emulator injects
         #    the ADB Power key + Return; the guest runs its real shutdown from its own event loop).

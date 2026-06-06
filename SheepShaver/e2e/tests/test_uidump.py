@@ -76,3 +76,28 @@ def test_find_title_contains():
     assert len(snap.find(title_contains="Macintosh")) == 1
     assert len(snap.find(title_contains="HD")) == 1
     assert snap.find(title="HD") == []        # exact still works (no match)
+
+
+def test_assert_window_found_and_missing():
+    snap = _load()
+    w = uidump.assert_window(snap, title="Macintosh HD")
+    assert w.window_class == "document"
+    import pytest
+    with pytest.raises(AssertionError):
+        uidump.assert_window(snap, title="Nonexistent Window")
+
+
+class _FakeVnc:
+    def __init__(self): self.clicks = []
+    def click(self, x, y): self.clicks.append((x, y))
+
+
+def test_click_window_clickable_and_blocked():
+    snap = _load()
+    vnc = _FakeVnc()
+    front = snap.windows[0]          # modal dialog, active -> clickable
+    pt = uidump.click_window(vnc, snap, front)
+    assert pt == front.content_bounds.center and vnc.clicks == [pt]
+    import pytest
+    with pytest.raises(AssertionError):
+        uidump.click_window(vnc, snap, snap.windows[1])   # behind modal -> blocked

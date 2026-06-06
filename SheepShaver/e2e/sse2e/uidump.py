@@ -181,6 +181,27 @@ def wait_for_window(dump_dir, *, title=None, title_contains=None, window_class=N
                        f"window_class={window_class!r} within {timeout}s")
 
 
+def assert_window(snap: "Snapshot", *, title=None, title_contains=None, window_class=None) -> "Window":
+    """Return the single matching window, or raise AssertionError naming what IS on screen.
+    Use to gate a step on the RIGHT window/dialog actually being present."""
+    matches = snap.find(title=title, title_contains=title_contains, window_class=window_class)
+    if not matches:
+        present = [(w.index, w.title, w.window_class) for w in snap.windows]
+        raise AssertionError(f"no window matching title={title!r} title_contains={title_contains!r} "
+                             f"window_class={window_class!r}; on screen: {present}")
+    return matches[0]
+
+
+def click_window(vnc, snap: "Snapshot", win: "Window") -> tuple[int, int]:
+    """Click the center of `win` over VNC, refusing if it is not clickable (occluded/collapsed/behind
+    a modal). Returns the clicked (x, y)."""
+    pt = snap.click_point(win)
+    if pt is None:
+        raise AssertionError(f"window {win.title!r} (index {win.index}) is not clickable right now")
+    vnc.click(*pt)
+    return pt
+
+
 def _main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(prog="python -m sse2e.uidump",

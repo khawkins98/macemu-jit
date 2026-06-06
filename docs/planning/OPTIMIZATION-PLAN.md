@@ -585,6 +585,17 @@ Compile-time link stack infrastructure added (bl pushes, blr pops+compares).
 **Finding:** bl is always a block terminator, so the compile-time stack is empty
 by the time the callee's blr compiles.  The fast-path never fires.
 
+**R1c. Restore RAM LR-prediction (icbi-safe) — follow-up to the 2026-06-06 correctness fix.**
+The LR-prediction direct-`B chain_code` had an icbi/SMC staleness bug (it wasn't a registered
+chain_site, so `invalidate_range` couldn't revert it). Fixed (`72c5e525`) by restricting the
+direct branch to **ROM** targets only — so RAM-return prediction is currently **disabled** (correct
+but unoptimized). To re-enable it safely: register the LR-prediction `B` as a chain_site whose
+**revert word branches to the miss/standard-dispatcher path** (NOT the default LDP epilogue — that
+position would double the epilogue/corrupt the stack). Needs `revert_word` added to
+`jit_chain_site` + `invalidate_range` writing `s->revert_word`. Validate: `make test-jit` + a boot
+that exercises icbi on a RAM return target. (Also re-unblocks the persistent-JIT-cache idea —
+CROSS-EMULATOR-IDEATION #10/#L.)
+
 **R1b. Runtime link stack** (follow-up to R1)
 The Dolphin/RPCS3 approach uses a **runtime** stack: `bl` emits ARM64 instructions
 that push the return PC onto a small stack in the regs struct; `blr` emits

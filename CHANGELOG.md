@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] LR-prediction icbi-safety fix + two stale-comment refreshes (code review)
+
+A code-review pass (`72c5e525`) found one latent bug + two stale comments in `ppc-jit.cpp`:
+- **icbi/SMC stale-translation bug:** the R1 LR-prediction fast-path emitted a raw `B chain_code`
+  to the return block's chain entry **without `record_chain_site`**, so
+  `ppc_jit_aarch64_invalidate_range` couldn't revert it — a RAM return-target that got SMC/icbi-
+  invalidated left the predicting block branching into a stale translation (the historical icbi-hang
+  class). Naive registration is unsafe (the B is mid-hit-path; the revert writes a lone LDP word →
+  double epilogue). **Fix:** only direct-chain LR predictions to never-invalidated **ROM** targets;
+  RAM returns fall back to the standard dispatcher (correct, unoptimized). Boot-verified (ISO→Finder,
+  no hang), `make test-jit` 302/302. (= CROSS-EMULATOR-IDEATION finding #L, now ✅.) Restoring the
+  RAM optimization via a registered revert-to-miss-path site is filed as a perf follow-up.
+- **Stale comments:** the block-chaining header claimed "default OFF / flip to 1 to test" (it's ON
+  + boot-verified — rewritten, with a do-not-disable note); the KNOWN-AltiVec-BUG (PARKED) block
+  claimed "STILL BROKEN: vmuloub/vmuleub" (fixed long ago) — updated to current status + an explicit
+  "approach A (global REV32 at load/store) REJECTED" guard so it isn't re-attempted.
+
 ### [docs] Fold external multicore analysis into the plans (+ code-verified concurrency baseline)
 
 - Reconciled a web-sourced external analysis against our plans. It **independently converged** on the

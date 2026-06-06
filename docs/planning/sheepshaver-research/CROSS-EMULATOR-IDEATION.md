@@ -154,10 +154,16 @@ spuriously and desync interp/JIT). Frequency-probe first; payoff is small unless
   vmuloub/vmuleub" — they're wired and fixed (cases 8/520/264/776).
 - **`#C3` Stale plan note** OPTIMIZATION-PLAN **R3**: claimed "no W^X toggling exists" — wrong;
   `MAP_JIT` + `pthread_jit_write_protect_np` is live. **✅ Fixed 2026-06-06** (this pass).
-- **`#L` Latent bug** `ppc-jit.cpp:~3052`: the LR-prediction path emits a raw `B chain_code` with **no
-  `record_chain_site`** — unlike the registered chain sites (950/956), so range-invalidation won't
-  normalize/revert it. Bug-shaped for SMC correctness and blocks the persistent-cache idea. Needs the
-  JIT owner + build/boot verification.
+- **`#L` Latent bug — ✅ FIXED (2026-06-06, `72c5e525`).** The LR-prediction path emitted a raw
+  `B chain_code` with **no `record_chain_site`** — unlike the registered chain sites (956/965), so
+  `ppc_jit_aarch64_invalidate_range` couldn't revert it → stale translation after SMC/icbi (the
+  icbi-hang class). The naive "register it" fix is unsafe: the B sits mid-hit-path, and the revert
+  writes a lone LDP epilogue word → double epilogue / stack corruption at that position. **Fix:**
+  only direct-chain LR predictions to NEVER-INVALIDATED (ROM) targets; RAM returns fall back to the
+  standard dispatcher (correct, just unoptimized). Verified: ISO boot to Finder clean, test-jit
+  302/302. **Perf follow-up (tracked, OPTIMIZATION-PLAN):** restore RAM LR-prediction via a
+  registered chain-site carrying a *revert-to-miss-path* word (so invalidation re-enters the
+  dispatcher instead of an LDP) — that also re-unblocks the persistent-JIT-cache idea (#10).
 
 ## References
 - Existing plans this feeds: [`OPTIMIZATION-PLAN.md`](../OPTIMIZATION-PLAN.md) (R8/R9 + HLE),

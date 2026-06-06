@@ -11,6 +11,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver][e2e] Guest UI introspection — Plan 1 walking skeleton (SS_UI_DUMP_DIR)
+
+A read-only, env-gated host-side dump of the guest `WindowList`: front→back window list with
+global (VNC-clickable) bounds, title (MacRoman→UTF-8), and dialog/active/visible flags, serviced
+at the idle safe point and written as nonce-stamped JSON. Python consumer `sse2e/uidump.py`
+provides the snapshot handshake and query/occlusion helpers. Live boot smoke verified: backend A,
+screen 800×600, 2 windows (CD volume + Desktop), clean exit 0. Activate by setting
+`SS_UI_DUMP_DIR` to a writable directory (feature is off when unset). Commits: `245d9fee`
+(text transforms), `ee21de74` (shared guard), `7665d73a` (Backend-A walk + transport, hardened),
+`13c0aa0c` + `07271080` (Python uidump consumer), `5d2bc4cf` (integration smoke). Spec:
+`docs/superpowers/specs/2026-06-06-guest-ui-introspection-design.md`.
+
 ### [docs] Canonical concurrency-model reference — "SheepShaver is not multicore-sensitive, and why"
 
 Added `SheepShaver/docs/CONCURRENCY-MODEL.md`: the citable, code-grounded answer to a recurring

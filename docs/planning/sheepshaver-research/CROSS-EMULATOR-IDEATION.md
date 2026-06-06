@@ -39,6 +39,7 @@ Effort/Payoff: Low / Med / High. "Blocked by" = what must happen first. Verdict 
 | — | **AltiVec byte-multiply ev_mixed fix** | — | — | — | optimization | ✅ **ALREADY DONE**; leftover = `vpkuwum` + signed/halfword test vectors (A1/A2) |
 
 ### Nominated first candidates
+*(Promoted to first-class tracked items — **ROADMAP B5** (`CopyBits` HLE), **B6** (idle-skipping).)*
 1. **`CopyBits` HLE** — biggest net-new throughput win for the workloads that justify throughput at all (games/media), no SMC risk (unlike `BlockMove`), and the natural on-ramp to Metal-accelerated blits. **Probe first:** a half-day call-frequency + rect-size histogram decides go/no-go.
 2. **Idle-skipping** — the single best "behaves like a real macOS app" win: a backgrounded Silicon Sheep VM must not peg a P-core at 100%. Unblocked, and it directly serves the desktop ambition.
 

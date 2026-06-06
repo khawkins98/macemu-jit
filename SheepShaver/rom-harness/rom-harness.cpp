@@ -35,6 +35,10 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <sys/stat.h>
+#include <math.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>   /* QoS is the only scheduling lever on Apple Silicon (affinity is a no-op) */
+#endif
 
 /* MAP_FIXED_NOREPLACE is Linux-only; on macOS/BSD fall back to 0 so the
  * fixed-address mmap below degrades to a hint, and the non-fixed fallback
@@ -1195,11 +1199,26 @@ static const BenchKernel BENCH_KERNELS[] = {
 };
 static const int BENCH_NKERNELS = (int)(sizeof(BENCH_KERNELS)/sizeof(BENCH_KERNELS[0]));
 
+/* Timer clock: CLOCK_THREAD_CPUTIME_ID excludes time the bench thread was
+ * descheduled (e.g. a co-tenant agent preempting us), so a preemption no longer
+ * inflates a sample. It does NOT correct DVFS/thermal frequency shifts — that is
+ * what the per-round CV gate in run_bench() catches. (Methodology: benchmark
+ * subagents, 2026-06-06; macOS has no usable userspace cycle counter.) */
+#ifdef CLOCK_THREAD_CPUTIME_ID
+#define BENCH_CLOCK CLOCK_THREAD_CPUTIME_ID
+#else
+#define BENCH_CLOCK CLOCK_MONOTONIC
+#endif
+
 /* Compile `kern` at `n_body` instrs (+ blr) at mem+off; time `iters` calls
- * (min of 5 runs after warm-up); return ns/call, or -1 on compile failure. */
+ * (min of 5 runs after warm-up); return ns/call, or -1 on compile failure.
+ * Also reports the emitted ARM64 code size (bytes) via *code_bytes — a
+ * DETERMINISTIC, zero-noise codegen-quality signal (the JIT knows exactly how
+ * much it emits), used by run_bench() to compute exact ARM64-insns-per-PPC-op. */
 static double bench_time_one(const BenchKernel *kern, int n_body,
                              uint8_t *mem, size_t total, uint32_t off,
-                             const PPCRegs *seedregs, long iters) {
+                             const PPCRegs *seedregs, long iters,
+                             uint32_t *code_bytes) {
 	uint8_t *p = mem + off;
 	kern->emit(p, n_body);
 	write_be32(p + n_body*4, 0x4E800020);          /* blr — block terminator */
@@ -1211,22 +1230,49 @@ static double bench_time_one(const BenchKernel *kern, int n_body,
 		printf("bench: compile failed (%s, n=%d)\n", kern->name, n_body);
 		return -1.0;
 	}
+	if (code_bytes) *code_bytes = jblk.code_size;
 	ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
 	PPCRegs regs;
 	for (int w = 0; w < 1000; w++) { regs = *seedregs; fn((void *)&regs); } /* warm-up */
 	double best = 1e300;
 	for (int run = 0; run < 5; run++) {
 		struct timespec t0, t1;
-		clock_gettime(CLOCK_MONOTONIC, &t0);
+		clock_gettime(BENCH_CLOCK, &t0);
 		for (long i = 0; i < iters; i++) { regs = *seedregs; fn((void *)&regs); }
-		clock_gettime(CLOCK_MONOTONIC, &t1);
+		clock_gettime(BENCH_CLOCK, &t1);
 		double ns = (t1.tv_sec - t0.tv_sec)*1e9 + (t1.tv_nsec - t0.tv_nsec);
 		if (ns < best) best = ns;
 	}
 	return best / (double)iters;
 }
 
-/* Baseline file: trivial "name ns_per_instr" lines (no JSON dep). */
+/* Median + coefficient-of-variation (stddev/mean, %) of a sample set. Sorts in
+ * place. Used to report a robust point estimate and a noise gate: a high CV means
+ * the host was too loaded/thermally-variable to trust the timing this run. */
+static int cmp_double(const void *a, const void *b) {
+	double d = *(const double*)a - *(const double*)b;
+	return (d > 0) - (d < 0);
+}
+static double bench_median(double *v, int n) {
+	qsort(v, n, sizeof(double), cmp_double);
+	return (n & 1) ? v[n/2] : 0.5 * (v[n/2 - 1] + v[n/2]);
+}
+static double bench_cv_pct(const double *v, int n) {
+	if (n < 2) return 0.0;
+	double mean = 0; for (int i = 0; i < n; i++) mean += v[i]; mean /= n;
+	if (mean == 0) return 0.0;
+	double var = 0; for (int i = 0; i < n; i++) { double d = v[i]-mean; var += d*d; }
+	var /= (n - 1);
+	return sqrt(var) / mean * 100.0;
+}
+/* CV above this → the timing number is not trustworthy this run (host too noisy).
+ * The deterministic ARM64-insns/op metric is unaffected and always reported. */
+#define BENCH_CV_NOISE_PCT 3.0
+#define BENCH_ROUNDS 9
+
+/* Baseline file: "name ns_per_instr arm64_per_op" lines (no JSON dep). The 3rd
+ * field is the deterministic ARM64-insns-per-PPC-op metric; older 2-field
+ * baselines still parse (a64 returns -1 = "n/a"). */
 static bool bench_baseline_stale(const char *path) {
 	struct stat sb, sj;
 	if (stat(path, &sb) != 0) return false;        /* no baseline yet */
@@ -1234,13 +1280,17 @@ static bool bench_baseline_stale(const char *path) {
 	if (stat(jit, &sj) != 0) return false;          /* source not found — skip */
 	return sj.st_mtime > sb.st_mtime;
 }
-static double bench_baseline_lookup(const char *path, const char *name) {
+/* Look up a kernel's baseline; returns ns/insn (or -1) and fills *a64 with the
+ * baseline ARM64-insns/op (or -1 if absent). */
+static double bench_baseline_lookup(const char *path, const char *name, double *a64) {
+	if (a64) *a64 = -1.0;
 	FILE *f = fopen(path, "r");
 	if (!f) return -1.0;
 	char ln[256]; double val = -1.0;
 	while (fgets(ln, sizeof ln, f)) {
-		char nm[128]; double v;
-		if (sscanf(ln, "%127s %lf", nm, &v) == 2 && strcmp(nm, name) == 0) { val = v; break; }
+		char nm[128]; double v, a = -1.0;
+		int got = sscanf(ln, "%127s %lf %lf", nm, &v, &a);
+		if (got >= 2 && strcmp(nm, name) == 0) { val = v; if (a64) *a64 = (got >= 3) ? a : -1.0; break; }
 	}
 	fclose(f);
 	return val;
@@ -1254,6 +1304,13 @@ static int run_bench(int argc, char **argv) {
 		else if (!strncmp(argv[i], "--compare=",       10)) compare_path = argv[i]+10;
 		else if (!strncmp(argv[i], "--save-baseline=", 16)) save_path = argv[i]+16;
 	}
+
+#if defined(__APPLE__)
+	/* Bias scheduling onto a performance core. On Apple Silicon thread affinity is
+	 * a no-op; QoS is the only lever. A default-QoS bench thread can migrate to an
+	 * E-core mid-run under load — a tens-of-percent swing. (Benchmark subagents.) */
+	pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
 
 	const size_t total = 16 * 1024 * 1024;          /* 16 MB scratch */
 	uint8_t *mem = (uint8_t *)mmap((void *)0x10000000UL, total,
@@ -1285,10 +1342,12 @@ static int run_bench(int argc, char **argv) {
 		       "comparison may be stale; re-baseline with --save-baseline.\n",
 		       compare_path);
 
-	printf("jit-bench: %d kernels, iters=%ld, differential N=%d-%d (ns/insn cancels "
-	       "prologue/epilogue)\n", BENCH_NKERNELS, iters, BENCH_N_BIG, BENCH_N_SMALL);
-	printf("%-13s %10s %10s", "kernel", "ns/call", "ns/insn");
-	if (compare_path) printf(" %10s", "vs base");
+	printf("jit-bench: %d kernels, iters=%ld, %d rounds, differential N=%d-%d\n"
+	       "  ns/insn: median of rounds (timing; CV>%.0f%% = host too noisy, *flagged)\n"
+	       "  a64/op:  emitted ARM64 insns per PPC op (DETERMINISTIC, zero-noise codegen metric)\n",
+	       BENCH_NKERNELS, iters, BENCH_ROUNDS, BENCH_N_BIG, BENCH_N_SMALL, BENCH_CV_NOISE_PCT);
+	printf("%-13s %10s %7s %8s", "kernel", "ns/insn", "cv%", "a64/op");
+	if (compare_path) printf(" %9s %9s", "ns base", "a64 base");
 	printf("   description\n");
 
 	FILE *out = save_path ? fopen(save_path, "w") : NULL;
@@ -1298,18 +1357,40 @@ static int run_bench(int argc, char **argv) {
 		/* unique offset per (kernel,size) so the JIT block cache can't alias PCs */
 		uint32_t off_s = 0x100000 + (uint32_t)(k*2+0)*0x10000;
 		uint32_t off_b = 0x100000 + (uint32_t)(k*2+1)*0x10000;
-		double small = bench_time_one(kn, BENCH_N_SMALL, mem, total, off_s, &seedregs, iters);
-		double big   = bench_time_one(kn, BENCH_N_BIG,   mem, total, off_b, &seedregs, iters);
-		if (small < 0 || big < 0) { rc = 1; continue; }
-		double per_insn = (big - small) / (double)(BENCH_N_BIG - BENCH_N_SMALL);
-		printf("%-13s %10.1f %10.3f", kn->name, big, per_insn);
+		/* Interleave small/big across rounds so both see the same host clock; the
+		 * per-round differential cancels prologue/epilogue, and the spread across
+		 * rounds is the host-noise estimate (CV). */
+		double per_insn_rounds[BENCH_ROUNDS];
+		uint32_t code_s = 0, code_b = 0;
+		int nr = 0; bool failed = false;
+		for (int r = 0; r < BENCH_ROUNDS; r++) {
+			/* Capture code_size only on round 0: that is the real compile; rounds 1+
+			 * hit the block cache at the same PC, which reports code_size=0. */
+			double small = bench_time_one(kn, BENCH_N_SMALL, mem, total, off_s, &seedregs, iters, r ? NULL : &code_s);
+			double big   = bench_time_one(kn, BENCH_N_BIG,   mem, total, off_b, &seedregs, iters, r ? NULL : &code_b);
+			if (small < 0 || big < 0) { failed = true; break; }
+			per_insn_rounds[nr++] = (big - small) / (double)(BENCH_N_BIG - BENCH_N_SMALL);
+		}
+		if (failed) { rc = 1; continue; }
+		double cv = bench_cv_pct(per_insn_rounds, nr);
+		double per_insn = bench_median(per_insn_rounds, nr);   /* sorts in place */
+		/* Deterministic: exact ARM64 insns emitted per extra PPC op (zero noise). */
+		double a64_per_op = (double)((int)code_b - (int)code_s) / 4.0
+		                    / (double)(BENCH_N_BIG - BENCH_N_SMALL);
+		bool noisy = cv > BENCH_CV_NOISE_PCT;
+		printf("%-13s %10.3f %6.1f%s %8.3f", kn->name, per_insn, cv, noisy ? "*" : " ", a64_per_op);
 		if (compare_path) {
-			double b = bench_baseline_lookup(compare_path, kn->name);
-			if (b > 0) printf(" %+9.1f%%", (per_insn - b) / b * 100.0);
-			else       printf(" %10s", "(new)");
+			double ba; double b = bench_baseline_lookup(compare_path, kn->name, &ba);
+			/* timing delta — suppressed when this run is noisy (untrustworthy) */
+			if (noisy)        printf(" %9s", "NOISY");
+			else if (b > 0)   printf(" %+8.1f%%", (per_insn - b) / b * 100.0);
+			else              printf(" %9s", "(new)");
+			/* a64/op delta — always exact, host-independent */
+			if (ba >= 0)      printf(" %+8.3f", a64_per_op - ba);
+			else              printf(" %9s", "(new)");
 		}
 		printf("   %s\n", kn->desc);
-		if (out) fprintf(out, "%s %.6f\n", kn->name, per_insn);
+		if (out) fprintf(out, "%s %.6f %.6f\n", kn->name, per_insn, a64_per_op);
 	}
 	if (out) { fclose(out); printf("baseline written: %s\n", save_path); }
 	munmap(mem, total);

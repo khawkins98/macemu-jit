@@ -9,7 +9,27 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
-## 2026-06-05
+## 2026-06-06
+
+### [SheepShaver] rom-harness — span gate cleans the differential signal (~46 → ~7–8 failures/seed)
+
+Follow-up to the skip-not-abort fix: the harness's failures were dominated by a **block-model
+mismatch**, not codegen bugs — the scanner ends a block at `bc` (opcode 16) but the JIT runs
+*past* it (bc is not a JIT terminator), so the two compared different instruction spans from the
+same start PC (the same root cause as `SS_JIT_VERIFY` fix-(i)).
+
+- **Span gate (`rom-harness.cpp`):** compare only when `jblk.n_insns == blk.n_insns`; dropped
+  blocks are reported as **`Span mismatch`** (visible, not a silent cap). On the OldWorld ROM
+  (`--count=10000`, seeds 1/7/42) this cut failures from ~43–49/seed to **~7–8 span-matched,
+  trustworthy failures** (≈710 bc-terminated blocks skipped). The remaining failures are now
+  genuine span-matched divergences (PC/CR-dominated — branch-target/condition), no longer cascade
+  artifacts from the span mismatch, so they're worth refereeing via `SS_TEST_HEX`.
+- **Tactical hardening:** `alarm(0)` now cancels the per-block timeout on all exit paths (normal,
+  SIGSEGV, fallback longjmp). In-code block-model notes at the compare site + `is_block_terminator`.
+- **Open follow-ups (ROADMAP A1):** (a) *recover* the dropped coverage by running the interp for
+  the JIT's instruction count instead of skipping; (b) triage the ~7–8 survivors (likely
+  harness-interp branch-target handling, but now refereeable). Higher-priority residual-bug surface
+  remains AltiVec/FP operand vectors in `test-jit`.
 
 ### [SheepShaver] rom-harness — skip-not-abort on fallback blocks (broad sweeps unblocked)
 

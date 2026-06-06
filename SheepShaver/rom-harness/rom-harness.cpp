@@ -1029,6 +1029,8 @@ struct TestResult {
 	int jit_compile_fail;
 	int jit_segv;
 	int jit_fallback;    /* complete-but-fallback block: skipped, not crashed */
+	int span_mismatch;   /* JIT ran more insns than the scanner block (bc not a JIT
+	                        terminator): non-comparable, skipped — see compare site */
 };
 
 static void print_regs(const char *label, const PPCRegs *r) {
@@ -1604,11 +1606,23 @@ int main(int argc, char **argv) {
 			 * is correct (non-vacuous SS_TEST_HEX "38600002 7C6903A6 42424642" gives
 			 * interp==JIT). GPR diffs in multi-insn blocks are largely CASCADE from this.
 			 *
-			 * To make failures trustworthy, compare only when the spans match, e.g.:
-			 *     if (jblk.n_insns != (uint32_t)blk.n_insns) { result.skipped++; continue; }
-			 * (or run the interpreter for `jblk.n_insns` instructions). Deferred as a
-			 * deliberate decision: it trades raw coverage (drops bc-terminated blocks)
-			 * for a clean signal — see ROADMAP A1 before flipping it on. */
+			 * THE GATE BELOW makes failures trustworthy: it compares only when the
+			 * spans match. This trades raw coverage (drops bc-terminated blocks, where
+			 * the JIT ran further) for a clean signal — the dropped count is reported as
+			 * "Span mismatch" so the coverage cost is visible, not silent. A future
+			 * upgrade (ROADMAP A1) could instead run the interpreter for `jblk.n_insns`
+			 * instructions to RECOVER that coverage; until then, skip. */
+			if ((uint32_t)blk.n_insns != jblk.n_insns) {
+				result.span_mismatch++;
+				result.skipped++;
+				if (verbose)
+					fprintf(stderr, "  ROM+0x%06x: span mismatch (scanner %d insns, "
+						"JIT %d) — non-comparable, skipped\n",
+						blk.offset, blk.n_insns, jblk.n_insns);
+				continue;
+			}
+
+			/* Compare (spans now guaranteed equal) */
 			if (compare_regs(&interp_regs, &jit_regs, blk.offset, verbose)) {
 				result.passed++;
 				if (verbose)
@@ -1656,6 +1670,8 @@ done:
 	fprintf(stderr, "  JIT compile fail:   %d\n", result.jit_compile_fail);
 	fprintf(stderr, "  JIT SIGSEGV:        %d\n", result.jit_segv);
 	fprintf(stderr, "  JIT fallback:       %d\n", result.jit_fallback);
+	fprintf(stderr, "  Span mismatch:      %d  (bc-terminated: JIT ran past the scanner block)\n",
+		result.span_mismatch);
 	fprintf(stderr, "Time: %.2f sec (%.0f blocks/sec)\n",
 		elapsed, testable > 0 ? testable / elapsed : 0);
 	fprintf(stderr, "Score: %d/%d\n", result.passed, result.passed + result.failed);

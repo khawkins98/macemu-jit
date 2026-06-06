@@ -106,6 +106,9 @@ Score: 663/766
 - **Skipped** blocks are excluded from the score (incomplete JIT, unsupported interp ops)
 - **JIT compile fail** = JIT couldn't compile the block (incomplete, unknown opcode)
 - **Interp unsupported** = harness interpreter doesn't handle an opcode in the block
+- **Span mismatch** = the JIT compiled/ran more instructions than the scanner's block (a `bc`
+  inside the block: terminator to the scanner, fall-through to the JIT). Skipped because interp and
+  JIT would run different instruction spans — see the block-model note below.
 - **JIT fallback** = a block the compiler marked `complete` still emitted an inline-interp
   fallback call at runtime (`ppc_jit_interp_one`), which this standalone harness can't execute.
   These are **skipped, not fatal** — previously the bridge `abort()`ed, killing the whole run
@@ -122,10 +125,13 @@ Score: 663/766
 > registers diverge because the two ran *different instruction spans*, not because either is wrong.
 > (This is the exact analog of the `SS_JIT_VERIFY` "fix (i)" block-exit problem — see
 > `docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md` and OPTIMIZATION-PLAN
-> §0b-extra4.) **A trustworthy differential would only compare when `jblk.n_insns == blk.n_insns`**
-> (or run the interp for the JIT's actual instruction count); until then, treat branch-terminated
-> failures as structurally non-comparable, and GPR diffs in multi-insn blocks as **cascade** from
-> the span mismatch, not independent bugs.
+> §0b-extra4.) **This is now gated:** the harness compares only when `jblk.n_insns == blk.n_insns`
+> and reports the dropped blocks as **`Span mismatch`** (so the coverage cost is visible). On the
+> OldWorld ROM this cleaned the signal from ~46 failures/seed to **~7–8 span-matched, trustworthy
+> failures** (≈711 bc-terminated blocks now skipped instead of producing false diffs). A future
+> upgrade (ROADMAP A1) could *recover* that dropped coverage by running the interpreter for the
+> JIT's instruction count instead of skipping. Note this means GPR diffs are no longer cascade
+> artifacts — the remaining failures are genuine span-matched divergences worth refereeing.
 >
 > **Worked example (2026-06-05, verified).** The single-instruction block `42424642`
 > (`bc BO=18,BI=9`, AA=1) "fails" here — but the JIT compiled **5** instructions past it while the

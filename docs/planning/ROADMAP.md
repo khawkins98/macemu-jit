@@ -96,18 +96,19 @@ harness that can't catch mistakes just produces the next silent bug.
   a residual codegen bug still hides. New curated vectors here are permanent CI assets (vs.
   throwaway triage). Grow `gen-altivec-vectors.py` (+ FP) alongside A2. *(Strategy-review verdict
   2026-06-06: ranked above the rom-harness GPR triage below.)*
-- 🟡 **rom-harness — block-model fix + then GPR triage** *(2026-06-06)*. The standalone differential
-  rom-harness now completes broad sweeps (skip-not-abort fix, `c1a10c0a`), but its failure signal is
-  dominated by a **block-model mismatch**, not codegen bugs: the scanner ends a block at `bc`
-  (opcode 16) while the JIT runs *past* it, so the two compare different instruction spans (the
-  same root cause as `SS_JIT_VERIFY` fix-(i)). Code TODO is in place at the compare site
-  (`rom-harness.cpp`) + `is_block_terminator`. **Fix (deliberate, has a coverage tradeoff):** gate
-  the comparison on `jblk.n_insns == blk.n_insns` (or run the interp for the JIT's instruction
-  count) — drops `bc`-terminated blocks but makes every remaining failure trustworthy. **Then**
-  triage the survivors via the real-emulator referee (`SS_TEST_HEX … SS_TEST_JIT={0,1}`) — expect a
-  handful, probably zero real bugs, but a defensible "integer path differentially clean" claim. The
-  raw GPR-diff "minority" today is **cascade** from the span mismatch — do **not** triage it before
-  the block-model fix (verified: the flagged `bc` was correct codegen, not a bug).
+- 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
+  The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
+  `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at
+  `bc` opcode 16; the JIT runs *past* it → mismatched spans, same root as `SS_JIT_VERIFY` fix-(i)).
+  ✅ **Span gate landed:** compares only when `jblk.n_insns == blk.n_insns`, reports the dropped
+  blocks as `Span mismatch` (visible, not silent) — on the OldWorld ROM this cut ~46 failures/seed
+  to **~7–8 span-matched, trustworthy failures** (≈711 bc-terminated blocks skipped). The remaining
+  failures are now genuine span-matched divergences (PC/CR-dominated), no longer cascade artifacts.
+  **Next, two independent follow-ups:** (a) 🟡 *recover the dropped coverage* — run the interpreter
+  for the JIT's instruction count instead of skipping (the fix-(i) analog proper); (b) 🟡 *triage
+  the ~7–8 survivors* via the real-emulator referee (`SS_TEST_HEX … SS_TEST_JIT={0,1}`) — likely
+  harness-interp branch-target handling, but now refereeable; expect few/zero real JIT bugs, but a
+  defensible "integer path differentially clean" claim.
 - 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered

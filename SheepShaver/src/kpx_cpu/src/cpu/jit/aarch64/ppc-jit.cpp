@@ -1632,9 +1632,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x2A2003E0 | (hB << 16) | RTMP1);                  /* MVN W1, W(hB) */
 			emit32(0x2A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ORR W0,W0,W1 */
 			emit32(0x7100001F | (RTMP0 << 5));                         /* CMP W0, #0 */
-			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | RTMP2); /* CSEL W2,W3,W2,EQ */
+			/* Write the result directly into hD via the final CSEL — eliminates the
+			 * trailing MOV (P0f-style) on the recurrence critical path. hA/hB are dead
+			 * here (last read by the EOR/MVN above), so hD aliasing rA/rB is safe. */
 			int hD = ra_store(rd);
-			a64_mov_reg(hD, RTMP2);
+			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | hD); /* CSEL W(hD),W3,W2,EQ */
 			if (op & 1) lazy_update_cr0(hD);
 			return true;
 		}

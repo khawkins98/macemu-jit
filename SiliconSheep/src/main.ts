@@ -458,6 +458,7 @@ function renderWizardStep(): string {
           </div>
           <div class="wizard-nav">
             <button class="btn btn-secondary" data-action="wizard-cancel">Cancel</button> <button class="btn btn-secondary" data-action="wizard-back">Back</button>
+            <button class="btn btn-secondary" data-action="wizard-create-only">Create</button>
             <button class="btn btn-primary btn-lg" data-action="wizard-create">Create & Start</button>
           </div>
         </div>
@@ -1191,7 +1192,7 @@ async function handleAction(e: Event) {
       break;
 
     case "pick-rom": {
-      const path = await pickFile("Select ROM File");
+      const path = await pickFile("Select ROM File", [{ name: "ROM Files", extensions: ["rom", "bin", "img", "ROM", ""] }]);
       if (path) {
         wizardState.romPath = path;
         try {
@@ -1213,7 +1214,7 @@ async function handleAction(e: Event) {
 
     case "pick-disk": {
       const path = await pickFile("Select Disk Image", [
-        { name: "Disk Images", extensions: ["dsk", "img", "hfv"] },
+        { name: "Disk Images", extensions: ["dsk", "img", "hfv", "image", "dmg"] },
       ]);
       if (path) {
         wizardState.diskPath = path;
@@ -1224,7 +1225,7 @@ async function handleAction(e: Event) {
 
     case "pick-cd": {
       const path = await pickFile("Select CD Image", [
-        { name: "CD Images", extensions: ["iso", "toast", "cdr", "dmg"] },
+        { name: "CD Images", extensions: ["iso", "toast", "cdr", "dmg", "img"] },
       ]);
       if (path) {
         wizardState.cdPath = path;
@@ -1242,6 +1243,36 @@ async function handleAction(e: Event) {
       wizardState.diskSizeGb = parseFloat(target.dataset.size || "2");
       render();
       break;
+
+    case "wizard-create-only": {
+      const nameInput2 = document.getElementById("vm-name") as HTMLInputElement;
+      const ramSelect2 = document.getElementById("ram-select") as HTMLSelectElement;
+      if (nameInput2) wizardState.vmName = nameInput2.value;
+      if (ramSelect2) wizardState.ramMb = parseInt(ramSelect2.value);
+
+      try {
+        await invoke("create_vm", {
+          request: {
+            name: wizardState.vmName,
+            romPath: wizardState.romPath,
+            ramMb: wizardState.ramMb,
+            diskMode: wizardState.diskMode,
+            diskSizeGb: wizardState.diskSizeGb,
+            diskPath: wizardState.diskPath,
+            cdPath: wizardState.cdPath,
+            screen: wizardState.screen,
+          },
+        });
+        vms = await loadVms();
+        currentView = "library";
+        showToast("VM created", "success");
+        render();
+      } catch (err) {
+        console.error("Failed to create VM:", err);
+        alert(`Failed to create VM: ${err}`);
+      }
+      break;
+    }
 
     case "wizard-create": {
       const nameInput = document.getElementById("vm-name") as HTMLInputElement;
@@ -1414,7 +1445,7 @@ async function handleAction(e: Event) {
       break;
 
     case "pick-setting-rom": {
-      const path = await pickFile("Select ROM File");
+      const path = await pickFile("Select ROM File", [{ name: "ROM Files", extensions: ["rom", "bin", "img", "ROM", ""] }]);
       if (path && selectedVmId) {
         await invoke("update_vm_setting", { id: selectedVmId, key: "rom", value: path });
         vms = await loadVms();
@@ -1441,7 +1472,7 @@ async function handleAction(e: Event) {
 
     case "pick-setting-disk": {
       const path = await pickFile("Select Disk Image", [
-        { name: "Disk Images", extensions: ["dsk", "img", "hfv"] },
+        { name: "Disk Images", extensions: ["dsk", "img", "hfv", "image", "dmg"] },
       ]);
       if (path && selectedVmId) {
         try {
@@ -1489,7 +1520,7 @@ async function handleAction(e: Event) {
 
     case "pick-setting-cd": {
       const path = await pickFile("Select CD Image", [
-        { name: "CD Images", extensions: ["iso", "toast", "cdr", "dmg"] },
+        { name: "CD Images", extensions: ["iso", "toast", "cdr", "dmg", "img"] },
       ]);
       if (path && selectedVmId) {
         await invoke("update_vm_setting", { id: selectedVmId, key: "cdrom", value: path });

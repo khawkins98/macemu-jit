@@ -19,7 +19,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-rom harness-count \
+        test test-opcodes test-jit test-rom harness-count ui-introspect-test \
         e2e e2e-smoke e2e-bench e2e-test e2e-setup e2e-clean \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
@@ -191,6 +191,10 @@ test-rom: build-rom-harness
 harness-count:
 	@printf 'harness vectors (TEST_ORDER in jit-test/run.sh): '
 	@grep -cE '^TEST_ORDER\+=\(' jit-test/run.sh
+
+ui-introspect-test:
+	c++ -std=c++17 -Wall -o /tmp/ui_introspect_test src/ui_introspect_test.cpp
+	/tmp/ui_introspect_test
 
 ensure-xvfb:
 	@pgrep -x Xvfb > /dev/null 2>&1 || \

@@ -339,10 +339,11 @@ static int jit_mix_classify(uint32_t insn) {
  * dispatch PCs), so JIT_BC_POOL-sized (65536) still overflowed — measured 2026-06-06.
  * 256K slots (~5 MB BSS, profiling builds only) holds a full boot with headroom. */
 #define JIT_PROF_SLOTS 262144  /* power of two for masked open-addressing */
-struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insns; };
+struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insns; uint16_t a64_insns; };
 static struct jit_prof_slot jit_prof_slots[JIT_PROF_SLOTS];
 static int  jit_prof_n = 0;
 static bool jit_profile_enabled = false;
+static struct timespec jit_prof_t0;   /* session start (set in init when profiling on) */
 /* SS_JIT_PROFILE_DISASM: per-block PPC instruction words, captured at COMPILE time
  * (where `op` is the real fetched word). Exit-time reads of guest RAM are unreliable —
  * the NATMEM reservation has PROT_NONE holes mincore() can't distinguish, so a blind
@@ -4490,6 +4491,7 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 	  jit_profile_enabled = (e && *e && strcmp(e, "0") != 0);
 	  if (jit_profile_enabled) {
 	      fprintf(stderr, "[JIT] SS_JIT_PROFILE on — execution-weighted hot-block profile at exit\n");
+	      clock_gettime(CLOCK_MONOTONIC, &jit_prof_t0);   /* session-throughput baseline */
 	      /* The normal emulator shutdown (Quit -> exit(0)) does NOT call
 	       * ppc_jit_aarch64_exit() — that's only on the SS_TEST_HEX path. Register the
 	       * dump with atexit so a real boot's clean shutdown still produces the profile. */
@@ -4541,8 +4543,15 @@ static void jit_profile_dump(void)
 			if (jit_prof_slots[order[b]].count > jit_prof_slots[order[best]].count) best = b;
 		int t = order[a]; order[a] = order[best]; order[best] = t;
 	}
-	uint64_t total = 0;
-	for (int i = 0; i < n; i++) total += jit_prof_slots[order[i]].count;
+	uint64_t total = 0, total_guest = 0, total_a64 = 0;
+	for (int i = 0; i < n; i++) {
+		struct jit_prof_slot *s = &jit_prof_slots[order[i]];
+		total       += s->count;
+		total_guest += (uint64_t)s->n_insns   * s->count;   /* guest insns executed (JIT) */
+		total_a64   += (uint64_t)s->a64_insns  * s->count;   /* ARM64 insns executed       */
+	}
+	struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+	double elapsed = (t1.tv_sec - jit_prof_t0.tv_sec) + (t1.tv_nsec - jit_prof_t0.tv_nsec) * 1e-9;
 	const char *path = getenv("SS_JIT_PROFILE");
 	FILE *f = (path && *path && strcmp(path, "1") != 0 && strcmp(path, "0") != 0)
 	          ? fopen(path, "w") : NULL;
@@ -4550,6 +4559,27 @@ static void jit_profile_dump(void)
 	fprintf(out, "\n[JIT-PROFILE] execution-weighted hot blocks "
 	        "(%d blocks profiled, %llu total block-executions):\n",
 	        jit_prof_n, (unsigned long long)total);
+	/* RUN PROFILE — empirical throughput + a host-independent codegen-density metric
+	 * for this whole workload (boot / app-launch / benchmark). Counts JIT-executed
+	 * guest instructions (the vast majority); interpreter-only ops excluded.
+	 *   guest-MIPS / block-rate: WALL-CLOCK — empirical and representative, but needs a
+	 *     reasonably quiet host (this is the "operations per second" number).
+	 *   a64/guest-op: DETERMINISTIC (zero host-noise), execution-weighted whole-block
+	 *     EMITTED ARM64 per guest op. Use for A/B (deltas are meaningful) — NOT a literal
+	 *     executed-instruction count: it counts the per-block prologue/epilogue that
+	 *     chaining skips at runtime AND the profiler's own 3-insn counter, so it is an
+	 *     inflated upper bound. A high value flags per-block overhead on small hot blocks
+	 *     (a chaining / block-merging lever). */
+	if (elapsed > 0 && total_guest > 0) {
+		fprintf(out, "[JIT-RUN-PROFILE] %.2fs  guest-insns=%llu (%.1f MIPS, wall-clock)  "
+		        "emitted-arm64=%llu  a64/guest-op=%.2f (emitted, A/B metric — not executed)  "
+		        "block-rate=%.1fM/s\n",
+		        elapsed,
+		        (unsigned long long)total_guest, total_guest / elapsed / 1e6,
+		        (unsigned long long)total_a64,
+		        (double)total_a64 / (double)total_guest,
+		        total / elapsed / 1e6);
+	}
 	fprintf(out, "  %-10s %14s %6s  %-11s %5s  region\n", "pc", "exec", "pct", "mix", "insns");
 	for (int a = 0; a < topN; a++) {
 		struct jit_prof_slot *s = &jit_prof_slots[order[a]];
@@ -5155,6 +5185,9 @@ bool ppc_jit_aarch64_compile(
 		if (mix_cnt[MIX_BRANCH] > best) dom = MIX_BRANCH;
 		prof_slot->mix = (uint8_t)dom;
 		prof_slot->n_insns = (uint16_t)n_compiled;
+		/* whole-block emitted ARM64 instruction count (for workload-weighted a64/op) */
+		size_t a64 = code_bytes / 4;
+		prof_slot->a64_insns = (a64 > 0xFFFF) ? 0xFFFF : (uint16_t)a64;
 	}
 
 	out->chain_code = chain_entry_start;

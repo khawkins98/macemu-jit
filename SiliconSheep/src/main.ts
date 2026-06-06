@@ -269,10 +269,6 @@ function renderDetailPane(): string {
         ${renderSettingsSection(vm, isRunning)}
       </div>
     </div>
-    ${Object.keys(pendingSettings).length > 0 ? `<div class="detail-save-bar">
-      <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
-      <button class="btn btn-primary" data-action="save-settings">Save</button>
-    </div>` : ""}
   `;
 }
 
@@ -465,7 +461,7 @@ function renderWizardStep(): string {
 }
 
 let settingsSection = "general";
-let pendingSettings: Record<string, string> = {};
+// Immediate-apply: settings save on change (Mac OS 9 HIG pattern — no Save button)
 let debugEnvVars: Record<string, string> = {};
 let settingsWindowOpen = false;
 let isSettingsWindow = false;
@@ -527,8 +523,6 @@ async function loadVmPrefs(id: string) {
 }
 
 function getPref(key: string): string {
-  // Pending (unsaved) edits take priority over on-disk prefs
-  if (key in pendingSettings) return pendingSettings[key];
   const entry = vmPrefs.find((e) => e.key === key);
   return entry?.value ?? "";
 }
@@ -944,10 +938,6 @@ function renderSettings(): string {
         ${renderSettingsSectionContent(vm, isRunning, settingsSection)}
       </div>
     </div>
-    ${Object.keys(pendingSettings).length > 0 ? `<div class="detail-save-bar">
-      <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
-      <button class="btn btn-primary" data-action="save-settings">Save</button>
-    </div>` : ""}
   `;
 }
 
@@ -972,20 +962,65 @@ function bindEvents() {
     el.addEventListener("click", handleAction);
   });
 
-  // Dirty detection: capture settings on any input change, re-render to show/hide save bar
+  // Immediate-apply: settings save on change (Mac OS 9 HIG — modeless, no Save button)
   document.querySelectorAll(".detail-tab-content input, .detail-tab-content select").forEach((el) => {
-    el.addEventListener("change", () => {
-      captureCurrentSectionSettings();
-      // Only re-render the save bar area, not the whole page (avoids losing focus)
-      const existing = document.querySelector(".detail-save-bar");
-      if (Object.keys(pendingSettings).length > 0 && !existing) {
-        render();
-      }
-    });
-    el.addEventListener("input", () => {
-      captureCurrentSectionSettings();
-      if (Object.keys(pendingSettings).length > 0 && !document.querySelector(".detail-save-bar")) {
-        render();
+    el.addEventListener("change", async () => {
+      if (!selectedVmId) return;
+      const input = el as HTMLInputElement | HTMLSelectElement;
+      const settingId = input.id;
+      if (!settingId) return;
+
+      // Map DOM element IDs to pref keys + transform
+      const mapping: Record<string, [string, (v: string) => string]> = {
+        "setting-name": ["name", (v) => v],
+        "setting-ram": ["ramsize", (v) => v + "M"],
+        "setting-screen-preset": ["screen", (v) => {
+          if (v === "custom") {
+            const w = (document.getElementById("setting-screen-w") as HTMLInputElement)?.value || "800";
+            const h = (document.getElementById("setting-screen-h") as HTMLInputElement)?.value || "600";
+            return "win/" + w + "/" + h;
+          }
+          return v;
+        }],
+        "setting-frameskip": ["frameskip", (v) => v],
+        "setting-gfxaccel": ["gfxaccel", (v) => v],
+        "setting-mousewheelmode": ["mousewheelmode", (v) => v],
+        "setting-mousewheellines": ["mousewheellines", (v) => v],
+        "setting-swap_opt_cmd": ["swap_opt_cmd", (v) => v],
+        "setting-keycodes": ["keycodes", (v) => v],
+        "setting-nosound": ["nosound", (v) => v],
+        "setting-ether": ["ether", (v) => v],
+        "setting-vncserver": ["vncserver", (v) => v],
+        "setting-vncport": ["vncport", (v) => v],
+        "setting-nocdrom": ["nocdrom", (v) => v],
+        "setting-bootdriver": ["bootdriver", (v) => v],
+        "setting-jitcache": ["jitcachesize", (v) => v],
+        "setting-ignoresegv": ["ignoresegv", (v) => v],
+        "setting-ignoreillegal": ["ignoreillegal", (v) => v],
+        "setting-idlewait": ["idlewait", (v) => v],
+        "setting-jit": ["jit", (v) => v],
+        "setting-jit68k": ["jit68k", (v) => v],
+        "setting-noclipconversion": ["noclipconversion", (v) => v],
+        "setting-hardcursor": ["hardcursor", (v) => v],
+        "setting-seriala": ["seriala", (v) => v],
+        "setting-serialb": ["serialb", (v) => v],
+        "setting-keyboardtype": ["keyboardtype", (v) => v],
+        "setting-sdlrender": ["sdlrender", (v) => v],
+      };
+
+      const entry = mapping[settingId];
+      if (entry) {
+        const [key, transform] = entry;
+        const value = transform(input.value);
+        try {
+          await invoke("update_vm_setting", { id: selectedVmId, key, value });
+          const isRunning = runningVmIds.has(selectedVmId!);
+          if (isRunning) {
+            showToast(key + " updated — takes effect on next restart", "info", 3000);
+          }
+        } catch (err) {
+          showToast("Failed to save: " + err, "error");
+        }
       }
     });
   });
@@ -1061,51 +1096,7 @@ async function pickFile(
   return null;
 }
 
-function captureCurrentSectionSettings() {
-  const fields: [string, string, (v: string) => string][] = [
-    ["setting-name", "name", (v) => v],
-    ["setting-ram", "ramsize", (v) => v + "M"],
-    ["setting-screen-preset", "screen", (v) => {
-      if (v === "custom") {
-        const w = (document.getElementById("setting-screen-w") as HTMLInputElement)?.value || "800";
-        const h = (document.getElementById("setting-screen-h") as HTMLInputElement)?.value || "600";
-        return `win/${w}/${h}`;
-      }
-      return v;
-    }],
-    ["setting-frameskip", "frameskip", (v) => v],
-    ["setting-ether", "ether", (v) => v],
-    ["setting-nosound", "nosound", (v) => v],
-    ["setting-jitcache", "jitcachesize", (v) => v],
-    ["setting-gfxaccel", "gfxaccel", (v) => v],
-    ["setting-vncserver", "vncserver", (v) => v],
-    ["setting-vncport", "vncport", (v) => v],
-    ["setting-mousewheelmode", "mousewheelmode", (v) => v],
-    ["setting-mousewheellines", "mousewheellines", (v) => v],
-    ["setting-swap_opt_cmd", "swap_opt_cmd", (v) => v],
-    ["setting-keycodes", "keycodes", (v) => v],
-    ["setting-bootdriver", "bootdriver", (v) => v],
-    ["setting-nocdrom", "nocdrom", (v) => v],
-    ["setting-ignoresegv", "ignoresegv", (v) => v],
-    ["setting-ignoreillegal", "ignoreillegal", (v) => v],
-    ["setting-idlewait", "idlewait", (v) => v],
-    ["setting-jit", "jit", (v) => v],
-    ["setting-jit68k", "jit68k", (v) => v],
-    ["setting-noclipconversion", "noclipconversion", (v) => v],
-    ["setting-hardcursor", "hardcursor", (v) => v],
-    ["setting-seriala", "seriala", (v) => v],
-    ["setting-serialb", "serialb", (v) => v],
-    ["setting-keyboardtype", "keyboardtype", (v) => v],
-    ["setting-sdlrender", "sdlrender", (v) => v],
-  ];
-  for (const [elId, key, transform] of fields) {
-    const el = document.getElementById(elId) as HTMLInputElement | HTMLSelectElement | null;
-    if (el) {
-      pendingSettings[key] = transform(el.value);
-    }
-  }
-
-  // Capture debug env vars from the Debug section
+function captureDebugEnvVars() {
   const debugIds = [
     "SS_JIT_VERIFY", "SS_JIT_NO_CHAIN", "SS_JIT_NO_ROM", "SS_USE_JIT",
     "SS_JIT_TRACE_RING", "SS_JIT_DIAG_LOG", "SS_JIT_WATCH_ADDR", "SS_JIT_SKIP_OPC",
@@ -1130,12 +1121,8 @@ async function handleAction(e: Event) {
   switch (action) {
     case "select-vm":
       if (id && id !== selectedVmId) {
-        captureCurrentSectionSettings();
-        if (Object.keys(pendingSettings).length > 0) {
-          if (!confirm("You have unsaved changes. Discard them?")) break;
-        }
+        captureDebugEnvVars();
         selectedVmId = id;
-        pendingSettings = {};
         await loadVmPrefs(id);
         render();
       }
@@ -1334,7 +1321,7 @@ async function handleAction(e: Event) {
         // Select the VM and show its detail pane (integrated mode)
         selectedVmId = id;
         settingsSection = "general";
-        pendingSettings = {};
+        
         await loadVmPrefs(id);
         render();
       }
@@ -1426,37 +1413,12 @@ async function handleAction(e: Event) {
       break;
 
     case "switch-section":
-      captureCurrentSectionSettings();
+      captureDebugEnvVars();
       settingsSection = target.dataset.section || "general";
       render();
       break;
 
-    case "revert-settings":
-      if (selectedVmId) {
-        pendingSettings = {};
-        await loadVmPrefs(selectedVmId);
-        showToast("Reverted to saved settings", "info");
-        render();
-      }
-      break;
-
-    case "save-settings":
-      if (selectedVmId) {
-        captureCurrentSectionSettings();
-        try {
-          for (const [key, value] of Object.entries(pendingSettings)) {
-            await invoke("update_vm_setting", { id: selectedVmId, key, value });
-          }
-          pendingSettings = {};
-          vms = await loadVms();
-          await loadVmPrefs(selectedVmId);
-          showToast("Settings saved", "success");
-          render();
-        } catch (err) {
-          showToast(`Failed to save: ${err}`, "error");
-        }
-      }
-      break;
+    // Save/revert removed: settings apply immediately (Mac OS 9 HIG modeless pattern)
 
     case "pick-setting-rom": {
       const path = await pickFile("Select ROM File", [{ name: "ROM Files", extensions: ["rom", "bin", "img", "ROM", ""] }]);
@@ -1759,23 +1721,14 @@ async function init() {
   if (settingsVmId) {
     selectedVmId = settingsVmId;
     settingsSection = "general";
-    pendingSettings = {};
+    
     await loadVmPrefs(settingsVmId);
     currentView = "settings";
     isSettingsWindow = true;
 
     // P0.1: Unsaved changes confirmation on window close
+    // Settings apply immediately — no unsaved-changes check needed on close
     const thisWindow = getCurrentWindow();
-    thisWindow.onCloseRequested(async (event) => {
-      captureCurrentSectionSettings();
-      if (Object.keys(pendingSettings).length > 0) {
-        const discard = confirm("You have unsaved changes. Discard them?");
-        if (!discard) {
-          event.preventDefault();
-          return;
-        }
-      }
-    });
 
     // P0.2: Auto-close if the VM is deleted from the Control Center
     listen("vm-deleted", (event) => {

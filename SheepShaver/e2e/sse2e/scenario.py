@@ -527,46 +527,51 @@ def _screen_size(dump_dir: str) -> tuple[int, int]:
     return 800, 600
 
 
-def _dialog_text(dlg) -> str:
-    """Join a dialog's static-text + button labels — used to report a launch-blocking alert."""
-    parts = [it.text.strip() for it in getattr(dlg, "items", [])
-             if it.text and it.type in ("staticText", "button")]
-    return " / ".join(p for p in parts if p)[:200]
 
-
-def _await_launch(runner: Runner, vnc: Vnc, spec: WorkloadSpec, baseline_hash, dump_dir: str,
+def _await_launch(runner: Runner, vnc: Vnc, spec: WorkloadSpec, baseline_hash, baseline_mb,
                   artifact_dir: Path, since: int) -> tuple[float | None, str | None]:
     """Wait for the app to take the screen. Returns (launch_elapsed, error_text).
 
-    Order matters: screen DIVERGENCE (the app is rendering) wins first, so a real launch isn't
-    aborted by a transient modal. Only if the screen is still ~Finder do we treat a modal alert as a
-    launch failure (the CarbonLib 'could not be found' error is exactly such an alert, and it IS a
-    standard dialog introspection can read even though the launched app later isn't)."""
+    The discriminator is the MENU BAR: classic Mac OS gives it to the frontmost app, so a changed
+    menu-bar strip = an app launched, while a Finder error dialog (e.g. CarbonLib 'could not be
+    found') leaves the Finder menu bar intact. This is the ONLY reliable signal here: that modal
+    alert services no idle hook, so it emits no [APP] modal=1 and introspection of it times out
+    (verified 2026-06-06) -- the screenshot is the sole evidence. A 'dialog' verdict must persist a
+    couple of polls before it is called a failure (the alert takes a moment to draw)."""
     poll = artifact_dir / f"{spec.name}-launch-poll.png"
     t0 = time.monotonic()
+    dialog_polls = 0
     while time.monotonic() - t0 < spec.launch_timeout:
-        # 1. screen diverged from the Finder baseline -> launched + rendering.
-        try:
-            vnc.capture(str(poll))
-            if workload.launched(_phash_dist(str(poll), baseline_hash), spec.launch_diverge):
-                return time.monotonic() - t0, None
-        except Exception:
-            pass
-        # 2. [APP] front-app signal (fires for non-Carbon apps; a bonus confirmation).
+        # Bonus early-confirm for NON-Carbon apps (whose CurApName changes); Carbon/fullscreen apps
+        # keep CurApName='Finder', so the menu-bar check below is the real signal for them.
         if spec.app_signal:
             for ln in runner.log_text().splitlines()[since:]:
                 fa = observe.front_app(ln)
                 if fa is not None and spec.app_signal in fa:
                     return time.monotonic() - t0, None
-        # 3. screen still ~Finder but a modal alert is up -> launch blocked (e.g. a missing library).
         try:
-            snap = uidump.snapshot(dump_dir, timeout=2.0)
-            if snap.modal_active:
-                dlg = snap.front_dialog()
-                if dlg is not None:
-                    return None, _dialog_text(dlg) or "(modal alert at launch)"
+            vnc.capture(str(poll))
+            mb_dist = imagecmp.region_phash(str(poll)) - baseline_mb
+            full_dist = _phash_dist(str(poll), baseline_hash)
         except Exception:
-            pass
+            time.sleep(1.0); continue
+        verdict = workload.classify_launch(mb_dist, full_dist, spec.menubar_change, spec.launch_diverge)
+        if verdict == "launched":
+            print(f"  [gate] launch: app owns the menu bar (menu-bar Δ={mb_dist}) at "
+                  f"{time.monotonic() - t0:.1f}s", flush=True)
+            return time.monotonic() - t0, None
+        if verdict == "dialog":
+            dialog_polls += 1
+            if dialog_polls >= 2:                       # sustained Finder dialog -> launch failure
+                try:
+                    vnc.capture(str(artifact_dir / f"{spec.name}-launch-error.png"))
+                except Exception:
+                    pass
+                return None, (f"app did not take the menu bar; a Finder dialog is up "
+                              f"(menu-bar Δ={mb_dist}, screen Δ={full_dist}) -- likely a launch "
+                              f"failure. See {spec.name}-launch-error.png")
+        else:
+            dialog_polls = 0
         time.sleep(1.0)
     return None, None
 
@@ -653,20 +658,27 @@ def run_workload(
         time.sleep(3.0)
 
         vnc = Vnc(port=vncport)
-        base = artifact_dir / f"{spec.name}-00-baseline.png"
-        vnc.capture(str(base))
-        baseline_hash = imagecmp.phash_masked(str(base))
         w, h = _screen_size(dump_dir)
         ex, ey = w // 2, h - 30
 
-        # Finder type-select launch: click empty desktop -> type volume -> Cmd-O -> type app -> Cmd-O.
+        # Finder type-select launch: click empty desktop -> type volume -> Cmd-O (open the volume
+        # window) -> type app -> Cmd-O (launch).
         since = _nlines(runner)
         print(f"  [workload] launch {spec.app!r} from volume {spec.volume!r}", flush=True)
         vnc.click(ex, ey); time.sleep(1.0)
         vnc.type_text(spec.volume); time.sleep(1.2); vnc.key("super-o"); time.sleep(4.0)
+
+        # Baseline AFTER the volume window is open: launch-divergence then measures the APP taking the
+        # screen, not the volume window we just opened (which also differs from the bare desktop).
+        base = artifact_dir / f"{spec.name}-00-baseline.png"
+        vnc.capture(str(base))
+        baseline_hash = imagecmp.phash_masked(str(base))
+        baseline_mb = imagecmp.region_phash(str(base))   # Finder menu-bar strip (the frontmost-app tell)
+
         vnc.type_text(spec.app); time.sleep(1.2); vnc.key("super-o")
 
-        launch_s, err = _await_launch(runner, vnc, spec, baseline_hash, dump_dir, artifact_dir, since)
+        launch_s, err = _await_launch(runner, vnc, spec, baseline_hash, baseline_mb,
+                                      artifact_dir, since)
         if err is not None:
             res.launch_error = err
             res.reason = f"launch failed — on-screen alert: {err}"

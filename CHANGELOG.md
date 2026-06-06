@@ -33,13 +33,17 @@ perf-join — hot × microbench ns/insn.)
 `scenario.run_workload` + `sse2e/workload.py`: the reusable framework for benchmarking a real app —
 boot a workload disk + attach the apps disk, launch by Finder type-select, and time the render via the
 **screenshot perceptual hash** (not the window list — a Carbon/fullscreen app has no standard
-`WindowRecord` while rendering). Gates: launch = screen diverges from the Finder baseline (a modal alert
-instead = launch failure, e.g. a missing library); render-done = pHash stabilizes; quit = pHash converges
+`WindowRecord` while rendering). Gates: launch = the app **takes the menu bar** (region-pHash of the
+menu-bar strip — classic Mac OS gives it to the frontmost app); a sustained Finder dialog with the menu
+bar intact = **launch failure** (the missing-library alert emits no `[APP]`/introspection signal, so the
+menu bar is the only tell — see `LEARNINGS.md`); render-done = pHash stabilizes; quit = pHash converges
 back to baseline; then the honest clean-shutdown verdict. Perf signal = `render_s` (launch→stable) + the
 result-frame pHash (visual fingerprint), appended to a per-workload `history.csv` with a trend line.
-Entry point `run_workload.py` (+ `make e2e-workload WL=<name>`); pure logic + history offline-unit-tested
-(`tests/test_workload.py`, 11 cases; suite 118). **Boot-validated against AltiVec Fractal Carbon: launched
-1.2 s, render stable 18.3 s, clean shutdown, result pHash + history recorded.** Commit `b4a0a594`.
+Entry point `run_workload.py` (+ `make e2e-workload WL=<name>`); pure logic (launch-classify, render-stable,
+history) offline-unit-tested (`tests/test_workload.py`, 15 cases; suite 122). **Boot-validated BOTH paths
+against AltiVec Fractal Carbon:** on the CarbonLib-1.6 disk → launched (menu-bar Δ=28), render stable 18.3 s,
+clean shutdown, result pHash + history; on the old-CarbonLib disk → correctly FAILS with "app did not take
+the menu bar … likely a launch failure" + a `launch-error.png`. Commits `b4a0a594`, `bbb53e80`.
 
 ### [SheepShaver][e2e] Guest UI introspection — window control-list items (non-dialog windows)
 

@@ -17,6 +17,31 @@ def test_launched_false_below_threshold():
     assert workload.launched(0, 12) is False
 
 
+# --- classify_launch(): menu-bar change = app launched; screen-changed-but-Finder-menu = dialog ---
+
+def test_classify_launch_menubar_change_is_launched():
+    # FC menus vs Finder ~30; well over the 14 threshold even though the full screen also diverged
+    assert workload.classify_launch(menubar_dist=30, full_dist=26,
+                                     menubar_change=14, launch_diverge=12) == "launched"
+
+
+def test_classify_launch_finder_dialog_is_dialog():
+    # a Finder error dialog: menu bar intact (~4) but the screen changed (~18) -> 'dialog' (a failure)
+    assert workload.classify_launch(menubar_dist=4, full_dist=18,
+                                     menubar_change=14, launch_diverge=12) == "dialog"
+
+
+def test_classify_launch_menubar_wins_over_dialog():
+    # if BOTH cross their thresholds, the menu-bar (real launch) verdict must win
+    assert workload.classify_launch(menubar_dist=20, full_dist=40,
+                                     menubar_change=14, launch_diverge=12) == "launched"
+
+
+def test_classify_launch_pending_when_nothing_decisive():
+    assert workload.classify_launch(menubar_dist=3, full_dist=5,
+                                     menubar_change=14, launch_diverge=12) == "pending"
+
+
 # --- stable_run(): render settled = last `frames` frame-to-frame distances all <= threshold ---
 
 def test_stable_run_true_when_trailing_frames_small():

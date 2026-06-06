@@ -162,8 +162,10 @@ make e2e-test     # offline unit tests (no emulator / assets / GUI)
 **Workload runner (`make e2e-workload`).** Boots the workload boot disk + attaches the apps disk, launches
 a real app by Finder type-select, and times its render via the **screenshot perceptual hash** — a
 Carbon/fullscreen app has no standard `WindowRecord` while rendering, so the window list can't gate it.
-Launch = the screen diverges from the Finder baseline (a modal alert instead = launch failure, e.g. a
-missing library); render-done = the pHash stabilizes; quit = the pHash converges back to the Finder. The
+Launch = the app **takes the menu bar** (a region-pHash of the menu-bar strip — classic Mac OS gives it to
+the frontmost app); a sustained Finder dialog with the menu bar intact = a **launch failure** (a
+missing-library alert emits no signal at all, so the menu bar is the only tell); render-done = the pHash
+stabilizes; quit = the pHash converges back to the Finder. The
 perf signal is `render_s` (launch→stable) plus the result-frame pHash, appended to
 `artifacts/workload-history/history.csv`. Workloads live in `run_workload.py`'s registry (Fractal Carbon
 is entry #1); the disks default to `e2e-macos9-workload-boot.dsk` (carries CarbonLib 1.6) + `e2e-apps.dsk`

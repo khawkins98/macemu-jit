@@ -37,6 +37,12 @@ test: wire JIT-equivalence harness as the codegen gate (make test-jit)
 - `SS_JIT_VERIFY=1` status for RA/CR/flag changes
 - What was tried and reverted, if applicable
 
+**CHANGELOG entries cite their commit.** When you add a `CHANGELOG.md` entry, append the
+implementing commit short-SHA to the entry so it's traceable — e.g.
+`### [SheepShaver] … (\`c2c43fd9\`)`, or inline `(commit \`5ac5e676\`)` for sub-bullets. Multi-commit
+work cites the primary + key follow-ups (`\`fe378c5d\`, triage \`980cf4df\``). Add it after the commit
+exists (amend the entry, or add the SHA in a follow-up doc commit).
+
 ## Crediting Borrowed Techniques
 
 This JIT borrows codegen and optimization ideas from other emulators (Dolphin, RPCS3,
@@ -120,6 +126,19 @@ with the header; when you touch an old doc, add it if missing.
 ### JIT codegen change (ppc-jit.cpp)
 
 - [ ] `make test-jit` passes (score=100) — NOT `make test-opcodes` (that only tests the interpreter)
+- [ ] **Verify the actual machine encoding — don't hand-decode or trust inline comments.** Disassemble
+  the exact `emit32()` words (`python3 -c 'import capstone…'`, AArch64 little-endian) and confirm the
+  mnemonic + operands. The AltiVec shift codegen shipped *scrambled* comments and the wrong NEON ops
+  (rounding `SRSHL` where AltiVec truncates, signed where it needs unsigned, `vsrb`↔`vsrab` swapped)
+  precisely because it was eyeballed, not disassembled (2026-06-06; `c2c43fd9`).
+- [ ] **Referee any divergence against the REAL interpreter, not a secondary oracle.** The trusted
+  ground truth is `SS_TEST_HEX="<words>" SS_TEST_DUMP=1 SS_TEST_JIT={0,1} ./src/Unix/SheepShaver`
+  (REGDUMP includes all 32 VR/FPR, so a single op's result is directly observable; seed inputs with
+  `SS_TEST_INIT=<32 hex words>`). The rom-harness uses its *own subset* interpreter — a divergence
+  there can be a harness bug, not a JIT bug. Confirm with the real emulator before claiming either.
+- [ ] **Mind the ev_mixed byte order for halfword/word vector ops.** VRs are stored bytes-reversed
+  within each 32-bit word; per-byte ops are order-safe, but halfword/word ops (and their operand/mask
+  vectors) are NOT — validate them with lvx-built byte-*asymmetric* operands, not `vspltisb`.
 - [ ] `SS_JIT_VERIFY=1 ./SheepShaver` boot for 10-20s with no divergence (for RA/flag/branch changes)
 - [ ] Normal boot to Finder desktop
 - [ ] `make bench` before/after if the change affects codegen performance. **If no bench kernel
@@ -175,6 +194,12 @@ with the header; when you touch an old doc, add it if missing.
 - [ ] Unique sentinel (no reuse of existing vector hex)
 - [ ] Comment explaining what the vector tests
 - [ ] Passes in both `make test-opcodes` and `make test-jit`
+- [ ] **Operands actually exercise the op (not vacuous).** The recurring failure mode here is a
+  vector that "passes" because both interp and JIT produce the same *trivial* result (all-zero,
+  all-same-lane). Check the interp result is **lane-asymmetric** (multiple distinct bytes). For
+  shifts/rotates specifically: use **amounts that exceed the element width** (catches a missing
+  mod-width mask) and **sign-boundary / high-bit data** (catches logical-vs-arithmetic confusion).
+  The result reaching a GPR (`grab()`) AND the VR dump both matter.
 
 ## Key Invariants
 

@@ -3,6 +3,27 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-06 — Installing classic Mac apps onto HFS images host-side, with resource forks intact
+
+Populating an E2E "apps" disk host-side (no boot) the obvious way silently produces a **dead app** —
+the resource fork and `APPL`/creator signature get dropped. Full procedure + code:
+**`docs/HOST-SIDE-MAC-SOFTWARE-INSTALL.md`**. The load-bearing lessons:
+
+- **`macutils`/`hexbin` is NOT in Homebrew.** Use **`unar`/`lsar`** (The Unarchiver, `brew install unar`)
+  to decode `.hqx`/`.sit` (often "StuffIt in BinHex") — it preserves forks as macOS xattrs
+  (`com.apple.ResourceFork` → readable at `"<file>/..namedfork/rsrc"`; `com.apple.FinderInfo` = type/creator).
+- **`hcopy` (hfsutils) without `-m` is DATA-FORK-ONLY** — it loses the resource fork and stamps the file
+  `????/UNIX`, so the app won't run. Repackage as **MacBinary II** (data + rsrc + FinderInfo, CRC-16-CCITT
+  at offset 124) and use **`hcopy -m`**. Verify with `hdir`: want `APPL/<creator>  <nonzero-rsrc>  <data>`.
+- **`hformat` makes a raw HFS volume and SheepShaver mounts it directly** — no Apple Partition Map needed,
+  no in-emulator "Initialize?" prompt (verified: `modal=False` on boot with it attached).
+- `os.getxattr` is **Linux-only**; on macOS Python read FinderInfo via the `xattr` *command*.
+- **Launch an app on an attached data volume with keyboard type-select** (Finder: type the volume name →
+  ⌘O → type the app name → ⌘O), gated on introspection — no fragile alias or coordinate-clicking.
+
+Proof: AltiVec Fractal Carbon (download → `unar` → MacBinary → `hformat`/`hcopy -m`) installed onto
+`e2e-apps.dsk`, `hdir` = `APPL/ddPF 8126 169060`, boot-verified to mount cleanly.
+
 ## 2026-06-05 — E2E benchmark auto-shutdown (keyboard quit-to-Finder); VNC clicks were never broken (misdiagnosis)
 
 Automating the Speedometer benchmark to shut down **unattended** hit two non-obvious walls. The

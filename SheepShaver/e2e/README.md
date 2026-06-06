@@ -1,5 +1,13 @@
 # SheepShaver E2E VNC harness
 
+> ### 🛡 Your disks are never modified
+> Every run boots an **isolated config** — its own throwaway prefs (never your
+> `~/.sheepshaver_prefs`) and, for disk scenarios, a **pristine per-run `clonefile` copy** of the disk
+> image. **The master image is never opened for write**, so it cannot be dirtied or corrupted — even
+> if a run is force-killed (the dirty copy is simply discarded). Read-only ISO scenarios can't be
+> dirtied at all. Each run also *drives and asserts a clean guest shutdown*. The run prints a
+> `🛡 disk-safety: booting a pristine per-run copy …` line so you can see it every time.
+
 A scriptable, system-level regression gate that boots SheepShaver from a **repo-tracked isolated
 config** (never your `~/.sheepshaver_prefs`) and checks the emulator actually works end-to-end. It
 complements `make test-jit` / `SS_JIT_VERIFY` (which test the JIT *per-instruction*) at the layer

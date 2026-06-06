@@ -29,7 +29,9 @@ no duplication:
 cd SheepShaver/e2e/assets
 ln -sf "/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom" rom.rom
 ln -sf "/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso" smoke.iso
-ln -sf "/Users/Shared/macemu/macos9_mini.dsk"                 bench.dsk
+ln -sf "/Users/Shared/macemu/e2e-macos9-mini-boot.dsk"        bench.dsk   # OS 9 boot disk (+ Speedometer)
+# optional extended-workloads volume, attached as a second disk (Word/Fractal/POV-Ray):
+# ln -sf "/Users/Shared/macemu/e2e-apps.dsk"                  apps.dsk
 ```
 
 Or just copy the files in with those names. (Both are gitignored.)

@@ -3,6 +3,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import html2canvas from "html2canvas";
 
 import iconDisplayOn from "./icons/display_on.png";
 import iconDisplayOff from "./icons/display_off.png";
@@ -254,6 +255,7 @@ function renderDetailPane(): string {
         <button class="btn btn-secondary" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}">${ICON_DUPLICATE()}</button>
         <button class="btn btn-secondary" data-action="reveal" data-id="${escapeAttr(vm.id)}">${ICON_FOLDER()}</button>
         <button class="btn btn-secondary btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}">${ICON_TRASH()}</button>
+        <button class="btn btn-secondary" data-action="bug-report" data-id="${escapeAttr(vm.id)}" title="Report Bug">🐛</button>
       </div>
     </div>
     ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
@@ -265,7 +267,7 @@ function renderDetailPane(): string {
     </div>
     <div class="detail-config">
       <div class="detail-tabs">
-        ${["general", "hardware", "storage", "network"]
+        ${["general", "hardware", "storage", "network", "inspector"]
           .map((s) => `<button class="detail-tab ${s === settingsSection ? "detail-tab--active" : ""}"
                         data-action="switch-section" data-section="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}</button>`)
           .join("")}
@@ -936,6 +938,30 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
   // Append advanced + debug as fold-outs inside general
   sections["general"] += (sections["advanced"] || "") + (sections["debug"] || "");
 
+  // Inspector panel — live stats, signal timeline, log viewer
+  sections["inspector"] = `
+    <div id="inspector-content">
+      <div class="inspector-section">
+        <h3 class="inspector-heading">JIT Stats</h3>
+        <div id="inspector-stats" class="inspector-stats">
+          <p class="ss-text-muted">Start a VM to see live stats.</p>
+        </div>
+      </div>
+      <div class="inspector-section">
+        <h3 class="inspector-heading">Events</h3>
+        <div id="inspector-signals" class="inspector-signals">
+          <p class="ss-text-muted">No events yet.</p>
+        </div>
+      </div>
+      <div class="inspector-section">
+        <h3 class="inspector-heading">Log</h3>
+        <div id="inspector-log" class="inspector-log">
+          <p class="ss-text-muted">No log output yet.</p>
+        </div>
+      </div>
+    </div>
+  `;
+
   return sections[section] || "";
 }
 
@@ -949,7 +975,7 @@ function renderSettings(): string {
     ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
     <div class="settings-body">
       <div class="settings-sidebar">
-        ${["general", "hardware", "storage", "network"]
+        ${["general", "hardware", "storage", "network", "inspector"]
           .map((s) => `
             <button class="settings-nav-item ${s === settingsSection ? "active" : ""}"
                     data-action="switch-section" data-section="${s}">
@@ -1161,6 +1187,35 @@ async function handleAction(e: Event) {
         selectedVmId = id;
         await loadVmPrefs(id);
         render();
+      }
+      break;
+
+    case "bug-report":
+      if (id) {
+        showToast("Generating bug report...", "info", 3000);
+        try {
+          // Capture UI screenshot from the web layer
+          let uiScreenshot: string | null = null;
+          try {
+            const canvas = await html2canvas(document.getElementById("app")!, {
+              scale: 1,
+              useCORS: true,
+              logging: false,
+            });
+            uiScreenshot = canvas.toDataURL("image/png");
+          } catch {
+            // html2canvas may fail in some contexts — proceed without
+          }
+
+          const zipPath = (await invoke("generate_bug_report", {
+            id,
+            uiScreenshotB64: uiScreenshot,
+          })) as string;
+
+          showToast(`Bug report saved to ${zipPath}`, "success", 10000);
+        } catch (err) {
+          showToast(`Failed to generate report: ${err}`, "error");
+        }
       }
       break;
 
@@ -1637,6 +1692,92 @@ async function loadScreenshots() {
 
 let screenshotCounter = 0;
 let screenshotInProgress = false;
+let inspectorCounter = 0;
+
+interface InspectorStats {
+  timestamp: string;
+  blocks: string;
+  rate: string;
+  compiled: string;
+  jnk: string;
+  jdr: string;
+  jram: string;
+  j2i: string;
+  rss: string;
+  cpu: string;
+  warnings: string;
+}
+
+interface InspectorSignal {
+  kind: string;
+  payload: string;
+}
+
+interface InspectorState {
+  stats: InspectorStats;
+  signals: InspectorSignal[];
+  log_tail: string[];
+}
+
+async function updateInspectorPanel() {
+  if (!selectedVmId || settingsSection !== "inspector") return;
+
+  try {
+    const data = (await invoke("get_vm_inspector", { id: selectedVmId })) as InspectorState;
+
+    const statsEl = document.getElementById("inspector-stats");
+    if (statsEl && data.stats.blocks) {
+      statsEl.innerHTML = `
+        <div class="inspector-gauge-grid">
+          <div class="inspector-gauge">
+            <span class="inspector-gauge__label">Blocks</span>
+            <span class="inspector-gauge__value">${escapeHtml(data.stats.blocks)}</span>
+          </div>
+          <div class="inspector-gauge">
+            <span class="inspector-gauge__label">Rate</span>
+            <span class="inspector-gauge__value">${escapeHtml(data.stats.rate)}</span>
+          </div>
+          <div class="inspector-gauge">
+            <span class="inspector-gauge__label">Compiled</span>
+            <span class="inspector-gauge__value">${escapeHtml(data.stats.compiled)}</span>
+          </div>
+          <div class="inspector-gauge">
+            <span class="inspector-gauge__label">CPU</span>
+            <span class="inspector-gauge__value">${escapeHtml(data.stats.cpu || "—")}</span>
+          </div>
+          <div class="inspector-gauge">
+            <span class="inspector-gauge__label">RSS</span>
+            <span class="inspector-gauge__value">${escapeHtml(data.stats.rss || "—")}</span>
+          </div>
+          <div class="inspector-gauge">
+            <span class="inspector-gauge__label">j2i</span>
+            <span class="inspector-gauge__value">${escapeHtml(data.stats.j2i || "0")}</span>
+          </div>
+        </div>
+        <div class="inspector-region-bar">
+          <span class="ss-text-muted">Regions: NK=${escapeHtml(data.stats.jnk || "0")} DR=${escapeHtml(data.stats.jdr || "0")} RAM=${escapeHtml(data.stats.jram || "0")}</span>
+        </div>
+        ${data.stats.warnings ? `<div class="inspector-warning">${escapeHtml(data.stats.warnings)}</div>` : ""}
+        <p class="ss-text-muted" style="margin-top: 4px;">Updated: ${escapeHtml(data.stats.timestamp)}</p>
+      `;
+    }
+
+    const signalsEl = document.getElementById("inspector-signals");
+    if (signalsEl && data.signals.length > 0) {
+      signalsEl.innerHTML = data.signals.slice(-20).reverse().map((s) =>
+        `<div class="inspector-signal"><span class="inspector-signal__tag">${escapeHtml(s.kind)}</span> <span class="ss-text-muted">${escapeHtml(s.payload.substring(0, 100))}</span></div>`
+      ).join("");
+    }
+
+    const logEl = document.getElementById("inspector-log");
+    if (logEl && data.log_tail.length > 0) {
+      logEl.innerHTML = `<pre class="inspector-log-pre">${data.log_tail.slice(-50).map(escapeHtml).join("\n")}</pre>`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  } catch {
+    // Inspector not available for this VM
+  }
+}
 
 async function pollRunningStatus() {
   const newRunning = await checkRunning();
@@ -1656,6 +1797,12 @@ async function pollRunningStatus() {
       await loadScreenshots();
     }
     if (currentView === "library") render();
+  }
+
+  // Update inspector panel every ~4s (every 2nd poll)
+  if (runningVmIds.size > 0 && ++inspectorCounter >= 2) {
+    inspectorCounter = 0;
+    updateInspectorPanel();
   }
 
   // Capture live screenshots every ~10s for all running VMs (guarded against reentrancy)

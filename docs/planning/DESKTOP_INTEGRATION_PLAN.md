@@ -223,6 +223,21 @@ this with new methods rather than inventing a new protocol.
   `disk`). ~2–3 days. See Implementation Notes §extfs.
 - [ ] **Live folder mount/unmount**: Hook `ExtFSInit()`/`ExtFSExit()` for hot-add/remove via
   UDS RPC.
+- [ ] **Hot disk/CD insertion + software library** *(Infinite-Mac-inspired, 2026-06-06)*: "insert a
+  disk into the running instance" and "pick software from a library." **The mount machinery already
+  exists** — `disk.cpp` has `DiskMountVolume`/`to_be_mounted` and `mount_mountable_volumes()` run from
+  `accRun` (the periodic mount path classic Mac OS uses for media insertion). So a UDS RPC
+  (`RPC_METHOD_INSERT_DISK <path>`) that adds an image to the mount list and flags `to_be_mounted`
+  should surface a new volume/CD in the *running* guest without restart — verify against the CD
+  media-change path. Pair with a **content-addressed image library** (curated `.dsk`/`.iso` set,
+  deduped via APFS `clonefile` so duplicates cost nothing) for a "software shelf" UI. For loose files,
+  reuse the ExtFS "drop folder" path above with Infinite Mac's **Downloads / Uploads / Saved** watched-
+  folder convention. *Transfers from Infinite Mac:* the runtime-injection model (it uses the **same
+  `extfs.cpp`** we have) + the watched-folder convention + content-addressed dedup. *Does **not**
+  transfer:* its browser plumbing (256 K HTTP-range chunks, service worker, IndexedDB, Emscripten FS) —
+  native macOS uses real files and APFS, so we skip the streaming layer entirely. Optional: a
+  `machfs`-based tool (as Infinite Mac uses) to build library images + preserve Finder metadata.
+  **Detail/source:** persistent.info Infinite Mac write-up; `INFINITE-MAC-EVALUATION-PLAN.md`.
 - [ ] **`utxt`/UT16 clipboard fix**: `clip_macosx64.mm` explicitly skips Unicode scrap types.
   Implement the UTF-16 ↔ Mac Roman converter. Mac OS 8.5+ supports `utxt` natively. Low-medium
   effort.
@@ -596,43 +611,81 @@ one else has solved coherence for classic Mac OS either.
 
 ---
 
-## Developer Inspector / Debug Chrome (Snow-inspired) — 🟡 planned
+## Developer Inspector / Debug Chrome (Snow-inspired) — 🟡 Tier 1 in progress
 
 **The idea (2026-06-06):** [Snow](SNOW-EVALUATION-PLAN.md) launches with rich live "chrome" — registers,
 disassembly, memory, trap/interrupt history, watchpoints — so you see machine state on the fly.
 SiliconSheep is the right home to give *our* build/debug environment that kind of live visibility —
-but reshaped for what we actually are.
+but reshaped for what we actually are: **inspiration, not code lifting** (Snow is 68K + egui; we're
+PPC + Tauri).
 
-**Build a live observability *inspector*, not a Snow-style step-debugger.** Snow is a hardware-level
-68K emulator where single-step/disassemble/edit-memory is the natural debugging model; ours is a JIT +
-paravirtualized PowerPC whose debugging is *differential* (`SS_JIT_VERIFY`, the harness,
-`jit-diff-sweep`). So we borrow Snow/DingusPPC's answer to *"which surfaces matter"*, not their
-architecture.
+**Build a live observability *inspector*, not a Snow-style step-debugger.** Our debugging is
+*differential* (`SS_JIT_VERIFY`, the harness), not single-step. Borrow Snow's answer to *"which
+surfaces matter"*, not its architecture. Full crosswalk: `SNOW-EVALUATION-PLAN.md` §S1.
 
-- **Data layer (already mostly exists):** the rich diagnostics SheepShaver already emits — heartbeat
-  (per-region block rates `jNK/jDR/jRAM`, `comp`, `j2i`, `rss`, `cpu%`, warning matrix), trace ring,
-  HOT-PC sampling, `SS_JIT_WATCH_ADDR` watchpoints, and the live JIT stats already pushed to the SDL
-  window title — plus the **B1 execution-weighted profiler** (`OPTIMIZATION-PLAN.md` §P0) once built.
-  The gap is presentation, not data. **B1 is the prerequisite data source**; the inspector is its
-  natural front-end (ties to the profiling-first plan).
-- **Presentation layer (cheap, here in SiliconSheep):** a Tauri "Inspector" tab. Rich chrome in a web
-  panel is far cheaper than a native debugger and keeps debugger-UI churn **out of the emulator core**.
-  Surfaces to show: hot blocks (B1), per-region execution mix + rates, fallback/`j2i` counters,
-  interrupt/spcflags state, watchpoint hits, HOT-PC, and (later) disassembly of the current hot region.
-- **Transport:** rides the same **bidirectional launcher↔emulator RPC** that Tier 4 Layer A (A0)
-  establishes — a structured diagnostics stream from the emulator to the Tauri front-end. Until A0
-  exists, a minimal first cut can tail the diag log / extend the window-title stats.
+### Tier 1 — buildable now (zero emulator changes, parse existing data)
 
-**Scope discipline:** observability-first; selectively expose *debugger affordances we already have
-backends for* (watchpoints via `SS_JIT_WATCH_ADDR`, PC history via the trace ring, HOT-PC) rather than
-building a new step-debugger. Defer anything needing emulator-core debugger machinery until the
-Track-A verification gates settle.
+The data already flows: `[HB]` heartbeat lines to stderr (every 10-60s), `[BOOT]`/`[SYSV]`/`[APP]`
+signals, `last_run.log` in the `.sheepvm` bundle. SiliconSheep already captures stderr in a
+background thread. What's missing is parsing + presentation.
 
-**Dependencies / sequence:** B1 profiler (data) → minimal live view (log tail / window-title) → Tauri
-Inspector tab on the A0 RPC. **Cross-refs:** `SNOW-EVALUATION-PLAN.md` (ergonomics reference + the
-"why inspector not debugger" rationale), `DINGUSPPC-EVALUATION-PLAN.md` (CLI-debugger surface ideas),
-`OPTIMIZATION-PLAN.md` §P0/B1 (the data source), Tier 4 Layer A above (the RPC transport). Also folds
-the three eval plans' separate "debug-tooling crosswalks" into **one** matrix that lands here.
+- [ ] **JIT Stats dashboard** — block count, cache usage %, compile rate, per-region rates
+  (jNK/jDR/jRAM), j2i transition ratio. Source: parse `[HB ...]` heartbeat lines. Cache latest
+  values in `AppState`, expose via `get_vm_stats` Tauri command. Render as gauges/sparklines in
+  a new Inspector panel (replaces the current Debug tab env-var form for running VMs).
+  Format: `[HB 10.0s] blocks=1.2M (0.5M/s) comp=847 | jNK=1200 jDR=500 jRAM=300 j2i=50 | rss=256M cpu=45%`
+- [ ] **Signal/event timeline** — chronological list of `[BOOT]`, `[SYSV]`, `[APP]`, `[READY]`,
+  `[STALL]`, `[WARN]` events with timestamps and payload. Source: same stderr parsing.
+- [ ] **Scrollable log viewer** — replace the `alert()` "View Logs" button with an inline
+  scrollable, filterable panel. Category filtering (heartbeat, signals, warnings).
+- [ ] **Explicit cost indicator** — Snow-style note when debug env vars are set:
+  "Debug mode active — performance is reduced."
+
+### Tier 2 — minor emulator additions (~50 LOC each)
+
+- [ ] **Register inspector** — GPR (r0-r31), SPR (LR/CTR/XER/CR), PC. Needs: new signal handler
+  or UDS endpoint that dumps `powerpc_registers` as JSON. Change-highlighting between snapshots.
+- [ ] **Memory hex viewer** — read N bytes at guest address. Needs: UDS command calling
+  `Mac2HostAddr()`. Classic hex+ASCII grid with navigable address input.
+- [ ] **Guest state sidebar** — CurApName, WindowList, Ticks, SysVersion, MBarHeight from
+  low-memory globals (`HOST-GUEST-CHANNELS.md`). Periodic dump via idle hook or UDS.
+
+### Tier 3 — defer until earned
+
+- [ ] **Live disassembly** — needs memory read + PPC disassembler (capstone WASM).
+- [ ] **Execution breakpoints** — needs a debug command protocol. Large scope.
+- [ ] **Peripheral state** — low value for paravirtualized PPC.
+
+### Data path
+
+```
+Emulator stderr ──→ Rust background thread ──→ parse [HB]/[BOOT]/etc.
+                                              ├─→ last_run.log (file)
+                                              └─→ AppState cache (live)
+                                                   ↓
+                              Tauri command (get_vm_stats) ──→ Web UI gauges
+```
+
+**Sequence:** Tier 1 panels (now, no B1 needed) → B1 profiler adds hot-block data → Tier 2 panels
+when UDS RPC exists. B1 remains the prerequisite for the *profiling* panels (hot blocks, instruction
+mix), but the *observability* panels use existing heartbeat data.
+
+### Bug Report Bundle — ✅ implemented
+
+One-click "Report Bug" button generates a `.zip` diagnostic bundle containing:
+- SiliconSheep UI screenshot (captured from the web layer via `html2canvas`, no system permissions)
+- Guest screen capture (from VNC, already implemented)
+- Last run log (from `.sheepvm/logs/`)
+- Inspector stats snapshot (from the live cache)
+- VM profile (prefs, OS version, RAM, screen config — sanitized)
+- Emulator build info (from stderr first line)
+- Host environment info (macOS version, architecture, Tauri version)
+
+All data sources already exist — no emulator changes needed. User can attach the zip to a GitHub
+issue or share for diagnosis.
+
+**Cross-refs:** `SNOW-EVALUATION-PLAN.md` (crosswalk + rationale), `HOST-GUEST-CHANNELS.md`,
+`OPTIMIZATION-PLAN.md` §P0/B1, Tier 4 Layer A (the RPC transport once it exists).
 
 ---
 

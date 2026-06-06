@@ -377,7 +377,7 @@ and shut down cleanly?" — is done and solid.** The genuinely-open work is **P2
   that renders garbage / a video regression still PASSes today (the SDL3 port had exactly these
   bugs). We already capture the screenshots; this just adds the gate. Pair with scripted app-launch.
 - ✅ **P2 (benchmark automation) — DONE (2026-06-05).** `make e2e-bench` boots the small Mac OS 9 +
-  Speedometer disk (`macos9_mini.dsk`, ~142 MB sparse, copy-per-run = instant clonefile), drives the
+  Speedometer disk (`e2e-macos9-mini-boot.dsk`, ~142 MB sparse, copy-per-run = instant clonefile), drives the
   full Speedometer 4.02 suite over VNC (splash→registration→Cmd+A→choose-disk, gated on a new `[APP]
   frontApp` signal so it doesn't race the variable launch), captures `benchmark-result.png` (PR/CPU),
   and shuts down via the hook. Verified PASS (PR 29.375, CPU 66.976). See spec §15.

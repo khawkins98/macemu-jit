@@ -28,6 +28,82 @@ codegen doesn't corrupt block results. Done on branch `p0-profiler` (git worktre
 boot run for true hot data + routine-name attribution. (Track B prereq; feeds the `jit-diff-sweep`
 perf-join — hot × microbench ns/insn.)
 
+### [SheepShaver][e2e] Guest UI introspection — Plan 2c: menu bar + depth + desktop role
+
+The last app-automation enabler: a top-level `menuBar` (menus + items + **Command-key equivalents** +
+enabled + apple role) read by a research-backed, read-only `MenuList` ($0A1C) walk — **no Toolbox
+traps** (the idle-hook reentrancy the repo already avoids), robust via **handle-anchoring** (each
+entry must deref to a plausible `MenuInfo`, else stop). Offsets verified vs Carbon `Menus.h`
+(`SheepShaver/e2e/MENUBAR-READ-SPEC.md`). The harness can now discover "File ▸ Open ⌘O" and fire it by
+keystroke (`find_menu_item(snap, "Open").cmd_key`). Also: real `screen.depth` from the GDevice;
+`role:"desktop"` on the Finder backdrop window. **Live-verified**: 7 Finder menus
+(File/Edit/View/Special/Help…), File's New=N/Open=O/Close=W. A subtle bug fix along the way: extent-END
+bounds checks must use a range-only guard (`guest_range_ok`) — `guest_ptr_ok` requires even alignment,
+so odd-ended title/text/menu extents were spuriously rejected (this also hardens Plan 1/2a/2b reads).
+Commits 4ca2da4d, 8aeb9a2f, ecb0ec42, 706ce769, d2fa9602, e73eb6a6, 5026c2b6.
+
+### [docs] Stress-workload catalog → living capability matrix (stretch goals + frontier metric)
+
+Extended `docs/MACOS9-STRESS-WORKLOADS.md` from a runnable-software list into a **capability matrix
+that benchmarks reach over time**. Added a "Capability matrix & stretch goals" section that
+**deliberately includes targets we can't run today** (Quake III / OpenGL games — no 3D accel;
+FireWire capture; 9.2.x-only software) as **frontier markers**, scored not pass/fail but by *how far
+they get* (🌑 won't launch → 🌒 quit → 🌓 menu → 🌔 one frame → 🌕 usable), measurable via the e2e
+harness + heartbeat/HOT-PC/trace-ring/`SS_JIT_VERIFY`. Each gated row lists its unlock path (3D bridge,
+virtual DV source, New-World ROM → D3). Names the 3D-acceleration bridge as the major unplanned
+north-star and "how far Quake III gets per build" as its motivating proxy.
+
+### [docs] Curated Mac OS 9 stress-test software catalog (downloadable, AltiVec-first)
+
+Added `docs/MACOS9-STRESS-WORKLOADS.md` (cross-linked from `TESTING.md`): a linkable catalog of
+demanding period-correct PowerPC Mac OS 9 software for stress-testing the JIT, prioritized by
+AltiVec-relevance + emulation-feasibility, with download sources (Macintosh Garden / Repository /
+archive.org) and per-title caveats. Web-researched, with myth-corrections carried: official
+**SETI@home is NOT AltiVec**, **Photoshop 6.0 removed AltiVec** (5.5+AltiVecCore plug-in / 7 have it),
+**stock POV-Ray Mac is NOT AltiVec**, **OpenGL games (Quake III) are non-starters** (no 3D HW) but
+software-renderer games run, and **iMovie/FCP render-export works camera-free** (only capture needs
+FireWire). Top zero-friction AltiVec picks: AltiVec Fractal Carbon (built-in scalar oracle),
+SoundJam MP (AltiVec MP3 encode), POV-Ray 3.6 (scalar-FP). Ties to ROADMAP A2/A3/A5-V + B1.
+
+### [docs] Fold in two external threads — JIT stress workloads + hot disk loading
+
+Digested two user-shared sources and folded the actionable parts:
+- **emaculation #7159** (the actual provenance of the "pin SheepShaver to one core" lore): specific
+  titles crashed on **upstream** multicore (Royal Flush, The Dig, A-Train; Sandy Bridge, Mac OS
+  7.5–9.0.4), single-core affinity "fixed" them. Added to `docs/TESTING.md` as documented
+  emulator-breakers (concurrency + timing stress; Royal Flush also a timing/speed-calibration probe),
+  and to `SheepShaver/docs/CONCURRENCY-MODEL.md` as the lore's provenance + an **empirical falsification
+  test** of our "not multicore-sensitive" claim (run them on a busy multicore Apple Silicon host under
+  SS_JIT_VERIFY; crashes = a real race to root-cause; the originals were the upstream x86 build).
+- **Infinite Mac disk-streaming write-up** (persistent.info): folded a "Hot disk/CD insertion +
+  software library" feature into `DESKTOP_INTEGRATION_PLAN.md` Tier 2. Validated that SheepShaver's
+  `disk.cpp` already has runtime mount machinery (`DiskMountVolume`/`to_be_mounted`/`mount_mountable_volumes`)
+  so hot insertion is feasible; Infinite Mac's runtime injection uses the **same `extfs.cpp`** we have +
+  a Downloads/Uploads/Saved watched-folder convention, while its browser streaming (256 K chunks/service
+  worker/IndexedDB) does **not** transfer to native (real files + APFS clonefile instead). Cross-linked
+  from the Infinite Mac eval plan.
+
+### [SheepShaver][e2e] Guest UI introspection — Plan 2a (dialog items) + 2b (control state) + harness integration
+
+Backend A now emits each **dialog** window's DITL items — `button`/`checkbox`/`radio`/`staticText`/
+`editText`/etc. with **globalized (VNC-clickable) rects**, titles, `enabled` (itemDisable), and the
+`default` item — plus the window `refCon` + `defaultItem`. Python `uidump.py` gains `Item`,
+`find_item`, and `click_item(vnc, snap, win, text="OK")` to click a named button. **Live-verified**
+against the Speedometer choose-disk dialog (8 items, `OK`/`Cancel` titles, `refCon='sped'`, plausible
+global coords). Review-driven Plan-1 hardening also landed: honest modality from the window *variant*
+(not `windowKind`), `frontWindowIndex`=first-visible, junk-title sanity. E2E harness now boots with
+`SS_UI_DUMP_DIR` and uses introspection in its gates — `run_lifecycle` logs the desktop window list,
+and the benchmark's quit-to-Finder is now a definitive "Speedometer gone + Finder front" check
+(heuristic kept as fallback). DX: `make ui-dump` CLI + `Snapshot.render()` ASCII layout,
+`wait_for_window`, `click_point`. Canonical reference `SheepShaver/docs/UI-INTROSPECTION.md` updated;
+action plan in `docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`. Plans: `…-p2a-dialog-items.md`.
+**Plan 2b (control state):** control-type items also emit `value`, `hilite` (255 = dimmed/disabled),
+and a self-checking `crect` (the `ControlRecord` rect, which must equal the item rect); text with
+`^0`–`^3` is flagged `hasParams` (resolution deferred to Backend B). Python `Item.checked`/`.dimmed`/
+`.has_params`. **Live-verified** on the choose-disk buttons: `crect_ok=True` on all controls, dimmed
+buttons reported `hil=255`. Commits 81c3f9e6, e901beb2, 320a0eb6, 57a8b9af, 80491e28, 325501c2,
+06b68fce, 39afb740, 4234bec0, 0299b22a, 31a3177c.
+
 ### [docs] Fold the "Developer Inspector" into SiliconSheep + correct DingusPPC license to GPL-3.0
 
 - **Folded the Snow-inspired build/debug "chrome" recommendation into the SiliconSheep plan** as a

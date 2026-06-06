@@ -29,6 +29,33 @@ enum { kDlgItems = 0x9C, kDlgDefItem = 0xA8 };   // DialogRecord fields, past th
 
 struct Rect16 { int16 top, left, bottom, right; bool ok; };
 
+// Is the guest BYTE at `a` inside mapped Mac RAM? Range-only (no even-alignment requirement):
+// unlike guest_ptr_ok, this is for the END of an in-RAM extent (a title/item string's last byte),
+// which legitimately lands on an ODD address. Those bytes are read via Mac2HostAddr, never deref'd
+// as a pointer, so alignment is irrelevant — and requiring it wrongly rejected odd extents.
+static inline bool guest_range_ok(uint32 a)
+{
+    return a >= 0x100 && a < RAMBase + RAMSize;
+}
+
+// Read the main screen's pixel depth from the main GDevice via low-mem MainDevice ($08A4).
+// Returns a sane depth (one of 1,2,4,8,16,32) or 0 if any deref fails or the value is garbage.
+// Offsets: GDHandle@0x08A4 -> GDevice; gdPMap (PixMapHandle) @ GDevice+0x16;
+// PixMap -> pixelSize (int16) @ PixMap+0x20. These are standard Mac toolbox structs.
+static int read_screen_depth() {
+    uint32 gdH = ReadMacInt32(0x08A4);                 // MainDevice (GDHandle)
+    if (!gdH || !guest_ptr_ok(gdH)) return 0;
+    uint32 gd = ReadMacInt32(gdH);                     // -> GDevice
+    if (!gd || !guest_ptr_ok(gd) || !guest_ptr_ok(gd + 0x16)) return 0;
+    uint32 pmH = ReadMacInt32(gd + 0x16);              // gdPMap (PixMapHandle)
+    if (!pmH || !guest_ptr_ok(pmH)) return 0;
+    uint32 pm = ReadMacInt32(pmH);                     // -> PixMap
+    if (!pm || !guest_ptr_ok(pm + 0x22)) return 0;
+    int d = (int16)ReadMacInt16(pm + 0x20);            // pixelSize
+    if (d==1||d==2||d==4||d==8||d==16||d==32) return d;
+    return 0;                                          // not a sane depth -> placeholder
+}
+
 // Read a Region handle's bounding box (global coords). ok=false if any deref is wild.
 static Rect16 region_bbox(uint32 rgnHandle) {
     Rect16 r = {0,0,0,0,false};
@@ -55,7 +82,7 @@ static std::string window_title(uint32 win, bool *valid) {
     if (!guest_ptr_ok(ptr)) { *valid = false; return ""; }
     uint8 *s = Mac2HostAddr(ptr);
     int len = s[0];
-    if (len > 63 || !guest_ptr_ok(ptr + 1 + len)) { *valid = false; return ""; }
+    if (len > 63 || !guest_range_ok(ptr + 1 + len)) { *valid = false; return ""; }
     std::string raw;
     for (int i = 0; i < len; i++) {
         uint8 c = s[1 + i];
@@ -108,12 +135,32 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
         uint8 dlen = Mac2HostAddr(p)[13];
         std::string text;
         bool isTextItem = (type == 4 || type == 5 || type == 6 || type == 8 || type == 16);
-        if (isTextItem && guest_ptr_ok(p + 14 + dlen)) {
+        if (isTextItem && guest_range_ok(p + 14 + dlen)) {
             uint8 *d = Mac2HostAddr(p + 14);
             std::string raw;
             for (int k = 0; k < dlen; k++) { uint8 c = d[k]; if (c < 32) { raw.clear(); break; } raw.push_back((char)c); }
             text = macroman_to_utf8(raw);
         }
+        // Control state: for control-type items the item's leading 4-byte field is the live
+        // ControlHandle. Deref -> ControlRecord; read hilite/value + contrlRect (self-check vs the
+        // item rect). All reads guarded; a wrong/nil handle just yields no control fields.
+        bool isCtrl = (type == 4 || type == 5 || type == 6 || type == 7);
+        bool haveCtrl = false; int cval = 0, chil = 0; int crl = 0, crt = 0, crr = 0, crb = 0;
+        if (isCtrl) {
+            uint32 ch = ReadMacInt32(p);                  // ControlHandle (item leading field)
+            if (ch && guest_ptr_ok(ch)) {
+                uint32 cr = ReadMacInt32(ch);             // -> ControlRecord
+                if (cr && guest_ptr_ok(cr) && guest_ptr_ok(cr + 0x18)) {
+                    crt = (int16)ReadMacInt16(cr + 0x08); crl = (int16)ReadMacInt16(cr + 0x0A);
+                    crb = (int16)ReadMacInt16(cr + 0x0C); crr = (int16)ReadMacInt16(cr + 0x0E);
+                    chil = Mac2HostAddr(cr)[0x11];        // contrlHilite (byte)
+                    cval = (int16)ReadMacInt16(cr + 0x12);// contrlValue
+                    haveCtrl = true;
+                }
+            }
+        }
+        bool hasParams = (text.find("^0") != std::string::npos || text.find("^1") != std::string::npos
+                       || text.find("^2") != std::string::npos || text.find("^3") != std::string::npos);
         if (i) j += ",";
         char b[256];
         snprintf(b, sizeof(b),
@@ -125,11 +172,86 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
             (i + 1 == defItem) ? ",\"default\":true" : "");
         j += b;
         if (isTextItem) { j += ",\"text\":\""; j += json_escape(text); j += "\""; }
+        if (haveCtrl) {
+            char c[160];
+            snprintf(c, sizeof(c),
+                ",\"value\":%d,\"hilite\":%d,\"crect\":{\"left\":%d,\"top\":%d,\"right\":%d,\"bottom\":%d}",
+                cval, chil, crl + ox, crt + oy, crr + ox, crb + oy);   // crect globalized like rect
+            j += c;
+        }
+        if (hasParams) j += ",\"hasParams\":true";
         j += "}";
         uint32 adv = 14 + dlen + (dlen & 1);              // 14-byte header is even; pad dlen to even
         p += adv;
     }
     j += "]";
+}
+
+// Walk the live menu bar (MenuList $0A1C) and append a "menuBar" JSON object. Read-only; every deref
+// guarded. Handle-anchoring: a menu whose MenuInfo/title looks wild stops the walk (a wrong stride
+// surfaces as a bad deref, not garbage output). cmd-keys are the inline cmdChar trailer byte.
+static void serialize_menu_bar(std::string &j) {
+    uint16 mbarHeight = ReadMacInt16(0x0BAA);
+    j += "\"menuBar\":{";
+    char hb[48]; snprintf(hb, sizeof(hb), "\"height\":%u,\"menus\":[", mbarHeight); j += hb;
+    uint32 listH = ReadMacInt32(0x0A1C);
+    if (!listH || !guest_ptr_ok(listH)) { j += "]}"; return; }
+    uint32 lp = ReadMacInt32(listH);
+    if (!lp || !guest_ptr_ok(lp)) { j += "]}"; return; }
+    uint16 lastMenu = ReadMacInt16(lp);                 // = numMenus * 6
+    if (lastMenu == 0 || (lastMenu % 6) != 0) { j += "]}"; return; }
+    int numMenus = lastMenu / 6;
+    if (numMenus > 64) { j += "]}"; return; }
+    int emitted = 0;
+    for (int i = 0; i < numMenus; i++) {
+        uint32 entry = lp + 6 + i * 6;
+        if (!guest_ptr_ok(entry + 6)) break;
+        uint32 mh = ReadMacInt32(entry);                // MenuHandle
+        if (!mh || !guest_ptr_ok(mh)) break;            // handle-anchoring: bad -> stop
+        uint32 mi = ReadMacInt32(mh);                   // -> MenuInfo
+        if (!mi || !guest_ptr_ok(mi + 0x0E)) break;
+        int16 menuID = (int16)ReadMacInt16(mi);
+        int32 enableFlags = (int32)ReadMacInt32(mi + 0x0A);
+        uint8 *tp = Mac2HostAddr(mi + 0x0E);
+        int titleLen = tp[0];
+        if (titleLen > 63 || !guest_range_ok(mi + 0x0F + titleLen)) break;   // anchoring sanity (end-of-title byte may be odd)
+        bool isApple = (titleLen == 1 && tp[1] == 0x14);
+        std::string title;
+        { std::string raw((const char *)tp + 1, titleLen);
+          title = isApple ? std::string("\xef\xa3\xbf") /*U+F8FF*/ : macroman_to_utf8(raw); }
+        if (emitted++) j += ",";
+        char mb[160];
+        snprintf(mb, sizeof(mb), "{\"id\":%d,\"enabled\":%s%s,\"title\":\"",
+                 menuID, (enableFlags & 1) ? "true" : "false",
+                 isApple ? ",\"role\":\"apple\"" : "");
+        j += mb; j += json_escape(title); j += "\",\"items\":[";
+        uint32 p = mi + 0x0F + titleLen;
+        int k = 0;
+        while (true) {
+            if (!guest_range_ok(p + 1)) break;          // item length byte (extent end may be odd)
+            int ilen = Mac2HostAddr(p)[0];
+            if (ilen == 0) break;                       // zero-length item = end of menu
+            if (ilen > 63 || !guest_range_ok(p + 1 + ilen + 4)) break;   // item text + 4-byte trailer in RAM
+            k++;
+            uint8 *ip = Mac2HostAddr(p + 1);
+            std::string itext = macroman_to_utf8(std::string((const char *)ip, ilen));
+            uint8 *tr = Mac2HostAddr(p + 1 + ilen);     // 4-byte trailer
+            uint8 cmdChar = tr[1], markChar = tr[2];
+            bool itemEnabled = (k <= 31) ? ((enableFlags & (1 << k)) != 0) : true;
+            if (k > 1) j += ",";
+            char ib[96];
+            snprintf(ib, sizeof(ib), "{\"index\":%d,\"enabled\":%s,\"text\":\"",
+                     k, itemEnabled ? "true" : "false");
+            j += ib; j += json_escape(itext); j += "\"";
+            if (cmdChar > 0x20) { char c[24]; snprintf(c, sizeof(c), ",\"cmdKey\":\"%c\"", (char)cmdChar); j += c; }
+            else if (cmdChar == 0x1B) { char c[32]; snprintf(c, sizeof(c), ",\"submenu\":%d", (int)markChar); j += c; }
+            j += "}";
+            p += 1 + ilen + 4;
+            if (k > 255) break;
+        }
+        j += "]}";
+    }
+    j += "]}";
 }
 
 // Serialize the window list (Backend A) to JSON. nonce is the request nonce echoed into output.
@@ -147,14 +269,20 @@ static std::string serialize_snapshot(const std::string &nonce) {
         json_escape(nonce).c_str(), ticks, sv_maj, sv_min, sv_bug);
     j += hdr;
 
-    // screen from CrsrPin (Rect). depth filled in Plan 2.
+    // screen from CrsrPin (Rect) + real depth from main GDevice.
+    int screenW = 0, screenH = 0;
     {
         int16 t = (int16)ReadMacInt16(kCrsrPin + 0), l = (int16)ReadMacInt16(kCrsrPin + 2);
         int16 b = (int16)ReadMacInt16(kCrsrPin + 4), rt = (int16)ReadMacInt16(kCrsrPin + 6);
+        screenW = rt - l;
+        screenH = b - t;
+        int depth = read_screen_depth();
         char sc[96];
-        snprintf(sc, sizeof(sc), "\"screen\":{\"width\":%d,\"height\":%d,\"depth\":0},", rt - l, b - t);
+        snprintf(sc, sizeof(sc), "\"screen\":{\"width\":%d,\"height\":%d,\"depth\":%d},", screenW, screenH, depth);
         j += sc;
     }
+    serialize_menu_bar(j);
+    j += ",";
 
     // Walk the window list, building per-window JSON into windows_json.
     // modalActive and frontWindowIndex are determined during the walk.
@@ -195,6 +323,14 @@ static std::string serialize_snapshot(const std::string &nonce) {
         Rect16 cb = region_bbox(ReadMacInt32(win + kWinCont));
         bool suspect = !sb.ok || !cb.ok || !tvalid;
 
+        // Geometry-based desktop detection: a non-dialog window whose bounds span essentially the
+        // full screen (within a small tolerance). The Finder desktop window always occupies the
+        // entire screen below the menu bar. This is v1 heuristic — good enough for a backdrop tag.
+        const Rect16 &boundsRef = cb.ok ? cb : sb;
+        bool isDesktop = !isDialog && screenW > 0 && screenH > 0
+                      && boundsRef.left <= 0 && boundsRef.top <= 40
+                      && boundsRef.right >= screenW - 1 && boundsRef.bottom >= screenH - 1;
+
         if (idx) windows_json += ",";
         char w[256];
         snprintf(w, sizeof(w),
@@ -210,6 +346,7 @@ static std::string serialize_snapshot(const std::string &nonce) {
         append_rect(windows_json, "contentBounds", cb.ok ? cb : sb);
         windows_json += ",";
         append_rect(windows_json, "structBounds", sb.ok ? sb : cb);
+        if (isDesktop) windows_json += ",\"role\":\"desktop\"";
         if (suspect) windows_json += ",\"suspect\":true";
         if (isDialog) {
             int32 refcon = (int32)ReadMacInt32(win + kWinRefCon);

@@ -36,6 +36,68 @@ class Rect:
                     or o.top >= self.bottom or o.bottom <= self.top)
 
 
+class Item:
+    def __init__(self, d: dict):
+        self.index: int = d["index"]
+        self.type: str = d.get("type", "")
+        self.rect = Rect.from_json(d["rect"])
+        self.text: str = d.get("text", "")
+        self.enabled: bool = d.get("enabled", True)
+        self.is_default: bool = d.get("default", False)
+        self.value = d.get("value")          # None unless a control
+        self.hilite = d.get("hilite")        # None unless a control; 255 = dimmed
+        self.has_params = d.get("hasParams", False)
+        self.crect = Rect.from_json(d["crect"]) if "crect" in d else None   # ControlRecord rect (self-check)
+
+    def __repr__(self):
+        r = self.rect
+        return f"Item[{self.index}] {self.type} {self.text!r} ({r.left},{r.top},{r.right},{r.bottom})"
+
+    @property
+    def checked(self) -> bool:
+        """True if this is a checkbox/radio that is on (value != 0)."""
+        return self.type in ("checkbox", "radio") and bool(self.value)
+
+    @property
+    def dimmed(self) -> bool:
+        """True if the control is drawn inactive/dimmed (contrlHilite == 255)."""
+        return self.hilite == 255
+
+
+class MenuItem:
+    def __init__(self, d: dict):
+        self.index: int = d["index"]
+        self.text: str = d.get("text", "")
+        self.enabled: bool = d.get("enabled", True)
+        self.cmd_key = d.get("cmdKey")        # e.g. "O" for Cmd-O; None if no key
+        self.submenu = d.get("submenu")       # submenu menu id, or None
+
+    def __repr__(self):
+        k = f" Cmd-{self.cmd_key}" if self.cmd_key else ""
+        return f"MenuItem[{self.index}] {self.text!r}{k}{'' if self.enabled else ' (disabled)'}"
+
+
+class Menu:
+    def __init__(self, d: dict):
+        self.id = d.get("id")
+        self.title: str = d.get("title", "")
+        self.enabled: bool = d.get("enabled", True)
+        self.role = d.get("role")
+        self.items = [MenuItem(it) for it in d.get("items", [])]
+
+
+class MenuBar:
+    def __init__(self, d: dict):
+        self.height = d.get("height")
+        self.menus = [Menu(m) for m in d.get("menus", [])]
+
+    def menu(self, title: str):
+        for m in self.menus:
+            if m.title == title:
+                return m
+        return None
+
+
 class Window:
     def __init__(self, d: dict):
         self._d = d
@@ -49,6 +111,10 @@ class Window:
         self.content_bounds = Rect.from_json(d["contentBounds"])
         self.struct_bounds = Rect.from_json(d["structBounds"])
         self.suspect: bool = d.get("suspect", False)
+        self.items = [Item(it) for it in d.get("items", [])]
+        self.ref_con = d.get("refCon")
+        self.default_item = d.get("defaultItem")
+        self.role: Optional[str] = d.get("role")  # e.g. "desktop" for the Finder backdrop; None for normal windows
 
     def __repr__(self):
         cb = self.content_bounds
@@ -67,10 +133,16 @@ class Snapshot:
         self.modal_active: bool = data.get("modalActive", False)
         self.front_index: int = data.get("frontWindowIndex", -1)
         self.windows: list[Window] = [Window(w) for w in data.get("windows", [])]
+        self.menu_bar = MenuBar(data["menuBar"]) if "menuBar" in data else None
 
     def __repr__(self):
         return (f"Snapshot(backend={self.backend} windows={len(self.windows)} "
                 f"modal={self.modal_active} front={self.front_index})")
+
+    @property
+    def screen_depth(self) -> int:
+        """Pixel depth of the main screen (e.g. 8, 16, 32), or 0 if unknown."""
+        return (self.raw.get("screen") or {}).get("depth", 0)
 
     def front_window(self) -> Optional[Window]:
         if 0 <= self.front_index < len(self.windows):
@@ -190,6 +262,48 @@ def assert_window(snap: "Snapshot", *, title=None, title_contains=None, window_c
         raise AssertionError(f"no window matching title={title!r} title_contains={title_contains!r} "
                              f"window_class={window_class!r}; on screen: {present}")
     return matches[0]
+
+
+def find_item(win: "Window", *, text=None, text_contains=None, type=None, default=None) -> "Item":
+    """Return the single matching dialog item, or raise AssertionError listing the items present."""
+    out = []
+    for it in win.items:
+        if text is not None and it.text != text: continue
+        if text_contains is not None and text_contains not in it.text: continue
+        if type is not None and it.type != type: continue
+        if default is not None and it.is_default != default: continue
+        out.append(it)
+    if not out:
+        raise AssertionError(f"no item text={text!r} text_contains={text_contains!r} type={type!r} "
+                             f"in {win.title!r}; items: {[(i.type, i.text) for i in win.items]}")
+    return out[0]
+
+
+def find_menu_item(snap: "Snapshot", text: str, *, menu=None) -> "MenuItem":
+    """Find a menu item by exact text (optionally within a named menu). Raises if not found.
+    Use `it.cmd_key` to fire it via a Cmd-key combo over VNC."""
+    if snap.menu_bar is None:
+        raise AssertionError("no menu bar in snapshot")
+    for m in snap.menu_bar.menus:
+        if menu is not None and m.title != menu:
+            continue
+        for it in m.items:
+            if it.text == text:
+                return it
+    raise AssertionError(f"no menu item {text!r}" + (f" in menu {menu!r}" if menu else "")
+                         + f"; menus: {[m.title for m in snap.menu_bar.menus]}")
+
+
+def click_item(vnc, snap: "Snapshot", win: "Window", **criteria) -> tuple[int, int]:
+    """Click the center of the matching dialog item over VNC. Refuses if the dialog isn't clickable
+    (occluded/collapsed/behind a modal) or the item is disabled."""
+    if not snap.clickable(win):
+        raise AssertionError(f"dialog {win.title!r} not clickable right now")
+    it = find_item(win, **criteria)
+    if not it.enabled:
+        raise AssertionError(f"item {it.text!r} is disabled")
+    vnc.click(*it.rect.center)
+    return it.rect.center
 
 
 def click_window(vnc, snap: "Snapshot", win: "Window") -> tuple[int, int]:

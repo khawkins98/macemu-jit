@@ -31,11 +31,16 @@ def main() -> int:
         # Writable disk boot: copy the pristine master per run (instant APFS clonefile) so the
         # master is never dirtied. Used for the benchmark medium (Mac OS 9 + Speedometer).
         run_disk = disk.copy_pristine(Path(assets.disk), work)
+        apps_line = ""
+        if assets.appsdisk:
+            apps_copy = disk.copy_pristine(Path(assets.appsdisk), work)
+            apps_line = disk.appsdisk_line(str(apps_copy))
         prefs = disk.render_prefs(
             HERE / "config" / "test.prefs.template",
             work / "test.prefs",
             rom=assets.rom,
             disk=str(run_disk),
+            appsdisk_line=apps_line,
             vncport=VNCPORT,
         )
     else:

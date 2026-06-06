@@ -61,6 +61,23 @@ def run_lifecycle(
             wins = ", ".join(f"[{w.index}]{w.title!r}({w.window_class})" for w in snap.windows) or "(none)"
             print(f"  [ui] desktop snapshot: {len(snap.windows)} windows, modal={snap.modal_active}: {wins}",
                   flush=True)
+            # The Finder installs File/Edit/View incrementally after the desktop settles, so poll a
+            # few seconds for the full menu bar before the self-check (non-fatal).
+            mb = snap.menu_bar
+            deadline = time.monotonic() + 20.0
+            while (mb is None or mb.menu("File") is None) and time.monotonic() < deadline:
+                time.sleep(1.0)
+                try:
+                    mb = uidump.snapshot(dump_dir, timeout=8.0).menu_bar
+                except TimeoutError:
+                    pass  # emulator briefly non-idle; keep polling
+            if mb is not None:
+                titles = [m.title for m in mb.menus]
+                fm = mb.menu("File")
+                fkeys = {it.text: it.cmd_key for it in fm.items if it.cmd_key} if fm else {}
+                file_ok = (len(titles) >= 3 and titles[1] == "File" and titles[2] == "Edit")
+                print(f"  [ui] menu bar: {len(mb.menus)} menus {titles} | File/Edit_ok={file_ok} "
+                      f"File keys={fkeys}", flush=True)
         except Exception as e:
             print(f"  [ui] snapshot unavailable (non-fatal): {e}", flush=True)
 
@@ -209,6 +226,30 @@ def run_benchmark(
             return BenchResult(False, "choose-disk dialog did not appear after Cmd+A",
                                runner.log_text())
         timings["choose"] = t
+
+        # [Plan 2a] Live verification + de-facto dialog identity: log the choose-disk dialog's DITL
+        # items. Non-fatal — a hiccup here must not fail the benchmark.
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=8.0)
+            dlg = snap.front_dialog()
+            if dlg is not None:
+                def _fmt(it):
+                    s = f"{it.type}:{it.text!r}@({it.rect.left},{it.rect.top})"
+                    if it.value is not None:
+                        ok = (it.crect is not None
+                              and it.crect.left == it.rect.left and it.crect.top == it.rect.top
+                              and it.crect.right == it.rect.right and it.crect.bottom == it.rect.bottom)
+                        s += f" val={it.value} hil={it.hilite} crect_ok={ok}"
+                    return s
+                items = ", ".join(_fmt(it) for it in dlg.items) or "(none)"
+                print(f"  [ui] choose-disk dialog: refCon={dlg.ref_con} default={dlg.default_item} "
+                      f"{len(dlg.items)} items: {items}", flush=True)
+            else:
+                _fw = snap.front_window()
+                _ft = _fw.title if _fw is not None else None
+                print(f"  [ui] choose-disk: front is not a dialog (front={_ft!r})", flush=True)
+        except Exception as e:
+            print(f"  [ui] dialog snapshot unavailable (non-fatal): {e}", flush=True)
 
         since = _nlines(runner)
         vnc.key("enter")                         # OK = the main Desktop disk -> benchmark runs

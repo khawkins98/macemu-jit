@@ -171,6 +171,12 @@ static bool did_add_event_watch = false;
 
 static bool mouse_grabbed = false;
 
+// SS_INPUT_LOCKOUT: when set (non-empty, non-"0"), the SDL3 window ignores all host
+// mouse + keyboard input and never grabs/captures the cursor.  VNC-injected events
+// (tagged with VNC_SYNTHETIC_INPUT_ID) still pass through so an automated VNC-driven
+// test cannot be disturbed by the host.  SDL2 parity is a follow-up.
+static bool input_lockout = false;
+
 // Mutex to protect SDL events
 static SDL_Mutex *sdl_events_lock = NULL;
 #define LOCK_EVENTS SDL_LockMutex(sdl_events_lock)
@@ -1275,6 +1281,7 @@ static void update_mouse_grab()
 // Grab mouse, switch to relative mouse mode
 void driver_base::grab_mouse(void)
 {
+	if (input_lockout) return;		// never grab when SS_INPUT_LOCKOUT is set
 	if (!mouse_grabbed) {
 		mouse_grabbed = true;
 		update_mouse_grab();
@@ -1461,6 +1468,11 @@ bool VideoInit(bool classic)
 	mouse_wheel_reverse = mouse_wheel_lines < 0;
 	if (mouse_wheel_reverse) mouse_wheel_lines = -mouse_wheel_lines;
 	VNCServerInitFromPrefs();		// start the VNC server if vncserver=true (mirrors video_sdl2.cpp)
+
+	// SS_INPUT_LOCKOUT: ignore all host mouse/keyboard; VNC-injected events still pass.
+	{ const char *e = getenv("SS_INPUT_LOCKOUT"); input_lockout = (e && e[0] && e[0] != '0'); }
+	if (input_lockout)
+		fprintf(stderr, "[input] SS_INPUT_LOCKOUT: host mouse/keyboard ignored — VNC-only control.\n");
 
 	// Get screen mode from preferences
 	migrate_screen_prefs();
@@ -2319,6 +2331,32 @@ enum {
 // added to SDL's event queue (and retrieve-able via SDL_PeepEvents(), etc.)
 static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 {
+	// Host-input lockout: drop all non-VNC mouse/keyboard events so an automated
+	// VNC-driven test cannot be disturbed by physical host input.  VNC events are
+	// tagged with VNC_SYNTHETIC_INPUT_ID in the `which` field and fall through.
+	if (input_lockout) {
+		switch (event->type) {
+			case SDL_EVENT_MOUSE_MOTION:
+				if (event->motion.which != VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+			case SDL_EVENT_MOUSE_BUTTON_DOWN:
+			case SDL_EVENT_MOUSE_BUTTON_UP:
+				if (event->button.which != VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+			case SDL_EVENT_MOUSE_WHEEL:
+				if (event->wheel.which != VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+			case SDL_EVENT_KEY_DOWN:
+			case SDL_EVENT_KEY_UP:
+				if (event->key.which != (SDL_KeyboardID)VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+		}
+	}
+
 	switch (event->type) {
 		case SDL_EVENT_KEY_UP: {
 			SDL_KeyboardEvent const &key = event->key;
@@ -2337,7 +2375,7 @@ static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 			return EVENT_DROP_FROM_QUEUE;
 			break;
 	}
-	
+
 	return EVENT_ADD_TO_QUEUE;
 }
 

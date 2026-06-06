@@ -6,9 +6,37 @@ mod vm;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 use vm::{CreateVmRequest, VmProfile};
+
+#[derive(Default, Clone, serde::Serialize)]
+pub struct VmLiveStats {
+    pub timestamp: String,
+    pub blocks: String,
+    pub rate: String,
+    pub compiled: String,
+    pub jnk: String,
+    pub jdr: String,
+    pub jram: String,
+    pub j2i: String,
+    pub rss: String,
+    pub cpu: String,
+    pub warnings: String,
+}
+
+#[derive(Default, Clone, serde::Serialize)]
+pub struct VmSignal {
+    pub kind: String,
+    pub payload: String,
+}
+
+#[derive(Default, Clone, serde::Serialize)]
+pub struct VmInspectorState {
+    pub stats: VmLiveStats,
+    pub signals: Vec<VmSignal>,
+    pub log_tail: Vec<String>,
+}
 
 struct RunningVm {
     child: Child,
@@ -17,6 +45,7 @@ struct RunningVm {
 
 struct AppState {
     running: Mutex<HashMap<String, RunningVm>>,
+    inspector: Arc<Mutex<HashMap<String, VmInspectorState>>>,
 }
 
 #[tauri::command]
@@ -184,10 +213,11 @@ fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, Stri
             .unwrap_or(5900)
     };
 
-    // Spawn a thread to parse stderr for boot signals and OS version
+    // Spawn a thread to parse stderr for boot signals, OS version, and inspector stats
     let stderr = child.stderr.take();
     let vm_id = id.clone();
     let vm_dir_clone = vm_dir.clone();
+    let inspector = Arc::clone(&state.inspector);
     if let Some(stderr) = stderr {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
@@ -236,9 +266,61 @@ fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, Stri
                         }
                     }
                     // Detect boot-ready signal
-                    // Format: [BOOT] idle frontApp='Finder' modal=0
                     if line.contains("[BOOT]") && line.contains("frontApp='Finder'") {
                         let _ = vm::update_last_booted(&vm_id);
+                    }
+
+                    // Inspector: parse heartbeat + signals into live state
+                    if let Ok(mut map) = inspector.lock() {
+                        let state = map.entry(vm_id.clone()).or_default();
+
+                        // Keep last 200 log lines
+                        state.log_tail.push(line.clone());
+                        if state.log_tail.len() > 200 {
+                            state.log_tail.remove(0);
+                        }
+
+                        // Parse [HB] heartbeat
+                        if line.starts_with("[HB ") {
+                            let mut stats = VmLiveStats::default();
+                            // [HB 10.0s] blocks=1.2M (0.5M/s) comp=847 | jNK=... | rss=... cpu=...
+                            if let Some(ts) = line.get(4..line.find(']').unwrap_or(4)) {
+                                stats.timestamp = ts.trim().to_string();
+                            }
+                            for part in line.split_whitespace() {
+                                if let Some(v) = part.strip_prefix("blocks=") { stats.blocks = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("comp=") { stats.compiled = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("jNK=") { stats.jnk = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("jDR=") { stats.jdr = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("jRAM=") { stats.jram = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("j2i=") { stats.j2i = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("rss=") { stats.rss = v.to_string(); }
+                                if let Some(v) = part.strip_prefix("cpu=") { stats.cpu = v.to_string(); }
+                            }
+                            if let Some(r) = line.find("M/s)") {
+                                if let Some(s) = line[..r].rfind('(') {
+                                    stats.rate = line[s+1..r].to_string() + "M/s";
+                                }
+                            }
+                            if let Some(w) = line.find("[WARN:").or(line.find("[SUSPECT:")) {
+                                stats.warnings = line[w..].to_string();
+                            }
+                            state.stats = stats;
+                        }
+
+                        // Parse signals: [BOOT], [SYSV], [APP], [READY], [STALL], [WARN]
+                        for tag in &["[BOOT]", "[SYSV]", "[APP]", "[READY]", "[STALL]", "[JIT"] {
+                            if line.contains(tag) {
+                                state.signals.push(VmSignal {
+                                    kind: tag.trim_matches(&['[', ']'] as &[char]).to_string(),
+                                    payload: line.clone(),
+                                });
+                                if state.signals.len() > 100 {
+                                    state.signals.remove(0);
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -302,6 +384,134 @@ fn read_vm_log(id: String, log_name: String) -> Result<String, String> {
     let vm_dir = vm::vm_dir_for(&id);
     let log_path = vm_dir.join("logs").join(&log_name);
     std::fs::read_to_string(&log_path).map_err(|e| format!("Cannot read log: {}", e))
+}
+
+#[tauri::command]
+fn get_vm_inspector(id: String, state: State<AppState>) -> Result<VmInspectorState, String> {
+    let map = state.inspector.lock().map_err(|e| e.to_string())?;
+    Ok(map.get(&id).cloned().unwrap_or_default())
+}
+
+#[tauri::command]
+fn generate_bug_report(id: String, ui_screenshot_b64: Option<String>, state: State<AppState>) -> Result<String, String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let profile = vm::get_profile(&id)?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let report_dir = std::env::temp_dir().join(format!("siliconsheep-report-{}", ts));
+    std::fs::create_dir_all(&report_dir).map_err(|e| e.to_string())?;
+
+    // 1. VM profile (sanitized — remove absolute paths for privacy)
+    let profile_json = serde_json::to_string_pretty(&profile).unwrap_or_default();
+    std::fs::write(report_dir.join("vm-profile.json"), &profile_json).ok();
+
+    // 2. Prefs file
+    let prefs_path = vm_dir.join("prefs");
+    if prefs_path.exists() {
+        std::fs::copy(&prefs_path, report_dir.join("prefs.txt")).ok();
+    }
+
+    // 3. Last run log
+    let last_log = vm_dir.join("last_run.log");
+    if last_log.exists() {
+        if let Ok(target) = std::fs::read_link(&last_log) {
+            std::fs::copy(&target, report_dir.join("last_run.log")).ok();
+        } else {
+            std::fs::copy(&last_log, report_dir.join("last_run.log")).ok();
+        }
+    }
+
+    // 4. Guest screenshot (from VNC if available)
+    let guest_screenshot = vm_dir.join("screenshot.png");
+    if guest_screenshot.exists() {
+        std::fs::copy(&guest_screenshot, report_dir.join("guest-screen.png")).ok();
+    }
+
+    // 5. UI screenshot (from frontend, base64 PNG)
+    if let Some(ref b64) = ui_screenshot_b64 {
+        if let Some(data) = b64.strip_prefix("data:image/png;base64,") {
+            if let Ok(bytes) = base64_decode(data) {
+                std::fs::write(report_dir.join("ui-screenshot.png"), &bytes).ok();
+            }
+        }
+    }
+
+    // 6. Inspector stats snapshot
+    if let Ok(map) = state.inspector.lock() {
+        if let Some(inspector) = map.get(&id) {
+            let json = serde_json::to_string_pretty(inspector).unwrap_or_default();
+            std::fs::write(report_dir.join("inspector-stats.json"), &json).ok();
+        }
+    }
+
+    // 7. Host environment info
+    let mut env_info = String::new();
+    env_info.push_str(&format!("SiliconSheep version: {}\n", env!("CARGO_PKG_VERSION")));
+    env_info.push_str(&format!("OS: {}\n", std::env::consts::OS));
+    env_info.push_str(&format!("Arch: {}\n", std::env::consts::ARCH));
+    if let Ok(output) = std::process::Command::new("sw_vers").output() {
+        env_info.push_str(&format!("macOS: {}", String::from_utf8_lossy(&output.stdout)));
+    }
+    if let Some(emu) = find_emulator_binary() {
+        env_info.push_str(&format!("Emulator: {}\n", emu));
+    }
+    std::fs::write(report_dir.join("environment.txt"), &env_info).ok();
+
+    // 8. Create zip
+    let zip_path = std::env::temp_dir().join(format!("siliconsheep-report-{}.zip", ts));
+    let zip_file = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default();
+
+    if let Ok(entries) = std::fs::read_dir(&report_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Ok(data) = std::fs::read(entry.path()) {
+                zip.start_file(&name, options).ok();
+                use std::io::Write;
+                zip.write_all(&data).ok();
+            }
+        }
+    }
+    zip.finish().map_err(|e| e.to_string())?;
+
+    // Cleanup temp dir
+    std::fs::remove_dir_all(&report_dir).ok();
+
+    Ok(zip_path.to_string_lossy().to_string())
+}
+
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    const TABLE: [u8; 128] = {
+        let mut t = [255u8; 128];
+        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut i = 0;
+        while i < 64 {
+            t[chars[i] as usize] = i as u8;
+            i += 1;
+        }
+        t
+    };
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let bytes: Vec<u8> = input.bytes().filter(|&b| b != b'\n' && b != b'\r' && b != b' ').collect();
+    for chunk in bytes.chunks(4) {
+        if chunk.len() < 2 { break; }
+        let a = TABLE.get(chunk[0] as usize).copied().unwrap_or(0);
+        let b = TABLE.get(chunk[1] as usize).copied().unwrap_or(0);
+        out.push((a << 2) | (b >> 4));
+        if chunk.len() > 2 && chunk[2] != b'=' {
+            let c = TABLE.get(chunk[2] as usize).copied().unwrap_or(0);
+            out.push((b << 4) | (c >> 2));
+            if chunk.len() > 3 && chunk[3] != b'=' {
+                let d = TABLE.get(chunk[3] as usize).copied().unwrap_or(0);
+                out.push((c << 6) | d);
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn find_capture_script() -> Option<std::path::PathBuf> {
@@ -497,6 +707,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             running: Mutex::new(HashMap::new()),
+            inspector: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             list_vms,
@@ -517,6 +728,8 @@ fn main() {
             check_emulator_status,
             import_from_prefs,
             get_vm_screenshot,
+            get_vm_inspector,
+            generate_bug_report,
             capture_vm_screenshot,
             list_vm_logs,
             read_vm_log,

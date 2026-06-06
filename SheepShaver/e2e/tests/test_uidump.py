@@ -101,3 +101,66 @@ def test_click_window_clickable_and_blocked():
     import pytest
     with pytest.raises(AssertionError):
         uidump.click_window(vnc, snap, snap.windows[1])   # behind modal -> blocked
+
+
+def test_dialog_items_parse():
+    snap = _load()
+    dlg = snap.windows[0]
+    assert len(dlg.items) == 5
+    assert dlg.items[0].type == "button" and dlg.items[0].text == "Save" and dlg.items[0].is_default
+    assert dlg.default_item == 1
+    assert snap.windows[1].items == []          # non-dialog window has no items
+
+
+def test_find_and_click_item():
+    snap = _load()
+    vnc = _FakeVnc()
+    pt = uidump.click_item(vnc, snap, snap.windows[0], text="Don't Save")
+    assert pt == (510, 430) and vnc.clicks == [(510, 430)]   # center of (420,420,600,440)
+    import pytest
+    with pytest.raises(AssertionError):
+        uidump.find_item(snap.windows[0], text="Nonexistent")
+    with pytest.raises(AssertionError):
+        uidump.click_item(vnc, snap, snap.windows[0], text="Save changes?")  # disabled item
+
+
+def test_control_value_and_checked():
+    snap = _load()
+    dlg = snap.windows[0]
+    cb = uidump.find_item(dlg, type="checkbox")
+    assert cb.value == 1 and cb.hilite == 0 and cb.checked is True and cb.dimmed is False
+    assert cb.crect is not None and cb.crect.left == cb.rect.left   # crect parsed
+    btn = uidump.find_item(dlg, text="Don't Save")
+    assert btn.value is None and btn.checked is False               # non-control -> no value
+
+
+def test_has_params_flag():
+    snap = _load()
+    txt = uidump.find_item(snap.windows[0], text_contains="Save changes to")
+    assert txt.has_params is True
+
+
+def test_screen_depth_and_role():
+    snap = _load()
+    assert snap.screen_depth == 8
+    assert snap.windows[1].role == "desktop"
+    assert snap.windows[0].role is None
+
+
+def test_menu_bar_parse():
+    snap = _load()
+    mb = snap.menu_bar
+    assert mb is not None and len(mb.menus) == 3
+    file_menu = mb.menu("File")
+    assert file_menu.id == 129 and len(file_menu.items) == 3
+    assert mb.menus[0].role == "apple"
+
+
+def test_find_menu_item_cmdkey():
+    snap = _load()
+    it = uidump.find_menu_item(snap, "Open")
+    assert it.cmd_key == "O" and it.enabled is True
+    assert uidump.find_menu_item(snap, "Print").cmd_key is None
+    import pytest
+    with pytest.raises(AssertionError):
+        uidump.find_menu_item(snap, "Nonexistent Command")

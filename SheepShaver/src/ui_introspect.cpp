@@ -178,6 +178,15 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
     j += "]";
 }
 
+// Is the guest BYTE at `a` inside mapped Mac RAM? Range-only (no even-alignment requirement):
+// unlike guest_ptr_ok, this is for the END of an in-RAM extent (a title/item string's last byte),
+// which legitimately lands on an ODD address. Those bytes are read via Mac2HostAddr, never deref'd
+// as a pointer, so alignment is irrelevant — and requiring it wrongly rejected odd extents.
+static inline bool guest_range_ok(uint32 a)
+{
+    return a >= 0x100 && a < RAMBase + RAMSize;
+}
+
 // Walk the live menu bar (MenuList $0A1C) and append a "menuBar" JSON object. Read-only; every deref
 // guarded. Handle-anchoring: a menu whose MenuInfo/title looks wild stops the walk (a wrong stride
 // surfaces as a bad deref, not garbage output). cmd-keys are the inline cmdChar trailer byte.
@@ -205,7 +214,7 @@ static void serialize_menu_bar(std::string &j) {
         int32 enableFlags = (int32)ReadMacInt32(mi + 0x0A);
         uint8 *tp = Mac2HostAddr(mi + 0x0E);
         int titleLen = tp[0];
-        if (titleLen > 63 || !guest_ptr_ok(mi + 0x0F + titleLen)) break;   // anchoring sanity
+        if (titleLen > 63 || !guest_range_ok(mi + 0x0F + titleLen)) break;   // anchoring sanity (end-of-title byte may be odd)
         bool isApple = (titleLen == 1 && tp[1] == 0x14);
         std::string title;
         { std::string raw((const char *)tp + 1, titleLen);
@@ -219,10 +228,10 @@ static void serialize_menu_bar(std::string &j) {
         uint32 p = mi + 0x0F + titleLen;
         int k = 0;
         while (true) {
-            if (!guest_ptr_ok(p + 1)) break;
+            if (!guest_range_ok(p + 1)) break;          // item length byte (extent end may be odd)
             int ilen = Mac2HostAddr(p)[0];
             if (ilen == 0) break;                       // zero-length item = end of menu
-            if (ilen > 63 || !guest_ptr_ok(p + 1 + ilen + 4)) break;
+            if (ilen > 63 || !guest_range_ok(p + 1 + ilen + 4)) break;   // item text + 4-byte trailer in RAM
             k++;
             uint8 *ip = Mac2HostAddr(p + 1);
             std::string itext = macroman_to_utf8(std::string((const char *)ip, ilen));

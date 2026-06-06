@@ -11,6 +11,20 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver][e2e] Guest UI introspection — Plan 2c: menu bar + depth + desktop role
+
+The last app-automation enabler: a top-level `menuBar` (menus + items + **Command-key equivalents** +
+enabled + apple role) read by a research-backed, read-only `MenuList` ($0A1C) walk — **no Toolbox
+traps** (the idle-hook reentrancy the repo already avoids), robust via **handle-anchoring** (each
+entry must deref to a plausible `MenuInfo`, else stop). Offsets verified vs Carbon `Menus.h`
+(`SheepShaver/e2e/MENUBAR-READ-SPEC.md`). The harness can now discover "File ▸ Open ⌘O" and fire it by
+keystroke (`find_menu_item(snap, "Open").cmd_key`). Also: real `screen.depth` from the GDevice;
+`role:"desktop"` on the Finder backdrop window. **Live-verified**: 7 Finder menus
+(File/Edit/View/Special/Help…), File's New=N/Open=O/Close=W. A subtle bug fix along the way: extent-END
+bounds checks must use a range-only guard (`guest_range_ok`) — `guest_ptr_ok` requires even alignment,
+so odd-ended title/text/menu extents were spuriously rejected (this also hardens Plan 1/2a/2b reads).
+Commits 4ca2da4d, 8aeb9a2f, ecb0ec42, 706ce769, d2fa9602, e73eb6a6, 5026c2b6.
+
 ### [docs] Stress-workload catalog → living capability matrix (stretch goals + frontier metric)
 
 Extended `docs/MACOS9-STRESS-WORKLOADS.md` from a runnable-software list into a **capability matrix

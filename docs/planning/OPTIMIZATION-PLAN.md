@@ -716,7 +716,20 @@ patching a handful of bulk-data primitives.
 
 ## Measurement Plan
 
-### P0. Build the mix-aware execution profiler FIRST (prerequisite)
+### P0. Build the mix-aware execution profiler FIRST (prerequisite) — 🟡 BUILT (2026-06-06), boot-validation pending
+
+**Status:** implemented + gated behind **`SS_JIT_PROFILE`** (zero codegen/runtime cost when off —
+`make test-jit` 302/302 unchanged). When on, each block emits a 64-bit exec-count increment at its
+**chain entry** (counts dispatched *and* chained entries); a pc-keyed slot table accumulates the
+count + a compile-time **instruction-mix tag** (integer-ALU / AltiVec / FP / load-store / branch);
+`ppc_jit_aarch64_exit()` dumps the **top-40 hottest blocks** (pc, exec, %, mix, insns, region
+ROM/DR/RAM) to stderr or to the path in `$SS_JIT_PROFILE`. Code: `ppc-jit.cpp` (`jit_prof_*`,
+`jit_mix_classify`, `jit_profile_dump`). **Validated without a boot** (E2E agent owns the emulator):
+the **rom-harness** activates it and produced a real hot-block dump with correct mix tags, and its
+differential Score is **identical on vs off (489/496)** — the counter codegen doesn't corrupt
+results. **Remaining:** (1) a real boot under `SS_JIT_PROFILE=1` for true exec-weighted hot data;
+(2) the chained-entry path is the same codegen but only the dispatched path is rom-harness-validated
+— confirm under boot; (3) routine attribution (hot PC → trap/NameRegistry name) — region tag only.
 
 The priorities below are currently estimated from *compile frequency* (how often a
 block is compiled), which is biased — a block compiled once but executed a million

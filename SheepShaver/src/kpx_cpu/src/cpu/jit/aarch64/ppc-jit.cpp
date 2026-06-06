@@ -299,6 +299,55 @@ static const struct jit_bc_entry *jit_bc_lookup(uint32_t pc) {
 	return NULL;
 }
 
+/* ---- P0 execution profiler (SS_JIT_PROFILE) --------------------------------
+ * Execution-WEIGHTED, instruction-mix-tagged hot-block profiler — answers "which
+ * blocks actually dominate execution" (vs the biased compile-frequency proxy).
+ * Gated behind SS_JIT_PROFILE: when off, zero codegen + zero runtime cost.
+ * When on, each compiled block emits a 64-bit counter increment at its chain
+ * entry (so BOTH dispatched and chained entries are counted); a pc-keyed slot
+ * table accumulates the count + a compile-time instruction-mix tag. Dumped
+ * top-N at ppc_jit_aarch64_exit(). See OPTIMIZATION-PLAN §P0. */
+enum { MIX_OTHER = 0, MIX_INT, MIX_ALTIVEC, MIX_FP, MIX_LOADSTORE, MIX_BRANCH };
+static const char *jit_mix_name(int m) {
+	switch (m) { case MIX_INT: return "integer-ALU"; case MIX_ALTIVEC: return "AltiVec";
+	             case MIX_FP: return "FP"; case MIX_LOADSTORE: return "load/store";
+	             case MIX_BRANCH: return "branch"; default: return "mixed"; }
+}
+/* classify a PPC instruction by primary opcode into a mix class */
+static int jit_mix_classify(uint32_t insn) {
+	uint32_t op = insn >> 26;
+	if (op == 4) return MIX_ALTIVEC;                       /* VX/VA-form AltiVec */
+	if (op == 59 || op == 63) return MIX_FP;               /* single/double FP arith */
+	if (op >= 48 && op <= 55) return MIX_FP;               /* lfs/lfd/stfs/stfd */
+	if (op >= 32 && op <= 47) return MIX_LOADSTORE;        /* lwz/stw/lbz/... */
+	if (op == 16 || op == 18 || op == 19) return MIX_BRANCH;
+	if (op == 31) {                                        /* X-form: load/store vs ALU */
+		uint32_t xo = (insn >> 1) & 0x3FF;
+		/* common load/store XOs (lwzx/stwx/lbzx/lvx/stvx/...) cluster with bit pattern;
+		 * approximate: indexed loads/stores have xo in these families */
+		if (xo==23||xo==55||xo==87||xo==119||xo==151||xo==183||xo==215||xo==247||
+		    xo==279||xo==311||xo==343||xo==375||xo==407||xo==439||xo==103||xo==231)
+			return MIX_LOADSTORE;
+		return MIX_INT;
+	}
+	return MIX_INT;
+}
+#define JIT_PROF_SLOTS 32768   /* power of two for masked open-addressing */
+struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insns; };
+static struct jit_prof_slot jit_prof_slots[JIT_PROF_SLOTS];
+static int  jit_prof_n = 0;
+static bool jit_profile_enabled = false;
+/* find-or-create the slot for `pc` (compile-time only, open-addressed by pc). */
+static struct jit_prof_slot *jit_prof_get(uint32_t pc) {
+	uint32_t h = (pc >> 2) & (JIT_PROF_SLOTS - 1);
+	for (int i = 0; i < JIT_PROF_SLOTS; i++) {
+		struct jit_prof_slot *s = &jit_prof_slots[(h + i) & (JIT_PROF_SLOTS - 1)];
+		if (s->pc == pc) return s;          /* existing (accumulate across recompiles) */
+		if (s->pc == 0) { s->pc = pc; jit_prof_n++; return s; }  /* empty (pc 0 = never a block) */
+	}
+	return NULL;                            /* table full — drop (logged at dump) */
+}
+
 static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, bool complete, int n_insns = 0) {
 	jit_bc_ensure_init();
 	/* Check if already exists */
@@ -4360,6 +4409,10 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 
 bool ppc_jit_aarch64_init(size_t cache_size_kb)
 {
+	{ const char *e = getenv("SS_JIT_PROFILE");
+	  jit_profile_enabled = (e && *e && strcmp(e, "0") != 0);
+	  if (jit_profile_enabled)
+	      fprintf(stderr, "[JIT] SS_JIT_PROFILE on — execution-weighted hot-block profile at exit\n"); }
 	jit_cache_size = cache_size_kb * 1024;
 	jit_cache_base = (uint8_t *)jit_cache_alloc(jit_cache_size);
 	if (!jit_cache_base) {
@@ -4384,8 +4437,54 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 	return true;
 }
 
+/* P0 profiler dump: top-N hottest blocks by execution count, with mix tag +
+ * region. Written to $SS_JIT_PROFILE (if a path) or stderr. Compile-time data is
+ * exact; the counts are the real per-block execution totals for the run. */
+static void jit_profile_dump(void)
+{
+	if (!jit_profile_enabled || jit_prof_n == 0) return;
+	/* collect non-empty slots */
+	int n = 0;
+	static int order[JIT_PROF_SLOTS];
+	for (int i = 0; i < JIT_PROF_SLOTS; i++)
+		if (jit_prof_slots[i].pc != 0) order[n++] = i;
+	/* partial selection sort for the top-N (n is small post-filter; keep it simple) */
+	int topN = n < 40 ? n : 40;
+	for (int a = 0; a < topN; a++) {
+		int best = a;
+		for (int b = a + 1; b < n; b++)
+			if (jit_prof_slots[order[b]].count > jit_prof_slots[order[best]].count) best = b;
+		int t = order[a]; order[a] = order[best]; order[best] = t;
+	}
+	uint64_t total = 0;
+	for (int i = 0; i < n; i++) total += jit_prof_slots[order[i]].count;
+	const char *path = getenv("SS_JIT_PROFILE");
+	FILE *f = (path && *path && strcmp(path, "1") != 0 && strcmp(path, "0") != 0)
+	          ? fopen(path, "w") : NULL;
+	FILE *out = f ? f : stderr;
+	fprintf(out, "\n[JIT-PROFILE] execution-weighted hot blocks "
+	        "(%d blocks profiled, %llu total block-executions):\n",
+	        jit_prof_n, (unsigned long long)total);
+	fprintf(out, "  %-10s %14s %6s  %-11s %5s  region\n", "pc", "exec", "pct", "mix", "insns");
+	for (int a = 0; a < topN; a++) {
+		struct jit_prof_slot *s = &jit_prof_slots[order[a]];
+		const char *region =
+		    (jit_rom_size && s->pc >= jit_rom_base && s->pc < jit_rom_base + jit_rom_size)
+		      ? ((s->pc >= jit_rom_base + 0x460000 && s->pc < jit_rom_base + 0x500000) ? "ROM/DR" : "ROM")
+		      : "RAM";
+		fprintf(out, "  %08x  %14llu %5.1f%%  %-11s %5u  %s\n",
+		        s->pc, (unsigned long long)s->count,
+		        total ? 100.0 * s->count / total : 0.0,
+		        jit_mix_name(s->mix), s->n_insns, region);
+	}
+	if (jit_prof_n >= JIT_PROF_SLOTS)
+		fprintf(out, "  [WARN: slot table full (%d) — some blocks dropped]\n", JIT_PROF_SLOTS);
+	if (f) { fclose(f); fprintf(stderr, "[JIT-PROFILE] written to %s\n", path); }
+}
+
 void ppc_jit_aarch64_exit(void)
 {
+	jit_profile_dump();
 	jit_report_misses();
 	if (jit_cache_base) {
 		jit_cache_free(jit_cache_base, jit_cache_size);
@@ -4712,6 +4811,23 @@ bool ppc_jit_aarch64_compile(
 	if (!in_dr_emulator)
 		emit_entry_spcflags_poll(pc);
 
+	/* P0 profiler: emit a per-block exec-count increment at the chain entry (after
+	 * the poll, so it counts blocks that actually run the body). Caught by both
+	 * dispatched and chained entries. RTMP0/RTMP1 are free here (pre-body, pre-RA).
+	 * Gated: nothing emitted unless SS_JIT_PROFILE is set. */
+	struct jit_prof_slot *prof_slot = NULL;
+	if (jit_profile_enabled) {
+		prof_slot = jit_prof_get(pc);
+		if (prof_slot) {
+			emit_load_imm64(RTMP0, (uint64_t)(uintptr_t)&prof_slot->count);
+			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1); /* LDR  X(RTMP1), [X(RTMP0)] */
+			emit32(0x91000400 | (RTMP1 << 5) | RTMP1); /* ADD  X(RTMP1), X(RTMP1), #1 */
+			emit32(0xF9000000 | (RTMP0 << 5) | RTMP1); /* STR  X(RTMP1), [X(RTMP0)] */
+		}
+	}
+	/* instruction-mix tally for the block's tag (compile-time, profiler only) */
+	int mix_cnt[6] = {0,0,0,0,0,0};
+
 	jit_blocks_attempted++;
 	uint32_t cur_pc = pc;
 	int n_compiled = 0;
@@ -4742,6 +4858,8 @@ bool ppc_jit_aarch64_compile(
 
 		uint32_t op = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
 		              ((uint32_t)p[2] << 8) | p[3];
+
+		if (jit_profile_enabled) mix_cnt[jit_mix_classify(op)]++;  /* P0 mix tally */
 
 		if (op == 0x4E800020) { /* blr — block terminator */
 			lazy_flush_cr0();
@@ -4918,6 +5036,17 @@ bool ppc_jit_aarch64_compile(
 	 * Contract: see AARCH64_JIT_RUNTIME_CONTRACT.md — block lifecycle. */
 	if (n_compiled > 0)
 		jit_bc_insert(pc, code_start, chain_entry_start, complete, n_compiled);
+
+	/* P0 profiler: finalize this block's mix tag (dominant non-branch class; a
+	 * block is "branch" only if branches outnumber real work). */
+	if (prof_slot) {
+		int dom = MIX_OTHER, best = -1;
+		for (int c = MIX_INT; c <= MIX_BRANCH; c++)
+			if (c != MIX_BRANCH && mix_cnt[c] > best) { best = mix_cnt[c]; dom = c; }
+		if (mix_cnt[MIX_BRANCH] > best) dom = MIX_BRANCH;
+		prof_slot->mix = (uint8_t)dom;
+		prof_slot->n_insns = (uint16_t)n_compiled;
+	}
 
 	out->chain_code = chain_entry_start;
 

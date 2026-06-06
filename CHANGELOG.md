@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] P0 execution-weighted hot-block profiler (`SS_JIT_PROFILE`) — Track B start
+
+First step of the performance pivot (OPTIMIZATION-PLAN §P0): a mix-aware, execution-weighted
+hot-block profiler so optimization priorities come from *what actually runs* rather than the biased
+compile-frequency proxy. Gated behind **`SS_JIT_PROFILE`** — zero codegen + runtime cost when off
+(`make test-jit` 302/302 unchanged). When on, each compiled block emits a 64-bit exec-count
+increment at its **chain entry** (counts dispatched *and* chained entries via RTMP0/RTMP1, free
+pre-body); a pc-keyed slot table accumulates the count + a compile-time **instruction-mix tag**
+(integer-ALU / AltiVec / FP / load-store / branch); at exit it dumps the **top-40 hottest blocks**
+(pc, exec, %, mix, insns, ROM/DR/RAM region) to stderr or the path in `$SS_JIT_PROFILE`. Implemented
+in `ppc-jit.cpp` (`jit_prof_*`/`jit_mix_classify`/`jit_profile_dump`). **Validated without a boot**
+(another agent owns the emulator): the rom-harness activates it and produced a real dump with correct
+mix tags, and its differential interp-vs-JIT Score is **identical on vs off (489/496)** — the counter
+codegen doesn't corrupt block results. Done on branch `p0-profiler` (git worktree). Remaining: a real
+boot run for true hot data + routine-name attribution. (Track B prereq; feeds the `jit-diff-sweep`
+perf-join — hot × microbench ns/insn.)
+
 ### [docs] Fold the "Developer Inspector" into SiliconSheep + correct DingusPPC license to GPL-3.0
 
 - **Folded the Snow-inspired build/debug "chrome" recommendation into the SiliconSheep plan** as a

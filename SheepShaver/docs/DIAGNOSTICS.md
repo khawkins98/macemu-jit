@@ -117,6 +117,7 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_JIT_ROM_SIZE=0xNNNNNN` | Limit the JIT-compiled ROM range — binary-search tool for isolating a bad ROM region. |
 | `SS_JIT_NO_CHAIN=1` | Disable block chaining at runtime (bisect chaining bugs without a rebuild). |
 | `SS_JIT_VERIFY=1` | Differential verify: re-run every JIT block through the interpreter and compare register state. **EXTREMELY SLOW**; reports the first divergences with block PC + opcodes. |
+| `SS_JIT_PROFILE=1` (or `=/path`) | Execution-weighted hot-block profiler (OPTIMIZATION-PLAN §P0): each block counts its executions + an instruction-mix tag; dumps the top-40 hottest blocks (pc/exec/%/mix/insns/region) at exit to stderr (or to `/path`). Zero cost when unset. |
 | `SS_JIT_DEBUG_PC=0xNNNNNNNN` | Per-PC debug output. |
 | `SS_JIT_WATCH_ADDR=dec,dec` | Guest-memory watchpoints (decimal, comma-separated). |
 | `SS_JIT_WATCH_STUB=1` | Software watchpoint on Mixed Mode switch-back stubs (`ppc-cpu.cpp`). |

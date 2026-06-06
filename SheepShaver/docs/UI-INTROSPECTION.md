@@ -1,6 +1,6 @@
 # Guest UI Introspection — Canonical Reference
 
-> **Status:** Plan 1 + Plan 2a (dialog items) shipped (2026-06-06) · **Track:** A5 (E2E harness) / Track C (Silicon Sheep)
+> **Status:** Plan 1 + Plan 2a (dialog items) + Plan 2b (control state) shipped (2026-06-06) · **Track:** A5 (E2E harness) / Track C (Silicon Sheep)
 > **Canonical reference for the shipped feature.** Design history and the full aspirational schema
 > live in `docs/superpowers/specs/2026-06-06-guest-ui-introspection-design.md`.
 
@@ -147,10 +147,17 @@ the DITL `itemDisable` bit is set), `text` (for button/checkbox/radio/static/edi
 `default:true` on the default item. Live-verified against the Speedometer choose-disk dialog (8 items,
 `OK`/`Cancel` titles, `refCon='sped'`). Consume via `Window.items` / `find_item` / `click_item`.
 
-**Not yet emitted (Plan 2b+):** `menuBar`, window `parts`, `dialogId` (numeric resource id — not
+**Control state (Plan 2b, shipped 2026-06-06):** control-type items (button/checkbox/radio/control)
+additionally emit `value` (checkbox/radio 0/1; popup current), `hilite` (0 = active, **255 = dimmed/
+disabled**), and `crect` (the `ControlRecord` rect, globalized — a self-check that equals `rect`).
+Text items containing `^0`–`^3` get `hasParams:true`. Consume via `Item.value`/`.hilite`/`.checked`
+(checkbox/radio on) / `.dimmed` (hilite==255) / `.has_params`. Live-verified (`crect_ok=True`, dimmed
+buttons reported `hil=255`).
+
+**Not yet emitted (Plan 2c+):** `menuBar`, window `parts`, `dialogId` (numeric resource id — not
 reliably stored in a live `DialogRecord`; use the item set + `refCon` for identity), `role:"desktop"`
-tag, `screen.depth` (GDevice), control state (`value`/`hilite`), `ParamText` `^0`–`^3` resolution in
-static text.
+tag, `screen.depth` (GDevice). `ParamText` `^0`–`^3` *resolution* (only flagged via `hasParams`;
+resolution is the Backend-B/Plan-3 calibration case). Popup choice-lists / list-box rows.
 
 ---
 
@@ -342,9 +349,9 @@ the spin-wait's exit — triggering the VBL-timer-starvation trap documented in 
 |------|--------|-------------|
 | **Plan 1** | Shipped (2026-06-06) | Window list: title, class, modality, bounds, active/visible, suspect. Signal-free file poll. Python `uidump.py`. |
 | **Plan 2a** | Shipped (2026-06-06) | Dialog **items**/DITL: type + globalized clickable rect + title/text + `enabled` (itemDisable) + `default`; window `refCon` + `defaultItem`. Python `Item`/`find_item`/`click_item`. Live-verified vs the choose-disk dialog. Also: harness gates use it (`assert_window`/`click_window`, the benchmark quit-to-Finder check). |
-| **Plan 2b** | Deferred | Control state (`value`/`hilite` from `ControlRecord`), `ParamText` `^0`–`^3` resolution, popup/list contents. |
-| **Plan 2c** | Deferred | Menu bar + items + `cmdChar`, window parts/hot-zones, `role:"desktop"` tag, `screen.depth` via GDevice. |
-| **Plan 3** | Deferred | Backend B (Toolbox-trap oracle via `Execute68kTrap`) + static recursion guard, `compare(A,B)` divergence report, `overlay(snapshot, png)` pixel spot-check, socket transport. |
+| **Plan 2b** | Shipped (2026-06-06) | Control state: `value`/`hilite`/`crect` (deref the item's `ControlHandle` → `ControlRecord`), `checked`/`dimmed` conveniences, `hasParams` flag on ParamText templates. Self-verified via `crect == rect` on the live dialog. |
+| **Plan 2c** | Deferred | Menu bar + items + `cmdChar`, window parts/hot-zones, `role:"desktop"` tag, `screen.depth` via GDevice, popup choice-lists / list rows. |
+| **Plan 3** | Deferred | Backend B (Toolbox-trap oracle via `Execute68kTrap`) + static recursion guard, `compare(A,B)` divergence report, `overlay(snapshot, png)` pixel spot-check, socket transport, **`ParamText` resolution** (the `DAStrings` layout is uncertain — Backend B's canonical calibration case). |
 
 `schemaVersion` stays `1` across all plans — additions are backward-compatible field additions.
 Feature-detect with `"menuBar" in snap.raw` rather than asserting on schema version.

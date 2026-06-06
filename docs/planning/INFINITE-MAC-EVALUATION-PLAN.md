@@ -75,6 +75,14 @@ whether AppleTalk exists at all.
 ## Adopt / defer / avoid (initial pass)
 
 ### Adopt now (low risk, high leverage)
+- **Hot disk/asset injection + software library** — ✅ **folded into the SiliconSheep plan**
+  (`DESKTOP_INTEGRATION_PLAN.md` Tier 2 → "Hot disk/CD insertion + software library"). Key validated
+  finding (2026-06-06, persistent.info write-up): Infinite Mac's runtime injection rides the **same
+  `extfs.cpp`** we have, plus a watched **Downloads/Uploads/Saved** folder convention; its disk
+  *streaming* (256 K content-addressed HTTP-range chunks, service worker, IndexedDB, Emscripten FS) is
+  **browser-only and does not transfer** — native macOS uses real files + APFS `clonefile` dedup and
+  skips the streaming layer. SheepShaver's `disk.cpp` already has the runtime mount machinery
+  (`DiskMountVolume`/`to_be_mounted`/`mount_mountable_volumes`), so true hot disk insertion is feasible.
 - Runtime action-queue patterns for file/media injection with explicit boundaries.
 - Better documentation of network mode capabilities/limits (mirroring their clear zone model).
 - Host setup ergonomics around environment bootstrap and data-pipeline staging.

@@ -234,6 +234,26 @@ benchmarks and the harness never touch.
 Photoshop, Bryce, KPT — FPU + AltiVec + QuickDraw + large memory. Classic
 PowerPC-emulation torture tests.
 
+### Documented emulator-breakers (historically multicore- and timing-fragile)
+
+From the community record ([emaculation #7159](https://www.emaculation.com/forum/viewtopic.php?t=7159)):
+specific titles crashed on **upstream** SheepShaver on multicore hosts that hadn't crashed before, and
+single-core affinity "fixed" them — i.e. they stress the exact host-thread/timing seams. They are
+*known to expose real bugs*, which makes them high-value regression workloads here:
+
+- **Royal Flush** (freeware pinball) — double-duty: it crashed on multicore *and* fails **speed
+  calibration** in both Basilisk II and SheepShaver (ball physics depend on correct elapsed-time
+  measurement). A pure **timing/interrupt-cadence** correctness probe — relevant to the VBL/decrementer
+  and idle-skipping work.
+- **The Dig** (LucasArts SCUMM adventure) — crashed almost immediately on multicore.
+- **A-Train** (simulation) — ran briefly, then crashed.
+
+Two distinct uses: (1) run them under `SS_JIT_VERIFY` on a **deliberately busy multicore Apple Silicon
+machine** as an empirical check of the "not multicore-sensitive" claim (see
+`SheepShaver/docs/CONCURRENCY-MODEL.md`); (2) Royal Flush specifically as a timing-correctness gate.
+Caveat: the original crashes were on the *upstream x86* build, not our AArch64 JIT — so stability here
+would *validate* our concurrency claim, and any crash is a real race to root-cause.
+
 ---
 
 ## Diagnostic / subsystem exercisers

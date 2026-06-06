@@ -223,6 +223,21 @@ this with new methods rather than inventing a new protocol.
   `disk`). ~2–3 days. See Implementation Notes §extfs.
 - [ ] **Live folder mount/unmount**: Hook `ExtFSInit()`/`ExtFSExit()` for hot-add/remove via
   UDS RPC.
+- [ ] **Hot disk/CD insertion + software library** *(Infinite-Mac-inspired, 2026-06-06)*: "insert a
+  disk into the running instance" and "pick software from a library." **The mount machinery already
+  exists** — `disk.cpp` has `DiskMountVolume`/`to_be_mounted` and `mount_mountable_volumes()` run from
+  `accRun` (the periodic mount path classic Mac OS uses for media insertion). So a UDS RPC
+  (`RPC_METHOD_INSERT_DISK <path>`) that adds an image to the mount list and flags `to_be_mounted`
+  should surface a new volume/CD in the *running* guest without restart — verify against the CD
+  media-change path. Pair with a **content-addressed image library** (curated `.dsk`/`.iso` set,
+  deduped via APFS `clonefile` so duplicates cost nothing) for a "software shelf" UI. For loose files,
+  reuse the ExtFS "drop folder" path above with Infinite Mac's **Downloads / Uploads / Saved** watched-
+  folder convention. *Transfers from Infinite Mac:* the runtime-injection model (it uses the **same
+  `extfs.cpp`** we have) + the watched-folder convention + content-addressed dedup. *Does **not**
+  transfer:* its browser plumbing (256 K HTTP-range chunks, service worker, IndexedDB, Emscripten FS) —
+  native macOS uses real files and APFS, so we skip the streaming layer entirely. Optional: a
+  `machfs`-based tool (as Infinite Mac uses) to build library images + preserve Finder metadata.
+  **Detail/source:** persistent.info Infinite Mac write-up; `INFINITE-MAC-EVALUATION-PLAN.md`.
 - [ ] **`utxt`/UT16 clipboard fix**: `clip_macosx64.mm` explicitly skips Unicode scrap types.
   Implement the UTF-16 ↔ Mac Roman converter. Mac OS 8.5+ supports `utxt` natively. Low-medium
   effort.

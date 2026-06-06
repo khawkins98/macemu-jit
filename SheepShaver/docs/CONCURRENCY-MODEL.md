@@ -62,6 +62,23 @@ The recurring claim is "the JIT is multicore-sensitive." For this fork it's fals
 If a *specific* build ever shows instability that pinning "fixes," treat that as a **bug to root-cause
 in our code**, not as confirmation of the folklore — and update this doc with the finding.
 
+### Provenance of the folklore — and how to falsify our claim empirically
+
+The "pin to one core" advice traces to threads like
+[emaculation #7159](https://www.emaculation.com/forum/viewtopic.php?t=7159): on an **Intel Core
+i5-2500 (Sandy Bridge), 32-bit Debian / Windows 7, Mac OS 7.5.3–9.0.4**, specific games crashed on
+multicore that hadn't before — **Royal Flush** (pinball), **The Dig**, **A-Train** — and single-core
+affinity fixed it. Note what that is: the **upstream x86 build** (the legacy dyngen/`kpx_cpu` JIT and
+the host-thread interactions of that era), **not** our hand-written AArch64 JIT. It's real evidence
+that *older builds had host-side races* — which is exactly why the lore exists — but it says nothing
+about this fork's code, which the audit above shows is cleanly synchronized.
+
+**Don't just assert it — test it.** Those three games are a ready-made **concurrency stress test**:
+run them on our fork on a deliberately busy multicore Apple Silicon machine (and under
+`SS_JIT_VERIFY`). If they're stable, that's empirical confirmation beyond the code reading; if any
+crashes, we've found a real race to root-cause (per the rule above). Tracked as real-software stress
+workloads in `docs/TESTING.md`.
+
 ## The one real caveat
 
 **The JIT code cache is single-writer by *assumption*, not by lock.** Because compilation only ever

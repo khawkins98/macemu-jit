@@ -11,6 +11,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Fold in two external threads — JIT stress workloads + hot disk loading
+
+Digested two user-shared sources and folded the actionable parts:
+- **emaculation #7159** (the actual provenance of the "pin SheepShaver to one core" lore): specific
+  titles crashed on **upstream** multicore (Royal Flush, The Dig, A-Train; Sandy Bridge, Mac OS
+  7.5–9.0.4), single-core affinity "fixed" them. Added to `docs/TESTING.md` as documented
+  emulator-breakers (concurrency + timing stress; Royal Flush also a timing/speed-calibration probe),
+  and to `SheepShaver/docs/CONCURRENCY-MODEL.md` as the lore's provenance + an **empirical falsification
+  test** of our "not multicore-sensitive" claim (run them on a busy multicore Apple Silicon host under
+  SS_JIT_VERIFY; crashes = a real race to root-cause; the originals were the upstream x86 build).
+- **Infinite Mac disk-streaming write-up** (persistent.info): folded a "Hot disk/CD insertion +
+  software library" feature into `DESKTOP_INTEGRATION_PLAN.md` Tier 2. Validated that SheepShaver's
+  `disk.cpp` already has runtime mount machinery (`DiskMountVolume`/`to_be_mounted`/`mount_mountable_volumes`)
+  so hot insertion is feasible; Infinite Mac's runtime injection uses the **same `extfs.cpp`** we have +
+  a Downloads/Uploads/Saved watched-folder convention, while its browser streaming (256 K chunks/service
+  worker/IndexedDB) does **not** transfer to native (real files + APFS clonefile instead). Cross-linked
+  from the Infinite Mac eval plan.
+
 ### [SheepShaver][e2e] Guest UI introspection — Plan 2a (dialog items) + 2b (control state) + harness integration
 
 Backend A now emits each **dialog** window's DITL items — `button`/`checkbox`/`radio`/`staticText`/

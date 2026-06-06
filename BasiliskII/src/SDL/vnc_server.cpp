@@ -177,6 +177,7 @@ static void vnc_push_key_event(bool down, SDL_Keycode key)
 	memset(&ev, 0, sizeof(ev));
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	ev.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+	ev.key.which = (SDL_KeyboardID)VNC_SYNTHETIC_INPUT_ID;	// tag: VNC-injected
 	ev.key.down = down;
 	ev.key.repeat = false;
 	ev.key.key = key;			// event2keycode() in video_sdl3.cpp reads event.key.key
@@ -197,6 +198,7 @@ static void vnc_push_pointer_button(Uint8 sdl_button, bool down, int x, int y)
 	memset(&ev, 0, sizeof(ev));
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	ev.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+	ev.button.which = VNC_SYNTHETIC_INPUT_ID;	// tag: VNC-injected
 	ev.button.down = down;
 	ev.button.button = sdl_button;
 	ev.button.x = (float)x;
@@ -217,6 +219,7 @@ static void vnc_push_pointer_motion(int x, int y)
 	memset(&ev, 0, sizeof(ev));
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	ev.type = SDL_EVENT_MOUSE_MOTION;
+	ev.motion.which = VNC_SYNTHETIC_INPUT_ID;	// tag: VNC-injected
 	ev.motion.state = 0;
 	ev.motion.x = (float)x;
 	ev.motion.y = (float)y;
@@ -241,6 +244,7 @@ static void vnc_push_wheel(int y)
 	memset(&ev, 0, sizeof(ev));
 #if SDL_VERSION_ATLEAST(3, 0, 0)
 	ev.type = SDL_EVENT_MOUSE_WHEEL;
+	ev.wheel.which = VNC_SYNTHETIC_INPUT_ID;	// tag: VNC-injected
 	ev.wheel.x = 0.0f;
 	ev.wheel.y = (float)y;
 #else

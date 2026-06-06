@@ -76,6 +76,15 @@ add("fp_fnmadd_real", A() + B() + C() + [aform(63, 1, 1, 2, 3, 31)] + grabd(0x13
 add("fp_fnmsub_real", A() + B() + C() + [aform(63, 1, 1, 2, 3, 30)] + grabd(0x130), "fnmsub: -(2.0*4.0-3.0)=-5.0")
 add("fp_frsp_real",   B() + [xform(63, 1, 0, 2, 12)] + grabd(0x130), "frsp f1,f2: round 3.0 to single")
 add("fp_fctiwz_real", B() + [xform(63, 1, 0, 2, 15)] + grabd(0x130), "fctiwz f1,f2: 3.0 -> int 3")
+# fctiw/fctiwz edge cases FIXED 2026-06-06 (ppc-jit.cpp case 14/15): rounding mode,
+# INT32 overflow saturation, NaN->0x80000000. frB into f2 via setd(2,hi16,off);
+# 2.5=0x4004, 2^31=0x41E0, NaN=0x7FF8 (all low-word 0). fctiw rounds half-AWAY (frin):
+# 2.5->3, DISTINCT from fctiwz toward-zero 2.5->2 (proves fctiw is not a fctiwz clone).
+add("fp_fctiw_round",  setd(2,0x4004,0x110) + [xform(63,1,0,2,14)] + grabd(0x130), "fctiw 2.5 -> 3 (round half-away per FPSCR)")
+add("fp_fctiwz_trunc", setd(2,0x4004,0x110) + [xform(63,1,0,2,15)] + grabd(0x130), "fctiwz 2.5 -> 2 (toward zero)")
+add("fp_fctiw_ovf",    setd(2,0x41E0,0x110) + [xform(63,1,0,2,14)] + grabd(0x130), "fctiw 2^31 -> 0x7FFFFFFF (saturate)")
+add("fp_fctiw_nan",    setd(2,0x7FF8,0x110) + [xform(63,1,0,2,14)] + grabd(0x130), "fctiw NaN -> 0x80000000")
+add("fp_fctiwz_nan",   setd(2,0x7FF8,0x110) + [xform(63,1,0,2,15)] + grabd(0x130), "fctiwz NaN -> 0x80000000")
 add("fp_fneg_real",   A() + [xform(63, 1, 0, 1, 40)] + grabd(0x130), "fneg f1,f1: -(2.0)")
 add("fp_fabs_real",   A() + [aform(63, 1, 0, 1, 0, 264)] + grabd(0x130), "fabs f1,f1: |2.0|=2.0")
 add("fp_fmr_real",    B() + [xform(63, 1, 0, 2, 72)] + grabd(0x130), "fmr f1,f2: copy 3.0")

@@ -13,7 +13,7 @@
 | Dhrystones/sec | 1,348K | **1,475K** | **+9.4%** |
 | CPU score | 62.7 | **64.2** | +2.2% |
 | Math score | 11,539 | **12,354** | +7.1% |
-| Harness | 235/235 | **296/296** (2026-06-06; count via `make harness-count`) | +FP, AltiVec (ev_mixed merges/vpkuhum/byte mults; +variable shift/rotate family +12; +saturating add/sub & signed averages +14, all 2026-06-06), carry-wrap, mullwo |
+| Harness | 235/235 | **302/302** (2026-06-06; count via `make harness-count`) | +FP, AltiVec (ev_mixed merges/vpkuhum/byte mults; +variable shift/rotate family +12; +saturating add/sub & signed averages +14, all 2026-06-06), carry-wrap, mullwo |
 
 Target: **3-5x** over interpreter, approaching G4/1.8GHz class.
 

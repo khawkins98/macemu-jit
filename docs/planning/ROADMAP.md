@@ -116,6 +116,14 @@ harness that can't catch mistakes just produces the next silent bug.
     (structural, overlap A2):** pack-saturate/pixel-pack-unpack/sum-across (scrambled labels, 2-source
     ev_mixed narrows, pixel-field expansion, saturation) + FP-conv UIMM-scale. Worklist:
     `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md` "Broad-sweep results". **26 AltiVec bugs fixed total.**
+  - 🐛 **FP SWEEP (2026-06-06) — `fctiw`/`fctiwz` conversion FIXED; rest of FP clean.** Pivoted the
+    method to the under-tested FP ops (vs real interp, edge-case operands). `fsel`/`fnabs`/single
+    fused (`fmsubs`/`fnmadds`/`fnmsubs`) all clean. `fctiw`/`fctiwz` both emitted 64-bit `FCVTZS Xd`
+    → `fctiw` ignored FPSCR rounding (cloned `fctiwz`), overflow mis-saturated, NaN→0. Fixed: 32-bit
+    `FCVTAS Wd` (`fctiw`, round-half-away = `frin` = default RN) / `FCVTZS Wd` (`fctiwz`) + NaN→`0x80000000`
+    fixup; 5 vectors, **`make test-jit` 302/302**. Caveat: only default FPSCR RN=0 honored (non-default
+    dynamic modes unread — still strictly better). `fsqrt`/`fres`/`frsqrte` un-sweepable (interp lacks
+    them / estimates). **27 codegen bugs fixed total this session.**
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at

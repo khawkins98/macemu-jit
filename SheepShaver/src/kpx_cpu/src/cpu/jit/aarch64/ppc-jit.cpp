@@ -3829,18 +3829,32 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			emit_store_fpr(0, frd);
 			return true;
 
-		case 14: /* fctiw frD,frB — convert to integer word (round per FPSCR) */
+		/* fctiw/fctiwz: convert double->int32. The 32-bit ARM FCVT* gives PPC's INT32
+		   saturation for free (overflow -> 0x7FFFFFFF / 0x80000000); the only PPC-specific
+		   bit is NaN -> 0x80000000 (ARM yields 0), patched with FCMP+CSEL. fctiw rounds per
+		   FPSCR[RN]: the default RN=0 ("round to nearest") is PPC frin = round-half-AWAY =
+		   ARM FCVTAS (round-nearest-ties-away). (Non-default RN modes are not yet honored —
+		   was previously wrong for ALL rounding since it hardcoded toward-zero.) The old code
+		   used 64-bit FCVTZS Xd, which mis-saturated overflow (0x80000000 not 0x7FFFFFFF) and
+		   treated fctiw as fctiwz. The int32 lands in the FPR's low 32 bits (high 32 zeroed by
+		   the W-form write); stored big-endian this is bits 32-63 of frD, per the PPC spec. */
+		case 14: /* fctiw frD,frB — round per FPSCR (default near = frin = ties-away) */
 			emit_load_fpr(0, frb);
-			emit32(0x9E780000 | (0 << 5) | RTMP0); /* FCVTZS Xd, Dn (toward zero) */
-			/* Store as int in FPR (low 32 bits) */
-			emit32(0x9E670000 | (RTMP0 << 5) | 0); /* FMOV Dd, Xn */
+			emit32(0x1E640000 | (0 << 5) | RTMP0);                              /* FCVTAS Wd, Dn */
+			emit32(0x1E602000 | (0 << 16) | (0 << 5));                          /* FCMP Dn, Dn (NaN -> V) */
+			emit32(0x52B00000 | RTMP1);                                         /* MOVZ Wtmp, #0x8000, LSL #16 */
+			emit32(0x1A800000 | (RTMP0 << 16) | (0x6 << 12) | (RTMP1 << 5) | RTMP0); /* CSEL Wd = VS? Wtmp : Wd */
+			emit32(0x9E670000 | (RTMP0 << 5) | 0);                              /* FMOV Dd, Xn */
 			emit_store_fpr(0, frd);
 			return true;
 
-		case 15: /* fctiwz frD,frB — convert to integer word (round toward zero) */
+		case 15: /* fctiwz frD,frB — round toward zero */
 			emit_load_fpr(0, frb);
-			emit32(0x9E780000 | (0 << 5) | RTMP0); /* FCVTZS Xd, Dn */
-			emit32(0x9E670000 | (RTMP0 << 5) | 0); /* FMOV Dd, Xn */
+			emit32(0x1E780000 | (0 << 5) | RTMP0);                              /* FCVTZS Wd, Dn */
+			emit32(0x1E602000 | (0 << 16) | (0 << 5));                          /* FCMP Dn, Dn (NaN -> V) */
+			emit32(0x52B00000 | RTMP1);                                         /* MOVZ Wtmp, #0x8000, LSL #16 */
+			emit32(0x1A800000 | (RTMP0 << 16) | (0x6 << 12) | (RTMP1 << 5) | RTMP0); /* CSEL Wd = VS? Wtmp : Wd */
+			emit32(0x9E670000 | (RTMP0 << 5) | 0);                              /* FMOV Dd, Xn */
 			emit_store_fpr(0, frd);
 			return true;
 

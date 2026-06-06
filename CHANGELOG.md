@@ -11,6 +11,26 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] FP differential sweep — fctiw/fctiwz conversion bug fixed; rest of FP clean
+
+Pivoted the proven sweep method to the under-tested FP ops (vs the real interpreter, with
+edge-case operands: signed zero, NaN, inf, rounding boundaries). **`fsel`, `fnabs`, and the single
+fused ops `fmsubs`/`fnmadds`/`fnmsubs` all passed** — clean. One real bug found:
+
+**`fctiw`/`fctiwz` (double→int32) were both wrong** (`ppc-jit.cpp` case 14/15): both emitted the
+*same* `FCVTZS Xd` (64-bit, toward-zero), so (a) `fctiw` ignored its FPSCR-rounding contract and
+behaved identically to `fctiwz`; (b) overflow mis-saturated (2³¹ → `0x80000000` instead of
+`0x7FFFFFFF`) because of the 64-bit-convert-then-truncate; (c) NaN → 0 instead of `0x80000000`.
+Fix: 32-bit `FCVTAS Wd` for `fctiw` (round-nearest-ties-**away** = PPC `frin` = FPSCR default RN=0)
+and 32-bit `FCVTZS Wd` for `fctiwz` — the 32-bit form gives PPC's INT32 overflow saturation for
+free — plus an `FCMP`/`CSEL` NaN→`0x80000000` fixup. Verified interp==JIT across 2.5/3.5/−2.5/2³¹/
+inf/NaN/±1 (`fctiw` now correctly rounds half-away 2.5→3, distinct from `fctiwz` 2.5→2). All NEON
+capstone-verified. **5 committed vectors** (`fp_fctiw_round`/`_ovf`/`_nan`, `fp_fctiwz_trunc`/`_nan`);
+`make test-jit` **302/302**. **Known limitation (documented in-code):** only the default FPSCR
+RN=0 is honored for `fctiw`; non-default dynamic rounding modes aren't read yet (still a strict
+improvement — the old code was wrong for *all* rounding). `fsqrt`/`fres`/`frsqrte` remain
+un-sweepable (interp doesn't implement them / they're estimates).
+
 ### [SheepShaver] AltiVec saturating add/sub + signed averages fixed — 14 more bugs (broad sweep)
 
 A broad differential sweep (every untested VX-form AltiVec op, JIT vs real interpreter, distinct

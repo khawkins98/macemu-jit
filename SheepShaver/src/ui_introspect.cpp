@@ -114,6 +114,26 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
             for (int k = 0; k < dlen; k++) { uint8 c = d[k]; if (c < 32) { raw.clear(); break; } raw.push_back((char)c); }
             text = macroman_to_utf8(raw);
         }
+        // Control state: for control-type items the item's leading 4-byte field is the live
+        // ControlHandle. Deref -> ControlRecord; read hilite/value + contrlRect (self-check vs the
+        // item rect). All reads guarded; a wrong/nil handle just yields no control fields.
+        bool isCtrl = (type == 4 || type == 5 || type == 6 || type == 7);
+        bool haveCtrl = false; int cval = 0, chil = 0; int crl = 0, crt = 0, crr = 0, crb = 0;
+        if (isCtrl) {
+            uint32 ch = ReadMacInt32(p);                  // ControlHandle (item leading field)
+            if (ch && guest_ptr_ok(ch)) {
+                uint32 cr = ReadMacInt32(ch);             // -> ControlRecord
+                if (cr && guest_ptr_ok(cr) && guest_ptr_ok(cr + 0x18)) {
+                    crt = (int16)ReadMacInt16(cr + 0x08); crl = (int16)ReadMacInt16(cr + 0x0A);
+                    crb = (int16)ReadMacInt16(cr + 0x0C); crr = (int16)ReadMacInt16(cr + 0x0E);
+                    chil = Mac2HostAddr(cr)[0x11];        // contrlHilite (byte)
+                    cval = (int16)ReadMacInt16(cr + 0x12);// contrlValue
+                    haveCtrl = true;
+                }
+            }
+        }
+        bool hasParams = (text.find("^0") != std::string::npos || text.find("^1") != std::string::npos
+                       || text.find("^2") != std::string::npos || text.find("^3") != std::string::npos);
         if (i) j += ",";
         char b[256];
         snprintf(b, sizeof(b),
@@ -125,6 +145,14 @@ static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std:
             (i + 1 == defItem) ? ",\"default\":true" : "");
         j += b;
         if (isTextItem) { j += ",\"text\":\""; j += json_escape(text); j += "\""; }
+        if (haveCtrl) {
+            char c[160];
+            snprintf(c, sizeof(c),
+                ",\"value\":%d,\"hilite\":%d,\"crect\":{\"left\":%d,\"top\":%d,\"right\":%d,\"bottom\":%d}",
+                cval, chil, crl + ox, crt + oy, crr + ox, crb + oy);   // crect globalized like rect
+            j += c;
+        }
+        if (hasParams) j += ",\"hasParams\":true";
         j += "}";
         uint32 adv = 14 + dlen + (dlen & 1);              // 14-byte header is even; pad dlen to even
         p += adv;

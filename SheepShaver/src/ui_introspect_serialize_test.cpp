@@ -60,9 +60,31 @@ int main() {
     w32(0x016A, 12345);                          // Ticks
     wrect(0x0834, 0, 0, 600, 800);               // CrsrPin (screen Rect) -> 800x600
     w32(0x08A4, 0);                              // MainDevice nil -> depth 0 (exercises the nil-guard)
-    w32(0x0A1C, 0);                              // MenuList nil -> empty menus
     w16(0x0BAA, 20);                             // MBarHeight
     w32(0x09D6, 0x2000);                         // WindowList -> window #1
+
+    // === Menu bar (MenuList $0A1C): apple menu + File menu (New=N, Open=O) ===
+    w32(0x0A1C, 0x5000);                         // MenuList handle
+    w32(0x5000, 0x5010);                         //  -> MenuList ptr
+    w16(0x5010, 12);                             // lastMenu = numMenus(2) * 6
+    w32(0x5016, 0x5100);                         // menu[0] entry: MenuHandle (apple)
+    w32(0x501C, 0x5200);                         // menu[1] entry: MenuHandle (File)
+    // apple MenuInfo @0x5110: id 1, all-enabled, title = single 0x14 (apple-logo)
+    w32(0x5100, 0x5110);
+    w16(0x5110 + 0x00, 1);                       // menuID
+    w32(0x5110 + 0x0A, 0xFFFFFFFF);              // enableFlags (menu + items)
+    w8 (0x5110 + 0x0E, 1); w8(0x5110 + 0x0F, 0x14);    // title Str255 = {0x14} -> isApple
+    wpstr(0x5120, "About");                      //   item 1 "About" (p = mi+0x0F+titleLen = 0x5120)
+    w32(0x5126, 0);                              //   trailer (no cmd key)
+    w8 (0x512A, 0);                              //   zero-length item = end of menu
+    // File MenuInfo @0x5210: id 2, all-enabled, title "File"
+    w32(0x5200, 0x5210);
+    w16(0x5210 + 0x00, 2);
+    w32(0x5210 + 0x0A, 0xFFFFFFFF);
+    wpstr(0x5210 + 0x0E, "File");                // title (len 4) -> items start at 0x5223
+    wpstr(0x5223, "New");  w8(0x5228, 'N');      //   item 1 "New", trailer cmdChar 'N'  (tr[1]@p+1+ilen+1)
+    wpstr(0x522B, "Open"); w8(0x5231, 'O');      //   item 2 "Open", trailer cmdChar 'O'
+    w8 (0x5234, 0);                              //   end of menu
 
     // === Window #1: NON-DIALOG (documentKind) with a controlList of 3 controls ===
     const uint32 W1 = 0x2000;
@@ -164,6 +186,12 @@ int main() {
     check(has(j, "\"rect\":{\"left\":50,\"top\":160,\"right\":130,\"bottom\":180}"),
           "DITL item rect globalized");
     check(has(j, "\"default\":true"), "DITL default item flagged");
+
+    // Menu bar: apple role + File menu with Command-key equivalents
+    check(has(j, "\"role\":\"apple\""), "apple menu role");
+    check(has(j, "\"title\":\"File\""), "File menu title");
+    check(has(j, "\"text\":\"New\"") && has(j, "\"cmdKey\":\"N\""), "File ▸ New = ⌘N");
+    check(has(j, "\"text\":\"Open\"") && has(j, "\"cmdKey\":\"O\""), "File ▸ Open = ⌘O");
 
     if (failures == 0) printf("ui_introspect_serialize: ALL OK\n");
     return failures ? 1 : 0;

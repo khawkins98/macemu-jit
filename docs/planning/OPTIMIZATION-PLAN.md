@@ -716,20 +716,32 @@ patching a handful of bulk-data primitives.
 
 ## Measurement Plan
 
-### P0. Build the mix-aware execution profiler FIRST (prerequisite) — 🟡 BUILT (2026-06-06), boot-validation pending
+### P0. Mix-aware execution profiler — ✅ DONE + boot-validated (2026-06-06)
 
-**Status:** implemented + gated behind **`SS_JIT_PROFILE`** (zero codegen/runtime cost when off —
-`make test-jit` 302/302 unchanged). When on, each block emits a 64-bit exec-count increment at its
-**chain entry** (counts dispatched *and* chained entries); a pc-keyed slot table accumulates the
-count + a compile-time **instruction-mix tag** (integer-ALU / AltiVec / FP / load-store / branch);
-`ppc_jit_aarch64_exit()` dumps the **top-40 hottest blocks** (pc, exec, %, mix, insns, region
-ROM/DR/RAM) to stderr or to the path in `$SS_JIT_PROFILE`. Code: `ppc-jit.cpp` (`jit_prof_*`,
-`jit_mix_classify`, `jit_profile_dump`). **Validated without a boot** (E2E agent owns the emulator):
-the **rom-harness** activates it and produced a real hot-block dump with correct mix tags, and its
-differential Score is **identical on vs off (489/496)** — the counter codegen doesn't corrupt
-results. **Remaining:** (1) a real boot under `SS_JIT_PROFILE=1` for true exec-weighted hot data;
-(2) the chained-entry path is the same codegen but only the dispatched path is rom-harness-validated
-— confirm under boot; (3) routine attribution (hot PC → trap/NameRegistry name) — region tag only.
+**Built + gated behind `SS_JIT_PROFILE`** (zero codegen/runtime cost off — `make test-jit` 302/302).
+Per-block 64-bit exec counter at the **chain entry** (counts dispatched *and* chained), pc-keyed slot
+table (262144) + compile-time **instruction-mix tag**, dumped top-40 at exit (`atexit`, since normal
+`Quit→exit(0)` doesn't call `ppc_jit_aarch64_exit`). Code: `ppc-jit.cpp` (`jit_prof_*`/
+`jit_mix_classify`/`jit_profile_dump`). Reviewed (register-safety on the chained path proven clean;
+NZCV-neutral `ADD`). **Boot-validated** via the E2E smoke (isolated ISO boot → clean shutdown) under
+`SS_JIT_PROFILE=/path`: complete profile, **70936 blocks / 843M block-executions, 0 dropped**.
+
+**First boot-to-Finder-to-shutdown profile (the data this prereq existed to produce):**
+- **Hottest single hot spot — a tiny RAM integer-ALU loop** `0x10643c30–0x10643c54` (2–4-insn blocks,
+  ~1.8% *each*, ~6 blocks ≈ **~8% combined**) + the load/store block `0x106a9848` (1.8%). These are
+  the #1 disassemble-and-understand targets (likely a clear/copy/checksum or the core idle spin).
+- **ROM/DR 68k-dispatch core** `0x50467xxx`/`0x50466xxx` (integer + a hot 1-insn branch, ~1.2%→0.9%):
+  inherent 68k-interpretation cost → the **HLE / DR-path** levers (CROSS-EMULATOR `CopyBits`/idle).
+- **Broad RAM working set** `0x1060xxxx`/`0x106axxxx` at a *uniform* ~0.9% across ~25 blocks: the
+  steady-state OS **event/idle loop** — strong evidence for **idle-skipping** (CROSS-EMULATOR #2): a
+  backgrounded Finder VM is spinning these. Big "good citizen" win, well-supported by this data.
+- **Caveat:** this is a boot→idle→shutdown profile (weighted to boot + idle, not a compute workload).
+  For throughput-lever ranking, also capture an **`e2e-bench` (Speedometer) profile** — the
+  workload-weighted complement. Routine-name attribution (hot PC → trap/NameRegistry) still TODO.
+
+**Next:** (1) disassemble the top RAM loop + `0x106a9848` to identify them; (2) `e2e-bench` profile
+for the compute-weighted view; then pick the lever the *combined* evidence supports (idle-skipping
+looks like the standout from the boot profile).
 
 The priorities below are currently estimated from *compile frequency* (how often a
 block is compiled), which is biased — a block compiled once but executed a million

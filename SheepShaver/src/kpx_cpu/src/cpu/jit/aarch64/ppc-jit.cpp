@@ -2801,12 +2801,6 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(hA);
 			return true;
 		}
-		if (sh) {
-			uint32_t ror_amt = (32 - sh) & 0x1F;
-			emit32(0x13800000 | (hS << 16) | (ror_amt << 10) | (hS << 5) | hA); /* EXTR */
-		} else if (hS != hA) {
-			a64_mov_reg(hA, hS);
-		}
 		uint32_t mask = 0;
 		if (mb <= me) {
 			for (uint32_t i = mb; i <= me; i++) mask |= (0x80000000U >> i);
@@ -2814,8 +2808,21 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			for (uint32_t i = 0; i <= me; i++) mask |= (0x80000000U >> i);
 			for (uint32_t i = mb; i <= 31; i++) mask |= (0x80000000U >> i);
 		}
+		/* sh!=0 rotates rS into hA (EXTR), then AND masks hA in place. sh==0 skips the
+		 * rotate AND the copy — AND reads rS directly into hA (clrlwi/clrrwi: −1 insn
+		 * when rs!=ra). Pure copy (sh==0, full mask, rs!=ra) still needs one MOV. */
+		int and_src;
+		if (sh) {
+			uint32_t ror_amt = (32 - sh) & 0x1F;
+			emit32(0x13800000 | (hS << 16) | (ror_amt << 10) | (hS << 5) | hA); /* EXTR hS->hA */
+			and_src = hA;
+		} else {
+			and_src = hS;
+		}
 		if (mask != 0xFFFFFFFF)
-			emit_and_imm32(hA, hA, mask, RTMP0);
+			emit_and_imm32(hA, and_src, mask, RTMP0);
+		else if (and_src != hA)
+			a64_mov_reg(hA, hS);
 		if (op & 1) lazy_update_cr0(hA);
 		return true;
 	}

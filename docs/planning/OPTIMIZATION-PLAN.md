@@ -408,8 +408,16 @@ EXTR+AND path unchanged for the rest. **Hot, unlike 0f/divw's follow-ups**: the
 `slwi`/`clrlwi`. Validated: test-jit 302/302; **exhaustive differential interp-vs-JIT
 248/248** (slwi+srwi × sh=1..31 × {0x80000001,0xFFFFFFFF,0x12345678,0x1}, CR0 via Rc=1);
 deterministic A/B on a new `shift` microbench kernel — **a64/op 2.000 → 1.000 (−50%)**,
-zero-noise (timing corroborated ~3× faster on that kernel). Follow-up (separate, measured):
-`clrlwi`/`clrrwi`/`extrwi`/`extlwi` are also single-UBFM candidates.
+zero-noise (timing corroborated ~3× faster on that kernel).
+
+**clrlwi/clrrwi extension — DONE (2026-06-06).** The `sh==0` masked forms now AND
+**directly from rS** into rA instead of `mov rA,rS` + `AND rA,rA` — −1 insn when rs≠ra
+(e.g. `clrlwi r0,r3,0x1e` in `0x10643c54`). Restructured the shared path (compute mask
+first; `and_src = sh ? hA(rotated) : hS`; pure-`mr` full-mask case still emits one MOV).
+Validated: test-jit 302/302; differential interp-vs-JIT — **248/248** clrlwi+clrrwi
+(×31 widths × 4 edge values, CR0 via Rc=1) **plus** the shared rotate+mask paths
+(general rotate, wrap-around mask, pure mr, rotlw full-mask) all match. Remaining
+single-UBFM candidates (`extrwi`/`extlwi`) deferred — lower frequency.
 
 ### 0g. Lazy CR0 Re-enable
 

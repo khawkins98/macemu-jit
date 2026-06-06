@@ -92,3 +92,35 @@ blitters, and DSP. The bugs survived because the suite had **zero** shift/rotate
    unpacks) — lower NEON-divergence odds but untested.
 
 Tracked: ROADMAP A1, CHANGELOG 2026-06-06.
+
+---
+
+# Broad-sweep results (2026-06-06) — second bug cluster + remaining worklist
+
+After the shift/rotate family, a broad differential sweep ran **every untested VX-form AltiVec op**
+(JIT vs real interpreter, distinct operands) + a sub-agent audit (canonical XO from the interpreter
+decode table, NEON disassembled with capstone). Outcome:
+
+**✅ FIXED — saturating add/sub + signed averages (14 ops):**
+- `vaddubs/uhs/uws` (512/576/640), `vaddsbs/shs/sws` (768/832/896): were **SABA/UABA** (abs-diff) →
+  now **UQADD/SQADD**.
+- `vsububs/uhs` (1536/1600), `vsubsbs/shs/sws` (1792/1856/1920): **signed/unsigned swapped** → now
+  correct **UQSUB/SQSUB**.
+- `vavgsb/sh/sw` (1282/1346/1410): were **SMAXP** → now **SRHADD** (signed rounding average).
+- All capstone-verified, validated mid+boundary+overflow (42/42), 14 committed vectors, test-jit 296.
+
+**✅ Confirmed CORRECT (no fix needed):** integer compares `vcmpequb/uh`, `vcmpgt{u,s}{b,h,w}`
+(all pass); unsigned averages `vavgu*`.
+
+**🟡 REMAINING (structural — overlap ROADMAP A2, deferred):**
+- **Pack-saturate** `vpkshss/swss` (398/462 emit FP-narrow `fcvtn` — wrong), `vpkshus/swus`
+  (270/334), `vpkuhus/uwus` (142/206 wrong signed/unsigned narrow), `vpkuwum` (78, known-tracked):
+  all 2-source narrows needing ev_mixed lane order — the A2 class.
+- **Pixel** `vpkpx` (782), `vupkhpx` (846 — XO routed to a float-convert case!), `vupklpx` (974):
+  need the 1-5-5-5 pixel field expansion, not a width narrow/widen.
+- **Sum-across** `vsumsws` (1928), `vsum2sws` (1672), `vsum4sbs` (1800): the `case` labels are
+  **rotated** (each emits a neighbour's reduction) and none apply PPC saturation.
+- **FP conversions** `vctsxs` (970), `vctuxs` (906): right base instruction but ignore the UIMM
+  2^scale factor — incomplete, not a wrong-opcode bug.
+- Note: sweep XOs 910/354/418/1038/1356/1420/1932 are **not real AltiVec opcodes** (the matching
+  JIT `case` labels are dead code at the wrong XO) — test artifacts, not bugs.

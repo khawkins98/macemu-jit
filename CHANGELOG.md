@@ -11,6 +11,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] AltiVec saturating add/sub + signed averages fixed — 14 more bugs (broad sweep)
+
+A broad differential sweep (every untested VX-form AltiVec op, JIT vs real interpreter, distinct
+operands) + a sub-agent audit surfaced a second large bug cluster, all written without differential
+validation (scrambled comments again). Fixed in `ppc-jit.cpp`, all NEON capstone-verified:
+
+- **Saturating add** `vaddubs/uhs/uws` (512/576/640), `vaddsbs/shs/sws` (768/832/896): emitted
+  **SABA/UABA** (absolute-difference-accumulate) — a completely different op — instead of
+  **UQADD/SQADD**. Also signedness was transposed vs the canonical XO.
+- **Saturating sub** `vsububs/uhs` (1536/1600), `vsubsbs/shs/sws` (1792/1856/1920): correct opcode
+  but **signed/unsigned swapped** (unsigned XOs emitted signed `SQSUB`, and vice versa) → wrong
+  clamp. Now `UQSUB`/`SQSUB` per the canonical op.
+- **Signed averages** `vavgsb/sh/sw` (1282/1346/1410): emitted **SMAXP** (pairwise max!) instead of
+  the signed rounding average **SRHADD**. (Unsigned `vavgu*` were already correct.)
+
+Validated against the real interpreter across mid-range + saturation-boundary + signed-overflow
+operands (42/42 agree). **14 strong committed vectors** with boundary-crossing operands (new
+`load_bytes`/`satop` generator helpers — `load_pattern`'s linear slope made subtraction vacuous);
+`make test-jit` **296/296** (was 282). Sweep also confirmed integer **compares** all correct, and
+flagged the pack/pixel/sum families (structural rework, overlap ROADMAP A2) + FP-conversion scale
+handling as remaining — see `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
+
 ### [docs] Cross-emulator ideation capture + effort/payoff grid + R3 stale-note fix
 
 - Added `docs/planning/sheepshaver-research/CROSS-EMULATOR-IDEATION.md`: a reality-checked capture

@@ -107,8 +107,15 @@ harness that can't catch mistakes just produces the next silent bug.
     `(x<<k)|(x>>>(w-k))`). Capstone-verified, validated byte-asymmetric (ev_mixed byte order
     covered); **12 strong vectors added, `make test-jit` 282/282** + boot smoke. Proof the AltiVec/FP
     surface is *live*, not theater — and it establishes the fix loop (capstone encoding →
-    `SS_TEST_HEX` repro → committed vector → `test-jit`) for the remaining untested families
-    (saturating add/sub, integer compares, unpacks — likely lower yield per NEON's closer mapping).
+    `SS_TEST_HEX` repro → committed vector → `test-jit`).
+  - 🐛 **SWEEP CLUSTER 2 (2026-06-06) — saturating add/sub + signed averages, 14 more bugs FIXED.**
+    A broad sweep (every untested VX op, JIT vs real interp) + sub-agent audit found another cluster:
+    sat-add emitted `SABA/UABA` (abs-diff, wrong op), sat-sub had **signed/unsigned swapped**, signed
+    averages emitted `SMAXP`. Fixed → `UQADD/SQADD/UQSUB/SQSUB/SRHADD` (capstone-verified); 14
+    vectors, `make test-jit` **296/296** + ISO boot smoke. Compares confirmed correct. **Remaining
+    (structural, overlap A2):** pack-saturate/pixel-pack-unpack/sum-across (scrambled labels, 2-source
+    ev_mixed narrows, pixel-field expansion, saturation) + FP-conv UIMM-scale. Worklist:
+    `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md` "Broad-sweep results". **26 AltiVec bugs fixed total.**
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at

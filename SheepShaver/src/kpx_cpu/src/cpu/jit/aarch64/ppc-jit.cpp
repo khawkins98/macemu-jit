@@ -3351,23 +3351,23 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 518: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E203400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtub CMHI.16B (unsigned) */
 		case 582: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E603400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtuh */
 		case 646: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA03400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtuw */
-		case 1282: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E20A400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgub URHADD.16B */
-		case 1346: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E60A400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavguh */
-		case 1410: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA0A400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavguw */
+		case 1282: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E201400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsb SRHADD.16B (signed rounding average; was SMAXP pairwise-max) */
+		case 1346: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E601400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsh SRHADD.8H */
+		case 1410: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA01400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsw SRHADD.4S */
 		case 1794: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E201400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsb SRHADD.16B */
 		case 1858: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E601400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsh */
 		case 1922: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0EA01400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vavgsw */
-		case 768: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E207C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddubs UQADD.16B (saturating) */
-		case 832: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E607C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vadduhs UQADD.8H */
-		case 896: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA07C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vadduws UQADD.4S */
-		case 1792: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsububs UQSUB.16B */
-		case 1856: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubuhs UQSUB.8H */
-		case 1920: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA02C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubuws UQSUB.4S */
-		case 512: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E207C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsbs SQADD.16B */
-		case 576: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E607C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddshs SQADD.8H */
-		case 640: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA07C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsws SQADD.4S */
-		case 1536: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubsbs SQSUB.16B */
-		case 1600: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubshs SQSUB.8H */
+		case 768: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E200C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsbs SQADD.16B (signed saturating add; was SABA/UABA abs-diff) */
+		case 832: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E600C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddshs SQADD.8H */
+		case 896: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA00C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddsws SQADD.4S */
+		case 1792: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubsbs SQSUB.16B (SIGNED sat sub; was unsigned UQSUB) */
+		case 1856: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubshs SQSUB.8H */
+		case 1920: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA02C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubsws SQSUB.4S */
+		case 512: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E200C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vaddubs UQADD.16B (unsigned saturating add; was SABA abs-diff) */
+		case 576: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E600C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vadduhs UQADD.8H */
+		case 640: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA00C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vadduws UQADD.4S */
+		case 1536: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E202C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsububs UQSUB.16B (UNSIGNED sat sub; was signed SQSUB) */
+		case 1600: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E602C00|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsubuhs UQSUB.8H */
 		/* AltiVec merges (vmrgh / vmrgl, byte/halfword/word) -- two bugs, both FIXED
 		 * 2026-06-04:
 		 *

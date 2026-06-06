@@ -3,6 +3,24 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — AltiVec may be UNREACHABLE by real guest software (despite PVR=G4) — our vector codegen unexercised
+
+Profiling "AltiVec Fractal Carbon" (the canonical AltiVec workload) showed its hot loop is the
+**scalar-FP** path, not AltiVec (hot block 0x1e5bc0d0 = 19-insn **FP**, tagged by primary opcode 59/63;
+an AltiVec loop would be op4 → MIX_ALTIVEC). Yet SheepShaver **does** advertise a G4: under EMULATED_PPC
+`main_unix.cpp:440` sets `PVR = 0x000c0000` (7400 *with AltiVec*), and name_registry maps `PVR>>16==12`
+to "PowerPC,G4". So PVR claims AltiVec but the guest still picks the scalar path → **AltiVec detection
+has a gap somewhere between PVR and the gestalt/`cpu_supports_altivec` the OS/app checks**. IMPLICATION:
+all the AltiVec JIT codegen we hardened (ev_mixed byte-order, pack/saturate/shift-rotate, vsel, etc.) is
+currently **validated only by the test harness — not exercised by any real guest app**, because nothing on
+the guest issues AltiVec instructions. This is high-value to resolve: if the detection gap is closed (e.g.
+the right gestalt `gestaltPowerPCHasVectorInstructions` bit, or a ROM/nanokernel AltiVec-enable), real
+AltiVec software (Fractal Carbon, Photoshop AltiVecCore, SoundJam) would light up the vector path and give
+us genuine AltiVec workload coverage + a real reason the vector-codegen work matters. NOT yet root-caused —
+needs a boot + a gestalt check (gestaltPowerPCProcessorFeatures) and a look at how Mac OS 9 gates AltiVec.
+Tracked as a task. (Caveat: it's also possible Mac OS 9.x simply needs the AltiVec-aware libs, or that the
+kpx_cpu CPU doesn't set the MSR/feature the OS probes — confirm before claiming a one-line fix.)
+
 ## 2026-06-07 — Interpreter Speedometer: harness `clean_signatures` is JIT-biased → skips score extraction
 
 Capturing the JIT-vs-interpreter Speedometer headline on the M5, the **interpreter** run

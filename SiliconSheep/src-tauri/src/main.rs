@@ -122,6 +122,9 @@ fn update_vm_setting(id: String, key: String, value: String) -> Result<(), Strin
     if key == "name" {
         return vm::rename_profile(&id, &value);
     }
+    if key == "description" {
+        return vm::update_metadata(&id, |vm| vm.description = Some(value.clone()));
+    }
     let vm_dir = vm::vm_dir_for(&id);
     let prefs_path = vm_dir.join("prefs");
     let mut pf = prefs::load_prefs(&prefs_path)?;

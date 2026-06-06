@@ -716,6 +716,7 @@ body {
   box-shadow: inset 0 1px 2px var(--ss-bevel-dark);
   transition: border-color 0.1s;
 }
+textarea.input { resize: vertical; min-height: 50px; }
 .input:focus { outline: none; border-color: var(--ss-accent); }
 
 .input-inline {

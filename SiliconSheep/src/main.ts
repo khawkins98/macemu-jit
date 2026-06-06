@@ -50,7 +50,11 @@ interface VmProfile {
   screen: string;
   shared_disk_warning?: string | null;
   os_version?: string | null;
+  os_target?: string | null;
+  description?: string | null;
+  created_at?: string | null;
   last_booted?: string | null;
+  last_modified?: string | null;
 }
 
 const vmScreenshots: Map<string, string> = new Map();
@@ -80,6 +84,7 @@ let wizardState = {
   vmName: "My Mac",
   ramMb: 256,
   screen: "win/1024/768",
+  osTarget: "",
 };
 
 async function loadVms(): Promise<VmProfile[]> {
@@ -403,6 +408,17 @@ function renderWizardStep(): string {
               <label>VM Name</label>
               <input type="text" class="input" id="vm-name" value="${escapeAttr(wizardState.vmName)}" />
             </div>
+            <div class="form-group">
+              <label>Target Mac OS Version</label>
+              <select class="input" id="vm-os-target" data-action="os-target-change">
+                <option value="" ${!wizardState.osTarget ? "selected" : ""}>Auto-detect on boot</option>
+                <option value="system7" ${wizardState.osTarget === "system7" ? "selected" : ""}>System 7 (64 MB RAM, 640×480)</option>
+                <option value="macos8" ${wizardState.osTarget === "macos8" ? "selected" : ""}>Mac OS 8 (128 MB RAM, 800×600)</option>
+                <option value="macos86" ${wizardState.osTarget === "macos86" ? "selected" : ""}>Mac OS 8.6 (256 MB RAM, 1024×768)</option>
+                <option value="macos9" ${wizardState.osTarget === "macos9" ? "selected" : ""}>Mac OS 9 (256 MB RAM, 1024×768)</option>
+              </select>
+              <p class="ss-text-muted">Sets recommended RAM and display defaults. You can change these later.</p>
+            </div>
             <div class="review-grid">
               <div class="review-item">
                 <span class="review-label">ROM</span>
@@ -573,6 +589,20 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         <!-- Roadmap: DESKTOP_INTEGRATION_PLAN.md Tier 2 "Clipboard enhancements" — directional
              control, Unicode utxt, status feedback. Requires emulator-side changes to clip_macosx64.mm. -->
         <p class="ss-text-muted">✓ Bidirectional — copy and paste works between guest and host (text, images, styled text). Unicode text (utxt) is not yet supported; text uses Mac Roman encoding.</p>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea class="input" id="setting-description" rows="3" placeholder="Notes about this VM...">${escapeHtml(vm.description || "")}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Info</label>
+        <p class="ss-text-muted">
+          ${vm.os_version ? "Detected OS: " + escapeHtml(vm.os_version) + "<br/>" : ""}
+          ${vm.os_target ? "Target: " + escapeHtml(vm.os_target) + "<br/>" : ""}
+          Created: ${vm.created_at ? formatLastBooted(vm.created_at) : "—"}<br/>
+          Last booted: ${vm.last_booted ? formatLastBooted(vm.last_booted) : "Never"}<br/>
+          Last modified: ${vm.last_modified ? formatLastBooted(vm.last_modified) : "—"}
+        </p>
       </div>
     `,
     display: (() => {
@@ -956,7 +986,7 @@ function bindEvents() {
   });
 
   // Immediate-apply: settings save on change (Mac OS 9 HIG — modeless, no Save button)
-  document.querySelectorAll(".detail-tab-content input, .detail-tab-content select").forEach((el) => {
+  document.querySelectorAll(".detail-tab-content input, .detail-tab-content select, .detail-tab-content textarea").forEach((el) => {
     el.addEventListener("change", async () => {
       if (!selectedVmId) return;
       const input = el as HTMLInputElement | HTMLSelectElement;
@@ -966,6 +996,7 @@ function bindEvents() {
       // Map DOM element IDs to pref keys + transform
       const mapping: Record<string, [string, (v: string) => string]> = {
         "setting-name": ["name", (v) => v],
+        "setting-description": ["description", (v) => v],
         "setting-ram": ["ramsize", (v) => v + "M"],
         "setting-screen-preset": ["screen", (v) => {
           if (v === "custom") {
@@ -1171,9 +1202,30 @@ async function handleAction(e: Event) {
         vmName: "My Mac",
         ramMb: 256,
         screen: "win/1024/768",
+        osTarget: "",
       };
       render();
       break;
+
+    case "os-target-change": {
+      const sel = document.getElementById("vm-os-target") as HTMLSelectElement;
+      if (sel) {
+        wizardState.osTarget = sel.value;
+        const presets: Record<string, { ram: number; screen: string }> = {
+          "system7": { ram: 64, screen: "win/640/480" },
+          "macos8": { ram: 128, screen: "win/800/600" },
+          "macos86": { ram: 256, screen: "win/1024/768" },
+          "macos9": { ram: 256, screen: "win/1024/768" },
+        };
+        const p = presets[sel.value];
+        if (p) {
+          wizardState.ramMb = p.ram;
+          wizardState.screen = p.screen;
+          render();
+        }
+      }
+      break;
+    }
 
     case "wizard-cancel":
       currentView = "library";
@@ -1260,7 +1312,7 @@ async function handleAction(e: Event) {
         await invoke("create_vm", {
           request: {
             name: wizardState.vmName,
-            romPath: wizardState.romPath,
+            romPath: wizardState.romPath, osTarget: wizardState.osTarget,
             ramMb: wizardState.ramMb,
             diskMode: wizardState.diskMode,
             diskSizeGb: wizardState.diskSizeGb,
@@ -1290,7 +1342,7 @@ async function handleAction(e: Event) {
         const vm = (await invoke("create_vm", {
           request: {
             name: wizardState.vmName,
-            romPath: wizardState.romPath,
+            romPath: wizardState.romPath, osTarget: wizardState.osTarget,
             ramMb: wizardState.ramMb,
             diskMode: wizardState.diskMode,
             diskSizeGb: wizardState.diskSizeGb,

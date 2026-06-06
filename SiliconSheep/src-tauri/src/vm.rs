@@ -27,7 +27,15 @@ pub struct VmProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_booted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +44,7 @@ pub struct CreateVmRequest {
     pub name: String,
     pub rom_path: String,
     pub ram_mb: u32,
+    pub os_target: String,
     pub disk_mode: String,
     pub disk_size_gb: f64,
     pub disk_path: String,
@@ -161,6 +170,13 @@ pub fn verify_rom(path: &str) -> Result<RomInfo, String> {
     })
 }
 
+fn now_timestamp() -> String {
+    format!("{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs())
+}
+
 pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
     let mut vms = load_manifest();
     let id = make_vm_id(&req.name);
@@ -220,7 +236,11 @@ pub fn create_profile(req: &CreateVmRequest) -> Result<VmProfile, String> {
         screen: req.screen.clone(),
         shared_disk_warning: None,
         os_version: None,
+        os_target: if req.os_target.is_empty() { None } else { Some(req.os_target.clone()) },
+        description: None,
+        created_at: Some(now_timestamp()),
         last_booted: None,
+        last_modified: Some(now_timestamp()),
     };
 
     vms.push(profile.clone());
@@ -258,7 +278,11 @@ pub fn import_from_prefs_file(prefs_path: &str, name: &str) -> Result<VmProfile,
         screen,
         shared_disk_warning: None,
         os_version: None,
+        os_target: None,
+        description: None,
+        created_at: Some(now_timestamp()),
         last_booted: None,
+        last_modified: Some(now_timestamp()),
     };
 
     vms.push(profile.clone());
@@ -286,6 +310,18 @@ pub fn update_os_version(id: &str, version: &str) -> Result<(), String> {
         save_manifest(&vms);
     }
     Ok(())
+}
+
+pub fn update_metadata<F: FnOnce(&mut VmProfile)>(id: &str, f: F) -> Result<(), String> {
+    let mut vms = load_manifest();
+    if let Some(vm) = vms.iter_mut().find(|v| v.id == id) {
+        f(vm);
+        vm.last_modified = Some(now_timestamp());
+        save_manifest(&vms);
+        Ok(())
+    } else {
+        Err(format!("VM '{}' not found", id))
+    }
 }
 
 pub fn rename_profile(id: &str, new_name: &str) -> Result<(), String> {
@@ -354,7 +390,11 @@ pub fn duplicate_profile(id: &str, new_name: &str) -> Result<VmProfile, String> 
             ))
         },
         os_version: source.os_version,
+        os_target: source.os_target,
+        description: source.description,
+        created_at: Some(now_timestamp()),
         last_booted: source.last_booted,
+        last_modified: Some(now_timestamp()),
     };
 
     vms.push(new_profile.clone());
@@ -380,6 +420,7 @@ pub fn sync_profile_from_prefs(id: &str) -> Result<(), String> {
         }
         vm.disk_paths = pf.get_all("disk").iter().map(|s| s.to_string()).collect();
         vm.cd_path = pf.get("cdrom").unwrap_or("").to_string();
+        vm.last_modified = Some(now_timestamp());
         save_manifest(&vms);
     }
     Ok(())
@@ -508,6 +549,7 @@ mod tests {
             disk_path: String::new(),
             cd_path: String::new(),
             screen: "win/1024/768".to_string(),
+            os_target: String::new(),
         }
     }
 

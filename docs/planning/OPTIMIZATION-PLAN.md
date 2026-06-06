@@ -687,6 +687,13 @@ This one artifact serves *both* tracks: it tells you which JIT-internals item
 (0g / P8 / P9) to do first **and** which routines clear the HLE gate above. It
 converts the rest of this plan from priors into evidence.
 
+> **Cross-link (2026-06-06):** the "what's hot × what's slow" join this P0 profiler
+> needs is exactly the *perf* half of the **unified test-session instrumentation**
+> design (`docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`,
+> Phase 3): it joins the HOT-PC liveness feed ("hot") with the microbench ns/insn
+> records ("slow") into a ranked optimization-target table. Build P0 and that perf
+> join together — same data, one analyzer (`jit-analyze.py`).
+
 ### P0b. Microbenchmark harness — DONE (2026-06-03)
 
 **Result**: `jit-bench` shipped as `rom-harness --bench` / `make bench`.

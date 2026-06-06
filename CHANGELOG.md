@@ -11,6 +11,19 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Unified test-session instrumentation design + planning reconciliation
+
+- **New design spec** `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`:
+  one `SS_RUN_DIR` run-stamp convention + a JSONL record schema (with an `oracle`-trust field) so the
+  four correctness/perf oracles (test-jit, rom-harness, `SS_JIT_VERIFY`, E2E/bench) + diagnostics
+  write to one analyzable place; a reconciliation analyzer **auto-referees disagreements via
+  `SS_TEST_HEX`** (automating the manual 2026-06-06 triage) and **joins HOT-PC "hot" with microbench
+  "slow"** for optimization leads. Phased (0: schema + 2 tools; 1: orchestrator; 2: auto-referee;
+  3: perf join), building on the benchmark-export run-stamp pattern + `jit-analyze.py`.
+- **Planning reconciled:** ROADMAP A1 gains the unified-instrumentation bullet and reflects the
+  rom-harness arc (span gate + triage ✅, integer path clean) and AltiVec/FP promoted to 🔜;
+  OPTIMIZATION-PLAN P0 cross-links the perf-join half of the spec; ROADMAP "Updated" → 2026-06-06.
+
 ### [docs] Multi-core offload plan ("multithreading light")
 
 - Added `docs/planning/MULTICORE-OFFLOAD-PLAN.md`: what guest/emulator work can move to other host

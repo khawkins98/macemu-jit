@@ -9,6 +9,34 @@ Guide for humans and AI agents working on the SheepShaver/BasiliskII AArch64 JIT
 3. Check `docs/planning/OPTIMIZATION-PLAN.md` — what's done, what's open, what was tried and deferred
 4. Check `docs/planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md` — ready-to-implement items
 
+## Working in a git worktree (parallel agents / isolated branches)
+
+When two efforts run at once (e.g. an E2E branch and a JIT branch), do the riskier/code-heavy one
+in a **separate `git worktree`** so the builds and the emulator don't collide:
+
+```bash
+git worktree add ../macemu-jit-<topic> -b <branch>     # new isolated working copy + branch
+```
+
+A fresh worktree contains only **tracked** files — the autoconf build products (`configure`,
+`src/Unix/Makefile`, `obj/`, the binary) are generated and gitignored, so they are **not** copied.
+Run the one-time configure in the new worktree before the first build:
+
+```bash
+cd <worktree>/SheepShaver/src/Unix
+NO_CONFIGURE=1 ./autogen.sh
+./configure --enable-sdl-video --enable-sdl-audio --enable-jit --without-gtk --without-x \
+            --without-esd --with-vdeplug CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib
+cd ../../ && make build-ss          # then build as usual
+```
+
+Each worktree builds its **own** binary/objects (good — no collision). Shared assets in
+`/Users/Shared/macemu/` (ROMs, ISOs) are read-only and safe to use from any worktree. **Only one
+emulator instance can run at a time** (shared SDL window / prefs), so if another agent is launching
+the emulator, restrict yourself to the **harnesses** — `make test-jit` and the standalone
+`rom-harness` exercise the JIT *without* opening the SDL window or booting, so they never collide.
+To pull a parallel branch's commits in and avoid late surprises: `git merge <other-branch>`.
+
 ## Commit Style
 
 ```

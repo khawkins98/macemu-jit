@@ -210,6 +210,23 @@ def run_benchmark(
                                runner.log_text())
         timings["choose"] = t
 
+        # [Plan 2a] Live verification + de-facto dialog identity: log the choose-disk dialog's DITL
+        # items. Non-fatal — a hiccup here must not fail the benchmark.
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=8.0)
+            dlg = snap.front_dialog()
+            if dlg is not None:
+                items = ", ".join(f"{it.type}:{it.text!r}@({it.rect.left},{it.rect.top})"
+                                  for it in dlg.items) or "(none)"
+                print(f"  [ui] choose-disk dialog: refCon={dlg.ref_con} default={dlg.default_item} "
+                      f"{len(dlg.items)} items: {items}", flush=True)
+            else:
+                _fw = snap.front_window()
+                _ft = _fw.title if _fw is not None else None
+                print(f"  [ui] choose-disk: front is not a dialog (front={_ft!r})", flush=True)
+        except Exception as e:
+            print(f"  [ui] dialog snapshot unavailable (non-fatal): {e}", flush=True)
+
         since = _nlines(runner)
         vnc.key("enter")                         # OK = the main Desktop disk -> benchmark runs
         # The benchmark-finished signal is Speedometer's "All Done!" alert (title=) — unambiguous,

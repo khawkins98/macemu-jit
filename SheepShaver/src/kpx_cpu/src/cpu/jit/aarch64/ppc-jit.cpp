@@ -323,16 +323,21 @@ static int jit_mix_classify(uint32_t insn) {
 	if (op == 16 || op == 18 || op == 19) return MIX_BRANCH;
 	if (op == 31) {                                        /* X-form: load/store vs ALU */
 		uint32_t xo = (insn >> 1) & 0x3FF;
-		/* common load/store XOs (lwzx/stwx/lbzx/lvx/stvx/...) cluster with bit pattern;
-		 * approximate: indexed loads/stores have xo in these families */
+		/* indexed integer loads/stores (lwzx/stwx/lbzx/... step-32 cluster) + lvx/stvx */
 		if (xo==23||xo==55||xo==87||xo==119||xo==151||xo==183||xo==215||xo==247||
 		    xo==279||xo==311||xo==343||xo==375||xo==407||xo==439||xo==103||xo==231)
 			return MIX_LOADSTORE;
+		/* byte-reverse loads/stores (lwbrx/lhbrx/stwbrx/sthbrx) */
+		if (xo==534||xo==790||xo==662||xo==918) return MIX_LOADSTORE;
+		/* FP indexed loads/stores (lfsx/lfdx/stfsx/stfdx) */
+		if (xo==535||xo==599||xo==663||xo==727) return MIX_FP;
 		return MIX_INT;
 	}
 	return MIX_INT;
 }
-#define JIT_PROF_SLOTS 32768   /* power of two for masked open-addressing */
+/* Sized to match JIT_BC_POOL (the JIT's distinct-block envelope) so a real boot's
+ * full working set fits without dropping late-compiled hot blocks (review 2026-06-06). */
+#define JIT_PROF_SLOTS 65536   /* power of two for masked open-addressing */
 struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insns; };
 static struct jit_prof_slot jit_prof_slots[JIT_PROF_SLOTS];
 static int  jit_prof_n = 0;
@@ -343,7 +348,9 @@ static struct jit_prof_slot *jit_prof_get(uint32_t pc) {
 	for (int i = 0; i < JIT_PROF_SLOTS; i++) {
 		struct jit_prof_slot *s = &jit_prof_slots[(h + i) & (JIT_PROF_SLOTS - 1)];
 		if (s->pc == pc) return s;          /* existing (accumulate across recompiles) */
-		if (s->pc == 0) { s->pc = pc; jit_prof_n++; return s; }  /* empty (pc 0 = never a block) */
+		/* pc==0 is the empty sentinel: guest block leaders are never at PC 0 (low memory
+		 * is exception vectors / system globals, not a code entry), so this is safe. */
+		if (s->pc == 0) { s->pc = pc; jit_prof_n++; return s; }
 	}
 	return NULL;                            /* table full — drop (logged at dump) */
 }

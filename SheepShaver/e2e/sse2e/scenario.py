@@ -161,6 +161,9 @@ def run_benchmark(
       splash -> Return; registration -> Esc; Cmd+A (run all) -> "choose drive" dialog ->
       Return (OK = the main Desktop disk) -> ~90 s benchmark -> screenshot results.
     """
+    dump_dir = tempfile.mkdtemp(prefix="ss-ui-")
+    os.environ["SS_UI_DUMP_DIR"] = dump_dir
+
     runner = Runner(argv=[emulator, "--config", prefs])
     runner.start()
     try:
@@ -233,7 +236,7 @@ def run_benchmark(
         report_saved = False
         try:
             report_saved = _save_text_report(runner, vnc)
-            _quit_to_finder(runner, vnc)
+            _quit_to_finder(runner, vnc, dump_dir=dump_dir)
             time.sleep(1.5)                               # let the Finder settle before shutdown
         except Exception:
             pass                                          # leave report_saved False; PASS unaffected
@@ -395,12 +398,38 @@ def _save_text_report(runner: Runner, vnc: Vnc) -> bool:
     return False
 
 
-def _quit_to_finder(runner: Runner, vnc: Vnc, timeout: float = 12.0) -> bool:
+def _await_finder_via_ui(runner: Runner, dump_dir: str, timeout: float):
+    """Definitive 'back at the Finder' check via UI introspection: Speedometer has no window left
+    and the front window is a non-dialog (the Desktop / a Finder window). Returns True if reached,
+    False if it timed out with Speedometer still present, or None if introspection produced no
+    snapshot at all (so the caller can fall back to the front-app settle heuristic)."""
+    deadline = time.monotonic() + timeout
+    first = True
+    while time.monotonic() < deadline:
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=min(3.0, max(0.5, deadline - time.monotonic())))
+        except TimeoutError:
+            if first:
+                return None            # no snapshots at all -> let the caller fall back
+            time.sleep(0.3); continue
+        first = False
+        if not snap.find(title_contains="Speedometer"):
+            fw = snap.front_window()
+            if fw is not None and not fw.is_dialog:
+                print(f"  [gate] ui:Finder (Speedometer gone, front={fw.title!r})", flush=True)
+                return True
+        time.sleep(0.3)
+    return False
+
+
+def _quit_to_finder(runner: Runner, vnc: Vnc, timeout: float = 12.0, dump_dir: str | None = None) -> bool:
     """Quit Speedometer back to the Finder, KEYBOARD-ONLY. Cmd-Q, then answer each modal that follows
     ("Save before quitting?" -> Yes -> the record save dialog -> accept -> any replace prompt) with
-    Return, until Speedometer has reliably VANISHED from the front-app stream (via `_await_front_app`,
-    not a single noisy 'Finder' frame). Returns True if the Finder was reached. The Power-key shutdown
-    hook only raises the Shut Down dialog at the Finder, not over a frontmost app.
+    Return, until Speedometer has reliably VANISHED from the front-app stream. When `dump_dir` is
+    supplied, uses UI introspection (`_await_finder_via_ui`) as a definitive check; falls back to the
+    noisy-'Finder'-frame settle heuristic (`_await_front_app`) when introspection is unavailable.
+    Returns True if the Finder was reached. The Power-key shutdown hook only raises the Shut Down
+    dialog at the Finder, not over a frontmost app.
     """
     since = _nlines(runner)
     vnc.key("super-q")                                # Cmd-Q = Quit
@@ -409,6 +438,12 @@ def _quit_to_finder(runner: Runner, vnc: Vnc, timeout: float = 12.0) -> bool:
             break
         since = _nlines(runner)
         vnc.key("enter")                              # default button (Yes / Save / Replace)
+    # Prefer a definitive introspection check; fall back to the front-app settle heuristic if
+    # introspection is unavailable (no SS_UI_DUMP_DIR / no snapshot).
+    if dump_dir is not None:
+        ok = _await_finder_via_ui(runner, dump_dir, timeout)
+        if ok is not None:
+            return ok
     return _await_front_app(runner, since, want="Finder", avoid="Speedometer",
                             timeout=timeout) is not None
 

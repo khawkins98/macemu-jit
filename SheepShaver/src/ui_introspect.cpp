@@ -20,6 +20,7 @@ enum {                       // offsets within a WindowRecord (GrafPort = 0x6C)
     kWinHilited= 0x6F,       // byte (the real "active" bit)
     kWinStruc  = 0x72,       // RgnHandle
     kWinCont   = 0x76,       // RgnHandle
+    kWinDefProc= 0x7E,       // WDEF handle; high byte = GetWVariant code
     kWinTitleH = 0x86,       // StringHandle
     kWinNext   = 0x90,       // WindowPeek
     kWinRefCon = 0x98,       // int32
@@ -41,16 +42,26 @@ static Rect16 region_bbox(uint32 rgnHandle) {
     return r;
 }
 
-// Read a window's title (StringHandle -> Str255), MacRoman-decoded. "" if untitled/wild.
-static std::string window_title(uint32 win) {
+// Returns the MacRoman-decoded title; sets *valid=false on a wild/garbage read (the caller marks
+// the window suspect). An untitled window is a VALID empty title (*valid stays true).
+static std::string window_title(uint32 win, bool *valid) {
+    *valid = true;
     uint32 hdl = ReadMacInt32(win + kWinTitleH);
-    if (!hdl || !guest_ptr_ok(hdl)) return "";
+    if (!hdl) return "";
+    if (!guest_ptr_ok(hdl)) { *valid = false; return ""; }
     uint32 ptr = ReadMacInt32(hdl);
-    if (!ptr || !guest_ptr_ok(ptr)) return "";
+    if (!ptr) return "";
+    if (!guest_ptr_ok(ptr)) { *valid = false; return ""; }
     uint8 *s = Mac2HostAddr(ptr);
     int len = s[0];
-    if (len > 255 || !guest_ptr_ok(ptr + 1 + len)) return "";
-    return macroman_to_utf8(std::string((const char *)s + 1, len));
+    if (len > 63 || !guest_ptr_ok(ptr + 1 + len)) { *valid = false; return ""; }
+    std::string raw;
+    for (int i = 0; i < len; i++) {
+        uint8 c = s[1 + i];
+        if (c < 32) { *valid = false; return ""; }   // control byte in a title = junk read
+        raw.push_back((char)c);
+    }
+    return macroman_to_utf8(raw);
 }
 
 static void append_rect(std::string &j, const char *key, const Rect16 &r) {
@@ -85,46 +96,72 @@ static std::string serialize_snapshot(const std::string &nonce) {
         j += sc;
     }
 
-    // modalActive = front window is a dialog (windowKind==2)
+    // Walk the window list, building per-window JSON into windows_json.
+    // modalActive and frontWindowIndex are determined during the walk.
     uint32 front = ReadMacInt32(kWindowList);
-    bool modal = front && guest_ptr_ok(front) && ((int16)ReadMacInt16(front + kWinKind) == 2);
-    char ma[64];
-    snprintf(ma, sizeof(ma), "\"modalActive\":%s,\"windows\":[", modal ? "true" : "false");
-    j += ma;
-
+    std::string windows_json;
     int idx = 0, front_index = -1;
+    bool front_is_modal = false;
+
     for (uint32 win = front; win && guest_ptr_ok(win); win = ReadMacInt32(win + kWinNext)) {
         if (!guest_ptr_ok(win + 0xA0)) break;   // ensure the whole WindowRecord is in RAM before reading its fields
+
         int16 kind = (int16)ReadMacInt16(win + kWinKind);
         bool isDialog = (kind == 2);
         bool visible  = Mac2HostAddr(win)[kWinVisible] != 0;   // byte read
         bool active   = Mac2HostAddr(win)[kWinHilited] != 0;
-        if (idx == 0) front_index = 0;
+
+        // title — must come before suspect computation
+        bool tvalid;
+        std::string title = window_title(win, &tvalid);
+
+        // modality: from the window VARIANT (high byte of windowDefProc @+0x7E via GetWVariant),
+        // gated to dialog windows ONLY. For non-dialog windows always "none".
+        const char *modality = "none";
+        if (isDialog) {
+            uint8 variant = Mac2HostAddr(win)[kWinDefProc];   // high byte of windowDefProc = GetWVariant code
+            if (variant == 1 || variant == 3)      modality = "modal";
+            else if (variant == 5)                 modality = "movableModal";
+            else                                   modality = "modeless";
+        }
+
+        // Fix 1: front_index = first VISIBLE window (list head can be hidden-but-linked).
+        if (front_index < 0 && visible) {
+            front_index = idx;
+            front_is_modal = (strcmp(modality, "modal") == 0);
+        }
+
         Rect16 sb = region_bbox(ReadMacInt32(win + kWinStruc));
         Rect16 cb = region_bbox(ReadMacInt32(win + kWinCont));
-        bool suspect = !sb.ok || !cb.ok;
+        bool suspect = !sb.ok || !cb.ok || !tvalid;
 
-        if (idx) j += ",";
+        if (idx) windows_json += ",";
         char w[256];
         snprintf(w, sizeof(w),
             "{\"index\":%d,\"ptr\":\"0x%08x\",\"title\":\"", idx, win);
-        j += w;
-        j += json_escape(window_title(win));
+        windows_json += w;
+        windows_json += json_escape(title);
         snprintf(w, sizeof(w),
             "\",\"windowClass\":\"%s\",\"modality\":\"%s\",\"isDialog\":%s,"
             "\"active\":%s,\"visible\":%s,\"collapsed\":false,",
-            isDialog ? "dialog" : "document", isDialog ? "modal" : "none",
+            isDialog ? "dialog" : "document", modality,
             isDialog ? "true" : "false", active ? "true" : "false", visible ? "true" : "false");
-        j += w;
-        append_rect(j, "contentBounds", cb.ok ? cb : sb);
-        j += ",";
-        append_rect(j, "structBounds", sb.ok ? sb : cb);
-        if (suspect) j += ",\"suspect\":true";
-        j += "}";
+        windows_json += w;
+        append_rect(windows_json, "contentBounds", cb.ok ? cb : sb);
+        windows_json += ",";
+        append_rect(windows_json, "structBounds", sb.ok ? sb : cb);
+        if (suspect) windows_json += ",\"suspect\":true";
+        windows_json += "}";
         idx++;
         if (idx > 256) break;     // runaway guard
     }
-    char tail[64];
+
+    // Assemble final JSON: modalActive depends on the front visible window discovered above.
+    char tail[128];
+    snprintf(tail, sizeof(tail), "\"modalActive\":%s,\"windows\":[",
+        front_is_modal ? "true" : "false");
+    j += tail;
+    j += windows_json;
     snprintf(tail, sizeof(tail), "],\"frontWindowIndex\":%d}", front_index);
     j += tail;
     return j;

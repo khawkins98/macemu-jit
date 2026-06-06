@@ -1162,6 +1162,24 @@ static void k_fp_add(uint8_t *p, int n) {     /* fadd f1,f1,f2  (FP add latency 
 static void k_fp_fma(uint8_t *p, int n) {     /* fmadd f1,f1,f1,f1  (FMA latency recurrence) */
 	for (int i = 0; i < n; i++) write_be32(p + i*4, 0xFC21183Au);
 }
+/* Integer-compute kernel modelling the real Speedometer hot block 0x1ed7befc
+ * (P0 profile): a mullw/extsh/divw/add/subf/addi recurrence on r3/r4/r5. This is
+ * the runtime-dominant pattern (heavy mullw+divw latency chain) that large-block
+ * codegen work (P5 const-fold, P6 scheduling, P8 pinning, RA) must move — the
+ * atomics (P3a) were hot by block-count but not by instruction-time. Register-only
+ * (no guest memory), so it runs anywhere the other integer kernels do. divw by a
+ * possibly-zero r5 is SDIV-safe on ARM64 (returns 0, no trap). */
+static void k_compute(uint8_t *p, int n) {
+	const uint32_t grp[6] = {
+		enc_xo(3,3,4,235,0,0),   /* mullw r3,r3,r4 */
+		enc_xo(4,5,0,922,0,0),   /* extsh r5,r4    (rS=4 in rd-slot, rA=5 in ra-slot) */
+		enc_xo(3,3,5,491,0,0),   /* divw  r3,r3,r5 */
+		enc_xo(3,3,4,266,0,0),   /* add   r3,r3,r4 */
+		enc_xo(3,4,3, 40,0,0),   /* subf  r3,r4,r3 (rB-rA = r3-r4) */
+		enc_d (14,4,4,1),        /* addi  r4,r4,1  */
+	};
+	for (int i = 0; i < n; i++) write_be32(p + i*4, grp[i % 6]);
+}
 
 struct BenchKernel { const char *name; const char *desc; void (*emit)(uint8_t*,int); };
 static const BenchKernel BENCH_KERNELS[] = {
@@ -1170,6 +1188,7 @@ static const BenchKernel BENCH_KERNELS[] = {
 	{ "alu",         "add/or/xor     (RA throughput)",   k_alu       },
 	{ "fp-add",      "fadd f1,f1,f2  (FP add latency)",  k_fp_add    },
 	{ "fp-fma",      "fmadd recurrence (FMA latency)",   k_fp_fma    },
+	{ "compute",     "mullw/divw/add chain (0x1ed7befc Speedometer hot)", k_compute },
 	/* load-store (k_loadstore) deferred to v2: guest data access goes through
 	 * RMEMBASE, which on macOS needs the DIRECT_ADDRESSING base set up so EAs land
 	 * in `mem` (low 4 GB is unmappable here). The emitter is kept for that work. */

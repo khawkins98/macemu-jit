@@ -28,7 +28,7 @@ _SPECS = {
     "iso":      ("SS_E2E_ISO",      "smoke.iso", "*.iso",
                  "/Users/Shared/macemu/Mac OS 8.6 Internal Edition.iso"),
     "disk":     ("SS_E2E_DISK",     "bench.dsk", "*.dsk",
-                 "/Users/Shared/macemu/macos9_mini.dsk"),
+                 "/Users/Shared/macemu/e2e-macos9-mini-boot.dsk"),
     # appsdisk is opt-in only: empty legacy default means "no apps disk" when nothing is configured.
     "appsdisk": ("SS_E2E_APPSDISK", "apps.dsk",  "apps.dsk", ""),
 }

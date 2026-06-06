@@ -25,6 +25,7 @@ enum {                       // offsets within a WindowRecord (GrafPort = 0x6C)
     kWinNext   = 0x90,       // WindowPeek
     kWinRefCon = 0x98,       // int32
 };
+enum { kDlgItems = 0x9C, kDlgDefItem = 0xA8 };   // DialogRecord fields, past the 0x9C WindowRecord
 
 struct Rect16 { int16 top, left, bottom, right; bool ok; };
 
@@ -70,6 +71,65 @@ static void append_rect(std::string &j, const char *key, const Rect16 &r) {
         "\"%s\":{\"left\":%d,\"top\":%d,\"right\":%d,\"bottom\":%d}",
         key, r.left, r.top, r.right, r.bottom);
     j += b;
+}
+
+static const char *ditl_type_name(int t) {
+    switch (t) {
+        case 4:  return "button";
+        case 5:  return "checkbox";
+        case 6:  return "radio";
+        case 7:  return "control";
+        case 8:  return "staticText";
+        case 16: return "editText";
+        case 32: return "icon";
+        case 64: return "picture";
+        default: return "userItem";
+    }
+}
+
+// Append the dialog's DITL items (globalized rects) as a JSON array `"items":[...]`. ox,oy = content
+// origin (window content-region top-left). defItem = aDefItem. All guest reads are bounds-guarded.
+static void serialize_dialog_items(uint32 win, int ox, int oy, int defItem, std::string &j) {
+    j += "\"items\":[";
+    uint32 ditlH = ReadMacInt32(win + kDlgItems);
+    if (!ditlH || !guest_ptr_ok(ditlH)) { j += "]"; return; }
+    uint32 ditl = ReadMacInt32(ditlH);
+    if (!ditl || !guest_ptr_ok(ditl)) { j += "]"; return; }
+    int count = (int16)ReadMacInt16(ditl) + 1;            // stored as N-1
+    if (count < 0 || count > 255) { j += "]"; return; }
+    uint32 p = ditl + 2;
+    for (int i = 0; i < count; i++) {
+        if (!guest_ptr_ok(p + 14)) break;                 // item header must be in RAM
+        int16 top  = (int16)ReadMacInt16(p + 4),  left  = (int16)ReadMacInt16(p + 6);
+        int16 bot  = (int16)ReadMacInt16(p + 8),  right = (int16)ReadMacInt16(p + 10);
+        uint8 typeByte = Mac2HostAddr(p)[12];
+        bool enabled = (typeByte & 0x80) == 0;
+        int  type = typeByte & 0x7F;
+        uint8 dlen = Mac2HostAddr(p)[13];
+        std::string text;
+        bool isTextItem = (type == 4 || type == 5 || type == 6 || type == 8 || type == 16);
+        if (isTextItem && guest_ptr_ok(p + 14 + dlen)) {
+            uint8 *d = Mac2HostAddr(p + 14);
+            std::string raw;
+            for (int k = 0; k < dlen; k++) { uint8 c = d[k]; if (c < 32) { raw.clear(); break; } raw.push_back((char)c); }
+            text = macroman_to_utf8(raw);
+        }
+        if (i) j += ",";
+        char b[256];
+        snprintf(b, sizeof(b),
+            "{\"index\":%d,\"type\":\"%s\",\"rect\":{\"left\":%d,\"top\":%d,\"right\":%d,\"bottom\":%d},"
+            "\"enabled\":%s%s",
+            i + 1, ditl_type_name(type),
+            left + ox, top + oy, right + ox, bot + oy,
+            enabled ? "true" : "false",
+            (i + 1 == defItem) ? ",\"default\":true" : "");
+        j += b;
+        if (isTextItem) { j += ",\"text\":\""; j += json_escape(text); j += "\""; }
+        j += "}";
+        uint32 adv = 14 + dlen + (dlen & 1);              // 14-byte header is even; pad dlen to even
+        p += adv;
+    }
+    j += "]";
 }
 
 // Serialize the window list (Backend A) to JSON. nonce is the request nonce echoed into output.
@@ -151,6 +211,16 @@ static std::string serialize_snapshot(const std::string &nonce) {
         windows_json += ",";
         append_rect(windows_json, "structBounds", sb.ok ? sb : cb);
         if (suspect) windows_json += ",\"suspect\":true";
+        if (isDialog) {
+            int32 refcon = (int32)ReadMacInt32(win + kWinRefCon);
+            int16 defItem = (int16)ReadMacInt16(win + kDlgDefItem);
+            char dd[64];
+            snprintf(dd, sizeof(dd), ",\"refCon\":%d,\"defaultItem\":%d,", refcon, defItem);
+            windows_json += dd;
+            int ox = cb.ok ? cb.left : sb.left;            // content-region top-left = local->global origin
+            int oy = cb.ok ? cb.top  : sb.top;
+            serialize_dialog_items(win, ox, oy, defItem, windows_json);
+        }
         windows_json += "}";
         idx++;
         if (idx > 256) break;     // runaway guard

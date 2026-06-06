@@ -3,6 +3,36 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — Interpreter Speedometer: harness `clean_signatures` is JIT-biased → skips score extraction
+
+Capturing the JIT-vs-interpreter Speedometer headline on the M5, the **interpreter** run
+(`SS_USE_JIT=0 make e2e-bench`) **ran the full suite** (reached Color Benchmarks) and **shut down
+cleanly** ("Shutdown complete", exit 0) — but the harness reported `FAIL: benchmark ran but the
+shutdown was not clean (exit=0, clean_signatures=False)`, and because `run_benchmark.py` does
+`if not res.ok: return` *before* the best-effort score export, **no interpreter score was recorded**.
+Root: the clean-shutdown signature check (scenario.py) keys on lines/timing that interpreter mode
+doesn't reproduce (likely JIT `[HB]`/region markers) — a false-negative, not a real shutdown problem.
+Two independent fixes (harness owner): (a) make the clean-shutdown signature **mode-agnostic**, or
+(b) move the score extraction *above* the `res.ok` gate — the code itself says "nothing here can flip a
+PASS to FAIL", so capturing a completed benchmark's score regardless of shutdown-cleanliness is strictly
+better. Lesson: **score capture should be decoupled from shutdown-cleanliness** — a benchmark that
+completed but shut down messily still has a valid score. (Also: interpreter Speedometer runs in ~the same
+wall-clock as JIT — Speedometer is fixed-*time* per subtest, so the mode difference shows in the *score*,
+not the run duration; ~40s benchmark gate both modes.)
+
+## 2026-06-07 — Re-enabling lazy CR0 would break divw/lwzx/mulhw/lwarx together (RTMP/NZCV across ra_store)
+
+Adversarial review of the perf commits surfaced a non-obvious coupling: several hot opcodes hold a live
+value in **RTMP0–2 and/or NZCV across an `ra_store(rd)` call** (divw: NZCV between CMP and the final CSEL;
+lwzx/lwarx: REV'd value in RTMP1 before `mov hD,RTMP1`; mulhw: SMULL product in RTMP0 before the LSR).
+This is safe **only because lazy CR0 is eager-in-practice** (`lazy_cr0_valid` is never set true), so
+`ra_store → ra_evict → emit_materialize_cr0` (which emits CMP+CSET, clobbering RTMP0–2 + NZCV) never fires.
+If §0g (lazy CR0) is ever truly enabled, all of these break **simultaneously**. So lazy-CR0 has a
+**prerequisite**: make `emit_materialize_cr0` RTMP/NZCV-safe, or hoist every such `ra_store` above its live
+values. divw is now hoisted (commit 0cce0942) as the first step; the rest are tracked in OPTIMIZATION-PLAN
+§0g / task #18. Lesson: "eager-in-practice" invariants that nothing *enforces* are landmines — a future
+optimization that flips the invariant detonates them all at once.
+
 ## 2026-06-06 — A launch-failure modal alert emits NO signal; detect it via the menu bar
 
 Building `scenario.run_workload`, the launch-error path (boot the app on a disk with the *wrong*

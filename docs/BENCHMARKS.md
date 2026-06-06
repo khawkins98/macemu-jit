@@ -47,8 +47,8 @@ Representative (real chaining/everything) but needs a reasonably quiet host. The
 |------|---|---|---|---|---|
 | 2026-06-06 | boot→Finder (ISO) | 1037 | 148M/s | 14.6 | JIT (pre-0h) |
 | 2026-06-07 | boot→Finder (ISO) | 1040 | 148M/s | 14.6 | JIT (post-0h) — flat, as expected: boot is I/O/timer-bound, not compute, so 0h shift/clrlwi wins don't move it |
-| _TODO_ | boot→Finder (ISO) | — | — | — | interpreter (`SS_USE_JIT=0`) — emulator-gated |
-| _TODO_ | Speedometer | — | — | — | JIT (bench completion-detection fix pending) |
+| 2026-06-07 | **Speedometer (compute)** | **2413** | 141M/s | **9.79** | JIT — **2.3× the boot guest-MIPS** (compute isn't I/O-bound); a64/guest-op 9.79 ≪ boot's 14.6 because Speedometer's hot blocks are large (20–163 insns) so per-block prologue/epilogue amortizes far better |
+| _TODO_ | boot→Finder (ISO) | — | — | — | interpreter (`SS_USE_JIT=0`) — produces no JIT profile (interpreter compiles no blocks); use Speedometer score ratio instead for the headline |
 
 The interpreter-vs-JIT guest-MIPS ratio is the headline "how much the JIT buys us" —
 pending one interpreter boot when the emulator is free. `a64/guest-op`=14.6 is inflated by
@@ -156,6 +156,33 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 - [x] HD boot timing — ~10s, works reliably (macos86_fresh.dsk, 4GB, Mac OS 8.6)
 
 ## Speedometer 4.02 Results
+
+### Current (2026-06-07, M5 MacBook Air, commit 0cce0942 — post P3a/0f/0h)
+
+Fresh JIT run via `make e2e-bench` (Mac OS 9 + Speedometer disk, profiler OFF):
+
+| Category | JIT score |
+|----------|-----------|
+| CPU | 65.5 |
+| Graphics | 43.4 |
+| Disk | 8.9 |
+| **Math** | **13,000** |
+
+In line with the post-B1/B2/A3 numbers below (the 0f/0h/P3a wins target boot/atomic
+paths and don't materially move Speedometer's large-block compute — consistent with the
+a64/op analysis). The e2e-bench harness's completion-detection (merged from the parent
+branch) now works — Speedometer reaches "All Done!" and the run records cleanly.
+
+**Interpreter floor (fresh M5) — BLOCKED on a harness false-negative.** `SS_USE_JIT=0`
+runs the full Speedometer suite (reaches Color Benchmarks) and shuts down cleanly
+("Shutdown complete", exit 0), but the harness's `clean_signatures` heuristic is
+**JIT-biased** and reports the shutdown unclean, so `run_benchmark.py` takes the FAIL path
+and **skips score extraction** (`if not res.ok: return`). The benchmark itself is fine —
+only the verdict + extraction gating is wrong for interpreter mode. **Fix (harness/other
+agent):** either make the clean-shutdown signature mode-agnostic, or move the best-effort
+score extraction *before* the `res.ok` check (the code already labels it "nothing here can
+flip a PASS to FAIL"). Until then the interpreter Speedometer floor is the prior-session
+figure below (PR 21.485). See LEARNINGS.
 
 ### Configuration
 - **Host**: macOS arm64 (Apple Silicon)

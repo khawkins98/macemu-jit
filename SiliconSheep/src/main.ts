@@ -149,7 +149,10 @@ function renderVmRow(vm: VmProfile): string {
     <div class="vm-row ${isRunning ? "vm-row--running" : ""} ${isSelected ? "vm-row--selected" : ""}"
          data-id="${escapeAttr(vm.id)}"
          data-name="${escapeAttr(vm.name)}"
-         data-action="select-vm">
+         data-action="select-vm"
+         role="option"
+         aria-selected="${isSelected}"
+         tabindex="0">
       <div class="vm-row__thumb">
         ${screenshotSrc
           ? `<img src="${screenshotSrc}" alt="" class="vm-row__thumb-img" />`
@@ -161,6 +164,9 @@ function renderVmRow(vm: VmProfile): string {
         <span class="vm-row__name">${escapeHtml(vm.name)}</span>
         <span class="vm-row__meta">${osLabel}${elapsed ? ` · ${elapsed}` : ""}</span>
       </div>
+      <!-- HIG review: sidebar row action buttons are suspect — Conflict Catcher kept
+           rows selection-only and put all actions in the detail pane. These stay for now
+           for quick-access discoverability, but may be removed in a future design pass. -->
       <div class="vm-row__actions">
         ${isRunning
           ? `<button class="vm-row__btn vm-row__btn--power-on" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">${ICON_POWER_ON()}</button>`
@@ -214,7 +220,7 @@ function renderLibrary(): string {
     ${renderErrorBanner()}
     <div class="cc-master-detail">
       <div class="cc-sidebar">
-        <div class="cc-list">
+        <div class="cc-list" role="listbox" aria-label="Virtual Machines">
           ${vms.map(renderVmRow).join("")}
         </div>
         <div class="cc-footer">
@@ -265,7 +271,7 @@ function renderDetailPane(): string {
     </div>
     <div class="detail-config">
       <div class="detail-tabs">
-        ${["general", "display", "storage", "network", "input", "advanced", "debug"]
+        ${["general", "hardware", "storage", "network"]
           .map((s) => `<button class="detail-tab ${s === settingsSection ? "detail-tab--active" : ""}"
                         data-action="switch-section" data-section="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}</button>`)
           .join("")}
@@ -274,6 +280,7 @@ function renderDetailPane(): string {
         ${renderSettingsSection(vm, isRunning)}
       </div>
       <div class="detail-save-bar">
+        <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
         <button class="btn btn-primary" data-action="save-settings">Save</button>
       </div>
     </div>
@@ -637,9 +644,10 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         <label>Disk Images</label>
         ${disks.length === 0
           ? '<p class="ss-text-muted">No disks attached.</p>'
-          : disks.map((d) => `
+          : disks.map((d, i) => `
             <div class="file-input" style="margin-bottom: 8px;">
               <span class="file-path">${escapeHtml(d)}</span>
+              <button class="btn btn-secondary btn-sm btn-danger-hover" data-action="remove-disk" data-index="${i}" title="Remove">✕</button>
             </div>
           `).join("")
         }
@@ -897,6 +905,22 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
     `,
   };
 
+  // Consolidated tabs: hardware = display + input + sound; general includes advanced + debug fold-outs
+  sections["hardware"] = (sections["display"] || "") +
+    '<h3 style="margin: 16px 0 8px; font-size: 13px; font-weight: 600;">Input</h3>' +
+    (sections["input"] || "") +
+    '<h3 style="margin: 16px 0 8px; font-size: 13px; font-weight: 600;">Sound</h3>' +
+    `<div class="form-group">
+        <label>Sound</label>
+        <select class="input" id="setting-nosound">
+          <option value="true" ${getPref("nosound") === "true" ? "selected" : ""}>Disabled</option>
+          <option value="false" ${getPref("nosound") !== "true" ? "selected" : ""}>Enabled</option>
+        </select>
+      </div>`;
+
+  // Append advanced + debug as fold-outs inside general
+  sections["general"] += (sections["advanced"] || "") + (sections["debug"] || "");
+
   return sections[section] || "";
 }
 
@@ -910,7 +934,7 @@ function renderSettings(): string {
     ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
     <div class="settings-body">
       <div class="settings-sidebar">
-        ${["general", "display", "storage", "network", "input", "advanced", "debug"]
+        ${["general", "hardware", "storage", "network"]
           .map((s) => `
             <button class="settings-nav-item ${s === settingsSection ? "active" : ""}"
                     data-action="switch-section" data-section="${s}">
@@ -923,6 +947,7 @@ function renderSettings(): string {
       </div>
     </div>
     <div class="detail-save-bar">
+      <button class="btn btn-secondary" data-action="revert-settings">Revert</button>
       <button class="btn btn-primary" data-action="save-settings">Save</button>
     </div>
   `;
@@ -947,6 +972,31 @@ function render() {
 function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((el) => {
     el.addEventListener("click", handleAction);
+  });
+
+  // Keyboard navigation: arrow keys in VM list, Return to boot
+  document.querySelectorAll(".vm-row").forEach((el) => {
+    el.addEventListener("keydown", (e) => {
+      const ke = e as KeyboardEvent;
+      const row = el as HTMLElement;
+      if (ke.key === "ArrowDown" || ke.key === "ArrowUp") {
+        ke.preventDefault();
+        const rows = Array.from(document.querySelectorAll(".vm-row"));
+        const idx = rows.indexOf(row);
+        const next = ke.key === "ArrowDown" ? rows[idx + 1] : rows[idx - 1];
+        if (next) {
+          (next as HTMLElement).focus();
+          (next as HTMLElement).click();
+        }
+      } else if (ke.key === "Enter") {
+        ke.preventDefault();
+        const vmId = row.dataset.id;
+        if (vmId && !runningVmIds.has(vmId)) {
+          const btn = row.querySelector('[data-action="launch"]');
+          if (btn) handleAction({ target: btn } as unknown as Event);
+        }
+      }
+    });
   });
 
   // P1.5: Double-click VM row to boot
@@ -1317,7 +1367,7 @@ async function handleAction(e: Event) {
       break;
 
     case "delete":
-      if (id && confirm("Remove this virtual machine and its files?")) {
+      if (id && confirm(`Delete "${vms.find(v => v.id === id)?.name || "this VM"}"?\n\nThis removes the VM profile and its .sheepvm bundle directory.\nDisk images stored outside the bundle are NOT deleted.`)) {
         try {
           await invoke("delete_vm", { id });
           emit("vm-deleted", { id });
@@ -1333,6 +1383,15 @@ async function handleAction(e: Event) {
       captureCurrentSectionSettings();
       settingsSection = target.dataset.section || "general";
       render();
+      break;
+
+    case "revert-settings":
+      if (selectedVmId) {
+        pendingSettings = {};
+        await loadVmPrefs(selectedVmId);
+        showToast("Reverted to saved settings", "info");
+        render();
+      }
       break;
 
     case "save-settings":
@@ -1359,6 +1418,22 @@ async function handleAction(e: Event) {
         await invoke("update_vm_setting", { id: selectedVmId, key: "rom", value: path });
         vms = await loadVms();
         render();
+      }
+      break;
+    }
+
+    case "remove-disk": {
+      const index = parseInt(target.dataset.index || "0");
+      if (selectedVmId && confirm("Remove this disk from the VM? (The disk image file is not deleted.)")) {
+        try {
+          await invoke("remove_vm_disk", { id: selectedVmId, index });
+          await loadVmPrefs(selectedVmId);
+          vms = await loadVms();
+          showToast("Disk removed", "success");
+          render();
+        } catch (err) {
+          showToast(`Failed: ${err}`, "error");
+        }
       }
       break;
     }

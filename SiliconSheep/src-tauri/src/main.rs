@@ -78,6 +78,23 @@ fn add_vm_disk(id: String, path: String, is_cdrom: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn remove_vm_disk(id: String, index: usize) -> Result<(), String> {
+    let vm_dir = vm::vm_dir_for(&id);
+    let prefs_path = vm_dir.join("prefs");
+    let mut pf = prefs::load_prefs(&prefs_path)?;
+    let disks: Vec<_> = pf.entries.iter().enumerate()
+        .filter(|(_, e)| e.key == "disk")
+        .map(|(i, _)| i)
+        .collect();
+    if index < disks.len() {
+        pf.entries.remove(disks[index]);
+        prefs::save_prefs(&prefs_path, &pf)?;
+        vm::sync_profile_from_prefs(&id)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn update_vm_setting(id: String, key: String, value: String) -> Result<(), String> {
     if key == "name" {
         return vm::rename_profile(&id, &value);
@@ -492,6 +509,7 @@ fn main() {
             save_vm_prefs,
             update_vm_setting,
             add_vm_disk,
+            remove_vm_disk,
             launch_vm,
             stop_vm,
             get_running_vms,

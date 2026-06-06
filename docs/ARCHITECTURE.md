@@ -50,6 +50,11 @@ LDRB/STRB at individual byte offsets (so=900, ca=902).
 
 See also `docs/planning/SheepShaver-AARCH64_JIT_PLAN.md` (plan + status).
 
+The `SheepShaver/src/ui_introspect.{h,cpp}` module is a host-side read-only `WindowList`
+walk serviced at the idle hook (`OP_IDLE_TIME`) when `SS_UI_DUMP_DIR` is set; it emits a
+nonce-stamped JSON window-list snapshot (global VNC-clickable coordinates, Plan 1). See
+`SheepShaver/docs/UI-INTROSPECTION.md` for the full reference.
+
 **Concurrency model:** SheepShaver runs the guest on a single host thread (one logical guest CPU)
 with synchronized host helper threads for I/O — it is **not** multicore-sensitive and needs no
 core-pinning. The canonical, code-grounded statement (and the one caveat for future multithreading)

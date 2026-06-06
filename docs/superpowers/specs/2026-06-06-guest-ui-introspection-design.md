@@ -4,6 +4,14 @@
 > **Spec for:** a host-side tool that emits a structured JSON tree of the running classic Mac OS guest's
 > on-screen UI (windows, dialog items, menus) with exact, VNC-clickable coordinates — *without* a screenshot.
 
+> **⚠️ Implementation status (2026-06-06):** This is the DESIGN. Plan 1 (the walking skeleton)
+> shipped a SUBSET — see the canonical reference `SheepShaver/docs/UI-INTROSPECTION.md` for what
+> actually exists. In particular: (1) the trigger is the **signal-free file poll** (§3), NOT SIGUSR2
+> (any §4.1/§8 SIGUSR2 mention is obsolete — SIGUSR2 is the nanokernel's interrupt); (2) §7's
+> "v1 full-fidelity" describes the full DESIGN, not Plan 1 (dialog items/parts/menus/dialogId are
+> Plan 2); (3) the shipped Python API is `find(title=/window_class=/visible=)` + `clickable()->bool`,
+> not §4.2's `find(text=/role=/type=)`/`assert_dialog`/`default_key` (those are Plan 2/3).
+
 ---
 
 ## 0. Problem & motivation

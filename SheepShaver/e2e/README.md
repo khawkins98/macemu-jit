@@ -189,7 +189,7 @@ SS_E2E_RUNS=5 make e2e-bench    # 5 benchmark runs -> a median ± CV% summary (l
 | `SS_E2E_MEDIUM` | `iso` | `iso` (read-only, default) or `disk` for the **smoke** boot medium | `make e2e` only (the benchmark is always the disk) |
 | `SS_E2E_RUNS` | `1` | Run the benchmark N times and print a median ± per-metric CV% batch summary | `make e2e-bench` |
 | `SS_E2E_SHUTDOWN_TIMEOUT` | `60` | Seconds to wait for the post-benchmark shutdown before force-killing (raise it to watch a stuck shutdown on screen) | `make e2e-bench` |
-| `SS_UI_DUMP_DIR` | unset (feature off) | Enables on-demand guest UI introspection. When set to a directory, the emulator's idle hook services a request file (`ss_ui.req`) and writes a Backend-A window-list snapshot (`ss_ui.A.json`) + a nonce-stamped `ss_ui.done` sentinel. Consumed by `sse2e/uidump.py`; see the introspection spec `docs/superpowers/specs/2026-06-06-guest-ui-introspection-design.md`. Try it: `.venv/bin/python run_uidump_smoke.py`. | both |
+| `SS_UI_DUMP_DIR` | unset (feature off) | Enables on-demand guest UI introspection. When set to a directory, the emulator's idle hook services a request file (`ss_ui.req`) and writes a Backend-A window-list snapshot (`ss_ui.A.json`) + a nonce-stamped `ss_ui.done` sentinel. Consumed by `sse2e/uidump.py`. **Canonical reference:** `SheepShaver/docs/UI-INTROSPECTION.md`. Try it: `.venv/bin/python run_uidump_smoke.py`. | both |
 
 A smoke run is ~1 min (boot ~5 s, shutdown flush ~20–30 s). The SDL window appears on your screen and
 **VNC is served on port 5950** if you want to watch live. On failure, `artifacts/fail.log` + any

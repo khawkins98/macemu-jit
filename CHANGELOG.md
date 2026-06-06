@@ -11,6 +11,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [SheepShaver] tools: jit-diff-sweep.py — differential op-sweep + auto-referee (instrumentation #11)
+
+The unified-instrumentation payoff (ROADMAP A1 #11, Phase 0+2 in practical form): a committed,
+reusable tool (`SheepShaver/tools/jit-diff-sweep.py`) that formalizes the throwaway sweep scripts +
+by-hand `SS_TEST_HEX` triage that found the session's 27 codegen bugs. For each registered AltiVec/FP
+op it injects one instruction (crafted lane-distinct, sign/saturation-crossing operands) through the
+**real emulator twice** — interp (`SS_TEST_JIT=0`) vs JIT (`SS_TEST_JIT=1`) — and diffs the result
+register. The interpreter IS the trusted oracle, so the tool is its own **auto-referee** (no second
+pass): `interp == JIT` ⇒ correct; `!=` ⇒ a real divergence with a copy-paste repro.
+
+- **Run-stamped JSONL output** under `$SS_RUN_DIR` (default `/tmp/macemu-runs/<ts>-sweep/` + a
+  `latest` symlink), one record per op (`{schema,tool,kind,family,op,verdict,oracle,interp,jit,hex}`)
+  + a `summary.json` — the #11 schema. FAIL records carry the exact `SS_TEST_HEX` repro.
+- **Regression-tracks known-broken ops** (the pack family, A2) as `known-broken`, not `FAIL`, and
+  **skips un-referee-able ops** (`fsqrt`/`fres`/`frsqrte`: interp lacks them / estimates).
+- Lessons baked in (operands non-saturating so lane bugs can't hide; see
+  `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`). Current run: **pass=38, FAIL=0, known-broken=3**.
+- **Remaining for full #11:** Phase 1 orchestrator (`make test-session` aggregating all oracles)
+  and the in-emulator C++ JSONL emitters (so `SS_JIT_VERIFY`/heartbeat feed the same run dir) — this
+  tool delivers the high-value referee piece standalone. Spec:
+  `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`.
+
 ### [SheepShaver] FP differential sweep — fctiw/fctiwz conversion bug fixed; rest of FP clean
 
 Pivoted the proven sweep method to the under-tested FP ops (vs the real interpreter, with

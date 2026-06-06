@@ -266,6 +266,32 @@ early-boot ROM spin — neither reaches Finder with full coverage. A targeted/sa
 on oracle-independent evidence (see P1a outcome).
 **Effort**: Medium (replay rework + memory snapshot). **Risk**: Low (tooling only).
 
+#### Fix (ii) — approach + decision (documented 2026-06-06; DEFERRED, low value)
+
+**Decision:** designed + review-vetted, **not implemented — deferred as low-value.** The broad
+verify sweep (2026-06-05) found the four residual `SUSPECT` blocks are *all* memory-RMW readback
+artifacts and **zero real codegen bugs hide behind them**, so fix (ii) buys oracle *completeness*,
+not bug-finding. It also touches the interpreter store path + dispatch ordering (real-boot blast
+radius), so it needs an explicit greenlight before landing. Pick it up only if a future need wants
+the verify oracle artifact-free (e.g. bisecting a real regression past early boot).
+
+**Approach (turnkey when picked up — full spec:
+`docs/superpowers/specs/2026-06-05-verify-memory-snapshot-fix-ii-design.md`):**
+1. **Interp-first reorder.** Run the interp replay on the *pristine* pre-state before the JIT
+   executes the block (snapshot regs, run interp, capture post-state, restore regs, run JIT,
+   `memcmp`). Removes the read-after-JIT-write hazard for the register compare with no memory
+   bookkeeping.
+2. **RAM-write journal.** The interp replay now writes memory, so wrap `vm_write_memory_{1,2,4,8}`
+   (the interp store chokepoint, `vm.hpp`) under a `verify_journal_active` flag: record
+   `(addr,size,old_bytes)` before each store; after the replay, replay the journal in reverse to
+   restore, then run the JIT. All gated behind `SS_JIT_VERIFY` so normal boots are untouched.
+3. **Two landing-blocker must-fixes** (from review): (a) an `ends_in_fallback` bit on `jit_bc_entry`
+   so the replay stops at a host-side fallback instead of over-running `n_insns`; (b) journal sized
+   ≥ **16384** entries with **loud-abort-on-overflow** (a single `stmw` writes 32 words; a silent
+   drop leaves guest RAM corrupted — the exact failure (ii) exists to prevent).
+4. **Caveat:** the oracle stays **register-only** even after (ii) — it removes the memory-RMW
+   *register* false-positives; it does not compare the JIT-vs-interp *memory* writes themselves.
+
 **Verify sweep result (2026-06-05, `SS_JIT_VERIFY=1 SS_JIT_NO_CHAIN=1`, HD boot) — honestly
 scoped:** with fix (i) + dedup, the oracle reports **exactly four `SUSPECT` blocks**
 (`100fd0e0`/`10106b50`/`1011e734`/`1018b04c`) and four `ARTIFACT-PC` blocks. **All four

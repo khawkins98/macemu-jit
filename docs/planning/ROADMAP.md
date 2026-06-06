@@ -159,8 +159,14 @@ harness that can't catch mistakes just produces the next silent bug.
   analyzer that **auto-referees disagreements via `SS_TEST_HEX`** (automating the manual triage done
   2026-06-06) and **joins HOT-PC "what's hot" with microbench "what's slow"** for optimization leads.
   Builds on the benchmark-export run-stamp pattern + `jit-analyze.py`. **Phase 0+2 (schema + auto-
-  referee) are the must-haves; 1/3 are convenience.** Not started; does not block the AltiVec/FP work.
-  Design: `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`.
+  referee) are the must-haves; 1/3 are convenience.**
+  ✅ **Phase 0+2 delivered in practical form (2026-06-06): `tools/jit-diff-sweep.py`** — a committed,
+  reusable differential AltiVec/FP op-sweep that runs the real emulator interp-vs-JIT (its own
+  auto-referee), emits run-stamped JSONL + `summary.json` under `$SS_RUN_DIR` (the schema), tracks
+  known-broken ops + skips un-referee-able ones, and prints copy-paste repros for FAILs (current:
+  pass=38/FAIL=0/known-broken=3). 🟡 **Remaining:** Phase 1 orchestrator (`make test-session`
+  aggregating all oracles) + in-emulator C++ JSONL emitters (so `SS_JIT_VERIFY`/heartbeat feed the
+  same run dir). Design: `docs/superpowers/specs/2026-06-06-unified-test-session-instrumentation-design.md`.
 - 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered

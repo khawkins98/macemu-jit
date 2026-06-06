@@ -299,6 +299,12 @@ So picking good workloads pays off twice — run each one under both lenses.
 All of the above are classic-Mac abandonware (Macintosh Garden / Macintosh
 Repository); the installed Mac OS 8.6 disk runs them.
 
+> **Curated, linkable catalog of specific demanding titles** (with download sources, AltiVec status,
+> and emulation caveats) → [`MACOS9-STRESS-WORKLOADS.md`](MACOS9-STRESS-WORKLOADS.md). Zero-friction
+> AltiVec first picks: **AltiVec Fractal Carbon** (Dauger — built-in scalar oracle for A/B),
+> **SoundJam MP** (AltiVec MP3 encode), **POV-Ray 3.6** (scalar-FP, ships its own benchmark scene).
+> Watch the corrections there (e.g. official SETI@home and Photoshop 6.0 are *not* AltiVec).
+
 ---
 
 ## When VERIFY reports a divergence

@@ -11,6 +11,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Curated Mac OS 9 stress-test software catalog (downloadable, AltiVec-first)
+
+Added `docs/MACOS9-STRESS-WORKLOADS.md` (cross-linked from `TESTING.md`): a linkable catalog of
+demanding period-correct PowerPC Mac OS 9 software for stress-testing the JIT, prioritized by
+AltiVec-relevance + emulation-feasibility, with download sources (Macintosh Garden / Repository /
+archive.org) and per-title caveats. Web-researched, with myth-corrections carried: official
+**SETI@home is NOT AltiVec**, **Photoshop 6.0 removed AltiVec** (5.5+AltiVecCore plug-in / 7 have it),
+**stock POV-Ray Mac is NOT AltiVec**, **OpenGL games (Quake III) are non-starters** (no 3D HW) but
+software-renderer games run, and **iMovie/FCP render-export works camera-free** (only capture needs
+FireWire). Top zero-friction AltiVec picks: AltiVec Fractal Carbon (built-in scalar oracle),
+SoundJam MP (AltiVec MP3 encode), POV-Ray 3.6 (scalar-FP). Ties to ROADMAP A2/A3/A5-V + B1.
+
 ### [docs] Fold in two external threads — JIT stress workloads + hot disk loading
 
 Digested two user-shared sources and folded the actionable parts:

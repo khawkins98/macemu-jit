@@ -734,6 +734,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_IDLE_TIME:
 			e2e_emit_idle_signals();
 			e2e_check_host_shutdown();	// inject Power key (with dwell) if host asked (A5)
+			ui_introspect_service();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();
@@ -743,6 +744,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 		case OP_IDLE_TIME_2:
 			e2e_emit_idle_signals();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
 			e2e_check_host_shutdown();
+			ui_introspect_service();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();

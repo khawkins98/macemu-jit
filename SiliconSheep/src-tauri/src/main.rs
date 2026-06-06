@@ -254,32 +254,6 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
-fn find_vncdotool() -> Option<String> {
-    let candidates = [
-        "../SheepShaver/e2e/.venv/bin/vncdotool",
-    ];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let p = exe_dir.join("../../../../SheepShaver/e2e/.venv/bin/vncdotool");
-            if p.exists() {
-                return Some(p.to_string_lossy().to_string());
-            }
-        }
-    }
-    for path in &candidates {
-        if std::path::Path::new(path).exists() {
-            return Some(path.to_string());
-        }
-    }
-    if let Ok(output) = std::process::Command::new("which").arg("vncdotool").output() {
-        if output.status.success() {
-            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !p.is_empty() { return Some(p); }
-        }
-    }
-    None
-}
-
 #[tauri::command]
 fn list_vm_logs(id: String) -> Result<Vec<String>, String> {
     let vm_dir = vm::vm_dir_for(&id);

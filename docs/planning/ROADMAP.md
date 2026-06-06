@@ -653,6 +653,45 @@ deferred/exploratory:
 Run the New World Phase 0 (and optionally the stub-pressure probe) before committing to either —
 the first wall may be the only one. Large, exploratory, low priority vs. Tracks A/C.
 
+## D4. 🟡 DingusPPC comparative investigation (exploratory)
+
+Evaluate [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc) as a **reference emulator**
+for architecture and validation ideas we can adapt to SheepShaver on Apple Silicon. This is not a
+port target and not a code-import plan; it is a structured "borrow-or-reject" pass focused on:
+MMU/TLB modeling, exception/timer fidelity, test harness discipline, and where their interpreter-
+heavy design should **not** influence our JIT execution path.
+
+Initial goal: produce a ranked "adopt now / defer / avoid" matrix with concrete first experiments
+and explicit non-goals to prevent scope creep, including Dingus's CLI-debugger/profiler ergonomics
+as potential inputs to our own verification workflow.
+**Detail:** `docs/planning/DINGUSPPC-EVALUATION-PLAN.md`.
+
+## D5. 🟡 Snow comparative investigation (exploratory)
+
+Evaluate [twvd/snow](https://github.com/twvd/snow) as a **reference emulator** for two things:
+(1) hardware-fidelity strategies relevant to classic-mac emulation (especially if BasiliskII/68K
+work is resumed), and (2) debugger UX/tooling patterns we can adapt for SheepShaver verification.
+
+The scope is comparative and strategic (borrow/defer/avoid), not a port plan and not code import.
+Primary focus: traceability tooling (instruction history/trap history/peripheral views/watchpoints),
+hardware-model discipline, and any low-risk debug instrumentation ideas transferable to this repo.
+**Detail:** `docs/planning/SNOW-EVALUATION-PLAN.md`.
+
+## D6. 🟡 Infinite Mac comparative investigation (exploratory)
+
+Evaluate [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac) as a reference for
+**host/runtime integration strategy**: browser+WASM emulator orchestration, dynamic file/media
+injection, and multi-instance networking setup.
+
+This is explicitly a "borrow-or-reject" pass for architecture ideas, not a web-port plan. It also
+gets a nod as a discovery source: its curated emulator stack includes DingusPPC and Snow, which
+helps us identify adjacent projects worth evaluating.
+
+Initial focus: dynamic uploads/CD-ROM mounting flows, chunked/remote media delivery patterns, and
+network topology constraints (including the project’s AppleTalk zone model and where it does/does
+not map to our native networking goals).
+**Detail:** `docs/planning/INFINITE-MAC-EVALUATION-PLAN.md`.
+
 ---
 
 ## ✅ Done (recent — for context, newest first)

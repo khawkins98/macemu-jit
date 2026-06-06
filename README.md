@@ -3,6 +3,7 @@
 This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit), adding an AArch64 JIT backend that translates PowerPC instructions to native ARM64 at runtime. **SheepShaver** boots Mac OS 8.x–9.x to the Finder desktop with the full native JIT on M-series Macs.
 
 > **Scope:** SheepShaver (PowerPC) is the working macOS emulator. **BasiliskII** (68K) does *not* currently build on macOS arm64 — see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`. A native macOS launcher, **Silicon Sheep** (Tauri), is in development — see [`SiliconSheep/`](SiliconSheep/).
+> **External targets under investigation:** We are also tracking [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac), [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc), and [twvd/snow](https://github.com/twvd/snow) as emulators we target for comparative research. We have not integrated work from these projects yet, but they use similar GPL-family licenses and may contain ideas we can incorporate after targeted evaluation.
 
 ### Prerequisites
 

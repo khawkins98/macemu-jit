@@ -1,6 +1,6 @@
 # `docs/planning/` — forward-looking plans
 
-> **Status:** 📖 Index · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Status:** 📖 Index · **Created:** 2026-06-04 · **Updated:** 2026-06-06
 > **Why this doc exists:** Index of every forward-looking plan under docs/planning/ — start at ROADMAP.md.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -29,6 +29,9 @@ status and pointers.
 | [`DR-JIT-SYNTHESIS.md`](DR-JIT-SYNTHESIS.md) | DR-emulator JIT synthesis notes. |
 | [`SheepShaver-AARCH64_JIT_PLAN.md`](SheepShaver-AARCH64_JIT_PLAN.md) | SheepShaver PPC→ARM64 JIT plan + status. |
 | [`BasiliskII-MACOS-AARCH64-JIT-PORT.md`](BasiliskII-MACOS-AARCH64-JIT-PORT.md) | BasiliskII macOS build/port pick-up plan (Track D). |
+| [`DINGUSPPC-EVALUATION-PLAN.md`](DINGUSPPC-EVALUATION-PLAN.md) | Comparative plan for evaluating DingusPPC ideas (adopt/defer/avoid) without scope creep. |
+| [`SNOW-EVALUATION-PLAN.md`](SNOW-EVALUATION-PLAN.md) | Comparative plan for evaluating Snow's emulation/debug tooling ideas for adoption or deferral. |
+| [`INFINITE-MAC-EVALUATION-PLAN.md`](INFINITE-MAC-EVALUATION-PLAN.md) | Comparative plan for evaluating Infinite Mac host/runtime integration and networking ideas. |
 | [`BasiliskII-next-phase-plan.md`](BasiliskII-next-phase-plan.md) | BasiliskII 68K JIT next-phase plan. |
 | [`sheepshaver-research/`](sheepshaver-research/) | Research/testing web (Dolphin/RPCS3/MAME leads, [IMPLEMENTATION-BACKLOG](sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md), compatibility-testing plan). Moved as a self-contained unit; internal links preserved. |
 | [`autoresearch/`](autoresearch/) | BasiliskII opcode-correctness autoresearch notes + experiment reports. |

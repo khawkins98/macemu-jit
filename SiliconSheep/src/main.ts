@@ -722,13 +722,6 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
     `,
     advanced: `
       <div class="form-group">
-        <label>Sound</label>
-        <select class="input" id="setting-nosound">
-          <option value="true" ${getPref("nosound") === "true" ? "selected" : ""}>Disabled</option>
-          <option value="false" ${getPref("nosound") !== "true" ? "selected" : ""}>Enabled</option>
-        </select>
-      </div>
-      <div class="form-group">
         <label>JIT Cache Size ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
         <select class="input" id="setting-jitcache" ${isRunning ? "disabled" : ""}>
           ${["64M", "128M", "256M", "512M"]

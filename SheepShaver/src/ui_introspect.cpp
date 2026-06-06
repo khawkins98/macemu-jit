@@ -32,7 +32,7 @@ static Rect16 region_bbox(uint32 rgnHandle) {
     Rect16 r = {0,0,0,0,false};
     if (!rgnHandle || !guest_ptr_ok(rgnHandle)) return r;
     uint32 ptr = ReadMacInt32(rgnHandle);            // master pointer
-    if (!ptr || !guest_ptr_ok(ptr)) return r;
+    if (!ptr || !guest_ptr_ok(ptr) || !guest_ptr_ok(ptr + 10)) return r;
     r.top    = (int16)ReadMacInt16(ptr + 2);
     r.left   = (int16)ReadMacInt16(ptr + 4);
     r.bottom = (int16)ReadMacInt16(ptr + 6);
@@ -49,7 +49,7 @@ static std::string window_title(uint32 win) {
     if (!ptr || !guest_ptr_ok(ptr)) return "";
     uint8 *s = Mac2HostAddr(ptr);
     int len = s[0];
-    if (len > 255) return "";
+    if (len > 255 || !guest_ptr_ok(ptr + 1 + len)) return "";
     return macroman_to_utf8(std::string((const char *)s + 1, len));
 }
 
@@ -94,6 +94,7 @@ static std::string serialize_snapshot(const std::string &nonce) {
 
     int idx = 0, front_index = -1;
     for (uint32 win = front; win && guest_ptr_ok(win); win = ReadMacInt32(win + kWinNext)) {
+        if (!guest_ptr_ok(win + 0xA0)) break;   // ensure the whole WindowRecord is in RAM before reading its fields
         int16 kind = (int16)ReadMacInt16(win + kWinKind);
         bool isDialog = (kind == 2);
         bool visible  = Mac2HostAddr(win)[kWinVisible] != 0;   // byte read
@@ -141,14 +142,14 @@ static std::string read_file(const std::string &path) {
 }
 
 // Write `content` to `dir/name` atomically (temp in same dir + rename).
-static void write_atomic(const std::string &dir, const char *name, const std::string &content) {
+static bool write_atomic(const std::string &dir, const char *name, const std::string &content) {
     std::string tmp = dir + "/." + name + ".tmp";
     std::string dst = dir + "/" + name;
     FILE *f = fopen(tmp.c_str(), "wb");
-    if (!f) return;
+    if (!f) return false;
     fwrite(content.data(), 1, content.size(), f);
     fclose(f);
-    rename(tmp.c_str(), dst.c_str());
+    return rename(tmp.c_str(), dst.c_str()) == 0;
 }
 
 // Extract a flat JSON string value: "key":"value" (no nesting/escapes in our request file).
@@ -176,8 +177,10 @@ void ui_introspect_service(void) {
     rename(req.c_str(), consumed.c_str());
     std::string body = read_file(consumed);
     std::string nonce = json_str_field(body, "nonce");
+    if (nonce.size() > 64) nonce.resize(64);
 
     // Backend A only in Plan 1 (ignore "backends"/"screenshot" until Plans 2-3).
-    write_atomic(dir, "ss_ui.A.json", serialize_snapshot(nonce));
+    if (!write_atomic(dir, "ss_ui.A.json", serialize_snapshot(nonce)))
+        return;                              // data write failed -> no sentinel (consumer times out)
     write_atomic(dir, "ss_ui.done", std::string("{\"nonce\":\"") + json_escape(nonce) + "\"}");
 }

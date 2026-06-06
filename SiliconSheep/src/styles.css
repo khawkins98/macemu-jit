@@ -193,8 +193,8 @@ body {
 }
 
 .cc-sidebar {
-  width: 220px;
-  min-width: 180px;
+  width: 180px;
+  min-width: 150px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--ss-border);
@@ -298,20 +298,14 @@ body {
   color: var(--ss-text-muted);
 }
 
-.vm-row__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--ss-space-xs);
-  flex-shrink: 0;
-}
-
+/* Footer + context menu icon buttons */
 .vm-row__btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: none;
   border-radius: var(--ss-radius);
-  font-size: 16px;
+  font-size: 14px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -322,13 +316,6 @@ body {
 }
 
 .vm-row__btn:hover { background: var(--ss-surface); color: var(--ss-text); }
-.vm-row--running .vm-row__btn:first-child { color: var(--ss-success); }
-
-.vm-row__sep {
-  width: 1px;
-  height: 16px;
-  background: var(--ss-border);
-}
 
 .vm-row__btn--power-on { color: var(--ss-success); }
 

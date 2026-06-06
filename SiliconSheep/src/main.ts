@@ -164,17 +164,6 @@ function renderVmRow(vm: VmProfile): string {
         <span class="vm-row__name">${escapeHtml(vm.name)}</span>
         <span class="vm-row__meta">${osLabel}${elapsed ? ` · ${elapsed}` : ""}</span>
       </div>
-      <!-- HIG review: sidebar row action buttons are suspect — Conflict Catcher kept
-           rows selection-only and put all actions in the detail pane. These stay for now
-           for quick-access discoverability, but may be removed in a future design pass. -->
-      <div class="vm-row__actions">
-        ${isRunning
-          ? `<button class="vm-row__btn vm-row__btn--power-on" data-action="stop" data-id="${escapeAttr(vm.id)}" title="Shut Down">${ICON_POWER_ON()}</button>`
-          : `<button class="vm-row__btn" data-action="launch" data-id="${escapeAttr(vm.id)}" title="Start">${ICON_POWER_OFF()}</button>`
-        }
-        <span class="vm-row__sep"></span>
-        <button class="vm-row__btn" data-action="settings" data-id="${escapeAttr(vm.id)}" title="Configure">${ICON_SETTINGS()}</button>
-      </div>
     </div>
   `;
 }

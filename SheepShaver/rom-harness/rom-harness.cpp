@@ -108,7 +108,12 @@ static bool is_block_terminator(uint32_t insn) {
 	uint32_t opc = ppc_primary(insn);
 	switch (opc) {
 	case 18: return true; /* b/bl */
-	case 16: return true; /* bc/bcl (conditional branch) */
+	case 16: return true; /* bc/bcl (conditional branch).
+	                         NOTE: the *JIT* does NOT treat bc as a block terminator —
+	                         it runs past it — so a bc-terminated scanner block is
+	                         shorter than the JIT's block, which makes the differential
+	                         comparison structurally mismatched. See the block-model
+	                         TODO at the compare site in the main test loop. */
 	case 19: {
 		uint32_t xo = ppc_xo(insn);
 		if (xo == 16 || xo == 528) return true; /* bclr, bcctr */
@@ -1563,8 +1568,10 @@ int main(int argc, char **argv) {
 				ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
 				alarm(1); /* 1-second timeout per block */
 				fn((void *)&jit_regs);
-				alarm(0); /* cancel timeout */
 			}
+			alarm(0); /* cancel timeout on ALL exit paths — normal return, SIGSEGV,
+			             or the fallback longjmp (which skips the in-body alarm(0)),
+			             so a pending alarm can't fire during a later block */
 			if (segv_caught) {
 				result.jit_segv++;
 				result.skipped++;
@@ -1582,7 +1589,26 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			
-			/* Compare */
+			/* Compare.
+			 *
+			 * KNOWN FALSE-POSITIVE SOURCE — block-model mismatch (TODO, tracked in
+			 * ROADMAP A1 / OPTIMIZATION-PLAN §0b-extra4):
+			 * the scanner ends a block at the first terminator and treats `bc`
+			 * (opcode 16) as one, so the interpreter above ran exactly `blk.n_insns`.
+			 * But the JIT does NOT treat `bc` as a block terminator — it compiles and
+			 * runs PAST it, so `jblk.n_insns` can exceed `blk.n_insns`. When it does,
+			 * interp and JIT executed DIFFERENT instruction spans from the same start
+			 * PC, and the register diff below is structural, not a codegen bug (the
+			 * exact analog of the SS_JIT_VERIFY fix-(i) block-exit problem). Verified
+			 * example: bc block 42424642 — JIT ran 5 insns, interp ran 1; the bc itself
+			 * is correct (non-vacuous SS_TEST_HEX "38600002 7C6903A6 42424642" gives
+			 * interp==JIT). GPR diffs in multi-insn blocks are largely CASCADE from this.
+			 *
+			 * To make failures trustworthy, compare only when the spans match, e.g.:
+			 *     if (jblk.n_insns != (uint32_t)blk.n_insns) { result.skipped++; continue; }
+			 * (or run the interpreter for `jblk.n_insns` instructions). Deferred as a
+			 * deliberate decision: it trades raw coverage (drops bc-terminated blocks)
+			 * for a clean signal — see ROADMAP A1 before flipping it on. */
 			if (compare_regs(&interp_regs, &jit_regs, blk.offset, verbose)) {
 				result.passed++;
 				if (verbose)

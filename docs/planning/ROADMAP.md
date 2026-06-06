@@ -90,8 +90,24 @@ harness that can't catch mistakes just produces the next silent bug.
   pursued now*: the highest-value case (FP/VR observability) is already defended at generation
   time, leaving only the trivial-operand / store-without-load-back residue, which needs a
   sentinel/mutation harness design for modest incremental yield. Lower urgency.
-- 🟡 **Broaden AltiVec coverage** — the suite has ~13 scored AltiVec + 9 quarantined ops out of
-  ~100+; most AltiVec ops are still untested. Grow `gen-altivec-vectors.py` alongside A2.
+- 🔜 **Broaden AltiVec / FP operand coverage *(highest residual-bug density — do this first)*** —
+  the suite has ~13 scored AltiVec + 9 quarantined ops out of ~100+, and is integer-heavy overall;
+  FP/AltiVec are exactly the paths boot-to-Finder exercises *least*, so they're the likeliest place
+  a residual codegen bug still hides. New curated vectors here are permanent CI assets (vs.
+  throwaway triage). Grow `gen-altivec-vectors.py` (+ FP) alongside A2. *(Strategy-review verdict
+  2026-06-06: ranked above the rom-harness GPR triage below.)*
+- 🟡 **rom-harness — block-model fix + then GPR triage** *(2026-06-06)*. The standalone differential
+  rom-harness now completes broad sweeps (skip-not-abort fix, `c1a10c0a`), but its failure signal is
+  dominated by a **block-model mismatch**, not codegen bugs: the scanner ends a block at `bc`
+  (opcode 16) while the JIT runs *past* it, so the two compare different instruction spans (the
+  same root cause as `SS_JIT_VERIFY` fix-(i)). Code TODO is in place at the compare site
+  (`rom-harness.cpp`) + `is_block_terminator`. **Fix (deliberate, has a coverage tradeoff):** gate
+  the comparison on `jblk.n_insns == blk.n_insns` (or run the interp for the JIT's instruction
+  count) — drops `bc`-terminated blocks but makes every remaining failure trustworthy. **Then**
+  triage the survivors via the real-emulator referee (`SS_TEST_HEX … SS_TEST_JIT={0,1}`) — expect a
+  handful, probably zero real bugs, but a defensible "integer path differentially clean" claim. The
+  raw GPR-diff "minority" today is **cascade** from the span mismatch — do **not** triage it before
+  the block-model fix (verified: the flagged `bc` was correct codegen, not a bug).
 - 🟡 **Paranoia FP conformance** runner wiring + CI (18 in-harness FP vectors landed; the
   self-grading torture run is still manual — needs a boot rig + disk image).
 - ⏸ **(stretch) golden-result oracle** — revive the PowerPC Emulator Tester against recovered

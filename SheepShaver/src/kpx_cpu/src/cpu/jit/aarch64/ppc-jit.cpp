@@ -480,17 +480,57 @@ static void emit_load_mem_base(void);
 #define PPCR_FPR(n) ((uint32_t)(256 + (n) * 8))
 
 /* ARM64 FP register helpers */
-/* LDR Dt, [Xn, #imm] (64-bit FP load, unsigned offset scaled by 8) */
-static void emit_load_fpr(int fd, int fpr_num) {
-	/* LDR Dt, [RSTATE, #offset] */
+/* Raw struct accessors (no RA): LDR/STR Dt, [RSTATE, #fpr_off] (scaled by 8). */
+static void emit_load_fpr_raw(int fd, int fpr_num) {
 	uint32_t off = PPCR_FPR(fpr_num);
 	emit32(0xFD400000 | ((off / 8) << 10) | (RSTATE << 5) | fd);
 }
-
-/* STR Dt, [Xn, #imm] */
-static void emit_store_fpr(int fs, int fpr_num) {
+static void emit_store_fpr_raw(int fs, int fpr_num) {
 	uint32_t off = PPCR_FPR(fpr_num);
 	emit32(0xFD000000 | ((off / 8) << 10) | (RSTATE << 5) | fs);
+}
+/* FMOV Dd, Dn — scalar double register-register move. */
+static void emit_fmov_d(int dd, int dn) { emit32(0x1E604000 | (dn << 5) | dd); }
+
+/* ---- FP register allocator (P5b) ----
+ * Mirrors the integer RA, for PPC FPRs → ARM64 V16–V23 (caller-saved, unused by
+ * other codegen; FP/AltiVec scratch is V0–V3, so disjoint). Kills the per-op
+ * struct round-trip (and its store→load serialization) for FP-heavy code (Math /
+ * Fractal). Full machinery (reset/evict/load/store/flush_all) is defined after the
+ * integer RA; the state + the RA-aware bridge live here so emit_load/store_fpr can
+ * use them. INVARIANT: every ra_fp_flush_all() site is block-terminating, so the
+ * V16–V23 values never need to survive across a BLR — no prologue save needed. */
+#define RA_FP_NUM_REGS  8
+#define RA_FP_FIRST_REG 16   /* V16 */
+static int  ra_fp_ppc_to_host[32];        /* PPC FPR → ARM64 V-reg, -1 = not cached */
+static int  ra_fp_host_to_ppc[RA_FP_NUM_REGS];
+static bool ra_fp_dirty[RA_FP_NUM_REGS];
+static int  ra_fp_lru[RA_FP_NUM_REGS];
+static int  ra_fp_clock;
+
+/* RA-aware FPR access (bridge for UNCONVERTED FP handlers; mirrors emit_load_gpr).
+ * If the FPR is cached, MOV from/to the cached Dn; else raw struct access. Converted
+ * handlers call ra_fp_load/ra_fp_store directly (below) for zero-copy access.
+ * NOTE: the cache is empty (all -1, set by ra_fp_reset at block start) until a
+ * converted handler populates it, so with no conversions this is behaviour-identical. */
+static void emit_load_fpr(int fd, int fpr_num) {
+	int host = ra_fp_ppc_to_host[fpr_num];
+	if (host >= 0) {
+		if (host != fd) emit_fmov_d(fd, host);
+		ra_fp_lru[host - RA_FP_FIRST_REG] = ++ra_fp_clock;
+	} else {
+		emit_load_fpr_raw(fd, fpr_num);
+	}
+}
+static void emit_store_fpr(int fs, int fpr_num) {
+	int host = ra_fp_ppc_to_host[fpr_num];
+	if (host >= 0) {
+		if (host != fs) emit_fmov_d(host, fs);
+		ra_fp_dirty[host - RA_FP_FIRST_REG] = true;
+		ra_fp_lru[host - RA_FP_FIRST_REG] = ++ra_fp_clock;
+	} else {
+		emit_store_fpr_raw(fs, fpr_num);
+	}
 }
 
 /* ---- PPC instruction field extraction ---- */
@@ -620,12 +660,18 @@ static int ra_store(int n) {
 	return host;
 }
 
-/* Flush all dirty cached regs back to struct (call at block exit) */
+static void ra_fp_flush_all(void);   /* fwd decl: defined with the FP RA below */
+
+/* Flush all dirty cached regs back to struct (call at block exit). Also flushes the
+ * FP RA — int and FP barriers coincide (every block-terminating site flushes both),
+ * so coupling here guarantees FP dirty values reach the struct at every exit/chain/
+ * interp-call without needing a separate call at each of the 6 ra_flush_all sites. */
 static void ra_flush_all(void) {
 	for (int i = 0; i < RA_NUM_REGS; i++) {
 		if (ra_host_to_ppc[i] >= 0 && ra_dirty[i])
 			a64_str_w_imm(RA_FIRST_REG + i, RSTATE, PPCR_GPR(ra_host_to_ppc[i]));
 	}
+	ra_fp_flush_all();
 }
 
 /* RA-aware GPR access for unconverted instruction handlers.
@@ -651,6 +697,78 @@ static void emit_store_gpr(int rs, int n) {
 	} else {
 		a64_str_w_imm(rs, RSTATE, PPCR_GPR(n));
 	}
+}
+
+/* ---- FP register allocator functions (P5b; state + RA-aware bridge declared above
+ * with the FP helpers). Structural copy of the integer RA, but: (a) evicts via raw
+ * STR Dn — no GP temp / RTMP / NZCV touched, so the integer RTMP-across-ra_store
+ * landmine cannot recur here; (b) no lazy-CR0 hook (FP has no deferred state — fcmp
+ * flushes CR immediately). V16–V23, disjoint from V0–V3 scratch and the int RA's
+ * x21–x28. ---- */
+static void ra_fp_reset(void) {
+	for (int i = 0; i < 32; i++) ra_fp_ppc_to_host[i] = -1;
+	for (int i = 0; i < RA_FP_NUM_REGS; i++) {
+		ra_fp_host_to_ppc[i] = -1;
+		ra_fp_dirty[i] = false;
+		ra_fp_lru[i] = 0;
+	}
+	ra_fp_clock = 0;
+}
+static void ra_fp_evict(int slot) {
+	int ppc = ra_fp_host_to_ppc[slot];
+	if (ppc >= 0) {
+		if (ra_fp_dirty[slot]) emit_store_fpr_raw(RA_FP_FIRST_REG + slot, ppc);
+		ra_fp_ppc_to_host[ppc] = -1;
+	}
+	ra_fp_host_to_ppc[slot] = -1;
+	ra_fp_dirty[slot] = false;
+}
+static int ra_fp_find_lru(void) {
+	int best = 0;
+	for (int i = 1; i < RA_FP_NUM_REGS; i++)
+		if (ra_fp_lru[i] < ra_fp_lru[best]) best = i;
+	return best;
+}
+/* Get the V-reg holding FPR n for READING (loads from struct if not cached). */
+static int ra_fp_load(int n) {
+	int host = ra_fp_ppc_to_host[n];
+	if (host >= 0) { ra_fp_lru[host - RA_FP_FIRST_REG] = ++ra_fp_clock; return host; }
+	int slot = -1;
+	for (int i = 0; i < RA_FP_NUM_REGS; i++) if (ra_fp_host_to_ppc[i] < 0) { slot = i; break; }
+	if (slot < 0) { slot = ra_fp_find_lru(); ra_fp_evict(slot); }
+	host = RA_FP_FIRST_REG + slot;
+	emit_load_fpr_raw(host, n);
+	ra_fp_ppc_to_host[n] = host;
+	ra_fp_host_to_ppc[slot] = n;
+	ra_fp_dirty[slot] = false;
+	ra_fp_lru[slot] = ++ra_fp_clock;
+	return host;
+}
+/* Get the V-reg for WRITING FPR n (marks dirty, allocates if needed). */
+static int ra_fp_store(int n) {
+	int host = ra_fp_ppc_to_host[n];
+	if (host >= 0) {
+		int slot = host - RA_FP_FIRST_REG;
+		ra_fp_dirty[slot] = true;
+		ra_fp_lru[slot] = ++ra_fp_clock;
+		return host;
+	}
+	int slot = -1;
+	for (int i = 0; i < RA_FP_NUM_REGS; i++) if (ra_fp_host_to_ppc[i] < 0) { slot = i; break; }
+	if (slot < 0) { slot = ra_fp_find_lru(); ra_fp_evict(slot); }
+	host = RA_FP_FIRST_REG + slot;
+	ra_fp_ppc_to_host[n] = host;
+	ra_fp_host_to_ppc[slot] = n;
+	ra_fp_dirty[slot] = true;
+	ra_fp_lru[slot] = ++ra_fp_clock;
+	return host;
+}
+/* Flush all dirty cached FPRs back to the struct (call at every block-terminating
+ * site, paired 1:1 with ra_flush_all). */
+static void ra_fp_flush_all(void) {
+	for (int i = 0; i < RA_FP_NUM_REGS; i++)
+		if (ra_fp_host_to_ppc[i] >= 0 && ra_fp_dirty[i])
+			emit_store_fpr_raw(RA_FP_FIRST_REG + i, ra_fp_host_to_ppc[i]);
 }
 
 /* 64-bit GPR access for G5/PPC64 instructions.
@@ -4147,65 +4265,48 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 
 		/* A-form FP ops (5-bit XO) */
 		switch (xo5) {
+		/* FP arithmetic — zero-copy via the FP RA (P5b). Load all sources first, then
+		 * ra_fp_store(frd) last so frd aliasing a source is safe (in-place is correct).
+		 * Encodings unchanged; only the Dd/Dn/Dm/Da reg fields are now RA-assigned. */
 		case 21: /* fadd frD,frA,frB */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frb);
-			emit32(0x1E602800 | (1 << 16) | (0 << 5) | 0); /* FADD Dd, Dn, Dm */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E602800 | (hB << 16) | (hA << 5) | hD); /* FADD hD, hA, hB */
+			return true; }
 
 		case 20: /* fsub frD,frA,frB */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frb);
-			emit32(0x1E603800 | (1 << 16) | (0 << 5) | 0); /* FSUB Dd, Dn, Dm */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E603800 | (hB << 16) | (hA << 5) | hD); /* FSUB hD, hA, hB */
+			return true; }
 
 		case 25: /* fmul frD,frA,frC */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit32(0x1E600800 | (1 << 16) | (0 << 5) | 0); /* FMUL Dd, Dn, Dm */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hD = ra_fp_store(frd);
+			emit32(0x1E600800 | (hC << 16) | (hA << 5) | hD); /* FMUL hD, hA, hC */
+			return true; }
 
 		case 18: /* fdiv frD,frA,frB */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frb);
-			emit32(0x1E601800 | (1 << 16) | (0 << 5) | 0); /* FDIV Dd, Dn, Dm */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E601800 | (hB << 16) | (hA << 5) | hD); /* FDIV hD, hA, hB */
+			return true; }
 
 		case 29: /* fmadd frD,frA,frC,frB = frA*frC+frB */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit_load_fpr(2, frb);
-			emit32(0x1F400000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FMADD Dd,Dn,Dm,Da */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F400000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FMADD hD,hA,hC,hB */
+			return true; }
 
 		case 28: /* fmsub frD,frA,frC,frB = frA*frC-frB */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit_load_fpr(2, frb);
-			emit32(0x1F608000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FNMSUB: Dn*Dm - Da */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F608000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FMSUB */
+			return true; }
 
 		case 31: /* fnmadd frD,frA,frC,frB = -(frA*frC+frB) */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit_load_fpr(2, frb);
-			emit32(0x1F600000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FNMADD */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F600000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FNMADD */
+			return true; }
 
 		case 30: /* fnmsub frD,frA,frC,frB = -(frA*frC-frB) = frB - frA*frC */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit_load_fpr(2, frb);
-			emit32(0x1F408000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FMSUB: Da - Dn*Dm */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FNMSUB */
+			return true; }
 
 		/* 64-bit FP conversions (G5/PPC970) */
 		case 814: /* fctid frD,frB — FP to 64-bit integer (round per FPSCR) */
@@ -5007,6 +5108,7 @@ bool ppc_jit_aarch64_compile(
 	lazy_cr0_valid = false;
 	lazy_cr0_reg = -1;
 	ra_reset();
+	ra_fp_reset();
 	link_stack_reset();
 
 	/* SS_JIT_MAX_INSNS=<n>: cap the number of PPC instructions compiled per block.

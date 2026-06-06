@@ -5,6 +5,14 @@
 > software for stress-testing the JIT — especially the **AltiVec/FP-under-real-software** gap (ROADMAP
 > A2/A3, A5-V). Prioritized by (1) actually uses AltiVec, (2) CPU-bound (runs in the emulator without
 > special hardware), (3) still downloadable. Companion to [`TESTING.md`](TESTING.md) (the *methodology*).
+>
+> **It's also a living *capability matrix*** — a benchmark of *where we are now vs. where we could go.*
+> It deliberately includes **aspirational targets we can't run today** (3D/OpenGL games, FireWire
+> capture, 9.2.x-only software). Those aren't noise: they're **frontier markers**. The metric for a
+> gated title isn't pass/fail but *how far it gets before it crashes* — black screen → splash → menu →
+> one rendered frame → crash at PC `0x…`. Re-run the matrix as the emulator's reach grows and that
+> frontier should advance; that progression *is* the benchmark. See
+> [Capability matrix & stretch goals](#capability-matrix--stretch-goals-where-we-are-vs-where-we-could-go).
 > _Markers: ✅ done · 🟡 in progress · ⏸ deferred · ☐ todo. Sources are community abandonware archives;
 > software licensing is the user's call (same grey area as ROMs)._
 
@@ -70,7 +78,7 @@ harness or a plain boot exercises it. Also run them under the B1 profiler for ho
 | **Myth II: Soulblighter** | ✅ software renderer | large unit sim + terrain = CPU/FP, full-stack | [Macintosh Garden](https://macintoshgarden.org) ("Myth II") |
 | **Tomb Raider 1 / 2** (Aspyr) | ✅ software mode | affine texture + transform/lighting on CPU | [Macintosh Garden](https://macintoshgarden.org/games/tomb-raider) (TR3 reportedly crashes SheepShaver — use TR1/TR2) |
 | **Unreal Tournament (GOTY)** | ⚠️ verify | useful *only if* the Mac port ships the software renderer | [Macintosh Garden](https://macintoshgarden.org) |
-| **Quake III, Tony Hawk, Oni** | ❌ skip | OpenGL/3D-HW oriented — non-starters without 3D acceleration | — |
+| **Quake III, Tony Hawk, Oni** | 🌑 stretch | OpenGL/3D-HW oriented — can't run *today* (no 3D accel), but kept as **stretch-goal frontier markers** — see [Capability matrix & stretch goals](#capability-matrix--stretch-goals-where-we-are-vs-where-we-could-go) | [Macintosh Garden](https://macintoshgarden.org) |
 
 ## Benchmarks / diagnostics (repeatable scoring across JIT changes)
 
@@ -95,6 +103,41 @@ harness or a plain boot exercises it. Also run them under the B1 profiler for ho
 1. **AltiVec Fractal Carbon** — AltiVec, built-in scalar oracle, no license/network/media.
 2. **SoundJam MP** — AltiVec MP3 encode (just needs a source audio file).
 3. **POV-Ray 3.6** — scalar-FP, ships its own benchmark scene, renders unattended.
+
+## Capability matrix & stretch goals (where we are vs. where we could go)
+
+This is the ambitious half: titles we **cannot run today**, kept as **frontier markers**. Don't score
+them pass/fail — score them by **how far they get**, and treat advancing that frontier as the
+benchmark. The frontier is *measurable* with tools we already have: the e2e harness records exit
+status, the heartbeat shows the last active region (`jNK/jDR/jRAM`), HOT-PC + the trace ring pin the
+crash PC, and `SS_JIT_VERIFY` catches a codegen divergence vs. a clean unsupported-feature bail.
+
+**Frontier legend (record the best reached, with date + build):**
+`🌑 won't launch` → `🌒 launches, immediate quit` → `🌓 splash/menu` → `🌔 runs, one frame/op` →
+`🌕 playable/usable` (graduates out of this section into the runnable tables above).
+
+| Aspirational target | Blocked by (today) | Current frontier — *measure & record* | What would unlock it |
+|---|---|---|---|
+| **Quake III Arena** | No 3D acceleration (OpenGL-only; no software renderer) | ❓ untested — expect 🌒/🌑 (fails OpenGL init). **Record the exact failure** (capability check? gl context? crash PC). | A **guest-3D bridge** (translate guest OpenGL/RAVE → host Metal/GL) or a software-GL — a large, currently-unplanned subsystem. The marquee "can our emulator do 3D?" goal. |
+| **Tony Hawk Pro Skater, Oni** | Same — HW-3D oriented | ❓ untested — likely 🌒 | Same 3D bridge. |
+| **Unreal Tournament (Mac)** | *Maybe* runnable — needs verification the Mac port ships a software renderer | ❓ untested — if software-render exists → could be 🌕 (graduates up); if OpenGL-only → 🌑 | Confirm the renderer; if software, it joins the runnable games. |
+| **iMovie / FCP — *capture* path** | No FireWire/DV hardware | 🌓 app runs, capture greyed/errors (render/export already works — see above) | A **virtual DV source** (feed a `.dv` clip as if from a camera). Niche; render path already covers the CPU stress. |
+| **9.2.x-only software** (latest QuickTime, newer apps) | The **Mac OS 9.0.4 ROM ceiling** | 🌑 OS won't boot | **New World parcels-ROM support** → 9.1/9.2.2 (ROADMAP **D3** / `NEW-WORLD-ROM-SUPPORT-PLAN.md`). Directly advances this whole row. |
+| **DVD Player / MPEG-2** | No DVD drive/decoder modeled | 🌑 | DVD device + MPEG-2 decode path. Low priority. |
+| **G5 / 64-bit-heavy AltiVec apps** | JIT 64-bit RA coherence gap (P1a) + no G5 machine profile; G5 ran OS 9 only in Classic anyway | 🌑 / N/A | The PPC64 path (P1a fix) — mostly moot for OS 9. |
+
+**The big one — 3D acceleration.** SheepShaver models *no* 3D hardware (no QuickDraw 3D RAVE, no
+OpenGL HW), so the entire OpenGL-game frontier sits at 🌑/🌒 today. Unlocking it is a **major,
+currently-unplanned subsystem** (a guest-GL/RAVE → host-Metal bridge, à la how some emulators proxy
+guest graphics APIs) — a legitimate north-star "stretch" but not on any track yet. Recording *how far*
+Quake III gets on each build is the cheap, motivating proxy for that ambition: even reaching the main
+menu (🌓) without a 3D path would be a real milestone.
+
+**Why keep this matrix even though most rows are 🌑 today:** it's the project's *reach* benchmark.
+The runnable AltiVec/FP titles measure correctness *now*; these frontier rows measure *ambition over
+time*. A title climbing 🌑→🌓→🌕 across builds is a far more motivating progress signal than a harness
+score — and several rows have concrete unlock paths already on the roadmap (9.2.x via D3; the verify
+gate via A5-V). Update the frontier column with `(date, build, how-far, crash-PC)` whenever one is run.
 
 ## Roadmap ties
 - **A2/A3** (AltiVec correctness + "AltiVec under real software"): the AltiVec picks are the in-the-wild

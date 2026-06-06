@@ -11,6 +11,17 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-06
 
+### [docs] Stress-workload catalog → living capability matrix (stretch goals + frontier metric)
+
+Extended `docs/MACOS9-STRESS-WORKLOADS.md` from a runnable-software list into a **capability matrix
+that benchmarks reach over time**. Added a "Capability matrix & stretch goals" section that
+**deliberately includes targets we can't run today** (Quake III / OpenGL games — no 3D accel;
+FireWire capture; 9.2.x-only software) as **frontier markers**, scored not pass/fail but by *how far
+they get* (🌑 won't launch → 🌒 quit → 🌓 menu → 🌔 one frame → 🌕 usable), measurable via the e2e
+harness + heartbeat/HOT-PC/trace-ring/`SS_JIT_VERIFY`. Each gated row lists its unlock path (3D bridge,
+virtual DV source, New-World ROM → D3). Names the 3D-acceleration bridge as the major unplanned
+north-star and "how far Quake III gets per build" as its motivating proxy.
+
 ### [docs] Curated Mac OS 9 stress-test software catalog (downloadable, AltiVec-first)
 
 Added `docs/MACOS9-STRESS-WORKLOADS.md` (cross-linked from `TESTING.md`): a linkable catalog of

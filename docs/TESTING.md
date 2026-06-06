@@ -65,7 +65,10 @@ note their blind spots** (below) — passing them is necessary, not sufficient.
 
 1. **The vectors are integer-heavy, but AltiVec coverage is improving fast.** They
    concentrate on integer ALU, loads/stores, and branches. **Floating point (51 JIT
-   ops) is still comparatively under-tested.** AltiVec coverage jumped in 2026-06: a
+   ops) is partly swept** (2026-06-06: `fsel`/`fnabs`/single fused ops confirmed clean,
+   `fctiw`/`fctiwz` conversion bug fixed; `fsqrt`/`fres`/`frsqrte` are un-differentiable —
+   interp lacks them / they're estimates), but most FP ops still lack a vector.
+   AltiVec coverage jumped in 2026-06: a
    differential sweep (every untested VX op vs the real interpreter) found and fixed
    **26 codegen bugs** — the whole variable shift/rotate family and the saturating
    add/sub + signed-average family — each now with a strong committed vector

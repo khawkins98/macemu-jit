@@ -16,6 +16,51 @@ All tests on Mac OS 8.6 Internal Edition ISO, OldWorld ROM, 256MB RAM.
 - **Display**: 800x600 windowed
 - **JIT config**: ROM=0x500000 (full DR emulator), chaining=1
 
+## Tracked series — how we measure progress over time
+
+Three complementary series. The interpreter (`SS_USE_JIT=0`) is the **fallback floor**
+in each; the JIT column is where we are; track the trend forward.
+
+### 1. Codegen density (deterministic, boot-free) — `a64/op` via `make bench`
+
+The trustworthy forward-tracking signal: **ARM64 instructions emitted per guest op**.
+Machine-independent and **zero host-noise** (committable; runs on a loaded laptop / CI),
+so it isolates *codegen quality* from host jitter. Lower = leaner. Record after every
+codegen change. (There is no interpreter column here — this measures JIT codegen.)
+
+| date | carry-chain | rc1 (`add.`) | alu | fp-add | fp-fma | compute | shift | notes |
+|------|---|---|---|---|---|---|---|---|
+| 2026-06-06 | 5.00 | 12.00 | 1.00 | 4.00 | 5.00 | 2.81 | 1.00 | post P3a + 0f-sweep + 0h. `shift` 2.00→1.00 (slwi/srwi 0h); `compute` 2.98→2.81 (divw 0f). |
+
+Standout: **`rc1`=12** — CR0 generation (~11 insns) on every `.`-form/compare is the
+broadest remaining lever (lazy-CR0 §0g, currently disabled). `alu`=1 and `shift`=1 are
+optimal; `carry-chain`=5 and the FP kernels are next-tier targets.
+
+### 2. Run-profile throughput (`guest-MIPS`, empirical) — `SS_JIT_PROFILE`
+
+Wall-clock **guest-instructions/sec over a whole real run** (the "operations per second").
+Representative (real chaining/everything) but needs a reasonably quiet host. The
+`[JIT-RUN-PROFILE]` line also reports `a64/guest-op` (deterministic). Capture per profile
+(boot / app-launch / Speedometer / Fractal-Carbon-AltiVec) at milestones.
+
+| date | profile | guest-MIPS | block-rate | a64/guest-op | mode |
+|------|---|---|---|---|---|
+| 2026-06-06 | boot→Finder (ISO) | 1037 | 148M/s | 14.6 | JIT |
+| _TODO_ | boot→Finder (ISO) | — | — | — | interpreter (`SS_USE_JIT=0`) — emulator-gated |
+| _TODO_ | Speedometer | — | — | — | JIT (bench completion-detection fix pending) |
+
+The interpreter-vs-JIT guest-MIPS ratio is the headline "how much the JIT buys us" —
+pending one interpreter boot when the emulator is free. `a64/guest-op`=14.6 is inflated by
+per-block prologue/epilogue (the block-merge/chaining lever) — see §P0 notes; use it for
+A/B, not as a literal executed count.
+
+### 3. Speedometer 4.02 (system-level, interpreter vs JIT) — see section below
+
+The long-running dated progression (pre-RA → post-RA → post-B1/B2/A3) with the
+interpreter floor (PR 21.485 vs JIT). Next entry pending the bench-harness completion fix.
+
+---
+
 ## Boot Benchmark (ISO cold boot to Finder desktop)
 
 | Metric | JIT (full native) | Interpreter | Ratio |
@@ -98,8 +143,12 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 
 ## Next Steps
 
+- [x] Boot-free codegen-density series (`a64/op`) — established 2026-06-06 (§"Tracked series" #1)
+- [x] Run-profile guest-MIPS (JIT boot = 1037 MIPS) — established 2026-06-06 (#2)
+- [ ] **Interpreter boot guest-MIPS** (`SS_USE_JIT=0`) — the JIT-vs-interpreter headline ratio; emulator-gated
+- [ ] **Fresh Speedometer (JIT + interpreter)** — pending the e2e bench completion-detection fix
+- [ ] **Fractal Carbon (AltiVec) run-profile** — the third workload profile, once the emulator is free
 - [ ] MacBench 5.0 benchmark (requires HD install)
-- [ ] Speedometer 4.0
 - [ ] Application launch timing (SimpleText, TeachText)
 - [ ] Compare with upstream Linux ARM64 (rcarmo/macemu-jit)
 - [x] HD boot timing — ~10s, works reliably (macos86_fresh.dsk, 4GB, Mac OS 8.6)

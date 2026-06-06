@@ -203,10 +203,11 @@ function renderLibrary(): string {
     return `${renderTitlebar()}${renderErrorBanner()}${renderEmptyState()}`;
   }
 
-  // Auto-select first VM if none selected
+  // Auto-select first VM if none selected (prefs loaded by ensurePrefsLoaded)
   if (!selectedVmId || !vms.find((v) => v.id === selectedVmId)) {
     selectedVmId = vms[0].id;
   }
+  ensurePrefsLoaded();
 
   return `
     ${renderTitlebar()}
@@ -220,7 +221,7 @@ function renderLibrary(): string {
           <button class="vm-row__btn" data-action="show-help" title="Help & Resources">${ICON_HELP()}</button>
           <button class="vm-row__btn" data-action="toggle-labels" title="Toggle icon labels">Aa</button>
           <div style="flex:1"></div>
-          <button class="vm-row__btn" data-action="import-prefs" title="Import Prefs">${ICON_IMPORT()}</button>
+          <button class="vm-row__btn" data-action="import-prefs" title="Import Setup">${ICON_IMPORT()}</button>
           <button class="vm-row__btn" data-action="wizard" title="New VM">${ICON_PLUS()}</button>
         </div>
       </div>
@@ -340,7 +341,7 @@ function renderWizardStep(): string {
             </ul>
           </details>
           <div class="wizard-nav">
-            <button class="btn btn-secondary" data-action="wizard-back">Back</button>
+            <button class="btn btn-secondary" data-action="wizard-cancel">Cancel</button> <button class="btn btn-secondary" data-action="wizard-back">Back</button>
             <button class="btn btn-primary" data-action="wizard-next" ${!wizardState.romPath ? "disabled" : ""}>${wizardState.romStatus === "error" ? "Next (proceed anyway)" : "Next"}</button>
           </div>
         </div>
@@ -394,7 +395,7 @@ function renderWizardStep(): string {
             </button>
           </div>
           <div class="wizard-nav">
-            <button class="btn btn-secondary" data-action="wizard-back">Back</button>
+            <button class="btn btn-secondary" data-action="wizard-cancel">Cancel</button> <button class="btn btn-secondary" data-action="wizard-back">Back</button>
             <button class="btn btn-primary" data-action="wizard-next">Next</button>
           </div>
         </div>
@@ -439,7 +440,7 @@ function renderWizardStep(): string {
               </div>
               <div class="review-item">
                 <span class="review-label">Network</span>
-                <span class="review-value">slirp (NAT)</span>
+                <span class="review-value">Internet (NAT)</span>
               </div>
               ${wizardState.cdPath ? `
               <div class="review-item">
@@ -449,7 +450,7 @@ function renderWizardStep(): string {
             </div>
           </div>
           <div class="wizard-nav">
-            <button class="btn btn-secondary" data-action="wizard-back">Back</button>
+            <button class="btn btn-secondary" data-action="wizard-cancel">Cancel</button> <button class="btn btn-secondary" data-action="wizard-back">Back</button>
             <button class="btn btn-primary btn-lg" data-action="wizard-create">Create & Start</button>
           </div>
         </div>
@@ -521,14 +522,33 @@ let vmPrefs: PrefEntry[] = [];
 async function loadVmPrefs(id: string) {
   try {
     vmPrefs = (await invoke("get_vm_prefs", { id })) as PrefEntry[];
+    vmPrefsLoadedFor = id;
   } catch {
     vmPrefs = [];
+    vmPrefsLoadedFor = null;
   }
 }
 
 function getPref(key: string): string {
+  // Pending (unsaved) edits take priority over on-disk prefs
+  if (key in pendingSettings) return pendingSettings[key];
   const entry = vmPrefs.find((e) => e.key === key);
   return entry?.value ?? "";
+}
+
+let vmPrefsLoadedFor: string | null = null;
+
+function ensurePrefsLoaded() {
+  if (selectedVmId && selectedVmId !== vmPrefsLoadedFor) {
+    const targetId = selectedVmId;
+    loadVmPrefs(targetId).then(() => {
+      // Only apply if the selection hasn't changed during the async load (fixes race: bug 3)
+      if (selectedVmId === targetId) {
+        vmPrefsLoadedFor = targetId;
+        render();
+      }
+    });
+  }
 }
 
 function getPrefs(key: string): string[] {
@@ -656,7 +676,7 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
       <div class="form-group">
         <label>Networking</label>
         <select class="input" id="setting-ether">
-          <option value="slirp" ${getPref("ether") === "slirp" ? "selected" : ""}>slirp (NAT — outbound only)</option>
+          <option value="slirp" ${getPref("ether") === "slirp" ? "selected" : ""}>Internet (NAT)</option>
           <option value="" ${!getPref("ether") ? "selected" : ""}>None</option>
         </select>
         <p class="ss-text-muted" style="margin-top: 8px;">In the guest, open TCP/IP in Control Panels and set Configure to "Using DHCP Server".</p>
@@ -935,7 +955,8 @@ function bindEvents() {
       const row = (e.currentTarget as HTMLElement);
       const vmId = row.dataset.id;
       if (vmId && !runningVmIds.has(vmId)) {
-        handleAction({ target: row.querySelector('[data-action="launch"]') } as unknown as Event);
+        const launchBtn = row.querySelector('[data-action="launch"]');
+        if (launchBtn) handleAction({ target: launchBtn } as unknown as Event);
       }
     });
   });
@@ -1044,8 +1065,10 @@ async function handleAction(e: Event) {
     case "select-vm":
       if (id && id !== selectedVmId) {
         captureCurrentSectionSettings();
+        if (Object.keys(pendingSettings).length > 0) {
+          if (!confirm("You have unsaved changes. Discard them?")) break;
+        }
         selectedVmId = id;
-        settingsSection = "general";
         pendingSettings = {};
         await loadVmPrefs(id);
         render();
@@ -1091,6 +1114,11 @@ async function handleAction(e: Event) {
         ramMb: 256,
         screen: "win/1024/768",
       };
+      render();
+      break;
+
+    case "wizard-cancel":
+      currentView = "library";
       render();
       break;
 
@@ -1442,6 +1470,7 @@ async function loadScreenshots() {
 }
 
 let screenshotCounter = 0;
+let screenshotInProgress = false;
 
 async function pollRunningStatus() {
   const newRunning = await checkRunning();
@@ -1463,9 +1492,10 @@ async function pollRunningStatus() {
     if (currentView === "library") render();
   }
 
-  // Capture live screenshots every ~10s for all running VMs
-  if (runningVmIds.size > 0 && ++screenshotCounter >= 5) {
+  // Capture live screenshots every ~10s for all running VMs (guarded against reentrancy)
+  if (runningVmIds.size > 0 && !screenshotInProgress && ++screenshotCounter >= 5) {
     screenshotCounter = 0;
+    screenshotInProgress = true;
     for (const id of runningVmIds) {
       try {
         await invoke("capture_vm_screenshot", { id });
@@ -1473,6 +1503,7 @@ async function pollRunningStatus() {
         if (src) vmScreenshots.set(id, src);
       } catch { /* VNC may not be ready */ }
     }
+    screenshotInProgress = false;
     if (currentView === "library") render();
   }
 }

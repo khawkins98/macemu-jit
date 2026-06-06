@@ -25,7 +25,7 @@ SiliconSheep/
 │   └── build.rs
 ├── src/                # Web frontend (TypeScript + CSS)
 │   ├── main.ts         # App: wizard, VM library, settings panel, toasts
-│   └── styles.css      # Dark/light mode, responsive card grid
+│   └── styles.css      # Mac OS 9 Platinum-inspired, master-detail layout
 ├── index.html          # Vite entry
 ├── package.json        # pnpm deps (Tauri CLI, Vite, TypeScript)
 ├── vite.config.ts
@@ -70,7 +70,8 @@ pnpm typecheck     # TypeScript only
 
 - **First-run wizard** — 4 screens: Welcome → ROM picker (SHA-256 verification) → Disk
   creation/selection + optional CD → Review & Boot
-- **VM library** — Card grid with Start/Stop/Settings/Duplicate/Reveal/Delete
+- **VM library** — Master-detail layout: sidebar VM list + integrated detail pane with
+  screenshot, config tabs, and action buttons. Start/Stop/Settings/Duplicate/Reveal/Delete
 - **Settings panel** — Sidebar sections (General, Display, Storage, Network, Advanced)
   with hot-reload badges and Save button
 - **Prefs bridge** — Round-trip faithful parser for SheepShaver's text format (comments,

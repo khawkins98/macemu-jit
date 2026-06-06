@@ -1014,15 +1014,27 @@ function bindEvents() {
         const value = transform(input.value);
         try {
           await invoke("update_vm_setting", { id: selectedVmId, key, value });
+          // Reload VM list so sidebar/header reflect the change (e.g. name)
+          vms = await loadVms();
+          await loadVmPrefs(selectedVmId!);
           const isRunning = runningVmIds.has(selectedVmId!);
           if (isRunning) {
             showToast(key + " updated — takes effect on next restart", "info", 3000);
           }
+          render();
         } catch (err) {
           showToast("Failed to save: " + err, "error");
         }
       }
     });
+    // Text inputs: also commit on Return key (Mac OS 9 pattern: blur or Return commits)
+    if (el.tagName === "INPUT" && (el as HTMLInputElement).type !== "number") {
+      el.addEventListener("keydown", (e) => {
+        if ((e as KeyboardEvent).key === "Enter") {
+          (el as HTMLElement).blur();
+        }
+      });
+    }
   });
 
   // Keyboard navigation: arrow keys in VM list, Return to boot

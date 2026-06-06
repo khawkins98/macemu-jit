@@ -1621,6 +1621,13 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			 *
 			 * Uses RA for GPR reads/write; RTMP0-3 for scratch. */
 			int hA = ra_load(ra); int hB = ra_load(rb);
+			/* Allocate hD up front, BEFORE any flag-setting. ra_store can trigger RA
+			 * eviction; if lazy CR0 is ever made truly lazy, an eviction here would
+			 * emit CMP+CSET and clobber NZCV + RTMP0-2 — which the CMP/CSEL below
+			 * depend on. Hoisting removes that latent hazard (adversarial-review item,
+			 * 2026-06-07). hA/hB stay live until the EOR/MVN; hD aliasing rA/rB is safe
+			 * because the final CSEL (hD's only write) is after the last hA/hB read. */
+			int hD = ra_store(rd);
 			emit32(0x1AC00C00 | (hB << 16) | (hA << 5) | RTMP2); /* SDIV W2,W(hA),W(hB) */
 			/* fallback = (int32)rA >> 31  → ASR W3, W(hA), #31 */
 			emit32(0x13000000 | (31 << 16) | (0x1F << 10) | (hA << 5) | RTMP3);
@@ -1634,9 +1641,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x2A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ORR W0,W0,W1 */
 			emit32(0x7100001F | (RTMP0 << 5));                         /* CMP W0, #0 */
 			/* Write the result directly into hD via the final CSEL — eliminates the
-			 * trailing MOV (P0f-style) on the recurrence critical path. hA/hB are dead
-			 * here (last read by the EOR/MVN above), so hD aliasing rA/rB is safe. */
-			int hD = ra_store(rd);
+			 * trailing MOV (P0f-style) on the recurrence critical path. hD allocated
+			 * above (before flag-setting) so no allocator call sits between CMP and CSEL. */
 			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | hD); /* CSEL W(hD),W3,W2,EQ */
 			if (op & 1) lazy_update_cr0(hD);
 			return true;

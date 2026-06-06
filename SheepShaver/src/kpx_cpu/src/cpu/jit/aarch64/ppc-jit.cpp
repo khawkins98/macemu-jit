@@ -343,6 +343,13 @@ struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insn
 static struct jit_prof_slot jit_prof_slots[JIT_PROF_SLOTS];
 static int  jit_prof_n = 0;
 static bool jit_profile_enabled = false;
+/* SS_JIT_PROFILE_DISASM: per-block PPC instruction words, captured at COMPILE time
+ * (where `op` is the real fetched word). Exit-time reads of guest RAM are unreliable —
+ * the NATMEM reservation has PROT_NONE holes mincore() can't distinguish, so a blind
+ * read segfaults. Capturing here is the robust path. Demand-zero BSS (~16 MB, only
+ * touched on profiling builds). First JIT_PROF_WORDS insns/block; longer blocks truncate. */
+#define JIT_PROF_WORDS 16
+static uint32_t jit_prof_words[JIT_PROF_SLOTS][JIT_PROF_WORDS];
 static void jit_profile_dump(void);   /* fwd decl: registered via atexit() in init */
 /* find-or-create the slot for `pc` (compile-time only, open-addressed by pc). */
 static struct jit_prof_slot *jit_prof_get(uint32_t pc) {
@@ -4496,6 +4503,27 @@ static void jit_profile_dump(void)
 	}
 	if (jit_prof_n >= JIT_PROF_SLOTS)
 		fprintf(out, "  [WARN: slot table full (%d) — some blocks dropped]\n", JIT_PROF_SLOTS);
+
+	/* SS_JIT_PROFILE_DISASM=1: also emit each top block's PPC instruction words,
+	 * captured at COMPILE time (jit_prof_words[], the real fetched `op`s — see the
+	 * array's declaration for why exit-time guest reads are unsafe). Offline capstone
+	 * (CS_ARCH_PPC, CS_MODE_BIG_ENDIAN, struct.pack('>I', word)) disassembles these.
+	 * Blocks longer than JIT_PROF_WORDS show "+" then truncate; cross-check the printed
+	 * word count + the table's mix tag against your disassembly. */
+	if (getenv("SS_JIT_PROFILE_DISASM")) {
+		fprintf(out, "\n[JIT-PROFILE-DISASM] PPC words per top block "
+		        "(compile-time capture, big-endian encodings):\n");
+		for (int a = 0; a < topN; a++) {
+			struct jit_prof_slot *s = &jit_prof_slots[order[a]];
+			unsigned ncap = s->n_insns < JIT_PROF_WORDS ? s->n_insns : JIT_PROF_WORDS;
+			fprintf(out, "  %08x %2u %-11s", s->pc, s->n_insns, jit_mix_name(s->mix));
+			for (unsigned k = 0; k < ncap; k++)
+				fprintf(out, " %08x", jit_prof_words[order[a]][k]);
+			if (s->n_insns > JIT_PROF_WORDS) fprintf(out, " +");
+			fprintf(out, "\n");
+		}
+	}
+
 	if (f) { fclose(f); fprintf(stderr, "[JIT-PROFILE] written to %s\n", path); }
 }
 
@@ -4844,6 +4872,8 @@ bool ppc_jit_aarch64_compile(
 	}
 	/* instruction-mix tally for the block's tag (compile-time, profiler only) */
 	int mix_cnt[6] = {0,0,0,0,0,0};
+	/* slot index for SS_JIT_PROFILE_DISASM word capture (-1 = not profiling this block) */
+	int prof_idx = prof_slot ? (int)(prof_slot - jit_prof_slots) : -1;
 
 	jit_blocks_attempted++;
 	uint32_t cur_pc = pc;
@@ -4877,6 +4907,7 @@ bool ppc_jit_aarch64_compile(
 		              ((uint32_t)p[2] << 8) | p[3];
 
 		if (jit_profile_enabled) mix_cnt[jit_mix_classify(op)]++;  /* P0 mix tally */
+		if (prof_idx >= 0 && i < JIT_PROF_WORDS) jit_prof_words[prof_idx][i] = op;  /* disasm capture */
 
 		if (op == 0x4E800020) { /* blr — block terminator */
 			lazy_flush_cr0();

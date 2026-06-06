@@ -54,6 +54,14 @@ extern uint8 *ROMBaseHost;
  * &spcflags == &spcflags.mask; the poll reads a W-word at this offset. */
 static_assert(offsetof(powerpc_registers, spcflags) == 1056,
               "spcflags offset changed — update PPCR_SPCFLAGS in ppc-jit.cpp");
+#if KPX_MAX_CPUS == 1
+/* lwarx/stwcx. reservation fields, addressed by the JIT (P3a) via RSTATE+offset.
+ * PPCR_RESERVE_VALID / PPCR_RESERVE_ADDR in ppc-jit.cpp must match. */
+static_assert(offsetof(powerpc_registers, reserve_valid) == 1060,
+              "reserve_valid offset changed — update PPCR_RESERVE_VALID in ppc-jit.cpp");
+static_assert(offsetof(powerpc_registers, reserve_addr) == 1064,
+              "reserve_addr offset changed — update PPCR_RESERVE_ADDR in ppc-jit.cpp");
+#endif
 
 #include <time.h>
 #include <unistd.h>

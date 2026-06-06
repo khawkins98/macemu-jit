@@ -416,6 +416,10 @@ static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, boo
 #define PPCR_CTR    1048
 #define PPCR_PC     1052
 #define PPCR_SPCFLAGS 1056  /* basic_spcflags.mask — pending interrupt/event flags */
+/* lwarx/stwcx. reservation state (KPX_MAX_CPUS==1 → per-instance uint32 fields in
+ * powerpc_registers, right after spcflags). Pinned by static_asserts in ppc-cpu.cpp. */
+#define PPCR_RESERVE_VALID 1060
+#define PPCR_RESERVE_ADDR  1064
 /* Actionable flag bits for the block-entry poll (dyngen gen_start equivalent).
  * These are exactly the bits powerpc_cpu::check_spcflags() clears/handles when
  * the dispatcher regains control at the JIT post-dispatch site (ppc-cpu.cpp
@@ -2350,15 +2354,70 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP0);
 			return true;
 		}
-		case 20: /* lwarx rD,rA,rB — load word and reserve.
-			 * Must set reservation state in the CPU object (not just regs struct).
-			 * Fall through to interpreter for correct reservation semantics. */
-			return false;
-		case 150: /* stwcx. rS,rA,rB — store word conditional.
-			 * Must check reservation state and set CR0 based on success/failure.
-			 * The reservation lives in the CPU object, not the regs struct.
-			 * Fall through to interpreter for correct atomic semantics. */
-			return false;
+		case 20: /* lwarx rD,rA,rB — load word and reserve (P3a).
+			 * KPX_MAX_CPUS==1 model (ppc-execute.cpp execute_lwarx): EA=(rA|0)+rB;
+			 * rD=mem[EA]; reserve_valid=1; reserve_addr=EA. Reservation lives in the
+			 * shared regs struct (RSTATE+offset), so a JIT-lwarx / interp-stwcx. pair
+			 * stays consistent. Profiler hot spot — see OPTIMIZATION-PLAN §P3a. */
+		{
+			/* EA → RTMP0 (32-bit guest effective address) */
+			if (ra != 0) {
+				int hA = ra_load(ra); int hB = ra_load(rb);
+				emit32(0x0B000000 | (hB << 16) | (hA << 5) | RTMP0); /* ADD W0,W(hA),W(hB) */
+			} else {
+				int hB = ra_load(rb); a64_mov_reg(RTMP0, hB);
+			}
+			/* RTMP1 = byte-swapped mem[EA] */
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
+			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV W1,W1 */
+			/* reserve_addr = EA; reserve_valid = 1 (RTMP0 still holds EA) */
+			a64_str_w_imm(RTMP0, RSTATE, PPCR_RESERVE_ADDR);
+			a64_movz(RTMP2, 1, 0);
+			a64_str_w_imm(RTMP2, RSTATE, PPCR_RESERVE_VALID);
+			/* rD = loaded value (do ra_store last — it is the only RA call that may
+			 * spill via RTMP; RTMP1 survives it, mirroring lwzx case 23) */
+			int hD = ra_store(rd); a64_mov_reg(hD, RTMP1);
+			return true;
+		}
+		case 150: /* stwcx. rS,rA,rB — store word conditional (P3a).
+			 * KPX_MAX_CPUS==1 model (ppc-execute.cpp execute_stwcx): EA=(rA|0)+rB;
+			 * CR0=0; if(reserve_valid){ if(reserve_addr==EA){ mem[EA]=rS; CR0.EQ=1 }
+			 * reserve_valid=0 } CR0.SO=XER.SO. We clear reserve_valid unconditionally
+			 * (0→0 when already clear is harmless, matching the conditional clear). */
+		{
+			int rs = PPC_RS(op);
+			/* Front-load all ra_load()s before touching RTMP regs (only spills clobber RTMP). */
+			int hS = ra_load(rs);
+			int hA = (ra != 0) ? ra_load(ra) : -1;
+			int hB = ra_load(rb);
+			/* EA → RTMP0 */
+			if (ra != 0)
+				emit32(0x0B000000 | (hB << 16) | (hA << 5) | RTMP0); /* ADD W0,W(hA),W(hB) */
+			else
+				a64_mov_reg(RTMP0, hB);
+			/* RTMP1 = reserve_valid (old); RTMP2 = reserve_addr (old) */
+			a64_ldr_w_imm(RTMP1, RSTATE, PPCR_RESERVE_VALID);
+			a64_ldr_w_imm(RTMP2, RSTATE, PPCR_RESERVE_ADDR);
+			/* reserve_valid = 0 (unconditional) */
+			a64_str_w_imm(31 /*WZR*/, RSTATE, PPCR_RESERVE_VALID);
+			/* success = reserve_valid_old && (reserve_addr_old == EA) → RTMP2 (0/1) */
+			emit32(0x6B00001F | (RTMP0 << 16) | (RTMP2 << 5));  /* CMP W2,W0 (reserve_addr==EA) */
+			emit32(0x1A9F07E0 | (0x1 << 12) | RTMP2);           /* CSET W2, EQ (inv=NE=0x1) */
+			emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP2); /* AND W2,W1,W2 */
+			/* RTMP3 = byte-swapped rS, then conditional store mem[EA]=rS if success */
+			emit32(0x5AC00800 | (hS << 5) | RTMP3); /* REV W3,W(hS) */
+			emit32(0x34000000 | (2 << 5) | RTMP2);  /* CBZ W2, #8 — skip store if !success */
+			a64_str_w_reg(RTMP3, RMEMBASE, RTMP0);  /* STR W3,[RMEMBASE,W0] (one instruction) */
+			/* CR0 (bits 31:28) nibble = 2*success + SO; LT=GT=0 */
+			emit_read_xer_so(RTMP1);                                  /* LDRB W1,[RSTATE,#XER_SO] */
+			emit32(0x0B000000 | (RTMP2 << 16) | (1 << 10) | (RTMP1 << 5) | RTMP3); /* ADD W3,W1,W2 LSL #1 */
+			lazy_flush_cr0();  /* lazy CR0 is eager in practice, but be explicit before a direct CR write */
+			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
+			emit32(0x33000000 | (4 << 16) | (3 << 10) | (RTMP3 << 5) | RTMP0); /* BFI W0,W3,#28,#4 */
+			a64_str_w_imm(RTMP0, RSTATE, PPCR_CR);
+			lazy_cr0_valid = false;
+			return true;
+		}
 
 		case 595: /* mfsr — move from segment register (supervisor, treat as NOP returning 0) */
 		{	int hD = ra_store(rd); a64_movz(hD, 0, 0); return true; }

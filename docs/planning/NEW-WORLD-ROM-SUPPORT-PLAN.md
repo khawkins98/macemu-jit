@@ -184,6 +184,20 @@ Work:
 > Assets staged by the user: `Downloads/New_World_Mac_Roms/New World ROM/` (19 versions), `macos_921_ppc.iso`,
 > `macos-922-uni.zip`.
 
+> **First patch-adaptation target characterized (2026-06-07, capstone disasm of 9.1.1 parcels).** The
+> `rom_patches.cpp:715` blocker, decoded: the 1.1 ROM has `mfpvr r12` then `cmpwi r12,1` at +24 (CPU-detect
+> inline, per-CPU offset in the next word). The **parcels ROM restructured it**: `mfpvr r12` →
+> `rlwinm. r12,r12,0,0,14` → `bne` → a **BAT/SPR-clear init block** (`mtspr/mtibatl/mtibatu …`) → `b`.
+> The real CPU-detect (`cmpwi r12,1` / `cmpwi r12,3`) is moved to **`0x310a1c`** and uses a **jump-table
+> mechanism** (`addi r11,r11,<offset>` accumulation → common handler `@0x311350`), not the inline
+> compare+beq the patch expects. So the patch must (a) detect the parcels layout (mfpvr→rlwinm./bne, not
+> →cmpwi) and (b) re-target the CPU-detect/per-CPU-data patch to the `0x310a1c`/`0x311350` structure (or
+> confirm the parcels ROM self-handles our faked PVR=7400 and skip). This is the *first* of the boot-patch
+> routine's structural divergences; each subsequent patch needs the same treatment. **Approach: additive —
+> a parcels branch in `patch_nanokernel_boot` gated on layout/cksum, leaving the 1.1 path byte-identical
+> ("support both old + new world ROMs").** A reference-research agent is checking for prior art (adapt vs
+> from-scratch) before committing to the full grind.
+
 **Infrastructure landed (safe, 1.1 boot verified byte-identical):**
 - ROM-version discrimination by checksum (`g_rom_904_lenient`, auto-on ONLY for the 9.0.4 G4
   ROM cksum `0xb8d0b672`; 1.1 `0xfd86d120` path untouched; opt-out `SS_ROM_NO_904`).

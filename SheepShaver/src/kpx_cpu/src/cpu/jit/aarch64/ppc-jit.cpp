@@ -1094,6 +1094,33 @@ static void emit_vmrg(int va, int vb, int vd, uint32_t zip)
 	emit_store_vr(0, vd);
 }
 
+/* AltiVec saturating HALFWORD->BYTE pack (vpkshss/vpkshus/vpkuhus) -- ev_mixed-aware.
+ * The pack writes saturate(vA.h[i]) to the HIGH-order byte half and saturate(vB.h[i]) to
+ * the LOW-order half (PPC element 0 = most significant). Derived empirically against the
+ * interpreter (REGDUMP VR2) with both non-saturating distinct operands AND
+ * saturation-crossing operands (negatives + >255) -- the latter is essential: with only
+ * non-saturating positives, SQXTUN and UQXTN are indistinguishable (false PASS).
+ *   1. REV32.16B -> PPC byte order; REV16.16B -> NEON .8H lanes now hold the correct PPC
+ *      halfword VALUES in the correct lane order (REV32 alone leaves them byte-swapped for
+ *      the .8H view -- that was the trap that sank the earlier attempt).
+ *   2. [SU]QXTN  v2.8B, vA.8H  -> vA's 8 saturated bytes in the LOW 8 lanes.
+ *      [SU]QXTN2 v2.16B, vB.8H -> vB's 8 in the HIGH 8 lanes (matches verified vpkuhum).
+ *   3. REV32.16B v2 -> back to ev_mixed for the raw store.
+ * Signedness encodings: SQXTN .8B=0x0E214800/.16B=0x4E214800 (opcode 10100, U=0);
+ * SQXTUN .8B=0x2E212800/.16B=0x6E212800 (10010, U=1); UQXTN .8B=0x2E214800/.16B=0x6E214800
+ * (10100, U=1). (The pre-2026-06-07 cases used 0x2E212800 mislabeled "UQXTN" -- it is
+ * actually SQXTUN, so unsigned packs clamped negatives-as-signed to 0. Fixed.) */
+static void emit_vpk_h2b(int va, int vb, int vd, uint32_t qxtn_lo, uint32_t qxtn2_hi)
+{
+	emit_load_vr(0, va); emit_load_vr(1, vb);
+	emit32(0x6E200800 | (0 << 5) | 0); emit32(0x6E200800 | (1 << 5) | 1); /* REV32.16B v0,v1 */
+	emit32(0x4E201800 | (0 << 5) | 0); emit32(0x4E201800 | (1 << 5) | 1); /* REV16.16B v0,v1 */
+	emit32(qxtn_lo  | (0 << 5) | 2); /* [SU]QXTN  v2.8B,  v0.8H (vA -> low 8 bytes) */
+	emit32(qxtn2_hi | (1 << 5) | 2); /* [SU]QXTN2 v2.16B, v1.8H (vB -> high 8 bytes) */
+	emit32(0x6E200800 | (2 << 5) | 2); /* REV32.16B v2 -> ev_mixed */
+	emit_store_vr(2, vd);
+}
+
 /* AltiVec even/odd BYTE multiply (vmul{o,e}{u,s}b) -- ev_mixed-aware widening.
  * Two bugs the old codegen had: it emitted a non-widening MUL.8B (must widen 8x8->16),
  * and it ignored ev_mixed even/odd element selection. Fix, on REV32.16B-normalized
@@ -3730,12 +3757,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		 * emit_vmrg. (vpkuwum/case 78 has the same ignore-vA bug — see ROADMAP A2.) */
 		case 14: emit_vmrg(va, vb, vd, 0x4E005800); return true; /* vpkuhum UZP2.16B (ev_mixed-normalized) */
 		case 78: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwum UZP1.4S — BROKEN: ignores vA (ROADMAP A2) */
-		case 398: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E216800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkshus SQXTUN.8B */
-		case 462: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E616800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswus SQXTUN.4H */
-		case 270: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E214800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkshss SQXTN.8B */
-		case 334: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E614800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswss SQXTN.4H */
-		case 142: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x2E212800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuhus UQXTN.8B */
-		case 206: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x2E612800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwus UQXTN.4H */
+		/* HALFWORD->byte saturating packs — ev_mixed-aware via emit_vpk_h2b (2026-06-07).
+		 * XOs per the decode table: 398=vpkshss (signed->signed, SQXTN), 270=vpkshus
+		 * (signed->unsigned, SQXTUN), 142=vpkuhus (unsigned->unsigned, UQXTN). */
+		case 398: emit_vpk_h2b(va, vb, vd, 0x0E214800, 0x4E214800); return true; /* vpkshss SQXTN */
+		case 270: emit_vpk_h2b(va, vb, vd, 0x2E212800, 0x6E212800); return true; /* vpkshus SQXTUN */
+		case 142: emit_vpk_h2b(va, vb, vd, 0x2E214800, 0x6E214800); return true; /* vpkuhus UQXTN */
+		/* WORD->halfword saturating packs (462/334/206) still use the old (broken)
+		 * single-narrow path — separate fix pass (different normalize: word values +
+		 * halfword output ordering). Tracked: ALTIVEC-SHIFT-ROTATE-BUGS.md. */
+		case 462: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E616800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswus SQXTUN.4H (BROKEN) */
+		case 334: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E614800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswss SQXTN.4H (BROKEN) */
+		case 206: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x2E612800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwus UQXTN.4H (BROKEN) */
 		case 814: emit_load_vr(0,vb); emit32(0x0E212800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupkhsb SXTL.8H (unpack high signed byte) */
 		case 878: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupkhsh SXTL.4S */
 		case 942: emit_load_vr(0,vb); emit32(0x4E212800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupklsb SXTL2.8H */

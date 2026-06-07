@@ -123,6 +123,17 @@ p("av_vmrglh", merge2(332), "vmrglh v2,v1,v3: low-halfword merge (ev_mixed-norma
 p("av_vmrghw", merge2(140), "vmrghw v2,v1,v3 -> high-word merge [A0,B0,A1,B1]")
 p("av_vmrglw", merge2(396), "vmrglw v2,v1,v3 -> low-word merge [A2,B2,A3,B3]")
 p("av_vpkuhum",merge2(14),  "vpkuhum v2,v1,v3: halfword->byte pack (ev_mixed-normalized UZP2.16B)")
+# --- saturating HALFWORD->byte packs FIXED 2026-06-07 (ppc-jit.cpp emit_vpk_h2b): REV32+REV16
+# normalize -> [SU]QXTN/QXTN2 (vA low, vB high) -> REV32 back. Operands CROSS the saturation
+# boundaries (negatives AND >255) so the three signednesses are DISTINCT (a non-saturating
+# operand set makes SQXTUN and UQXTN identical -> false PASS, the trap the earlier attempt hit).
+# big-endian halfwords: vA={0001,0100,7FFF,8000,FF00,00FF,0080,017F}, vB={1234,FFFF,0010,8001,7F00,007F,ABCD,0005}.
+_PK_A=[0x00,0x01, 0x01,0x00, 0x7F,0xFF, 0x80,0x00, 0xFF,0x00, 0x00,0xFF, 0x00,0x80, 0x01,0x7F]
+_PK_B=[0x12,0x34, 0xFF,0xFF, 0x00,0x10, 0x80,0x01, 0x7F,0x00, 0x00,0x7F, 0xAB,0xCD, 0x00,0x05]
+def packop(xo): return load_bytes(1,_PK_A)+load_bytes(3,_PK_B)+[vx(2,1,3,xo)]+grab()
+p("av_vpkshss", packop(398), "vpkshss: halfword->byte signed source, signed-saturate (SQXTN)")
+p("av_vpkshus", packop(270), "vpkshus: halfword->byte signed source, unsigned-saturate (SQXTUN)")
+p("av_vpkuhus", packop(142), "vpkuhus: halfword->byte unsigned source, unsigned-saturate (UQXTN)")
 # --- variable byte shifts: FIXED 2026-06-06 (ppc-jit.cpp case 260/516/772). Were
 # emitting unmasked, signed, rounding NEON shifts; vsrb shifted the wrong direction.
 # data=0x80..0x8F (high bit -> logical vs arith fill), amounts=0x00..0x0F (>=8 -> mask mod 8). ---

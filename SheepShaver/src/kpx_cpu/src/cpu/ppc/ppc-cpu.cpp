@@ -43,6 +43,8 @@
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 extern uint8 *RAMBaseHost;
 extern uint32 RAMSize;
+// Boot-stall watchdog (emul_op.cpp): alarms when the guest wedges pre-idle. See call site below.
+extern "C" void ss_boot_stall_check(double now_s, unsigned compiled, double rate_mhz);
 extern uint32 ROMBase;
 extern uint8 *ROMBaseHost;
 #include "cpu/jit/aarch64/ppc-jit.h"
@@ -1828,6 +1830,12 @@ void powerpc_cpu::execute(uint32 entry)
 								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
 								        compiled, rgn_jit_blocks, rgn_jit_to_interp);
 							}
+							/* Boot-stall probe: until the guest reaches Process-Manager idle,
+							 * read the front modal screen and log a [STALL] line each heartbeat.
+							 * Surfaces EARLY-boot modal alerts (e.g. the model-rejection screen)
+							 * that never reach the idle hook and so emit nothing. Auto-silences
+							 * post-idle. Defined in emul_op.cpp. */
+							ss_boot_stall_check(now, compiled, rate);
 							/* NOTE: "same PC at consecutive heartbeats" is a SAMPLING HINT, not
 							 * proof of a hang — hot dispatch PCs (e.g. the nanokernel exception
 							 * dispatcher at 0x50313d34) recur by chance.  Do not treat

@@ -258,6 +258,12 @@ static void force_altivec_idle_service(void)
 	        (unsigned)(rb.d[0] & 0xffff), (unsigned)rb.a[0], (rb.a[0] & 0x10) ? "SET" : "clear");
 }
 
+// Set once the guest reaches Process-Manager idle ([BOOT] emitted). The boot-stall probe
+// (ss_boot_stall_check, driven by the host-side JIT heartbeat) reads this to know when to go
+// quiet — before idle it reports the front modal screen; after idle the idle hook owns dialog
+// reporting via [APP].
+static volatile bool g_boot_idle_emitted = false;
+
 static void e2e_emit_idle_signals(void)
 {
 	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars). Sanitize to log-safe ASCII so an
@@ -304,6 +310,7 @@ static void e2e_emit_idle_signals(void)
 	static bool boot_emitted = false;
 	if (!boot_emitted) {
 		boot_emitted = true;
+		g_boot_idle_emitted = true;	// silence the pre-idle stall probe
 		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' menubar=%u ticks=%u (%.1fs)\n",
 		        app, modal, front, title, mbar, ticks, ticks / 60.0);
 		fflush(stderr);
@@ -371,6 +378,89 @@ static void e2e_emit_idle_signals(void)
 		strncpy(last_title, title, sizeof(last_title) - 1);
 		last_title[sizeof(last_title) - 1] = '\0';
 		last_modal = modal;
+	}
+}
+
+
+// Boot-stall watchdog (diagnostic). Problem it solves: when the guest wedges at an early-boot
+// dead-end — most often the ROM "This startup disk will not work on this Macintosh model" alert,
+// but also a hang or a sad-Mac — the log shows a burst of JIT compilation (~0.2s) and then goes
+// SILENT, because every higher-level signal we have ([BOOT]/[APP] modal, [SYSV], [READY]) rides
+// the idle hook (SynchIdleTime), which only fires once the guest reaches Process-Manager idle —
+// which a wedged guest never does. The operator is left staring at a GUI screen the log can't see
+// (see memory gui-outcomes-not-in-log). Empirically (9.2.1 model-rejection, 2026-06-07): that
+// screen is a ROM-level DSAlert drawn BEFORE the System boots, so WindowList(0x9D6) reads
+// 0xffffffff and the Toolbox can't name it — naming via low-mem is impossible. But the SHAPE of
+// the failure is unmistakable and signal-independent: blocks keep executing fast (~150M/s, a tight
+// wait loop) while NO new blocks compile and idle is NEVER reached.
+//
+// So this is a WATCHDOG, not a namer: driven by the host-side JIT heartbeat (ppc-cpu.cpp), which
+// keeps ticking all through the wedge (16k+ [HB] lines were emitted during that 9.2.1 screen). It
+// raises a loud [ALARM] the moment that shape is confirmed, then re-states it every ~30s so a
+// `tail` of the log always shows the live stalled state instead of silence.
+//
+// FALSE-POSITIVE SAFETY (cf. CLAUDE.md "comp frozen ≠ hang"): that caution is about POST-boot
+// steady-state HOT-PC sampling. This watchdog is scoped strictly PRE-IDLE and self-disarms the
+// instant [BOOT] idle fires (g_boot_idle_emitted) — a healthy boot reaches idle in ~10s, well
+// before the alarm threshold, so it never trips. It also re-arms whenever compilation resumes
+// (comp increases), so a legitimate brief cached-loop phase that then proceeds won't alarm. The
+// alarm requires: pre-idle AND comp flat for >= stall window AND still spinning fast, after a
+// grace period for normal early-boot compilation. Threshold tunable via SS_BOOT_STALL_SECS
+// (default 15s total; "0" disables the watchdog).
+extern "C" void ss_boot_stall_check(double now_s, unsigned compiled, double rate_mhz)
+{
+	if (g_boot_idle_emitted)
+		return;					// idle reached — healthy; [APP] owns dialog reporting now
+
+	static int    s_threshold = -1;		// total seconds of stall before alarming (env-tunable)
+	static double s_grace = 8.0;		// don't judge before this — early boot legitimately compiles
+	if (s_threshold < 0) {
+		const char *e = getenv("SS_BOOT_STALL_SECS");
+		s_threshold = (e && *e) ? atoi(e) : 15;
+	}
+	if (s_threshold == 0)
+		return;					// watchdog disabled
+
+	static unsigned s_last_comp = 0;
+	static double   s_comp_progress_t = -1.0;	// last time a NEW block compiled
+	static bool     s_alarmed = false;
+	static double   s_last_restate = 0.0;
+	if (s_comp_progress_t < 0.0) { s_last_comp = compiled; s_comp_progress_t = now_s; }
+
+	if (compiled != s_last_comp) {		// compilation progressed -> re-arm
+		s_last_comp = compiled;
+		s_comp_progress_t = now_s;
+		s_alarmed = false;
+	}
+
+	double quiet = now_s - s_comp_progress_t;	// seconds since the last new block compiled
+	bool spinning = rate_mhz > 1.0;			// CPU busy in a tight (already-compiled) loop
+	bool stalled = (now_s >= s_grace) && (quiet >= (double)s_threshold - s_grace) && spinning;
+
+	// Best-effort name the front screen — works only if the WindowManager is up (later dialogs:
+	// disk-repair prompt, "rebuild desktop?"); for the pre-System DSAlert case win reads 0xffffffff.
+	uint32 front = ReadMacInt32(0x9d6);		// WindowList head
+	bool wm_up = front != 0 && front != 0xffffffff && guest_ptr_ok(front);
+	char title[64] = { 0 };
+	if (wm_up)
+		e2e_front_window_title(front, title, sizeof(title));
+
+	if (stalled && !s_alarmed) {
+		s_alarmed = true;
+		s_last_restate = now_s;
+		fprintf(stderr, "[ALARM] boot stalled at %.1fs: no new blocks for %.0fs, guest NOT idle, "
+		        "still spinning %.0fM/s -> dead-end (model-rejection alert / hang). %s\n",
+		        now_s, quiet, rate_mhz,
+		        wm_up ? "Front window/dialog title='" : "WindowManager not up (pre-System screen, "
+		                "e.g. \"won't work on this model\") — capture a screenshot to identify.");
+		if (wm_up)
+			fprintf(stderr, "         title='%s'\n", title);
+		fflush(stderr);
+	} else if (s_alarmed && (now_s - s_last_restate) >= 30.0) {
+		s_last_restate = now_s;			// keep the log alive instead of going silent
+		fprintf(stderr, "[STALL] still wedged at %.1fs (no new blocks for %.0fs, %.0fM/s, pre-idle)\n",
+		        now_s, quiet, rate_mhz);
+		fflush(stderr);
 	}
 }
 

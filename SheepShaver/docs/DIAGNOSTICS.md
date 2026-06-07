@@ -104,6 +104,33 @@ decodes and type-detects as NewWorld, yet the emulator rejects it downstream. So
 | `[JIT Ns] STALL: comp=...` | `SS_JIT_RING_DUMP_ON_STALL=<n>` | one-shot trace-ring dump on compile freeze |
 | `[JIT Ns] interrupt delivered` | each guest interrupt | diag log file only |
 
+## Boot-stall watchdog (`[ALARM]` / `[STALL]`)
+
+Catches **early-boot dead-ends that emit nothing else** — the ROM "This startup disk will
+not work on this Macintosh model" alert, an early hang, a sad Mac. The trap these fall into:
+every higher-level boot signal (`[BOOT]`/`[APP]` modal, `[SYSV]`, `[READY]`) rides the
+`SynchIdleTime` idle hook, which only fires once the guest reaches Process-Manager idle — a
+wedged guest never does. So the log shows a ~0.2s burst of `[JIT … first compile …]` lines
+and then goes silent, and the operator is left staring at a GUI screen the log can't see
+(see `LEARNINGS.md` + memory `gui-outcomes-not-in-log`).
+
+The watchdog (`ss_boot_stall_check`, emul_op.cpp, driven by the host-side heartbeat which
+keeps ticking through the wedge) fires on the **shape** of the failure, which is
+signal-independent: blocks keep executing fast (~150M/s, a tight already-compiled wait loop)
+while **no new blocks compile** and idle is **never reached**.
+
+| Output | Meaning |
+|---|---|
+| `[ALARM] boot stalled at Ns: no new blocks for Ns, guest NOT idle, still spinning NM/s -> dead-end …` | one-shot when the stall is confirmed (default ~15s). Names the front dialog if the WindowManager is up (later prompts: disk-repair, rebuild-desktop); for a **pre-System DSAlert** (e.g. the model-rejection screen) WindowList reads `0xffffffff` — it says so and points you to a screenshot. |
+| `[STALL] still wedged at Ns …` | re-stated every 30s after the alarm, so a `tail` of the log shows the live stalled state instead of silence. |
+
+**Why this is NOT the forbidden "same-PC" rule** (warning-matrix retraction above): that
+caution is about POST-boot HOT-PC sampling. This watchdog is scoped strictly **pre-idle** and
+self-disarms the instant `[BOOT] idle` fires (healthy boot ~10s « 15s threshold), and re-arms
+if compilation resumes — so a healthy boot never trips it. Tunable via `SS_BOOT_STALL_SECS`
+(default 15; `0` disables). Empirically verified: `[ALARM]` at 15.0s on the failing 9.2.1
+NewWorld boot (2026-06-07).
+
 ## Diagnostic environment variables
 
 The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
@@ -125,6 +152,7 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_JIT_TRACE_RING=1` | Block-level execution-history ring; dumped to `/tmp/ss_jit_ring.txt` by the SIGSEGV handler (records J/I blocks, inline calls, EMUL_OP entry/return). |
 | `SS_JIT_RING_DUMP_TRIGGER=1` | Dump the trace ring when the DR emulator executes stack-region code (`ppc-cpu.cpp`). |
 | `SS_JIT_RING_DUMP_ON_STALL=<n>` | One-shot trace-ring dump on a compile freeze (see table above). |
+| `SS_BOOT_STALL_SECS=<n>` | Boot-stall watchdog threshold in seconds (default 15; `0` disables). Pre-idle dead-end alarm — see the `[ALARM]`/`[STALL]` section above. |
 | `SS_EMULOP_COUNTS=1` | Per-`EMUL_OP` execution counters to stderr every ~5s (`sheepshaver_glue.cpp`). |
 | `SS_EMULOP_TRACE=1` | Log SCSI `EMUL_OP` return values to `/tmp/emulop_trace.log` (`sheepshaver_glue.cpp`). |
 | `SS_UI_DUMP_DIR=<dir>` | **Feature gate (not a JIT diagnostic)** — enables on-demand guest UI introspection. When set, the idle hook services `ss_ui.req` and writes a Backend-A window-list JSON snapshot (`ss_ui.A.json`) + nonce-stamped `ss_ui.done`. Zero cost when unset. See `SheepShaver/docs/UI-INTROSPECTION.md` for the full reference. |

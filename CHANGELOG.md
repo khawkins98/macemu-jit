@@ -11,6 +11,15 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] fsel/frsp/frsqrte/fsqrt → zero-copy FP RA (P5b follow-up, completes FP-RA op conversion)
+
+- Converted the last bridge-using FP ops to direct FP-RA access: `frsp`/`fsel` (differentially
+  tested — added `fp_fsel_pos`/`fp_fsel_neg` exercising both select arms) and `frsqrte`/`fsqrt`
+  (double; mechanical/prospective — `frsqrte` is an estimate, the emulated 603/604/750 interpreter
+  doesn't implement `fsqrt`, so neither is differentially testable). `make test-jit` **317/317**.
+- The FP path now has **no `emit_*_fpr` bridge uses in any hot op**; the bridge remains only for
+  genuinely struct-resident reads (mffs/mtfsf/fcmp). See OPTIMIZATION-PLAN §P5b.
+
 ### [SheepShaver] FP indexed/update memory → zero-copy FP RA (P5b follow-up)
 
 - Converted the FP **indexed** loads/stores (`lf{s,d}x`/`lf{s,d}ux`/`stf{s,d}x`/`stf{s,d}ux`,

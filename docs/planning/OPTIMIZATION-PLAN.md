@@ -599,10 +599,16 @@ FPR is RA-resident and keeping FP values RA-resident across loads/stores in FP-h
 315/315.** FC perf-neutral (its Mandelbrot loop is register FP arith, doesn't use these ops; renders
 identically, guest-MIPS within noise) — the win accrues to array-heavy FP workloads.
 
-**Remaining follow-ups** (still coherent via the bridge): `fsel`, `frsp`, `frsqrte` to zero-copy;
-later cross-block FP pinning (callee-saved d8–d15 + prologue save — multi-session); a
-belt-and-suspenders `SS_JIT_VERIFY` boot (Speedometer Math + FC correctness already strong evidence).
-**Effort**: was High — MVP + single-precision + FP-memory all landed via the staged/bridge approach.
+**Single-op follow-ups DONE (2026-06-07):** `frsp`/`fsel` (differentially tested — `fp_frsp_real`,
+new `fp_fsel_pos`/`fp_fsel_neg`) and `frsqrte`/`fsqrt` (double; mechanical, prospective — not
+differentially testable) converted to zero-copy. **The FP path now has no `emit_*_fpr` bridge uses
+in any hot op** — the bridge remains only as the coherence shim for genuinely struct-resident reads
+(mffs/mtfsf/fcmp). test-jit **317/317**.
+
+**Remaining follow-ups** (larger, multi-session): cross-block FP pinning (callee-saved d8–d15 +
+prologue save) for FP values live across block boundaries; a belt-and-suspenders `SS_JIT_VERIFY` boot
+(Speedometer Math + FC correctness already strong evidence). **Effort so far**: was High — MVP +
+single-precision + FP-memory + single-op follow-ups all landed via the staged/bridge approach.
 
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 

@@ -255,6 +255,7 @@ function renderDetailPane(): string {
         <button class="btn btn-secondary" data-action="duplicate" data-id="${escapeAttr(vm.id)}" data-name="${escapeAttr(vm.name)}">${ICON_DUPLICATE()}</button>
         <button class="btn btn-secondary" data-action="reveal" data-id="${escapeAttr(vm.id)}">${ICON_FOLDER()}</button>
         <button class="btn btn-secondary btn-danger-hover" data-action="delete" data-id="${escapeAttr(vm.id)}">${ICON_TRASH()}</button>
+        <button class="btn btn-secondary" data-action="open-inspector" data-id="${escapeAttr(vm.id)}" title="Inspector">🔬</button>
         <button class="btn btn-secondary" data-action="bug-report" data-id="${escapeAttr(vm.id)}" title="Report Bug">🐛</button>
       </div>
     </div>
@@ -267,7 +268,7 @@ function renderDetailPane(): string {
     </div>
     <div class="detail-config">
       <div class="detail-tabs">
-        ${["general", "hardware", "storage", "network", "inspector"]
+        ${["general", "hardware", "storage", "network"]
           .map((s) => `<button class="detail-tab ${s === settingsSection ? "detail-tab--active" : ""}"
                         data-action="switch-section" data-section="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}</button>`)
           .join("")}
@@ -991,7 +992,7 @@ function renderSettings(): string {
     ${isRunning ? '<div class="settings-running-banner">VM is running. Hardware settings apply on next restart.</div>' : ""}
     <div class="settings-body">
       <div class="settings-sidebar">
-        ${["general", "hardware", "storage", "network", "inspector"]
+        ${["general", "hardware", "storage", "network"]
           .map((s) => `
             <button class="settings-nav-item ${s === settingsSection ? "active" : ""}"
                     data-action="switch-section" data-section="${s}">
@@ -1224,6 +1225,33 @@ async function handleAction(e: Event) {
         selectedVmId = id;
         await loadVmPrefs(id);
         render();
+      }
+      break;
+
+    case "open-inspector":
+      if (id) {
+        try {
+          const existing = await WebviewWindow.getByLabel("inspector");
+          if (existing) {
+            await existing.setFocus();
+            break;
+          }
+        } catch { /* doesn't exist yet */ }
+
+        const vmName = vms.find(v => v.id === id)?.name || "VM";
+        try {
+          new WebviewWindow("inspector", {
+            url: `index.html?inspector=${encodeURIComponent(id)}`,
+            title: `${vmName} — Inspector`,
+            width: 900,
+            height: 700,
+            resizable: true,
+            minWidth: 700,
+            minHeight: 500,
+          });
+        } catch (err) {
+          showToast(`Failed to open Inspector: ${err}`, "error");
+        }
       }
       break;
 
@@ -1727,6 +1755,183 @@ async function loadScreenshots() {
   }
 }
 
+// Inspector window — separate window with full-width panels
+let inspectorInterval: ReturnType<typeof setInterval> | null = null;
+let inspectorRecording = false;
+let inspectorRecordedEvents: { ts: number; kind: string; payload: string }[] = [];
+
+function renderInspectorWindow(vmId: string) {
+  const app = document.getElementById("app")!;
+
+  app.innerHTML = `
+    <div class="inspector-window">
+      <div class="inspector-toolbar">
+        <span class="inspector-toolbar__title">Inspector</span>
+        <div class="inspector-toolbar__tabs">
+          <button class="inspector-toolbar__tab inspector-toolbar__tab--active" data-panel="overview">Overview</button>
+          <button class="inspector-toolbar__tab" data-panel="timeline">Timeline</button>
+          <button class="inspector-toolbar__tab" data-panel="log">Log</button>
+          <button class="inspector-toolbar__tab" data-panel="debug">Debug</button>
+        </div>
+        <div style="flex:1"></div>
+        <button class="btn btn-secondary btn-sm" id="inspector-record-btn">⏺ Record</button>
+      </div>
+      <div class="inspector-panels">
+        <div class="inspector-panel" id="panel-overview">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">JIT Stats</h3>
+            <div id="insp-stats" class="inspector-stats"><p class="ss-text-muted">Waiting for data...</p></div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-timeline" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Events</h3>
+            <div id="insp-signals" class="inspector-signals"><p class="ss-text-muted">No events yet.</p></div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-log" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Emulator Log</h3>
+            <div id="insp-log" class="inspector-log"><p class="ss-text-muted">No log output yet.</p></div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-debug" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Runtime Controls</h3>
+            <div class="form-group">
+              <label>Input Lockout</label>
+              <select class="input" id="insp-input-lockout">
+                <option value="0">Off — host input active</option>
+                <option value="1">On — VNC-only control</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Frameskip</label>
+              <select class="input" id="insp-frameskip">
+                ${[0,1,2,4,8,12].map(v => `<option value="${v}">${v === 0 ? "Max (60fps)" : `Every ${v}${v === 1 ? "st" : v === 2 ? "nd" : "th"} (${Math.round(60/v)}fps)`}</option>`).join("")}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>RPC Stats Query</label>
+              <button class="btn btn-secondary btn-sm" id="insp-rpc-query">Query via RPC</button>
+              <pre id="insp-rpc-result" class="inspector-log-pre" style="margin-top: 8px; min-height: 40px;"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Tab switching
+  app.querySelectorAll(".inspector-toolbar__tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      app.querySelectorAll(".inspector-toolbar__tab").forEach(t => t.classList.remove("inspector-toolbar__tab--active"));
+      tab.classList.add("inspector-toolbar__tab--active");
+      app.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");
+      const panelId = `panel-${(tab as HTMLElement).dataset.panel}`;
+      const panel = document.getElementById(panelId);
+      if (panel) panel.style.display = "";
+    });
+  });
+
+  // Record button
+  document.getElementById("inspector-record-btn")?.addEventListener("click", () => {
+    inspectorRecording = !inspectorRecording;
+    const btn = document.getElementById("inspector-record-btn")!;
+    if (inspectorRecording) {
+      inspectorRecordedEvents = [];
+      btn.textContent = "⏹ Stop";
+      btn.classList.add("btn-danger-hover");
+      showToast("Recording session events...", "info", 2000);
+    } else {
+      btn.textContent = "⏺ Record";
+      btn.classList.remove("btn-danger-hover");
+      showToast(`Recorded ${inspectorRecordedEvents.length} events`, "success", 3000);
+      // TODO: save to .sheepshaver-profile file
+    }
+  });
+
+  // RPC controls
+  document.getElementById("insp-input-lockout")?.addEventListener("change", async (e) => {
+    const val = (e.target as HTMLSelectElement).value;
+    try {
+      await invoke("rpc_set_input_lockout", { id: vmId, enabled: val === "1" });
+      showToast(`Input lockout ${val === "1" ? "enabled" : "disabled"} — instant`, "info", 2000);
+    } catch (err) {
+      showToast(`RPC failed: ${err}`, "error");
+    }
+  });
+
+  document.getElementById("insp-frameskip")?.addEventListener("change", async (e) => {
+    const val = parseInt((e.target as HTMLSelectElement).value);
+    try {
+      await invoke("rpc_set_frameskip", { id: vmId, value: val });
+      showToast(`Frameskip set to ${val} — instant`, "info", 2000);
+    } catch (err) {
+      showToast(`RPC failed: ${err}`, "error");
+    }
+  });
+
+  document.getElementById("insp-rpc-query")?.addEventListener("click", async () => {
+    try {
+      const result = await invoke("rpc_get_stats", { id: vmId }) as string;
+      const el = document.getElementById("insp-rpc-result");
+      if (el) el.textContent = result || "(no data)";
+    } catch (err) {
+      const el = document.getElementById("insp-rpc-result");
+      if (el) el.textContent = `Error: ${err}`;
+    }
+  });
+
+  // Poll for updates
+  inspectorInterval = setInterval(async () => {
+    try {
+      const data = (await invoke("get_vm_inspector", { id: vmId })) as InspectorState;
+
+      // Overview panel
+      const statsEl = document.getElementById("insp-stats");
+      if (statsEl && data.stats.blocks) {
+        statsEl.innerHTML = `
+          <div class="inspector-gauge-grid">
+            <div class="inspector-gauge"><span class="inspector-gauge__label">Blocks</span><span class="inspector-gauge__value">${escapeHtml(data.stats.blocks)}</span></div>
+            <div class="inspector-gauge"><span class="inspector-gauge__label">Rate</span><span class="inspector-gauge__value">${escapeHtml(data.stats.rate)}</span></div>
+            <div class="inspector-gauge"><span class="inspector-gauge__label">Compiled</span><span class="inspector-gauge__value">${escapeHtml(data.stats.compiled)}</span></div>
+            <div class="inspector-gauge"><span class="inspector-gauge__label">CPU</span><span class="inspector-gauge__value">${escapeHtml(data.stats.cpu || "—")}</span></div>
+            <div class="inspector-gauge"><span class="inspector-gauge__label">RSS</span><span class="inspector-gauge__value">${escapeHtml(data.stats.rss || "—")}</span></div>
+            <div class="inspector-gauge"><span class="inspector-gauge__label">j2i</span><span class="inspector-gauge__value">${escapeHtml(data.stats.j2i || "0")}</span></div>
+          </div>
+          <div class="inspector-region-bar">Regions: NK=${escapeHtml(data.stats.jnk || "0")} DR=${escapeHtml(data.stats.jdr || "0")} RAM=${escapeHtml(data.stats.jram || "0")}</div>
+          ${data.stats.warnings ? `<div class="inspector-warning">${escapeHtml(data.stats.warnings)}</div>` : ""}
+          <p class="ss-text-muted" style="margin-top: 4px;">Updated: ${escapeHtml(data.stats.timestamp)}</p>
+        `;
+      }
+
+      // Timeline panel
+      const signalsEl = document.getElementById("insp-signals");
+      if (signalsEl && data.signals.length > 0) {
+        signalsEl.innerHTML = data.signals.slice(-30).reverse().map(s =>
+          `<div class="inspector-signal"><span class="inspector-signal__tag">${escapeHtml(s.kind)}</span> <span class="ss-text-muted">${escapeHtml(s.payload.substring(0, 120))}</span></div>`
+        ).join("");
+      }
+
+      // Log panel
+      const logEl = document.getElementById("insp-log");
+      if (logEl && data.log_tail.length > 0) {
+        logEl.innerHTML = `<pre class="inspector-log-pre">${data.log_tail.slice(-100).map(escapeHtml).join("\n")}</pre>`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // Recording
+      if (inspectorRecording && data.signals.length > 0) {
+        const latest = data.signals[data.signals.length - 1];
+        if (!inspectorRecordedEvents.length || inspectorRecordedEvents[inspectorRecordedEvents.length - 1].payload !== latest.payload) {
+          inspectorRecordedEvents.push({ ts: Date.now(), kind: latest.kind, payload: latest.payload });
+        }
+      }
+    } catch { /* VM may not be running */ }
+  }, 2000);
+}
+
 let screenshotCounter = 0;
 let screenshotInProgress = false;
 let inspectorCounter = 0;
@@ -1980,6 +2185,14 @@ async function init() {
     });
 
     render();
+    return;
+  }
+
+  // Detect if this is an Inspector window (opened with ?inspector=<vmid>)
+  const inspectorVmId = params.get("inspector");
+  if (inspectorVmId) {
+    selectedVmId = inspectorVmId;
+    renderInspectorWindow(inspectorVmId);
     return;
   }
 

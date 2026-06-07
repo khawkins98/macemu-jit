@@ -409,8 +409,21 @@ static void e2e_emit_idle_signals(void)
 // (default 15s total; "0" disables the watchdog).
 extern "C" void ss_boot_stall_check(double now_s, unsigned compiled, double rate_mhz)
 {
-	if (g_boot_idle_emitted)
-		return;					// idle reached — healthy; [APP] owns dialog reporting now
+	static bool     s_alarmed = false;
+	static bool     s_recovery_logged = false;
+
+	if (g_boot_idle_emitted) {
+		// Idle reached — healthy; [APP] owns dialog reporting now. If we had alarmed (a slow
+		// medium that crossed the threshold but then DID boot), retract once so a false [ALARM]
+		// is self-correcting in the log rather than sitting there permanently.
+		if (s_alarmed && !s_recovery_logged) {
+			s_recovery_logged = true;
+			fprintf(stderr, "[RECOVERED] boot reached idle at %.1fs — the earlier [ALARM] was a "
+			        "slow boot, not a dead-end (consider raising SS_BOOT_STALL_SECS)\n", now_s);
+			fflush(stderr);
+		}
+		return;
+	}
 
 	static int    s_threshold = -1;		// total seconds of stall before alarming (env-tunable)
 	static double s_grace = 8.0;		// don't judge before this — early boot legitimately compiles
@@ -423,7 +436,6 @@ extern "C" void ss_boot_stall_check(double now_s, unsigned compiled, double rate
 
 	static unsigned s_last_comp = 0;
 	static double   s_comp_progress_t = -1.0;	// last time a NEW block compiled
-	static bool     s_alarmed = false;
 	static double   s_last_restate = 0.0;
 	if (s_comp_progress_t < 0.0) { s_last_comp = compiled; s_comp_progress_t = now_s; }
 

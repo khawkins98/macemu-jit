@@ -123,6 +123,7 @@ while **no new blocks compile** and idle is **never reached**.
 |---|---|
 | `[ALARM] boot stalled at Ns: no new blocks for Ns, guest NOT idle, still spinning NM/s -> dead-end …` | one-shot when the stall is confirmed (default ~15s). Names the front dialog if the WindowManager is up (later prompts: disk-repair, rebuild-desktop); for a **pre-System DSAlert** (e.g. the model-rejection screen) WindowList reads `0xffffffff` — it says so and points you to a screenshot. |
 | `[STALL] still wedged at Ns …` | re-stated every 30s after the alarm, so a `tail` of the log shows the live stalled state instead of silence. |
+| `[RECOVERED] boot reached idle at Ns …` | one-shot retraction — printed if an `[ALARM]` fired but the guest *then* reached idle (a slow medium that crossed the threshold yet did boot). Makes a false alarm self-correcting; if you see it, raise `SS_BOOT_STALL_SECS`. |
 
 **Why this is NOT the forbidden "same-PC" rule** (warning-matrix retraction above): that
 caution is about POST-boot HOT-PC sampling. This watchdog is scoped strictly **pre-idle** and

@@ -58,6 +58,29 @@ extern bool tick_inhibit;
 // ppc-execute.cpp; no-op unless the probe is enabled. See MMU-NANOKERNEL-MP-PLAN.md.
 extern "C" void ss_stub_trace_steady(void);
 
+// CopyBits HLE go/no-go probe (SS_COPYBITS_TRACE): resolve _CopyBits (trap 0xA8EC) once the System is
+// up, and report its address so a SS_JIT_PROFILE run can read CopyBits's execution count straight from
+// the JIT's per-block (PC-keyed) profiler — NO guest patching, zero crash surface. (An earlier
+// come-from heap-stub that counted via an EMUL_OP crashed the guest on the first CopyBits call from the
+// ADB cursor-draw path — the EMUL_OP mis-resumed in nested execute_68k, jmp(a0) → garbage PC; abandoned.
+// COMPATIBILITY-PAYOFF memo #1.) To get the frequency: run with `SS_COPYBITS_TRACE=1 SS_JIT_PROFILE=/p`,
+// note the logged CopyBits PC, then grep the profile's hot-block table for that PC. Phase 2 (rect sizes)
+// will need real interception — do it the safe ROM-patch way, not a heap come-from. Env-gated; default off.
+static bool g_copybits_resolved = false;
+static void copybits_probe_install(void)
+{
+	const char *e = getenv("SS_COPYBITS_TRACE");
+	if (g_copybits_resolved || !(e && *e && *e != '0'))
+		return;
+	g_copybits_resolved = true;
+	M68kRegisters r = {};
+	r.d[0] = 0xA8EC;                 // _CopyBits
+	Execute68kTrap(0xa146, &r);      // GetToolboxTrapAddress -> a0
+	fprintf(stderr, "[COPYBITS] _CopyBits trap 0xA8EC resolves to guest PC %08x — "
+	        "run with SS_JIT_PROFILE and grep the hot-block table for that PC to get its exec count.\n",
+	        (unsigned)r.a[0]);
+}
+
 void PlayStartupSound();
 
 // TVector of MakeExecutable
@@ -275,6 +298,8 @@ static void e2e_emit_idle_signals(void)
 		// Flip the stub-pressure trace (SS_STUB_TRACE) from boot to steady-state at first idle
 		// (no-op unless that probe is enabled). See ppc-execute.cpp / MMU-NANOKERNEL-MP-PLAN.md.
 		ss_stub_trace_steady();
+		// Install the CopyBits-frequency probe (SS_COPYBITS_TRACE) now the System + traps are up.
+		copybits_probe_install();
 	}
 
 	// [READY]: one-shot when the desktop is SETTLED — the Finder has been seen frontmost at least
@@ -424,6 +449,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			printf("*** Breakpoint\n");
 			Dump68kRegs(r);
 			break;
+
 
 		case OP_XPRAM1: {			// Read/write from/to XPRam
 			uint32 len = r->d[3];

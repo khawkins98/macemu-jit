@@ -35,6 +35,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
   instead of raw "No such file" messages.
 
+### [SheepShaver] AltiVec XO audit tool + FP round/compare fixes (vrfin/vrfiz/vcmpgefp) + vmsum→interp
+
+- New tool `tools/altivec-xo-audit.py`: cross-checks every JIT `case N:` (mnemonic from its comment)
+  against the authoritative `{mnemonic→XO}` in `ppc-decode.cpp`. One run found 13 more mismatches.
+  (Blind spot, documented: catches XO/label mismatch only — right-XO-wrong-codegen is invisible;
+  `make test-jit` is the codegen gate.)
+- **Fixed** (emitted wrong code for real ops): `vrfin`@522 ran FRINTP, `vrfiz`@586 ran FRINTM,
+  `vcmpgefp`@454 ran FCMGT. Remapped all four FP rounds to authoritative XOs + both FP compares.
+  `vrfin` is round-half-**away** (FRINTA, matches interp `frsin`), not ties-to-even — the differential
+  tie test caught the wrong choice. Routed the broken `vmsum*`/`vmhaddshs`/`vmhraddshs`/`vmladduhm`
+  VA-form block (horizontal multiply-sums / swapped operands) to the interpreter; kept the correct
+  `vmaddfp`/`vnmsubfp`/`vsel`/`vperm`.
+- **Deferred** (already correct via interp fallback; logged): 6 dead-XO cases (`vupkhsb/hsh/lsb/lsh`,
+  `vexptefp`/`vlogefp`) — moving them to the right XO only accelerates dormant code.
+- 6 new differential vectors (`av_vrfin/vrfiz/vrfip/vrfim/vcmpgefp/vcmpgtfp`). `make test-jit` 349/349.
+  Note: these are wrong results *if/when AltiVec is enabled* (currently dormant); record forms'
+  CR6 is unmodeled (pre-existing family-wide gap, like VSCR).
+
 ### [SheepShaver] AltiVec whole-vector shifts fixed — vsl/vslo/vsro had scrambled XOs + per-lane codegen
 
 - A coverage audit (JIT `case` labels vs test-vector names) found a second scrambled family. The

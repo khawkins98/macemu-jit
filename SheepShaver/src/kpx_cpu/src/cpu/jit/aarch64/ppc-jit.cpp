@@ -3790,10 +3790,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 524: { uint32_t idx=(va&~3u)+(3-(va&3u)); emit_load_vr(0,vb); emit32(0x4E010400|((idx*2+1)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vspltb DUP.16B (ev_mixed byte_element) */
 		case 588: { uint32_t idx=(va&~1u)+(1-(va&1u)); emit_load_vr(0,vb); emit32(0x4E020400|((idx*4+2)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vsplth DUP.8H (ev_mixed half_element) */
 		case 652: { uint32_t idx=va; emit_load_vr(0,vb); emit32(0x4E040400|((idx*8+4)<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vspltw DUP.4S */
-		case 522: emit_load_vr(0,vb); emit32(0x4EA18800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfip FRINTP */
-		case 586: emit_load_vr(0,vb); emit32(0x4E219800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfim FRINTM */
-		case 198+768: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E20E400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgefp FCMGE */
-		case 454: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA0E400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtfp FCMGT */
+		/* FP round-to-integer + FP compares: XOs were SCRAMBLED (label != XO). Authoritative
+		 * (ppc-decode.cpp): vrfin=522 vrfiz=586 vrfip=650 vrfim=714; vcmpgefp=454 vcmpgtfp=710.
+		 * Was: 522 ran FRINTP (vrfip's mode) but 522 is vrfin; 586 ran FRINTM but is vrfiz;
+		 * 454 ran FCMGT but is vcmpgefp; vcmpgefp's FCMGE sat at the dead XO 966. Fixed 2026-06-07.
+		 * NOTE: the record forms (vcmpgefp./vcmpgtfp.) update CR6; the JIT models no CR6 for ANY
+		 * vcmp (pre-existing family-wide gap) — the value result is correct, CR6 is not set. */
+		case 522: emit_load_vr(0,vb); emit32(0x6E218800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfin FRINTA (round to nearest, ties AWAY -- matches interp frsin, NOT FRINTN ties-even) */
+		case 586: emit_load_vr(0,vb); emit32(0x4EA19800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfiz FRINTZ (toward zero) */
+		case 650: emit_load_vr(0,vb); emit32(0x4EA18800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfip FRINTP (toward +inf) */
+		case 714: emit_load_vr(0,vb); emit32(0x4E219800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vrfim FRINTM (toward -inf) */
+		case 454: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E20E400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgefp FCMGE (>=) */
+		case 710: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6EA0E400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtfp FCMGT (>) */
 		case 774: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E203400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtsb CMGT.16B (signed) */
 		case 838: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E603400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtsh */
 		case 902: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4EA03400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vcmpgtsw */
@@ -3984,14 +3992,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 43: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x4E002000|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true;
 		case 42: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x6E601C00|(0<<16)|(1<<5)|2); emit_store_vr(2,vd); return true; /* vsel: BSL Vd=vC,Vn=vB,Vm=vA -> (vC&vB)|(vA&~vC). Vn/Vm were swapped (gave vA where vC=1); caught by vsel_mask vector */
 
-		case 32: emit_load_vr(0,va); emit_load_vr(1,vc); emit_load_vr(2,vb); emit32(0x4E21CC00|(1<<16)|(0<<5)|2); emit_store_vr(2,vd); return true; /* vmhaddshs (approx via FMLA) */
-		case 33: emit_load_vr(0,va); emit_load_vr(1,vc); emit_load_vr(2,vb); emit32(0x4E21CC00|(1<<16)|(0<<5)|2); emit_store_vr(2,vd); return true; /* vmhraddshs (approx) */
-		case 34: emit_load_vr(0,va); emit_load_vr(1,vc); emit_load_vr(2,vb); emit32(0x4E609C00|(1<<16)|(0<<5)|0); emit32(0x4E608400|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmladduhm MUL+ADD */
-		case 36: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x4E209C00|(1<<16)|(0<<5)|0); emit32(0x4E208400|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmsumubm (approx) */
-		case 37: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x4E609C00|(1<<16)|(0<<5)|0); emit32(0x4E608400|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmsumshm */
-		case 38: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x6E609C00|(1<<16)|(0<<5)|0); emit32(0x6E608400|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmsumshs */
-		case 40: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x6E209C00|(1<<16)|(0<<5)|0); emit32(0x6E208400|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmsumubm */
-		case 41: emit_load_vr(0,va); emit_load_vr(1,vb); emit_load_vr(2,vc); emit32(0x4E609C00|(1<<16)|(0<<5)|0); emit32(0x4E608400|(2<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmsumuhm */
+		/* vmhaddshs/vmhraddshs/vmladduhm + vmsum* (VA-form XOs 32,33,34,36,37,38,40,41): all emitted
+		 * WRONG native code -- the vmsum* are horizontal multiply-SUMS (no NEON equivalent as coded),
+		 * vmhadd* used a bogus FMLA approx, and vmladduhm had swapped operands (vA*vC+vB, not vA*vB+vC).
+		 * Some XO labels were also scrambled (37/38/40/41). Routed to the interpreter (correct) until
+		 * proper native codegen lands. Note: vmaddfp(46)/vnmsubfp(47) are correct FMLA/FMLS and kept;
+		 * vsel(42)/vperm(43) kept. Fixed 2026-06-07. */
+		case 32: case 33: case 34: case 36: case 37: case 38: case 40: case 41:
+			return false; /* interp fallback (vmhaddshs/vmhraddshs/vmladduhm/vmsum* — wrong native code) */
 		default: return false;
 		}
 	}

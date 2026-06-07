@@ -3,6 +3,33 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — Systematic AltiVec XO audit (now a tool) — fixed FP round/compare; vrfin is ties-AWAY not -even
+
+After two scrambled families by hand, built the audit as a **tool**: `SheepShaver/tools/altivec-xo-audit.py`
+cross-checks every JIT `case N:` (label from its `/* mnem */` comment) against the authoritative
+`{mnemonic->XO}` in `ppc-decode.cpp`. One run surfaced **13 more mismatches**. Triaged by the only axis
+that matters while AltiVec is dormant — *does it emit WRONG code for a real op, or already fall back to
+correct interp?*:
+- **Emitted wrong (fixed):** `vrfin`@522 ran FRINTP, `vrfiz`@586 ran FRINTM, `vcmpgefp`@454 ran FCMGT.
+  Remapped all four rounds to authoritative XOs (vrfin=522 vrfiz=586 vrfip=650 vrfim=714) and both
+  compares (vcmpgefp=454 FCMGE, vcmpgtfp=710 FCMGT). Also routed the `vmsum*`/`vmhaddshs`/`vmhraddshs`/
+  `vmladduhm` VA-form block (XOs 32/33/34/36/37/38/40/41) to `return false` — they emitted wrong native
+  code (horizontal multiply-sums NEON can't express as coded; vmladduhm had swapped operands). Kept the
+  correct `vmaddfp`/`vnmsubfp` (FMLA/FMLS) and `vsel`/`vperm`.
+- **Already correct via interp (DEFERRED, logged not fixed):** 6 dead-XO cases — `vupkhsb/hsh/lsb/lsh`
+  (reals 526/590/654/718) and `vexptefp/vlogefp` (394/458) sit at XOs no op decodes to; the real ops
+  fall back to interp. Moving them to the right XO only *accelerates dormant code* — near-zero value now.
+
+**The catch that proves the lesson: `vrfin` is round-half-AWAY-from-zero, not ties-to-even.** I mapped it
+to `FRINTN` (ties-even) as "obviously correct"; the differential test FAILED (interp `frsin`: 2.5->3.0,
+not 2.0). Fixed to `FRINTA` (ties away). *The "obvious" NEON op was wrong; only the boundary/tie test
+caught it.* — exactly [[altivec-sum-across-scramble]]'s "untested = unverified."
+
+**Audit blind spot (stated loudly so "0 mismatches" is never mistaken for "verified"):** the tool catches
+XO/label mismatches ONLY. **Right-XO-wrong-codegen is invisible to it** — the sum-across *saturation* bug
+(correct label, missing clamp) and `vrfin`'s wrong rounding mode would BOTH pass the audit clean. Only
+`make test-jit` with boundary operands proves codegen. All fixes gated: 349/349, score=100.
+
 ## 2026-06-07 — AltiVec coverage audit found a 2nd scrambled family: whole-vector shifts (vsl/vslo/vsro)
 
 Ran the advisor's suggested **coverage audit** (grep JIT `case` labels vs `TEST_ORDER` vector names)

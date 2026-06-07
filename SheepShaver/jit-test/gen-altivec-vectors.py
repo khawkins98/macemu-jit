@@ -217,6 +217,24 @@ p("av_vsro", shiftwv(1100, [0x20]*16), "vsro: shift whole vector RIGHT 4 octets,
 # vsl/vsr shift count = vB bits 125-127 (bit count 0-7); all bytes' low 3 bits must match. sh=3.
 p("av_vsl",  shiftwv(452,  [0x03]*16), "vsl: shift whole vector LEFT 3 bits, cross-byte carry")
 p("av_vsr",  shiftwv(708,  [0x03]*16), "vsr: shift whole vector RIGHT 3 bits, cross-byte carry")
+# --- FP round-to-integer (vrfin/vrfiz/vrfip/vrfim) + FP compares (vcmpgefp/vcmpgtfp).
+# XOs were SCRAMBLED (label != XO); authoritative: vrfin=522 vrfiz=586 vrfip=650 vrfim=714,
+# vcmpgefp=454 vcmpgtfp=710. Single-precision float lanes; interp (frsi*/fp compare) is ground truth.
+def _lw4f(vT, words):  # load 4 float-bit words into vT (reuses the word-loader shape)
+    out=[]
+    for k,w in enumerate(words): out+=[lis(3,(w>>16)&0xFFFF), ori(3,w&0xFFFF), stw(3,OFF+k*4,1)]
+    return out+[li(3,OFF), lvx(vT,1,3)]
+def vrfop(xo, words): return _lw4f(1,words)+[vx(2,0,1,xo)]+grab()  # vrfin vD,vB (vA field=0)
+_RND=[0x40200000, 0xC0200000, 0x40600000, 0xC0600000]  # 2.5, -2.5, 3.5, -3.5 (distinguishes all 4 modes)
+p("av_vrfin", vrfop(522,_RND), "vrfin: round to nearest (interp frsin is ground truth re: ties)")
+p("av_vrfiz", vrfop(586,_RND), "vrfiz: round toward zero -> 2,-2,3,-3")
+p("av_vrfip", vrfop(650,_RND), "vrfip: round toward +inf -> 3,-2,4,-3")
+p("av_vrfim", vrfop(714,_RND), "vrfim: round toward -inf -> 2,-3,3,-4")
+def vcmpfp(xo, wa, wb): return _lw4f(1,wa)+_lw4f(3,wb)+[vx(2,1,3,xo)]+grab()  # non-record form (no CR6)
+_CA=[0x40000000, 0x40400000, 0x40000000, 0x7FC00000]  # 2.0, 3.0, 2.0, NaN
+_CB=[0x40000000, 0x40000000, 0x40400000, 0x40000000]  # 2.0, 2.0, 3.0, 2.0
+p("av_vcmpgefp", vcmpfp(454,_CA,_CB), "vcmpgefp: >= per lane -> [FF,FF,00,00] (eq true, NaN false)")
+p("av_vcmpgtfp", vcmpfp(710,_CA,_CB), "vcmpgtfp: > per lane -> [00,FF,00,00] (eq false)")
 # Saturating add/sub + signed averages: FIXED 2026-06-06. Were emitting the wrong NEON op
 # (SABA/UABA abs-diff for adds, SMAXP for signed avg) and/or swapped signedness (sat-sub).
 # Now SQADD/UQADD/SQSUB/UQSUB/SRHADD (capstone-verified). Boundary operands exercise the

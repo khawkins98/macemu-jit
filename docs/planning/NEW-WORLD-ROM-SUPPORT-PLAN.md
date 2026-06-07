@@ -1,6 +1,6 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** 🟡 Phase 2 in progress (2026-06-07) — infra landed, ~6-8 absent patches need RE; target = 9.0.4 G4 ROM · **Created:** 2026-06-03 · **Updated:** 2026-06-07
+> **Status:** 🟡 Phase 2 in progress · **RE-SCOPED 2026-06-08** — the `:715` CPU-detect wall is SKIPPABLE on parcels (the ROM self-handles the faked 7400); `patch_nanokernel_boot` reduces to skip-1-block + RE-2-routines (`sr_load`, `jump68k`). Target for the ceiling-break = 9.2-class parcels ROM. See "GO/NO-GO RE-SCOPE" below. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
 > **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`
@@ -197,6 +197,49 @@ Work:
 > a parcels branch in `patch_nanokernel_boot` gated on layout/cksum, leaving the 1.1 path byte-identical
 > ("support both old + new world ROMs").** A reference-research agent is checking for prior art (adapt vs
 > from-scratch) before committing to the full grind.
+
+### ⭐ GO/NO-GO RE-SCOPE (2026-06-08) — the `:715` wall COLLAPSES; `patch_nanokernel_boot` is ~2 routines, not a full re-RE
+
+**Method:** decoded both ROMs (`rom-inspect --dump` → `/tmp/rom901.bin`, `/tmp/rom11.bin`), disassembled
+the CPU-detect region with capstone, cross-referenced against the buildable RE'd nanokernel source
+([`elliotnunn/NanoKernel`](https://github.com/elliotnunn/NanoKernel), cloned), and byte-tested **every**
+`patch_nanokernel_boot` pattern against the decoded 9.0.1 image. Result overturns the earlier
+"essentially the whole boot-patch routine needs re-RE" read.
+
+**1. The `:715` CPU-detect block is SKIPPABLE on parcels (the biggest documented wall — gone).**
+The patch (`rom_patches.cpp` ~714–858) exists to (a) feed the ROM our faked PVR and (b) inject per-CPU
+cache/TLB data **because the 1998 1.1 ROM has no table entry for the 7400**. On the 2001 parcels ROM
+neither is needed:
+- `mfpvr` in THIS emulator returns the faked global `PVR` directly (`ppc-execute.cpp:1294`,
+  `SPR_PVR → PVR`; default `0x000c0000` = 7400, `main_unix.cpp:453`). So the patch's `mfpvr→lwz XLM_PVR`
+  swap is a **redundant no-op** here (both yield 0x000c0000).
+- The parcels ROM's real CPU-detect at **0x310a1c** has a native **`cmpwi r12,0xc` (7400/G4) handler**
+  (chain: 1,3,4,6,7,8,9,0xa,**0xc**,0xd → common handler 0x311350). With `PVR>>16 = 0xc` it self-selects
+  the correct per-CPU data. **So the patch should be SKIPPED for parcels, not re-RE'd** — a branch-guard
+  (`if lp[6] != 0x2c0c0001 && parcels → skip block`), not weeks of CPU-detect reverse-engineering. The
+  1.1 path (`lp[6] == 0x2c0c0001`) stays byte-identical.
+
+**2. Behind `:715`, only ~2 mandatory patterns are genuinely ABSENT (restructured); the rest relocate.**
+Byte-test of all 17 `patch_nanokernel_boot` patterns vs the 9.0.1 image:
+- **Present (relocated — the existing `g_rom_904_lenient` whole-image fallback resolves these):**
+  `sr_init`, `pvr_read`, `sprg3_mq`, `msr`, `sprg3`, `pvr_read2`, `pvr_read4`, `sdr1_read`, `pgtb_clear`,
+  `desc_create`, `sr_load_caller`, `sr_load2`, `pm_check`, `jump68k_caller`; `twi` is in-range. (~14)
+- **ABSENT — restructured, need real RE (find the rewritten routine + retarget):**
+  `sr_load` (`7c0004ac 839d0000 938105e8` — "don't load SRs/BATs"; only the bare `mtmsr` opcode survives,
+  ×257) and `jump68k_dat` (`7d9243a6 7d5a03a6 7d7b03a6` — SRR0/SRR1 setup to enter the 68k emulator).
+  Both are core boot steps; both have direct analogues in `elliotnunn/NanoKernel` (SR/BAT load in
+  `PageTable.s`/`Power.s`, the 68k-emulator entry in `Emulate.s`) to ground the relocation.
+- `pvr_read3` absent but **optional** (`!= 0` then patch) — no action.
+
+**Revised effort for `patch_nanokernel_boot` (1 of 4 patch functions):** skip 1 block (hours) + RE 2
+routines (days, grounded by the NanoKernel source) + lenient for the rest (done). NOT the multi-week
+"whole routine" grind the `:715` finding first implied. **Caveat (honest):** this is only the first
+patch function — `patch_68k_emul`/`patch_nanokernel`/`patch_68k` have their own absent patterns (the
+2026-06-07 runtime attempt on 9.0.4 reached `patch_nanokernel`'s `nvram2_dat`), and Phase 3 + the
+possible "second wall" remain unquantified. But the **single biggest documented blocker is now a
+branch-guard**, which materially improves the odds. **Next concrete step:** add the env-gated parcels
+skip-guard at `:715`, run `SS_ROM_LENIENT=1 SS_ROM_PATCH_TRACE=1` on 9.0.1, and confirm PatchROM
+advances to the `sr_load`/`jump68k` RE work (or the next function).
 
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 

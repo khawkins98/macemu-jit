@@ -92,6 +92,22 @@ trap patches in `rom_patches.cpp`/`emul_op.cpp`; scoped 2026-06-07):
 - **Phase 2 interception (rect sizes):** do it the **ROM-patch way** (EMUL_OP written into the routine at
   PatchROM time, like the existing `adbop`/nvram patches), NOT a runtime heap come-from.
 
+#### ⚠️ FINDING (2026-06-07): trap address ≠ JIT block PC on PPC (Mixed Mode indirection)
+
+The resolver logged `_CopyBits` (0xA8EC) → **0x102daa5c**, but `SS_JIT_PROFILE_PC=102daa5c` after a 9.0
+boot + Finder activity reported **"(not compiled) 0"** — that block never JIT-executed. Reason: on a
+PowerPC Mac, QuickDraw's CopyBits is **PowerPC (CFM/PEF) code**; the 68k trap `0xA8EC` dispatches through
+the **Mixed Mode Manager** via a **routine descriptor**. `GetToolboxTrapAddress` returns the
+descriptor/glue address (`0x102daa5c`), NOT the PPC code the JIT actually compiles+runs. So
+"resolve-trap-addr → correlate with the JIT PC-keyed profile" **does not work** for PPC Toolbox routines.
+**Fix for the frequency number:** follow the routine descriptor at `0x102daa5c` → its PPC `ProcPtr`/TVector
+→ the real PPC code entry, then `SS_JIT_PROFILE_PC=<that addr>`. (A RoutineDescriptor is `0x6666` `'mdes'`
+magic + fields; the PPC entry is reachable via its routine-record `procDescriptor`/TVector → `[code,toc]`.)
+Alternatively, identify CopyBits's PPC block from the top-40 hot blocks under a graphics workload by
+disassembling candidates. Either way the **graphics workload still matters** (Finder nudges barely blit).
+Tooling (`SS_COPYBITS_TRACE` resolver, `SS_JIT_PROFILE_PC`) is in place; the descriptor-follow is the
+remaining step.
+
 ---
 
 ## CONFIRM / CHALLENGE of the standing verdict

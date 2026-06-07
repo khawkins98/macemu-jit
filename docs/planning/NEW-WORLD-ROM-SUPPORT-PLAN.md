@@ -166,6 +166,24 @@ Work:
 
 ## Phase 2 — Patch adaptation 🟡 IN PROGRESS (2026-06-07, target = 9.0.4 G4 ROM)
 
+> **🔑 KEY FINDING (2026-06-07, autonomous diagnostic boot of the user's New World ROM set).** The blocker
+> is **bigger than the patch-sizing "17 absent patterns" implied** — it's a **structural rewrite of the
+> nanokernel-boot routine**, not just missing byte sequences. With `SS_ROM_LENIENT=1` (forces lenient mode
+> for any NewWorld ROM, so the 31 *relocated* patterns auto-resolve), booting the versioned **Mac OS ROM
+> 9.1.1** (and 9.0.1/9.6.1/9.8.1/10.2.1 — all identical: 27 in-range / 31 relocated / 17 applicable-absent)
+> aborts almost immediately at `patch_nanokernel_boot` **`rom_patches.cpp:715`**:
+> `if (ntohl(lp[6]) != 0x2c0c0001) return false;` — it expects `cmpwi r12,1` (the CPU-detect compare) at
+> `pvr_read+24`. In the parcels ROM that word is a `mtspr`; the real `cmpwi r12,1` is ~0x520 bytes away in
+> a *different* routine (`@0x310a1c` vs the site `@0x3104f8`). So the entire pvr_read → CPU-detect →
+> per-CPU-data-table logic (`rom_patches.cpp` ~714-870) is **calibrated to the 1.1 LZSS ROM's code layout
+> and must be re-RE'd for the parcels layout** — and this is the *first* patch in `patch_nanokernel_boot`,
+> so essentially the whole boot-patch routine needs re-RE. **Implication:** patch-sizing (byte-pattern
+> presence) *undercounts* the work — it can't see structural `lp[N]==const` assumptions. The real Phase-2
+> effort is "re-RE patch_nanokernel_boot for parcels," genuine multi-session RE (the "days-to-weeks"
+> estimate stands, possibly worse). Tooling for it shipped: `SS_ROM_LENIENT=1` + `SS_ROM_PATCH_TRACE=1`.
+> Assets staged by the user: `Downloads/New_World_Mac_Roms/New World ROM/` (19 versions), `macos_921_ppc.iso`,
+> `macos-922-uni.zip`.
+
 **Infrastructure landed (safe, 1.1 boot verified byte-identical):**
 - ROM-version discrimination by checksum (`g_rom_904_lenient`, auto-on ONLY for the 9.0.4 G4
   ROM cksum `0xb8d0b672`; 1.1 `0xfd86d120` path untouched; opt-out `SS_ROM_NO_904`).

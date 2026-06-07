@@ -2398,3 +2398,32 @@ OPTIMIZATION-PLAN §0g. (The load/update forms are already safe — `ra_fp_*` ev
 Minor pre-existing nit (not fixed — untestable, invisible): `fsel` emits signaling `FCMPE` vs
 `#0.0`; PPC `fsel` is exception-free, so `FCMP` would be more correct, but FPSCR exceptions aren't
 surfaced so it's unobservable and the differential harness can't validate a change.
+
+## 2026-06-07 — AltiVec ev_mixed normalize rules (generalizable; cracked the saturating packs)
+
+Fixed all 6 saturating packs (vpk{sh,uh,sw,uw}{ss,us}) by deriving — empirically against the
+interpreter REGDUMP, never from input-byte reasoning — these **reusable ev_mixed normalize rules**
+for `emit_load_vr` (raw `LDR Q`) / `emit_store_vr` (raw `STR Q`). They should accelerate the
+remaining pixel/sum-across families and any future AltiVec codegen:
+
+- **REV16.16B and REV32.16B COMMUTE** (both are byte permutations; on a word `[a,b,c,d]` either
+  order → `[c,d,a,b]`). So "REV32 then REV16" == "REV16 then REV32" = *swap adjacent halfwords
+  within each word, halfword values intact*.
+- **Byte elements** (`byte_element` = reverse within word): raw↔natural = **REV32.16B** (self-inverse).
+  So byte-granular ops (merges, vpkuhum, byte output) normalize with a single REV32.16B each side.
+- **Halfword elements** (`half_element` = swap within pairs, values intact): raw↔natural =
+  **REV32.16B + REV16.16B** (the commuting pair). Use on halfword INPUTS (to get correct `.8H`
+  values in order) and halfword OUTPUTS.
+- **Word elements** (`word_element` = identity): the raw `.4S` lane **already holds the correct PPC
+  word value in the correct order** — NEON's little-endian `.4S` read cancels the ev_mixed in-word
+  byte reverse. So word inputs need **NO** normalize; a REV32 there byte-swaps the words (a bug I hit).
+- **Saturating narrow signedness encodings** (these are easy to mislabel — the pre-existing code had
+  `0x2E212800` commented "UQXTN" but it is **SQXTUN**): SQXTN `.8B`=0x0E214800/`.4H`=0x0E614800
+  (opcode 10100,U=0); SQXTUN `.8B`=0x2E212800/`.4H`=0x2E612800 (10010,U=1); UQXTN
+  `.8B`=0x2E214800/`.4H`=0x2E614800 (10100,U=1). `2` (high-half) variant sets bit30.
+
+**Test-operand rule (the false-PASS trap):** saturating ops MUST be tested with operands that
+**cross the saturation boundary** (negatives + over-range), else SQXTUN and UQXTN are
+indistinguishable and a wrong impl passes. The earlier reverted attempt used non-saturating
+positives and got a false PASS. Recipe in `gen-altivec-vectors.py` (`packop`/`packwop`), full
+write-up in [[the ALTIVEC-SHIFT-ROTATE-BUGS doc]].

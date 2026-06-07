@@ -119,23 +119,42 @@ static bool e2e_front_window_title(uint32 win, char *out, int outsz)
 	return valid;
 }
 
-// SS_FORCE_ALTIVEC=1 (experimental, throwaway — task #26): the AltiVec-detection de-risk.
-// Called from OP_IDLE_TIME (System fully booted, safe to call traps). One-shot.
-// FINDING (2026-06-07): in SheepShaver's OldWorld-1.1-ROM environment, the 'ppcf'
-// (gestaltPowerPCProcessorFeatures) selector is NOT registered at all — Gestalt('ppcf')
-// returns gestaltUndefSelectorErr under BOTH Mac OS 8.6 AND 9.0 (verified; sysv control reads
-// fine). So System version is not the gate. WORKING FORCE: register 'ppcf' ourselves via
-// _NewGestalt ($A3AD) with a tiny 68k SelectorFunction that returns the vector bit
-// (0x10 = 1<<gestaltPowerPCHasVectorInstructions; bit 4, per Apple Gestalt.h — an earlier
-// 0x40 was WRONG, that's the 64-bit-support bit), then read back (which calls the function).
-// This lets a real app SEE AltiVec; whether it then EXECUTES AltiVec is the profiler test
-// (SS_JIT_PROFILE=1, MIX_ALTIVEC>0). CAVEAT: 8.6/9.0 here never enable VR context save/restore,
-// so this is a VALIDITY experiment, not production-safe multitasking AltiVec.
+// ---- AltiVec detection enabler (opt-in: `altivec` pref / SS_FORCE_ALTIVEC env) --------------
+//
+// WHAT: makes the guest OS report that the (emulated) PowerPC has a vector unit, so real apps
+// take their AltiVec code path. Our AArch64 JIT already COMPILES PPC AltiVec → ARM64 NEON
+// unconditionally (no MSR[VEC] gate); the only thing missing was the guest *detecting* AltiVec.
+//
+// WHY IT'S NEEDED (verified 2026-06-07): in SheepShaver's OldWorld-1.1-ROM environment the
+// gestalt selector 'ppcf' (gestaltPowerPCProcessorFeatures, 0x70706366) is NOT registered at
+// all — Gestalt('ppcf') returns gestaltUndefSelectorErr under BOTH Mac OS 8.6 AND 9.0 ('sysv'
+// control reads fine). The OldWorld nanokernel never advertises a vector unit, so no OS version
+// fixes it. PVR is already a 7400 (G4), but apps key off the gestalt, not PVR.
+//
+// HOW: at the first post-boot idle (System up, safe to call traps), REGISTER 'ppcf' ourselves
+// via _NewGestalt ($A3AD) with a tiny 68k SelectorFunction that returns the vector-feature mask
+// 0x10 = (1 << gestaltPowerPCHasVectorInstructions). NOTE the constant is bit NUMBER 4, so the
+// mask is 0x10 — NOT 0x40 (bit 6 = gestaltPowerPCHas64BitSupport; an earlier 0x40 set the wrong
+// feature and confounded the whole experiment — see LEARNINGS 2026-06-07). Verified end-to-end:
+// AltiVec Fractal Carbon then detects AltiVec, runs its vector kernel, and the JIT compiles it
+// (`SS_JIT_PROFILE` → [JIT-COMPILED-MIX] AltiVec=160, AltiVec hot blocks).
+//
+// OPT-IN + CAVEAT (why this is NOT default-on): under 8.6/9.0 here the OS/nanokernel does not do
+// VR (vector register) context save/restore across task switches — fine for a single compute
+// app, but advertising AltiVec system-wide could corrupt vector state in true preemptive/MP
+// vector use. So it's an explicit opt-in (`altivec` pref, default false; SS_FORCE_ALTIVEC env
+// overrides for dev). Roadmap §B5 tracks promoting this to fully-safe (model VR context).
 static void force_altivec_idle_service(void)
 {
 	static int s_enabled = -1;
 	static bool s_done = false;
-	if (s_enabled < 0) { const char *e = getenv("SS_FORCE_ALTIVEC"); s_enabled = (e && *e && *e != '0') ? 1 : 0; }
+	if (s_enabled < 0) {
+		// `altivec` pref is the user-facing opt-in; SS_FORCE_ALTIVEC env is a dev override that
+		// forces it on even when the pref is absent/false (and "=0" forces it off).
+		const char *e = getenv("SS_FORCE_ALTIVEC");
+		if (e && *e) s_enabled = (*e != '0') ? 1 : 0;
+		else s_enabled = PrefsFindBool("altivec") ? 1 : 0;
+	}
 	if (!s_enabled || s_done)
 		return;
 	// Gate on a KNOWN-registered selector ('sysv' = system version) so we don't act before the

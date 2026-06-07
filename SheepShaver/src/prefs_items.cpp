@@ -61,6 +61,7 @@ prefs_desc common_prefs_items[] = {
 	{"jit", TYPE_BOOLEAN, false,        "enable JIT compiler"},
 	{"jit68k", TYPE_BOOLEAN, false,     "enable 68k DR emulator"},
 	{"jitcachesize", TYPE_INT32, false, "JIT code cache size in KB (default 256 MB)"},
+	{"altivec", TYPE_BOOLEAN, false,    "advertise AltiVec to the guest ('ppcf' gestalt) so apps use the vector unit (opt-in; aarch64 JIT compiles AltiVec->NEON). See USER-HANDBOOK."},
 	{"keyboardtype", TYPE_INT32, false, "hardware keyboard type"},
 	{"hardcursor", TYPE_BOOLEAN, false, "hardware mouse cursor"},
 	{"hotkey", TYPE_INT32, false,       "hotkey modifier"},
@@ -110,6 +111,11 @@ void AddPrefsDefaults(void)
 	// this pref controls the legacy kpx_cpu codegen JIT only. Default true on all builds.
 	PrefsAddBool("jit", true);
 	PrefsAddBool("jit68k", false);
+	// AltiVec detection enabler: default OFF (opt-in). The aarch64 JIT always compiles AltiVec
+	// (PPC->NEON); this pref only makes the guest OS *advertise* the vector unit so apps use it.
+	// Off by default because 8.6/9.0 here don't VR-context-switch — safe for single-app compute,
+	// not general preemptive vector use. See emul_op.cpp force_altivec_idle_service + USER-HANDBOOK.
+	PrefsAddBool("altivec", false);
 
 	PrefsAddInt32("keyboardtype", 5);
 

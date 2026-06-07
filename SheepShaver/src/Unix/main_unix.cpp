@@ -931,11 +931,19 @@ static int ss_rpc_handle_ui_snapshot(rpc_connection_t *conn) {
 }
 
 extern "C" void jit_profile_get_json(char *buf, int bufsz, int top_n);
+extern "C" void jit_fallback_get_json(char *buf, int bufsz, int top_n);
 
 static int ss_rpc_handle_get_profile(rpc_connection_t *conn) {
 	rpc_method_get_args(conn, RPC_TYPE_INVALID);
 	static char buf[32768];
 	jit_profile_get_json(buf, sizeof(buf), 50);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_get_fallbacks(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[32768];
+	jit_fallback_get_json(buf, sizeof(buf), 50);
 	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
 }
 
@@ -947,6 +955,7 @@ static rpc_method_descriptor_t ss_rpc_methods[] = {
 	{ RPC_METHOD_DUMP_REGISTERS, ss_rpc_handle_dump_registers },
 	{ RPC_METHOD_UI_SNAPSHOT,    ss_rpc_handle_ui_snapshot },
 	{ RPC_METHOD_GET_PROFILE,    ss_rpc_handle_get_profile },
+	{ RPC_METHOD_GET_FALLBACKS,  ss_rpc_handle_get_fallbacks },
 };
 
 static void ss_rpc_init_server(void) {

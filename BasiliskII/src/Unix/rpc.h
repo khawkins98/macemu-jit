@@ -108,7 +108,8 @@ enum {
   RPC_METHOD_READ_MEMORY    = 15,  // (uint32 addr, uint32 len) → reply with bytes
   RPC_METHOD_DUMP_REGISTERS = 16,
   RPC_METHOD_UI_SNAPSHOT    = 17,  // () → reply with guest UI state JSON
-  RPC_METHOD_GET_PROFILE    = 18,  // () → reply with B1 profiler hot blocks JSON  // () → reply with register dump string
+  RPC_METHOD_GET_PROFILE    = 18,  // () → reply with B1 profiler hot blocks JSON
+  RPC_METHOD_GET_FALLBACKS  = 19,  // () → reply with B1 fallback trace JSON  // () → reply with register dump string
 };
 
 // C2.0: server-side connection for receiving launcher commands

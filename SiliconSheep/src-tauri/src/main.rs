@@ -496,6 +496,15 @@ fn rpc_get_profile(id: String, state: State<AppState>) -> Result<String, String>
 }
 
 #[tauri::command]
+fn rpc_get_fallbacks(id: String, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap()
+        .invoke_get_string(rpc_client::METHOD_GET_FALLBACKS)
+}
+
+#[tauri::command]
 fn rpc_ui_snapshot(id: String, state: State<AppState>) -> Result<String, String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
     ensure_rpc(&mut running, &id)?;
@@ -877,6 +886,7 @@ fn main() {
             rpc_read_memory,
             rpc_ui_snapshot,
             rpc_get_profile,
+            rpc_get_fallbacks,
             read_file_contents,
             save_profile_session,
             generate_bug_report,

@@ -58,6 +58,42 @@ static bool jit_profile_checked = false;
 static std::unordered_map<uint32_t, uint64_t> jit_profile_counts;
 static uint64_t jit_profile_total = 0;
 
+// Fallback trace: per-PC fallback counts (blocks that went to interpreter instead of JIT)
+static std::unordered_map<uint32_t, uint64_t> jit_fallback_counts;
+static uint64_t jit_fallback_total = 0;
+
+extern "C" void jit_fallback_get_json(char *buf, int bufsz, int top_n) {
+	if (!jit_profile_enabled || jit_fallback_counts.empty()) {
+		snprintf(buf, bufsz, "{\"enabled\":false,\"total\":0,\"blocks\":[]}");
+		return;
+	}
+	std::vector<std::pair<uint32_t, uint64_t>> sorted(jit_fallback_counts.begin(), jit_fallback_counts.end());
+	std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+	if (top_n > (int)sorted.size()) top_n = sorted.size();
+	if (top_n > 100) top_n = 100;
+
+	int pos = 0;
+	pos += snprintf(buf + pos, bufsz - pos, "{\"enabled\":true,\"total\":%llu,\"uniqueBlocks\":%zu,\"blocks\":[",
+	                (unsigned long long)jit_fallback_total, jit_fallback_counts.size());
+	for (int i = 0; i < top_n && pos < bufsz - 200; i++) {
+		if (i > 0) pos += snprintf(buf + pos, bufsz - pos, ",");
+		// Read the opcode at this PC for identification
+		uint32_t opc = 0;
+		uint32_t pc_addr = sorted[i].first;
+		if (pc_addr < RAMSize) {
+			opc = ntohl(*(uint32_t*)(RAMBaseHost + pc_addr));
+		} else if (pc_addr >= ROMBase && pc_addr < ROMBase + 0x500000 && ROMBaseHost) {
+			opc = ntohl(*(uint32_t*)(ROMBaseHost + (pc_addr - ROMBase)));
+		}
+		int primary = (opc >> 26) & 0x3F;
+		int xo = (opc >> 1) & 0x3FF;
+		pos += snprintf(buf + pos, bufsz - pos,
+			"{\"pc\":\"0x%08x\",\"count\":%llu,\"opcode\":\"0x%08x\",\"primary\":%d,\"xo\":%d}",
+			pc_addr, (unsigned long long)sorted[i].second, opc, primary, xo);
+	}
+	pos += snprintf(buf + pos, bufsz - pos, "]}");
+}
+
 // Returns the top N hot blocks as a JSON string for the Inspector
 extern "C" void jit_profile_get_json(char *buf, int bufsz, int top_n) {
 	if (!jit_profile_enabled || jit_profile_counts.empty()) {
@@ -1731,6 +1767,11 @@ void powerpc_cpu::execute(uint32 entry)
 			}
 #endif
 		  skip_jit:
+			// B1 fallback trace: count interpreter fallbacks by PC
+			if (__builtin_expect(jit_profile_enabled, false)) {
+				jit_fallback_counts[pc()]++;
+				jit_fallback_total++;
+			}
 			for (;;) {
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 				/* Region profiling: count interpreted blocks by entry PC, and emit a

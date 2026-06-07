@@ -1028,8 +1028,9 @@ static void emit_load_ea_base(int ra_num) {
  * Mac OS picks scalar code paths. ALL of the AltiVec codegen below is validated ONLY by
  * the test harness (gen-altivec-vectors.py + jit-diff-sweep.py), NOT exercised by any
  * booted app — do NOT spend perf effort here until detection is enabled. Enabling it is
- * a *foundational* ("widen emulation") task, not a codegen one: it needs the System-side
- * 'ppcf' vector bit set AND VR save/restore on context switch. The "OS enables via mtmsr
+ * a *foundational* ("widen emulation") task, not a codegen one: it needs the gestalt 'ppcf'
+ * vector bit set (where it's computed — PVR-direct vs a ROM handler the System invokes — is
+ * OPEN, ROADMAP #23) AND VR save/restore on context switch. The "OS enables via mtmsr
  * MSR[VEC]" theory was FALSIFIED (zero mtmsr in a full Mac OS 9 + AltiVec-app boot; probe
  * commit 112481f2). See LEARNINGS.md "AltiVec detection is NOT an mtmsr/MSR[VEC] path" and
  * ROADMAP Track A / the widen-emulation framing. The byte-order correctness notes below

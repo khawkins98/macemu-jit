@@ -18,11 +18,15 @@ workload (`SS_LOG_ILLEGAL=1 make e2e-workload`; make exports env → recipe chil
 Interpretation (consistent with the [AltiVec-dormant finding](#2026-06-07--altivec-may-be-unreachable-by-real-guest-software-despite-pvrg4--our-vector-codegen-unexercised)):
 `mtmsr`-enable is *downstream* of detection. Because the gestalt `'ppcf'`
 (gestaltPowerPCProcessorFeatures) **vector bit is not set**, no app issues AltiVec, so nothing ever
-needs to enable MSR[VEC] → no `mtmsr`. **The lever is the gestalt `'ppcf'` computation, which is
-System-side** (`'ppcf'` = 17 hits in the Mac OS 9 System file on disk, 0 in the OldWorld ROM).
-SCOPE REFRAME (per advisor): this is NOT a contained CPU-model fix and NOT a ROM-patch. Two cheap
-ROM-agnostic follow-on probes remain: (1) static-disassemble the `'ppcf'` computation to see what it
-reads — PVR-direct → ROM-orthogonal (NewWorld ROM won't help); ROM-table → NewWorld *might* matter;
+needs to enable MSR[VEC] → no `mtmsr`. **The lever is the gestalt `'ppcf'` vector bit** — but note
+the *measured* fact vs the *open* one. MEASURED (2026-06-07): the `'ppcf'` selector byte-string =
+**0× in the OldWorld ROM, 5× in the Mac OS 9 boot disk** (so the selector is *referenced* on-disk).
+OPEN (#23): WHERE the bit is *computed* — a ROM/NanoKernel handler the System merely invokes is fully
+consistent with the selector living on-disk, so "computed in ROM" is **unverified, not disproven**;
+do not over-read the string count as locating the computation.
+SCOPE REFRAME (per advisor): this is NOT a contained CPU-model fix and NOT (as far as we know) a quick
+ROM-patch. Two cheap ROM-agnostic follow-on probes remain: (1) static-disassemble the `'ppcf'`
+handler to see what it reads — PVR-direct → ROM-orthogonal (NewWorld ROM won't help); ROM-table → NewWorld *might* matter;
 (2) experimentally force the `'ppcf'` vector bit and observe whether the guest then emits AltiVec
 blocks — but a gestalt-only hack is **unsafe** in production without VR context-switch save/restore.
 NewWorld ROM is worth doing for **Mac OS 9.1/9.2 support**, but is unlikely to be the AltiVec unlock —

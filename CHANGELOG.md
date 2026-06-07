@@ -102,8 +102,8 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **Finding (falsified hypothesis, task #21):** advertising MSR[VEC]=1 via `mfmsr`
   (`0x0200f072`) does **not** enable AltiVec. Booted Fractal Carbon with the change →
   profile still shows **0 AltiVec blocks** (hot mix unchanged: 24 integer / 11 load-store /
-  4 branch / 1 FP, ~1105 guest-MIPS). The real gate is gestalt `'ppcf'` (`0x70706366`) vector
-  bit — **System-side, not ROM** (corrected below by the `112481f2` probe). Experiment reverted.
+  4 branch / 1 FP, ~1105 guest-MIPS). The gate is the gestalt `'ppcf'` (`0x70706366`) vector
+  bit; *where* it is computed is open (#23, see the `112481f2` probe below). Experiment reverted.
 - **Reframing:** the aarch64 AltiVec NEON codegen is **mature and dormant**, not missing
   (54 differential vectors, 27 bugs fixed; open: pack/pixel/sum + `fctiw` rounding). AltiVec
   enablement is a *detection* problem, not a codegen one. Codegen-first ordering adopted: close
@@ -120,11 +120,14 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   →`execute_illegal`; validated with `SS_TEST_HEX=7C600124` in JIT+interp), then booted **Mac OS 9 +
   Fractal Carbon** via the E2E workload: **zero `mtmsr`, zero illegal opcodes** all run. `mtmsr`-enable
   is downstream of detection.
-- **Correction:** the gestalt `'ppcf'` vector-bit computation is **System-side** (`'ppcf'`: 17 hits in
-  the Mac OS 9 System file on disk, 0 in the OldWorld ROM) — **not** a ROM/NanoKernel routine as the
-  prior entry stated. So enabling AltiVec is not a ROM patch; it is Phase-3 "widen emulation" work
-  (System-side `'ppcf'` + VR context-switch save/restore). `make test-jit` **332/332**. See LEARNINGS
-  2026-06-07 "AltiVec detection is NOT an `mtmsr`/MSR[VEC] path", ROADMAP B5, the in-code DORMANT banner.
+- **Measurement (not a full correction):** the `'ppcf'` **selector byte-string** appears **0× in the
+  OldWorld ROM, 5× in the Mac OS 9 boot disk** (measured 2026-06-07) — so the selector is *referenced*
+  on-disk. This does **not** locate where the vector bit is *computed*: a ROM/NanoKernel handler the
+  System invokes is consistent with the selector living on-disk, so the prior entry's "computed in ROM"
+  is **unverified, not disproven** (#23 is open precisely to settle this). Either way, enabling AltiVec
+  is Phase-3 "widen emulation" work (System `'ppcf'` path + VR context-switch save/restore), not a quick
+  ROM patch. `make test-jit` **332/332**. See LEARNINGS 2026-06-07 "AltiVec detection is NOT an
+  `mtmsr`/MSR[VEC] path", ROADMAP B5, the in-code DORMANT banner.
 
 ### [shared] C2.0 Bidirectional UDS RPC — sub-16ms launcher↔emulator IPC
 

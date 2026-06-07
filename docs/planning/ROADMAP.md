@@ -595,11 +595,14 @@ but modeling more of the stack so an existing capability becomes reachable.
   to inline-interp), then booted **Mac OS 9 + Fractal Carbon** via the E2E workload: **zero `mtmsr`,
   zero illegal opcodes** all run. `mtmsr`-enable is *downstream* of detection — nothing tries to
   enable the vector unit because nothing detects it.
-- 🎯 **The real gate is gestalt `'ppcf'` (`0x70706366`) vector bit, and it is SYSTEM-side, not ROM**
-  (`'ppcf'`: 17 hits in the Mac OS 9 System file on disk, **0 in the OldWorld ROM**). So this is NOT
-  a ROM-patch and NOT a "find the ROM site" spelunk. Next probes (both ROM-agnostic, no boot for #23):
-  - **task #23** — static-disassemble the System's `'ppcf'` computation: does it read PVR directly
-    (→ ROM-orthogonal; NewWorld ROM won't help) or a ROM table/service (→ NewWorld *might* matter)?
+- 🎯 **The gate is the gestalt `'ppcf'` (`0x70706366`) vector bit — but WHERE the bit is computed is
+  still OPEN (#23), don't treat it as settled.** *Measured 2026-06-07:* the `'ppcf'` **selector
+  byte-string** appears **0× in the OldWorld ROM, 5× in the Mac OS 9 boot disk** — so the selector is
+  *referenced* on-disk, not in ROM. That does **not** locate the *computation*: a NanoKernel/ROM-resident
+  gestalt handler the System merely *invokes* is fully consistent with the selector living on disk, so
+  "computed in ROM" is **unverified, not disproven**. Next probes (ROM-agnostic; #23 needs no boot):
+  - **task #23** — static-disassemble the `'ppcf'` handler: does it read PVR directly (→ ROM-orthogonal;
+    NewWorld ROM won't help) or a ROM table/service (→ NewWorld *might* matter)?
   - then — experimentally force the `'ppcf'` vector bit and confirm the guest emits AltiVec blocks.
 - ⚠️ **Full enable is foundational, not a hack.** A gestalt-only flip is **unsafe** without VR
   save/restore on context switch (vector state would corrupt across task switches). That VR-context

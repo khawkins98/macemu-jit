@@ -159,6 +159,11 @@ with the header; when you touch an old doc, add it if missing.
   mnemonic + operands. The AltiVec shift codegen shipped *scrambled* comments and the wrong NEON ops
   (rounding `SRSHL` where AltiVec truncates, signed where it needs unsigned, `vsrb`↔`vsrab` swapped)
   precisely because it was eyeballed, not disassembled (2026-06-06; `c2c43fd9`).
+- [ ] **Run `python3 SheepShaver/tools/altivec-xo-audit.py` if you touch the AltiVec or FP dispatch.**
+  It cross-checks every `case N:` XO against the authoritative `{mnemonic→XO}` in `ppc-decode.cpp`
+  (exit 1 on mismatch). It found THREE scrambled AltiVec families + a live `mtfsf`/`mtfsfi` body swap
+  on 2026-06-07. CAVEAT: it catches XO/label mismatches only — **right-XO-wrong-codegen is invisible**
+  (the sum-across saturation bug and `vrfin`→`FRINTN` both passed it); `make test-jit` is the codegen gate.
 - [ ] **Referee any divergence against the REAL interpreter, not a secondary oracle.** The trusted
   ground truth is `SS_TEST_HEX="<words>" SS_TEST_DUMP=1 SS_TEST_JIT={0,1} ./src/Unix/SheepShaver`
   (REGDUMP includes all 32 VR/FPR, so a single op's result is directly observable; seed inputs with

@@ -1196,6 +1196,30 @@ static void k_shift(uint8_t *p, int n) {
 	for (int i = 0; i < n; i++) write_be32(p + i*4, grp[i % 2]);
 }
 
+/* AltiVec (VMX) kernels — measure the vector codegen the JIT translates PPC AltiVec -> ARM64
+ * NEON (reachable by real apps via the `altivec` pref). seed_regs zeroes the VRs, so these
+ * compute on 0-vectors — fine for timing (vector-unit throughput/latency don't depend on the
+ * operand value, and 0.0 is a valid FP input). Each op chains through v2 (reads the previous
+ * result) so it's a latency chain, like the integer/FP kernels. NOTE: today each guest AltiVec
+ * op compiles to {load 2 VRs from the regs struct, 1 NEON op, store 1 VR back} — so a64/op runs
+ * higher than register-resident ops; that spill overhead is the future "VR register allocator"
+ * lever (the FP-RA analog), and this benchmark is how we'd A/B it. */
+static uint32_t enc_vx(int vd, int va, int vb, int xo) {   /* VX-form: primary 4, 11-bit XO */
+	return 0x10000000u | (vd << 21) | (va << 16) | (vb << 11) | xo;
+}
+static uint32_t enc_va(int vd, int va, int vb, int vc, int xo) { /* VA-form: vC at bits 6-10 */
+	return 0x10000000u | (vd << 21) | (va << 16) | (vb << 11) | (vc << 6) | xo;
+}
+static void k_av_add(uint8_t *p, int n) {   /* vadduwm v2,v2,v3 (XO=128) — vector int add -> ADD.4S */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_vx(2,2,3,128));
+}
+static void k_av_fma(uint8_t *p, int n) {   /* vmaddfp v2,v2,v2,v2 (VA XO=46) — vector FP FMA -> FMLA.4S */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_va(2,2,2,2,46));
+}
+static void k_av_perm(uint8_t *p, int n) {  /* vperm v2,v2,v3,v4 (VA XO=43) — the AltiVec shuffle -> TBL */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_va(2,2,3,4,43));
+}
+
 struct BenchKernel { const char *name; const char *desc; void (*emit)(uint8_t*,int); };
 static const BenchKernel BENCH_KERNELS[] = {
 	{ "carry-chain", "adde r3,r3,r4  (0b/0f carry ops)", k_carry     },
@@ -1205,6 +1229,9 @@ static const BenchKernel BENCH_KERNELS[] = {
 	{ "fp-fma",      "fmadd recurrence (FMA latency)",   k_fp_fma    },
 	{ "compute",     "mullw/divw/add chain (0x1ed7befc Speedometer hot)", k_compute },
 	{ "shift",       "slwi/srwi (rlwinm single-insn fast path)",         k_shift   },
+	{ "av-add",      "vadduwm (AltiVec int add -> NEON ADD.4S)",          k_av_add  },
+	{ "av-fma",      "vmaddfp (AltiVec FP FMA -> NEON FMLA.4S)",          k_av_fma  },
+	{ "av-perm",     "vperm   (AltiVec shuffle -> NEON TBL)",             k_av_perm },
 	/* load-store (k_loadstore) deferred to v2: guest data access goes through
 	 * RMEMBASE, which on macOS needs the DIRECT_ADDRESSING base set up so EAs land
 	 * in `mem` (low 4 GB is unmappable here). The emitter is kept for that work. */

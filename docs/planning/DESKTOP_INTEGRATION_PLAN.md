@@ -657,64 +657,100 @@ one else has solved coherence for classic Mac OS either.
 
 ---
 
-## Developer Inspector / Debug Chrome (Snow-inspired) — 🟡 Tier 1 in progress
+## Developer Inspector (Snow-inspired) — 🟡 Tier 1 shipped, Profiler planned
 
-**The idea (2026-06-06):** [Snow](SNOW-EVALUATION-PLAN.md) launches with rich live "chrome" — registers,
-disassembly, memory, trap/interrupt history, watchpoints — so you see machine state on the fly.
-SiliconSheep is the right home to give *our* build/debug environment that kind of live visibility —
-but reshaped for what we actually are: **inspiration, not code lifting** (Snow is 68K + egui; we're
-PPC + Tauri).
+**Architecture: the Inspector is a separate window** — like Chrome DevTools detaching from the
+browser, or Xcode Instruments being its own app. The settings panel is a control panel (trivial:
+RAM, resolution, networking); the Inspector is a full development tool (complex: JIT stats,
+execution tracing, memory inspection, profiling). Different audiences, different complexity,
+different screen real estate.
+
+The Inspector opens as its own Tauri `WebviewWindow` (same mechanism as the settings window),
+not a tab in the detail pane. The current "Inspector" tab in settings is the minimum viable
+stub; the real Inspector window replaces it.
 
 **Build a live observability *inspector*, not a Snow-style step-debugger.** Our debugging is
 *differential* (`SS_JIT_VERIFY`, the harness), not single-step. Borrow Snow's answer to *"which
 surfaces matter"*, not its architecture. Full crosswalk: `SNOW-EVALUATION-PLAN.md` §S1.
 
-### Tier 1 — buildable now (zero emulator changes, parse existing data)
+### Live Observability — ✅ Tier 1 shipped
 
-The data already flows: `[HB]` heartbeat lines to stderr (every 10-60s), `[BOOT]`/`[SYSV]`/`[APP]`
-signals, `last_run.log` in the `.sheepvm` bundle. SiliconSheep already captures stderr in a
-background thread. What's missing is parsing + presentation.
+Heartbeat parsing, signal timeline, log viewer, stats gauges — all working in the Inspector
+tab. Data flows: emulator stderr → Rust thread → AppState cache → Tauri command → web UI.
 
-- [ ] **JIT Stats dashboard** — block count, cache usage %, compile rate, per-region rates
-  (jNK/jDR/jRAM), j2i transition ratio. Source: parse `[HB ...]` heartbeat lines. Cache latest
-  values in `AppState`, expose via `get_vm_stats` Tauri command. Render as gauges/sparklines in
-  a new Inspector panel (replaces the current Debug tab env-var form for running VMs).
-  Format: `[HB 10.0s] blocks=1.2M (0.5M/s) comp=847 | jNK=1200 jDR=500 jRAM=300 j2i=50 | rss=256M cpu=45%`
-- [ ] **Signal/event timeline** — chronological list of `[BOOT]`, `[SYSV]`, `[APP]`, `[READY]`,
-  `[STALL]`, `[WARN]` events with timestamps and payload. Source: same stderr parsing.
-- [ ] **Scrollable log viewer** — replace the `alert()` "View Logs" button with an inline
-  scrollable, filterable panel. Category filtering (heartbeat, signals, warnings).
-- [ ] **Explicit cost indicator** — Snow-style note when debug env vars are set:
-  "Debug mode active — performance is reduced."
+### Machine State — Tier 2 (C2.0 RPC enables these)
 
-### Tier 2 — minor emulator additions (~50 LOC each)
-
-- [ ] **Register inspector** — GPR (r0-r31), SPR (LR/CTR/XER/CR), PC. Needs: new signal handler
-  or UDS endpoint that dumps `powerpc_registers` as JSON. Change-highlighting between snapshots.
-- [ ] **Memory hex viewer** — read N bytes at guest address. Needs: UDS command calling
-  `Mac2HostAddr()`. Classic hex+ASCII grid with navigable address input.
+- [ ] **Register inspector** — GPR (r0-r31), SPR (LR/CTR/XER/CR), PC via `RPC_METHOD_DUMP_REGISTERS`.
+  Change-highlighting between snapshots (Snow-style yellow).
+- [ ] **Memory hex viewer** — read N bytes at guest address via `RPC_METHOD_READ_MEMORY` (already
+  implemented in emulator, capped at 64K). Classic hex+ASCII grid with navigable address input.
 - [ ] **Guest state sidebar** — CurApName, WindowList, Ticks, SysVersion, MBarHeight from
-  low-memory globals (`HOST-GUEST-CHANNELS.md`). Periodic dump via idle hook or UDS.
+  low-memory globals (`HOST-GUEST-CHANNELS.md`). Periodic poll via C2.0 RPC.
 
-### Tier 3 — defer until earned
+### Profiler / Session Recording — ☐ planned (Chrome DevTools-inspired)
 
-- [ ] **Live disassembly** — needs memory read + PPC disassembler (capstone WASM).
-- [ ] **Execution breakpoints** — needs a debug command protocol. Large scope.
-- [ ] **Peripheral state** — low value for paravirtualized PPC.
+**The vision:** a "Performance" panel like Chrome DevTools — click Record, run something in the
+guest, click Stop, see a timeline of what happened. Which blocks were hot, where fallbacks
+occurred, what was slow. This is the JIT equivalent of a flame chart.
 
-### Data path
+**Inspiration:** Chrome DevTools Performance tab (recording + flame chart), Xcode Instruments
+(timeline + detail), Firefox Profiler (web-based, shareable).
+
+**Tier P1 — Session recording (existing data, new recording/playback UI):**
+- [ ] **Start/Stop recording** button in the Inspector window. While recording, capture all
+  `[HB]` heartbeats, `[BOOT]`/`[APP]`/`[STALL]` signals, and j2i/fallback events to a session
+  file (JSON or binary). Timestamped.
+- [ ] **Session timeline** — replay the recording as a scrollable waterfall. X-axis = time,
+  Y-axis = events. Zoom in/out. Click an event to see its detail.
+- [ ] **Fallback trace** — log every interpreter fallback with the PC and opcode (needs a new
+  emitter in `ppc-cpu.cpp`, guarded by an env var or RPC command to avoid overhead when not
+  recording). This is the "why was this slow?" data.
+- [ ] **Export/share** — save the session as a `.sheepshaver-profile` file that can be reopened
+  or shared for diagnosis (like Firefox Profiler's shareable URLs).
+
+**Tier P2 — Per-block profiling (needs B1, the execution-weighted profiler):**
+- [ ] **Hot block table** — sorted by execution count. Shows PPC address, instruction count,
+  native code size, hit count. Source: B1 profiler data via C2.0 RPC.
+- [ ] **Heat map** — visual representation of ROM/RAM regions by execution density.
+  Color-coded: red = hot, blue = cold. Click a region to see its blocks.
+- [ ] **Instruction mix** — breakdown of which PPC opcodes are executing most. Pie chart or
+  ranked list. Identifies optimization targets.
+
+**Tier P3 — Flame chart (needs block-level timing):**
+- [ ] **Block-level timing** — measure wall-clock time per JIT block execution. Needs
+  `mach_absolute_time()` instrumentation in the dispatch loop (very low overhead with the
+  rdtsc approach, but still a cost — guarded by recording mode only).
+- [ ] **Flame chart** — Chrome DevTools-style visualization. Each row = a JIT block, width =
+  time spent. Stack depth shows call chains (bl/blr). Interactive: hover for detail, click
+  to see disassembly.
+- [ ] **Comparison** — record two sessions (before/after a change), overlay the flame charts
+  to see what got faster/slower.
+
+### Data paths
 
 ```
-Emulator stderr ──→ Rust background thread ──→ parse [HB]/[BOOT]/etc.
-                                              ├─→ last_run.log (file)
-                                              └─→ AppState cache (live)
-                                                   ↓
-                              Tauri command (get_vm_stats) ──→ Web UI gauges
+Live observability (Tier 1, shipped):
+  Emulator stderr ──→ Rust thread ──→ parse [HB]/signals ──→ AppState cache ──→ web UI
+
+C2.0 RPC (Tier 2, landed):
+  SiliconSheep ──→ UDS socket ──→ emulator handler ──→ reply
+  (sub-16ms, bidirectional, supports READ_MEMORY + DUMP_REGISTERS)
+
+Profiler recording (Tier P1, planned):
+  Emulator ──→ structured event stream (stderr or dedicated RPC channel)
+  ──→ session file (.sheepshaver-profile) ──→ Inspector timeline UI
+
+B1 execution profiler (Tier P2, planned — OPTIMIZATION-PLAN §P0):
+  JIT dispatch loop ──→ per-block counters ──→ RPC_METHOD_GET_PROFILE
+  ──→ hot block table / heat map
 ```
 
-**Sequence:** Tier 1 panels (now, no B1 needed) → B1 profiler adds hot-block data → Tier 2 panels
-when UDS RPC exists. B1 remains the prerequisite for the *profiling* panels (hot blocks, instruction
-mix), but the *observability* panels use existing heartbeat data.
+**Sequence:** ✅ Tier 1 (shipped) → Tier 2 machine state (C2.0 ready) → Tier P1 session
+recording (UI + event capture) → B1 profiler (data) → Tier P2 hot blocks → Tier P3 flame
+chart (only if earned).
+
+**Cross-refs:** `SNOW-EVALUATION-PLAN.md` (crosswalk), `OPTIMIZATION-PLAN.md` §P0/B1,
+`HOST-GUEST-CHANNELS.md`, C2.0 RPC above.
 
 ### Bug Report Bundle — ✅ implemented
 

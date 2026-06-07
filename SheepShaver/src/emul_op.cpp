@@ -54,6 +54,10 @@
 
 extern bool tick_inhibit;
 
+// Stub-pressure trace (SS_STUB_TRACE): flip boot→steady at first guest idle. Defined in
+// ppc-execute.cpp; no-op unless the probe is enabled. See MMU-NANOKERNEL-MP-PLAN.md.
+extern "C" void ss_stub_trace_steady(void);
+
 void PlayStartupSound();
 
 // TVector of MakeExecutable
@@ -268,6 +272,9 @@ static void e2e_emit_idle_signals(void)
 		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' menubar=%u ticks=%u (%.1fs)\n",
 		        app, modal, front, title, mbar, ticks, ticks / 60.0);
 		fflush(stderr);
+		// Flip the stub-pressure trace (SS_STUB_TRACE) from boot to steady-state at first idle
+		// (no-op unless that probe is enabled). See ppc-execute.cpp / MMU-NANOKERNEL-MP-PLAN.md.
+		ss_stub_trace_steady();
 	}
 
 	// [READY]: one-shot when the desktop is SETTLED — the Finder has been seen frontmost at least

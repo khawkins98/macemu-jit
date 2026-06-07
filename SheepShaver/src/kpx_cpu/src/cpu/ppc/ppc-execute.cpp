@@ -51,11 +51,93 @@
 #include "debug.h"
 
 /**
+ *	Stub-pressure trace (SS_STUB_TRACE) — the MMU/nanokernel "second wall" probe.
+ *
+ *	SheepShaver runs the guest as a flat-addressed CPU by FAKING/DROPPING the privileged
+ *	supervisor ops (mfspr SDR1→0xdead001f, mfspr-other→0, mtspr BAT/SDR1/SPRG/DEC→dropped,
+ *	mtmsr/mtsr/tlbie/rfi→illegal-ignored). On the aarch64 JIT these all route through the
+ *	INTERPRETER (the JIT only inlines LR/CTR/XER and `return false`s the rest), so counting
+ *	here is runtime-accurate. We bucket boot vs steady-state (flipped at the first guest idle
+ *	via ss_stub_trace_steady(), called from emul_op.cpp) to answer the decisive question:
+ *	are the supervisor stubs hit only at BOOT (→ real MMU/nanokernel emulation is a small
+ *	delta, the "second wall" is shallow) or CONSTANTLY (→ deep change)? Decides whether to
+ *	invest in NewWorld-ROM/9.x before that work. Zero cost when SS_STUB_TRACE unset.
+ *	See docs/planning/MMU-NANOKERNEL-MP-PLAN.md "stub-pressure trace".
+ **/
+#ifdef SHEEPSHAVER
+static int    ss_stub_enabled = -1;
+static int    ss_stub_phase = 0;            /* 0 = boot, 1 = steady (set at first idle) */
+static bool   ss_stub_registered = false;
+static uint64 ss_stub_mfspr[2][1024];       /* [phase][spr] faked SPR reads (SDR1 + default-0) */
+static uint64 ss_stub_mtspr[2][1024];       /* [phase][spr] dropped SPR writes */
+static uint64 ss_stub_ill31[2][1024];       /* [phase][xo]  primop-31 undecoded (mtmsr/mtsr/tlbie/rfi) */
+static uint64 ss_stub_ill_other[2];         /* [phase] non-primop-31 illegal */
+
+static void ss_stub_dump(void)
+{
+	FILE *o = stderr;
+	fprintf(o, "\n[STUB-TRACE] supervisor-stub pressure (boot | steady) — MMU 2nd-wall probe\n");
+	fprintf(o, "  (boot = before first guest idle; steady = after. Constant steady hits => deep change.)\n");
+	uint64 tot_boot = 0, tot_steady = 0;
+	fprintf(o, "  -- mfspr (faked reads) --\n");
+	for (int s = 0; s < 1024; s++)
+		if (ss_stub_mfspr[0][s] || ss_stub_mfspr[1][s]) {
+			fprintf(o, "    spr %-4d : %12llu | %12llu\n", s,
+			        (unsigned long long)ss_stub_mfspr[0][s], (unsigned long long)ss_stub_mfspr[1][s]);
+			tot_boot += ss_stub_mfspr[0][s]; tot_steady += ss_stub_mfspr[1][s];
+		}
+	fprintf(o, "  -- mtspr (dropped writes; BAT/SDR1/SPRG = MMU-relevant) --\n");
+	for (int s = 0; s < 1024; s++)
+		if (ss_stub_mtspr[0][s] || ss_stub_mtspr[1][s]) {
+			fprintf(o, "    spr %-4d : %12llu | %12llu\n", s,
+			        (unsigned long long)ss_stub_mtspr[0][s], (unsigned long long)ss_stub_mtspr[1][s]);
+			tot_boot += ss_stub_mtspr[0][s]; tot_steady += ss_stub_mtspr[1][s];
+		}
+	fprintf(o, "  -- illegal/undecoded primop-31 (xo; 146=mtmsr 210=mtsr 306=tlbie ...) --\n");
+	for (int x = 0; x < 1024; x++)
+		if (ss_stub_ill31[0][x] || ss_stub_ill31[1][x]) {
+			fprintf(o, "    xo %-5d : %12llu | %12llu\n", x,
+			        (unsigned long long)ss_stub_ill31[0][x], (unsigned long long)ss_stub_ill31[1][x]);
+			tot_boot += ss_stub_ill31[0][x]; tot_steady += ss_stub_ill31[1][x];
+		}
+	if (ss_stub_ill_other[0] || ss_stub_ill_other[1]) {
+		fprintf(o, "    illegal-other: %12llu | %12llu\n",
+		        (unsigned long long)ss_stub_ill_other[0], (unsigned long long)ss_stub_ill_other[1]);
+		tot_boot += ss_stub_ill_other[0]; tot_steady += ss_stub_ill_other[1];
+	}
+	fprintf(o, "  TOTAL: boot=%llu  steady=%llu  => %s\n",
+	        (unsigned long long)tot_boot, (unsigned long long)tot_steady,
+	        tot_steady == 0 ? "boot-time only (2nd wall SHALLOW)"
+	                        : "ongoing steady-state pressure (investigate which SPR/op)");
+}
+
+static inline bool ss_stub_on(void)
+{
+	if (ss_stub_enabled < 0) {
+		const char *e = getenv("SS_STUB_TRACE");
+		ss_stub_enabled = (e && *e && *e != '0') ? 1 : 0;
+	}
+	if (ss_stub_enabled && !ss_stub_registered) { ss_stub_registered = true; atexit(ss_stub_dump); }
+	return ss_stub_enabled != 0;
+}
+
+/* Called from emul_op.cpp at the first guest idle ([BOOT] marker) to split boot vs steady. */
+extern "C" void ss_stub_trace_steady(void) { ss_stub_phase = 1; }
+#endif // SHEEPSHAVER
+
+/**
  *	Illegal & NOP instructions
  **/
 
 void powerpc_cpu::execute_illegal(uint32 opcode)
 {
+#ifdef SHEEPSHAVER
+	if (ss_stub_on()) {
+		uint32 primary = opcode >> 26;
+		if (primary == 31) ss_stub_ill31[ss_stub_phase][(opcode >> 1) & 0x3ff]++;
+		else ss_stub_ill_other[ss_stub_phase]++;
+	}
+#endif
 	/* SS_LOG_ILLEGAL=1: log every undecoded opcode reaching this handler, with
 	 * special attention to mtmsr (op31/XO146) and the MSR[VEC] bit (0x02000000).
 	 * Probe for AltiVec-detection task #21: does the OS try to enable the vector
@@ -1192,13 +1274,17 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_CTR:	d = ctr();		break;
 	case powerpc_registers::SPR_VRSAVE:	d = vrsave();	break;
 #ifdef SHEEPSHAVER
-	case powerpc_registers::SPR_SDR1:	d = 0xdead001f;	break;
+	case powerpc_registers::SPR_SDR1:	d = 0xdead001f;
+		if (ss_stub_on()) ss_stub_mfspr[ss_stub_phase][spr & 1023]++;
+		break;
 	case powerpc_registers::SPR_PVR: {
 		extern uint32 PVR;
 		d = PVR;
 		break;
 	}
-	default: d = 0;
+	default:
+		d = 0;
+		if (ss_stub_on()) ss_stub_mfspr[ss_stub_phase][spr & 1023]++;  /* faked-0 SPR read */
 #else
 	default: execute_illegal(opcode);
 #endif
@@ -1220,6 +1306,10 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);
+#else
+	default:  /* SheepShaver drops all other SPR writes (BAT/SDR1/SPRG/DEC...) — stub */
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
 #endif
 	}
 

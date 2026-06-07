@@ -110,7 +110,9 @@ enum {
   RPC_METHOD_UI_SNAPSHOT    = 17,  // () → reply with guest UI state JSON
   RPC_METHOD_GET_PROFILE    = 18,  // () → reply with B1 profiler hot blocks JSON
   RPC_METHOD_GET_FALLBACKS  = 19,  // () → reply with B1 fallback trace JSON
-  RPC_METHOD_GET_TIMING     = 20,  // () → reply with P3 per-block timing JSON  // () → reply with register dump string
+  RPC_METHOD_GET_TIMING     = 20,  // () → reply with P3 per-block timing JSON
+  RPC_METHOD_GET_OPCODE_MIX = 21,  // () → reply with instruction mix JSON
+  RPC_METHOD_GET_HEATMAP    = 22,  // () → reply with region heat map JSON  // () → reply with register dump string
 };
 
 // C2.0: server-side connection for receiving launcher commands

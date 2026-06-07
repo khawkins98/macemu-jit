@@ -26,6 +26,8 @@ pub const METHOD_UI_SNAPSHOT: i32 = 17;
 pub const METHOD_GET_PROFILE: i32 = 18;
 pub const METHOD_GET_FALLBACKS: i32 = 19;
 pub const METHOD_GET_TIMING: i32 = 20;
+pub const METHOD_GET_OPCODE_MIX: i32 = 21;
+pub const METHOD_GET_HEATMAP: i32 = 22;
 
 pub struct RpcClient {
     stream: UnixStream,

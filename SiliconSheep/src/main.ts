@@ -1791,6 +1791,7 @@ function renderInspectorWindow(vmId: string) {
           <button class="inspector-toolbar__tab" data-panel="registers">Registers</button>
           <button class="inspector-toolbar__tab" data-panel="memory">Memory</button>
           <button class="inspector-toolbar__tab" data-panel="hotblocks">Hot Blocks</button>
+          <button class="inspector-toolbar__tab" data-panel="analysis">Analysis</button>
           <button class="inspector-toolbar__tab" data-panel="debug">Debug</button>
         </div>
         <div style="flex:1"></div>
@@ -1895,6 +1896,20 @@ function renderInspectorWindow(vmId: string) {
             <div id="insp-fallbacks" style="margin-top: 8px;">
               <p class="ss-text-muted">Click "Refresh" after a profiled run.</p>
             </div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-analysis" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Instruction Mix</h3>
+            <p class="ss-text-muted" style="margin-bottom: 8px;">Which PPC opcodes execute most — identifies optimization targets.</p>
+            <button class="btn btn-secondary btn-sm" id="insp-refresh-opcmix">↻ Refresh</button>
+            <div id="insp-opcmix" style="margin-top: 8px;"><p class="ss-text-muted">Click "Refresh" after a profiled run.</p></div>
+          </div>
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Region Heat Map</h3>
+            <p class="ss-text-muted" style="margin-bottom: 8px;">Execution density by 64K address region — ROM vs RAM vs DR emulator.</p>
+            <button class="btn btn-secondary btn-sm" id="insp-refresh-heatmap">↻ Refresh</button>
+            <div id="insp-heatmap" style="margin-top: 8px;"><p class="ss-text-muted">Click "Refresh" after a profiled run.</p></div>
           </div>
         </div>
         <div class="inspector-panel" id="panel-debug" style="display:none">
@@ -2227,6 +2242,86 @@ function renderInspectorWindow(vmId: string) {
     } catch {
       el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
     }
+  });
+
+  // Instruction mix
+  document.getElementById("insp-refresh-opcmix")?.addEventListener("click", async () => {
+    const result = await rpcCall(() => invoke("rpc_get_opcode_mix", { id: vmId }) as Promise<string>, "Opcode mix");
+    const el = document.getElementById("insp-opcmix");
+    if (!el || !result) { if (el) el.innerHTML = '<p class="ss-text-muted">Not available.</p>'; return; }
+    try {
+      const data = JSON.parse(result);
+      if (!data.enabled) { el.innerHTML = '<p class="ss-text-muted">Profiler not enabled.</p>'; return; }
+      const opcodes = data.opcodes || [];
+      el.innerHTML = `
+        <table style="width:100%; font-size: 10px; font-family: 'SF Mono', Menlo, monospace; border-collapse: collapse;">
+          <tr style="color: var(--ss-text-muted);"><th style="text-align:left; padding: 2px 4px;">Opcode</th><th>Name</th><th style="text-align:right;">Count</th><th style="text-align:right;">%</th><th style="padding-left: 8px;">Bar</th></tr>
+          ${opcodes.map((o: any) => {
+            const barW = Math.max(1, Math.round(o.pct * 3));
+            return `<tr style="border-top: 1px solid var(--ss-border);">
+              <td style="padding: 2px 4px;">${o.opc}</td>
+              <td style="padding: 2px 4px;">${escapeHtml(o.name)}</td>
+              <td style="text-align:right; padding: 2px 4px;">${o.count?.toLocaleString()}</td>
+              <td style="text-align:right; padding: 2px 4px;">${o.pct?.toFixed(1)}%</td>
+              <td style="padding: 2px 4px 2px 8px;"><div style="background: var(--ss-accent); height: 10px; width: ${barW}px; border-radius: 2px;"></div></td>
+            </tr>`;
+          }).join("")}
+        </table>`;
+    } catch { el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`; }
+  });
+
+  // Heat map
+  document.getElementById("insp-refresh-heatmap")?.addEventListener("click", async () => {
+    const result = await rpcCall(() => invoke("rpc_get_heatmap", { id: vmId }) as Promise<string>, "Heat map");
+    const el = document.getElementById("insp-heatmap");
+    if (!el || !result) { if (el) el.innerHTML = '<p class="ss-text-muted">Not available.</p>'; return; }
+    try {
+      const data = JSON.parse(result);
+      if (!data.enabled) { el.innerHTML = '<p class="ss-text-muted">Profiler not enabled.</p>'; return; }
+      const regions = data.regions || [];
+      const maxPct = Math.max(...regions.map((r: any) => r.pct), 1);
+      el.innerHTML = `
+        <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;">
+          ${regions.slice(0, 30).map((r: any) => {
+            const intensity = Math.min(255, Math.round((r.pct / maxPct) * 255));
+            const color = r.label === "ROM" ? `rgb(${intensity}, ${Math.round(intensity*0.4)}, 0)`
+                        : r.label === "DR" ? `rgb(${intensity}, ${intensity}, 0)`
+                        : `rgb(0, ${Math.round(intensity*0.6)}, ${intensity})`;
+            return `<div title="${r.base} (${r.label}) — ${r.pct.toFixed(1)}%" style="width: 24px; height: 24px; background: ${color}; border-radius: 3px; border: 1px solid var(--ss-border);"></div>`;
+          }).join("")}
+        </div>
+        <div style="font-size: 10px; margin-bottom: 8px;">
+          <span style="color: rgb(200,80,0);">■</span> ROM
+          <span style="color: rgb(200,200,0); margin-left: 8px;">■</span> DR
+          <span style="color: rgb(0,100,200); margin-left: 8px;">■</span> RAM
+        </div>
+        <table style="width:100%; font-size: 10px; font-family: 'SF Mono', Menlo, monospace; border-collapse: collapse;">
+          <tr style="color: var(--ss-text-muted);"><th style="text-align:left; padding: 2px 4px;">Region</th><th>Type</th><th style="text-align:right;">Count</th><th style="text-align:right;">%</th></tr>
+          ${regions.map((r: any) => `
+          <tr style="border-top: 1px solid var(--ss-border);">
+            <td style="padding: 2px 4px;"><a href="#" data-action="mem-jump" data-memaddr="${r.base}" style="color: var(--ss-accent);">${escapeHtml(r.base)}</a></td>
+            <td style="padding: 2px 4px;">${escapeHtml(r.label)}</td>
+            <td style="text-align:right; padding: 2px 4px;">${r.count?.toLocaleString()}</td>
+            <td style="text-align:right; padding: 2px 4px;">${r.pct?.toFixed(1)}%</td>
+          </tr>`).join("")}
+        </table>`;
+      // Wire PC links
+      el.querySelectorAll("[data-action='mem-jump']").forEach(link => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const addr = (link as HTMLElement).dataset.memaddr;
+          if (addr) {
+            const addrInput = document.getElementById("insp-mem-addr") as HTMLInputElement;
+            if (addrInput) addrInput.value = addr;
+            document.querySelectorAll(".inspector-toolbar__tab").forEach(t => t.classList.remove("inspector-toolbar__tab--active"));
+            document.querySelector('[data-panel="memory"]')?.classList.add("inspector-toolbar__tab--active");
+            document.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");
+            document.getElementById("panel-memory")!.style.display = "";
+            readMemory();
+          }
+        });
+      });
+    } catch { el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`; }
   });
 
   // Block timing (P3)

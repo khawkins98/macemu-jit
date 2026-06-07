@@ -72,6 +72,109 @@ static double jit_ticks_to_ns(uint64_t ticks) {
 	return (double)ticks * jit_timebase.numer / jit_timebase.denom;
 }
 
+// Instruction mix: aggregate execution counts by primary opcode
+extern "C" void jit_profile_opcode_mix_json(char *buf, int bufsz) {
+	if (!jit_profile_enabled || jit_profile_counts.empty()) {
+		snprintf(buf, bufsz, "{\"enabled\":false,\"opcodes\":[]}");
+		return;
+	}
+	// Aggregate counts by primary opcode (bits 0-5 of the PPC instruction)
+	uint64_t opc_counts[64] = {0};
+	for (const auto &p : jit_profile_counts) {
+		uint32_t pc_addr = p.first;
+		uint32_t opc = 0;
+		if (pc_addr < RAMSize) {
+			opc = ntohl(*(uint32_t*)(RAMBaseHost + pc_addr));
+		} else if (pc_addr >= ROMBase && pc_addr < ROMBase + 0x500000 && ROMBaseHost) {
+			opc = ntohl(*(uint32_t*)(ROMBaseHost + (pc_addr - ROMBase)));
+		}
+		int primary = (opc >> 26) & 0x3F;
+		opc_counts[primary] += p.second;
+	}
+
+	// Sort by count descending
+	struct OpcEntry { int opc; uint64_t count; };
+	std::vector<OpcEntry> sorted;
+	for (int i = 0; i < 64; i++) {
+		if (opc_counts[i] > 0) sorted.push_back({i, opc_counts[i]});
+	}
+	std::sort(sorted.begin(), sorted.end(), [](const OpcEntry &a, const OpcEntry &b) { return a.count > b.count; });
+
+	int pos = 0;
+	pos += snprintf(buf + pos, bufsz - pos, "{\"enabled\":true,\"total\":%llu,\"opcodes\":[",
+	                (unsigned long long)jit_profile_total);
+	for (size_t i = 0; i < sorted.size() && pos < bufsz - 100; i++) {
+		if (i > 0) pos += snprintf(buf + pos, bufsz - pos, ",");
+		double pct = jit_profile_total > 0 ? (100.0 * sorted[i].count / jit_profile_total) : 0;
+		// PPC primary opcode names (common ones)
+		const char *name = "?";
+		switch (sorted[i].opc) {
+			case 14: name = "addi"; break;
+			case 15: name = "addis"; break;
+			case 16: name = "bc"; break;
+			case 18: name = "b"; break;
+			case 19: name = "cr/bclr/bcctr"; break;
+			case 21: name = "rlwinm"; break;
+			case 24: name = "ori"; break;
+			case 28: name = "andi."; break;
+			case 31: name = "alu/xo"; break;
+			case 32: name = "lwz"; break;
+			case 33: name = "lwzu"; break;
+			case 34: name = "lbz"; break;
+			case 36: name = "stw"; break;
+			case 37: name = "stwu"; break;
+			case 38: name = "stb"; break;
+			case 40: name = "lhz"; break;
+			case 42: name = "lha"; break;
+			case 44: name = "sth"; break;
+			case 46: name = "lmw"; break;
+			case 47: name = "stmw"; break;
+			case 48: name = "lfs"; break;
+			case 50: name = "lfd"; break;
+			case 52: name = "stfs"; break;
+			case 54: name = "stfd"; break;
+			case 59: name = "fp-single"; break;
+			case 63: name = "fp-double"; break;
+			case 4:  name = "altivec"; break;
+			default: break;
+		}
+		pos += snprintf(buf + pos, bufsz - pos,
+			"{\"opc\":%d,\"name\":\"%s\",\"count\":%llu,\"pct\":%.2f}",
+			sorted[i].opc, name, (unsigned long long)sorted[i].count, pct);
+	}
+	pos += snprintf(buf + pos, bufsz - pos, "]}");
+}
+
+// Heat map: aggregate execution counts by 64K region
+extern "C" void jit_profile_heatmap_json(char *buf, int bufsz) {
+	if (!jit_profile_enabled || jit_profile_counts.empty()) {
+		snprintf(buf, bufsz, "{\"enabled\":false,\"regions\":[]}");
+		return;
+	}
+	std::unordered_map<uint32_t, uint64_t> region_counts;
+	for (const auto &p : jit_profile_counts) {
+		uint32_t region = p.first & 0xFFFF0000; // 64K alignment
+		region_counts[region] += p.second;
+	}
+	std::vector<std::pair<uint32_t, uint64_t>> sorted(region_counts.begin(), region_counts.end());
+	std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+
+	int pos = 0;
+	pos += snprintf(buf + pos, bufsz - pos, "{\"enabled\":true,\"total\":%llu,\"regions\":[",
+	                (unsigned long long)jit_profile_total);
+	for (size_t i = 0; i < sorted.size() && i < 50 && pos < bufsz - 100; i++) {
+		if (i > 0) pos += snprintf(buf + pos, bufsz - pos, ",");
+		double pct = jit_profile_total > 0 ? (100.0 * sorted[i].second / jit_profile_total) : 0;
+		const char *label = "RAM";
+		if (sorted[i].first >= ROMBase && sorted[i].first < ROMBase + 0x500000) label = "ROM";
+		else if (sorted[i].first >= 0x50460000 && sorted[i].first < 0x50500000) label = "DR";
+		pos += snprintf(buf + pos, bufsz - pos,
+			"{\"base\":\"0x%08x\",\"count\":%llu,\"pct\":%.2f,\"label\":\"%s\"}",
+			sorted[i].first, (unsigned long long)sorted[i].second, pct, label);
+	}
+	pos += snprintf(buf + pos, bufsz - pos, "]}");
+}
+
 // Returns top N blocks by time as JSON
 extern "C" void jit_profile_time_get_json(char *buf, int bufsz, int top_n) {
 	if (!jit_profile_enabled || jit_profile_time.empty()) {

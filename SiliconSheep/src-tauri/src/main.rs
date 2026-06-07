@@ -505,6 +505,22 @@ fn rpc_get_fallbacks(id: String, state: State<AppState>) -> Result<String, Strin
 }
 
 #[tauri::command]
+fn rpc_get_opcode_mix(id: String, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap().invoke_get_string(rpc_client::METHOD_GET_OPCODE_MIX)
+}
+
+#[tauri::command]
+fn rpc_get_heatmap(id: String, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap().invoke_get_string(rpc_client::METHOD_GET_HEATMAP)
+}
+
+#[tauri::command]
 fn rpc_get_timing(id: String, state: State<AppState>) -> Result<String, String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
     ensure_rpc(&mut running, &id)?;
@@ -897,6 +913,8 @@ fn main() {
             rpc_get_profile,
             rpc_get_fallbacks,
             rpc_get_timing,
+            rpc_get_opcode_mix,
+            rpc_get_heatmap,
             read_file_contents,
             save_profile_session,
             generate_bug_report,

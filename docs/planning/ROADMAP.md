@@ -595,19 +595,25 @@ but modeling more of the stack so an existing capability becomes reachable.
   to inline-interp), then booted **Mac OS 9 + Fractal Carbon** via the E2E workload: **zero `mtmsr`,
   zero illegal opcodes** all run. `mtmsr`-enable is *downstream* of detection — nothing tries to
   enable the vector unit because nothing detects it.
-- 🎯 **The gate is the gestalt `'ppcf'` (`0x70706366`) vector bit — but WHERE the bit is computed is
-  still OPEN (#23), don't treat it as settled.** *Measured 2026-06-07:* the `'ppcf'` **selector
-  byte-string** appears **0× in the OldWorld ROM, 5× in the Mac OS 9 boot disk** — so the selector is
-  *referenced* on-disk, not in ROM. That does **not** locate the *computation*: a NanoKernel/ROM-resident
-  gestalt handler the System merely *invokes* is fully consistent with the selector living on disk, so
-  "computed in ROM" is **unverified, not disproven**. Next probes (ROM-agnostic; #23 needs no boot):
-  - **task #23** — static-disassemble the `'ppcf'` handler: does it read PVR directly (→ ROM-orthogonal;
-    NewWorld ROM won't help) or a ROM table/service (→ NewWorld *might* matter)?
-  - then — experimentally force the `'ppcf'` vector bit and confirm the guest emits AltiVec blocks.
-- ⚠️ **Full enable is foundational, not a hack.** A gestalt-only flip is **unsafe** without VR
-  save/restore on context switch (vector state would corrupt across task switches). That VR-context
-  modeling is the real Phase-3 cost. [DingusPPC](https://github.com/dingusdev/dingusppc) is the
-  reference for how a fuller PPC model handles MSR[VEC]/VRSAVE/context.
+- 🎯 **The gate is the gestalt `'ppcf'` (`0x70706366`) vector bit — and detection is NOT pure-PVR
+  (established 2026-06-07, #23).** *Static measurement:* the `'ppcf'` selector literal = **0× in the
+  OldWorld ROM, 5× in the Mac OS 9 disk** — selector + handler live on-disk; static RE then hit a wall
+  (gestalt is table-dispatched, handler proc relocated at load — can't follow the pointer from raw disk).
+  *Key deduction:* the **PVR is already `0x000c0000` (7400 = G4 with AltiVec)** and the gestalt CPU-type
+  is patched to match, **yet the vector bit stays clear** → the handler reads **more than PVR**; there's
+  a **co-requirement**. Prime suspect (hypothesis, not yet verified): a **nanokernel/ROM-side
+  vector-enable** that exists in NewWorld (G4-era) ROMs but not in OldWorld (which only ran on pre-G4,
+  non-AltiVec CPUs). **This flips the earlier lean: NewWorld ROM is now a *plausible* AltiVec unlock,
+  not a non-factor.**
+- 🔬 **Decisive next test (boot-level): boot the staged NewWorld ROM (`Mac OS ROM 9.0.1`)** and check
+  whether AltiVec lights up (profiler MIX_ALTIVEC blocks > 0). Most direct; settles it regardless of the
+  nanokernel-mechanism guess. Alternative: a PVR-read (`mfspr` 287) hook (à la `SS_LOG_ILLEGAL`) to see
+  what the handler consults. Caveat: "New World CHRP ROMs don't scan cleanly" (rom-harness), so the
+  NewWorld boot path may need work — but `ROMTYPE_NEWWORLD` paths already exist.
+- ⚠️ **Full enable is foundational, not a hack.** Even if detection flips, a usable AltiVec needs VR
+  save/restore on context switch (vector state would otherwise corrupt across task switches). That
+  VR-context modeling is the real Phase-3 cost. [DingusPPC](https://github.com/dingusdev/dingusppc) is
+  the reference for how a fuller PPC model handles MSR[VEC]/VRSAVE/context.
 - ✅ **Codegen-first ordering (already mostly done):** the open AltiVec families (pack/pixel done;
   sum-across + `fctiw`/`fctid` rounding remain) are closed via the `SS_TEST_HEX` differential harness
   — needs **no** detection — so flipping `'ppcf'` later is a pure win, not silent corruption (task #22).

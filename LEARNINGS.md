@@ -3,6 +3,40 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — AltiVec detection is NOT pure-PVR — there's a co-requirement, likely ROM/nanokernel-side → **NewWorld ROM may be the unlock after all**
+
+The session-earlier lean "NewWorld ROM is unlikely to help AltiVec" was **too confident — corrected here.**
+The flip comes from our own evidence:
+
+- **MEASURED (static, no boot):** the `'ppcf'` selector *literal* (`0x70706366`) = **0× in the OldWorld
+  ROM, 5× in the Mac OS 9 disk**. So the selector — and the gestalt entry/handler that owns it — live
+  **on disk**, identical under either ROM. (Static raw-disk RE then hit a wall: gestalt is *table-
+  dispatched* — the selector literal sits in a (selector, handlerProc) data table, the handler proc is
+  relocated at load, so you can't follow the pointer to the handler code from raw disk offsets. A
+  `lis 0x7070`/`ori 0x6366` constant-build scan of the ROM found nothing either. Static is exhausted;
+  the decisive test is now boot-level.)
+- **KEY DEDUCTION (solid, from our own setup):** under EMULATED_PPC the **PVR is already `0x000c0000`
+  (7400 = G4 *with* AltiVec)** (`main_unix.cpp:453`) AND the gestalt CPU-type byte is patched to match
+  (`rom_patches.cpp:1708`, `move.b #PVR,$1d(a2)` in 68K InitGestalt) — **yet the `'ppcf'` vector bit
+  stays clear.** Therefore the `'ppcf'` handler is **NOT pure-PVR**: if it merely read PVR, AltiVec
+  would already be on. There is a **co-requirement beyond "PVR says G4."**
+- **HYPOTHESIS (deduction solid; the specific mechanism is reconstruction, verify before asserting):**
+  AltiVec is a **G4-only** feature; OldWorld ROMs only ever shipped on pre-G4 (non-AltiVec: beige G3
+  and earlier) machines, so the OldWorld **nanokernel has no reason to probe/enable a vector unit or
+  set the flag the `'ppcf'` handler reads**. That enable/flag is plausibly **present in NewWorld
+  (G4-era) ROMs and absent in OldWorld** → swapping to NewWorld could be exactly what flips detection.
+  This makes NewWorld a **plausible AltiVec unlock**, not the non-factor claimed earlier.
+- **DECISIVE TEST (boot-level — out of #23's no-boot scope, hence a report-back):** boot the staged
+  **NewWorld ROM (`Mac OS ROM 9.0.1`)** and see if AltiVec lights up (the profiler's MIX_ALTIVEC blocks
+  go nonzero). Most direct — settles it regardless of whether the nanokernel mechanism guess is right.
+  Alternative: a PVR-read (`mfspr` SPR 287) hook à la `SS_LOG_ILLEGAL` to watch what the handler reads.
+  Caveat: CLAUDE.md notes "New World CHRP ROMs don't scan cleanly" in rom-harness, so NewWorld boot may
+  need work — but `ROMTYPE_NEWWORLD` code paths already exist, so it may be less effort than feared.
+
+The mtmsr/MSR[VEC] finding below still stands (enable is downstream of detection); this entry refines
+*where* detection's missing piece lives. Net: **AltiVec-enable is foundational Phase-3 work, and the
+cheapest next experiment is a NewWorld-ROM boot trial — which happens to match the user's own instinct.**
+
 ## 2026-06-07 — AltiVec detection is NOT an `mtmsr`/MSR[VEC] path — the gate is upstream (gestalt `'ppcf'`)
 
 Probed the hypothesis "the OS enables AltiVec by writing MSR[VEC] via `mtmsr`, which we silently drop."

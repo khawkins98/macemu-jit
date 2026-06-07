@@ -1029,11 +1029,13 @@ static void emit_load_ea_base(int ra_num) {
  * the test harness (gen-altivec-vectors.py + jit-diff-sweep.py), NOT exercised by any
  * booted app — do NOT spend perf effort here until detection is enabled. Enabling it is
  * a *foundational* ("widen emulation") task, not a codegen one: it needs the gestalt 'ppcf'
- * vector bit set (where it's computed — PVR-direct vs a ROM handler the System invokes — is
- * OPEN, ROADMAP #23) AND VR save/restore on context switch. The "OS enables via mtmsr
- * MSR[VEC]" theory was FALSIFIED (zero mtmsr in a full Mac OS 9 + AltiVec-app boot; probe
- * commit 112481f2). See LEARNINGS.md "AltiVec detection is NOT an mtmsr/MSR[VEC] path" and
- * ROADMAP Track A / the widen-emulation framing. The byte-order correctness notes below
+ * vector bit set AND VR save/restore on context switch. Detection is NOT pure-PVR: the PVR is
+ * already 0x000c0000 (G4 w/ AltiVec) and the gestalt CPU-type is patched to match, yet the bit
+ * stays clear — so there's a co-requirement, prime suspect a nanokernel/ROM-side vector-enable
+ * present in NewWorld (G4-era) ROMs but not OldWorld → NEWWORLD ROM may be the unlock (boot the
+ * staged Mac OS ROM 9.0.1 to test; ROADMAP B5 / #23). The "OS enables via mtmsr MSR[VEC]" theory
+ * was FALSIFIED (zero mtmsr in a full Mac OS 9 + AltiVec-app boot; probe commit 112481f2). See
+ * LEARNINGS.md 2026-06-07 (both AltiVec-detection entries). The byte-order correctness notes below
  * remain accurate and are worth keeping — they're just not on any hot path yet.
  *
  * The VR is stored in the interpreter's *ev_mixed* byte order (ppc-operands.hpp):

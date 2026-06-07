@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-07
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-07 (added project arc / phase framing)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -10,6 +10,33 @@ task, update its **Status** line. This is the **map**, not the territory — dee
 design, and per-item detail live in the linked docs. Keep entries to a few lines + a pointer.
 
 **Legend:** 🔜 next up · 🟡 open · ⏸ deferred/optional · ✅ done
+
+---
+
+## Project arc — where this is going
+
+The motivating idea: **SheepShaver was built for a resource-constrained era; we are not.** An
+M-series Mac has orders of magnitude more CPU, RAM, and I/O than the machines SheepShaver
+targeted. That headroom lets us *widen* what we emulate — model more of the complete PowerPC
+Mac stack, more faithfully — rather than only making the existing narrow slice faster. The
+strategy is deliberately sequenced so each phase rests on the one before it:
+
+| Phase | Thrust | State |
+|-------|--------|-------|
+| **1. Foundation** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen. | ✅ done |
+| **2. Instrumentation** | **Automated testing + CI tooling + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness, Speedometer/MacBench capture, per-block profiler. The safety net that makes everything after it measurable. | ✅ done (now maintained) |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (e.g. AltiVec actually reachable by guests, fuller device/OS modeling). Leverage host headroom; correctness first, measured continuously against the Phase-2 benchmarks. **This is the emerging primary thrust.** | 🔜 next |
+| **4. Optimize** | *Then* make it faster — close the per-block overhead ceiling, cross-block pinning, HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
+| **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
+
+**Reference for Phase 3:** [DingusPPC](https://github.com/dingusdev/dingusppc) is the active
+reference for fuller PowerPC-Mac-stack emulation (interpreter-only, so ideas not codegen;
+GPLv3 reuse is license-feasible — see `docs/planning/DINGUSPPC-EVALUATION-PLAN.md`).
+
+> **How this maps to the four tracks below.** The phases are the *narrative*; Tracks A–D are
+> the *tactical backlog*. Phase 2 ≈ Track A (verification) now in maintenance. Phase 3 (widen)
+> is new work that will mostly land as new Track-A correctness items + targeted Track-D breadth.
+> Phase 4 ≈ Track B (perf). Silicon Sheep ≈ Track C.
 
 ---
 
@@ -552,25 +579,39 @@ Inspector" data layer (Track C). **Detail:** `OPTIMIZATION-PLAN.md` §P0/§P0b.
 - Remaining: constant folding (P5), instruction scheduling (P6), byte-swap opt (P7), **cross-block
   register pinning** (r1/SP, r2/RTOC — P8). **Detail:** `OPTIMIZATION-PLAN.md` §P5–P9.
 
-## B5. 🔴 AltiVec is DORMANT for real guest software — it's a *detection* gap (2026-06-07)
+## B5. 🔴 AltiVec is DORMANT for real guest software — a *detection* gap → **Phase-3 (widen) foundational work**
 
 The AltiVec JIT codegen (extensively hardened — 54 differential vectors, 27 bugs fixed) is **only
 exercised by the test harness**: no real app issues AltiVec because the guest never *detects* it.
+This is the prototypical **Phase-3 "widen emulation"** item — not a codegen fix and not a perf lever,
+but modeling more of the stack so an existing capability becomes reachable.
 
-- ❌ **`mfmsr[VEC]` is NOT the gate — falsified 2026-06-07 (task #21).** Advertising MSR[VEC]=1
-  (`mfmsr`→`0x0200f072`) and booting Fractal Carbon left the profile at **0 AltiVec blocks**.
-  Reverted. (Kept the JIT `mfmsr`→`0xf072` divergence fix, `cd6df179`.)
-- 🎯 **The real gate is gestalt `'ppcf'` (`0x70706366`) bit 4**, computed inside the ROM/NanoKernel
-  with **no SheepShaver hook** (`rom_patches.cpp:1699` InitGestalt patch writes only
-  CPU-type/pagesize/RAM). Enabling it = find + patch the ROM's processor-features computation
-  (a ROM-spelunk — **deferred**, task #23).
-- ✅ **Codegen-first ordering (do this before detection):** close the open AltiVec families
-  (pack/pixel/sum + `fctiw`/`fctid` non-default rounding) via the `SS_TEST_HEX` differential
-  harness — needs **no** detection at all — so flipping `'ppcf'` later is a pure win, not silent
-  corruption for apps that hit those ops (task #22).
+- ❌ **`mfmsr[VEC]` READ is NOT the gate — falsified.** Advertising MSR[VEC]=1 (`mfmsr`→`0x0200f072`)
+  and booting Fractal Carbon left the profile at **0 AltiVec blocks**. (Kept the JIT `mfmsr`→`0xf072`
+  divergence fix, `cd6df179`.)
+- ❌ **`mtmsr[VEC]` WRITE is NOT the gate either — falsified 2026-06-07 (task #21, probe commit
+  `112481f2`).** Instrumented `execute_illegal` (`SS_LOG_ILLEGAL=1`, decodes `mtmsr` op31/XO146 +
+  tests bit `0x02000000`); confirmed `mtmsr` reaches the handler (not NOP-stubbed: JIT falls through
+  to inline-interp), then booted **Mac OS 9 + Fractal Carbon** via the E2E workload: **zero `mtmsr`,
+  zero illegal opcodes** all run. `mtmsr`-enable is *downstream* of detection — nothing tries to
+  enable the vector unit because nothing detects it.
+- 🎯 **The real gate is gestalt `'ppcf'` (`0x70706366`) vector bit, and it is SYSTEM-side, not ROM**
+  (`'ppcf'`: 17 hits in the Mac OS 9 System file on disk, **0 in the OldWorld ROM**). So this is NOT
+  a ROM-patch and NOT a "find the ROM site" spelunk. Next probes (both ROM-agnostic, no boot for #23):
+  - **task #23** — static-disassemble the System's `'ppcf'` computation: does it read PVR directly
+    (→ ROM-orthogonal; NewWorld ROM won't help) or a ROM table/service (→ NewWorld *might* matter)?
+  - then — experimentally force the `'ppcf'` vector bit and confirm the guest emits AltiVec blocks.
+- ⚠️ **Full enable is foundational, not a hack.** A gestalt-only flip is **unsafe** without VR
+  save/restore on context switch (vector state would corrupt across task switches). That VR-context
+  modeling is the real Phase-3 cost. [DingusPPC](https://github.com/dingusdev/dingusppc) is the
+  reference for how a fuller PPC model handles MSR[VEC]/VRSAVE/context.
+- ✅ **Codegen-first ordering (already mostly done):** the open AltiVec families (pack/pixel done;
+  sum-across + `fctiw`/`fctid` rounding remain) are closed via the `SS_TEST_HEX` differential harness
+  — needs **no** detection — so flipping `'ppcf'` later is a pure win, not silent corruption (task #22).
 
 Real workloads waiting on this: Fractal Carbon, Power Fractal, Photoshop AltiVecCore, SoundJam.
-**Detail:** LEARNINGS 2026-06-07; `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`; `OPTIMIZATION-PLAN.md` §P0.
+**Detail:** LEARNINGS 2026-06-07 ("AltiVec detection is NOT an `mtmsr`/MSR[VEC] path"); the in-code
+DORMANT banner atop the KNOWN-AltiVec note in `ppc-jit.cpp`; `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
 
 ## B4. 🟡 Strategic / from-research levers
 

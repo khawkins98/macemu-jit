@@ -1023,6 +1023,18 @@ static void emit_load_ea_base(int ra_num) {
 /* Load 128-bit vector register into ARM64 Q register (NEON).
  *
  * ============================ KNOWN AltiVec BUG (PARKED) ============================
+ * ⚠️ DORMANT CODE PATH — READ FIRST. As of 2026-06-07 no real guest issues AltiVec:
+ * the gestalt 'ppcf' (gestaltPowerPCProcessorFeatures) vector bit is never set, so
+ * Mac OS picks scalar code paths. ALL of the AltiVec codegen below is validated ONLY by
+ * the test harness (gen-altivec-vectors.py + jit-diff-sweep.py), NOT exercised by any
+ * booted app — do NOT spend perf effort here until detection is enabled. Enabling it is
+ * a *foundational* ("widen emulation") task, not a codegen one: it needs the System-side
+ * 'ppcf' vector bit set AND VR save/restore on context switch. The "OS enables via mtmsr
+ * MSR[VEC]" theory was FALSIFIED (zero mtmsr in a full Mac OS 9 + AltiVec-app boot; probe
+ * commit 112481f2). See LEARNINGS.md "AltiVec detection is NOT an mtmsr/MSR[VEC] path" and
+ * ROADMAP Track A / the widen-emulation framing. The byte-order correctness notes below
+ * remain accurate and are worth keeping — they're just not on any hot path yet.
+ *
  * The VR is stored in the interpreter's *ev_mixed* byte order (ppc-operands.hpp):
  *     byte_element(i) = (i & ~3) + (3 - (i & 3))   // bytes reversed WITHIN each word
  *     half_element(i) = (i & ~1) + (1 - (i & 1))   // halfwords swapped within pairs

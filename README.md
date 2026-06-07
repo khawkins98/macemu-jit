@@ -5,6 +5,26 @@ This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit]
 > **Scope:** SheepShaver (PowerPC) is the working macOS emulator. **BasiliskII** (68K) does *not* currently build on macOS arm64 — see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`. A native macOS launcher, **Silicon Sheep** (Tauri), is in development — see [`SiliconSheep/`](SiliconSheep/).
 > **External targets under investigation:** We are also tracking [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac), [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc), and [twvd/snow](https://github.com/twvd/snow) as emulators we target for comparative research. We have not integrated work from these projects yet, but they use similar GPL-family licenses and may contain ideas we can incorporate after targeted evaluation.
 
+### Project direction
+
+SheepShaver was built for a resource-constrained era; an M-series Mac is not. That headroom lets us
+**widen what we emulate** — model more of the complete PowerPC Mac stack, more faithfully — rather than
+only making the existing slice faster. The work is sequenced so each phase rests on the previous one:
+
+1. **Foundation** ✅ — a native AArch64 JIT (PowerPC → ARM64); SheepShaver boots Mac OS 8.6/9 to Finder.
+2. **Instrumentation** ✅ — automated testing, CI tooling, and empirical benchmarks (differential opcode
+   harness, end-to-end boot/workload harness, Speedometer/MacBench capture, a per-block profiler). The
+   safety net that makes everything after it measurable.
+3. **Widen emulation** 🔜 *(emerging primary thrust)* — close the structural gaps SheepShaver never
+   could (e.g. AltiVec actually reachable by guest software, fuller device/OS modeling), correctness
+   first, measured continuously against the Phase-2 benchmarks. [DingusPPC](https://github.com/dingusdev/dingusppc)
+   is our reference for fuller PPC-Mac-stack modeling.
+4. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, HLE), with the
+   benchmarks gating every change against regressions.
+
+Running alongside all of this, **Silicon Sheep** (the Tauri desktop app) improves the day-to-day
+usability experience. The full tactical backlog lives in [`docs/planning/ROADMAP.md`](docs/planning/ROADMAP.md).
+
 ### Prerequisites
 
 Install build dependencies via Homebrew:

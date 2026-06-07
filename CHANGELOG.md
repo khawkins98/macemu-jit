@@ -102,14 +102,29 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **Finding (falsified hypothesis, task #21):** advertising MSR[VEC]=1 via `mfmsr`
   (`0x0200f072`) does **not** enable AltiVec. Booted Fractal Carbon with the change →
   profile still shows **0 AltiVec blocks** (hot mix unchanged: 24 integer / 11 load-store /
-  4 branch / 1 FP, ~1105 guest-MIPS). The real gate is gestalt `'ppcf'` (`0x70706366`) bit 4,
-  computed inside the ROM/NanoKernel with no SheepShaver hook (`rom_patches.cpp:1699`
-  InitGestalt patch writes only CPU-type/pagesize/RAM). Experiment reverted; finding banked.
+  4 branch / 1 FP, ~1105 guest-MIPS). The real gate is gestalt `'ppcf'` (`0x70706366`) vector
+  bit — **System-side, not ROM** (corrected below by the `112481f2` probe). Experiment reverted.
 - **Reframing:** the aarch64 AltiVec NEON codegen is **mature and dormant**, not missing
   (54 differential vectors, 27 bugs fixed; open: pack/pixel/sum + `fctiw` rounding). AltiVec
   enablement is a *detection* problem, not a codegen one. Codegen-first ordering adopted: close
   the open families via the `SS_TEST_HEX` differential harness before attempting gestalt
   enablement. See LEARNINGS 2026-06-07, ROADMAP B5, tasks #22/#23.
+
+### [SheepShaver] `SS_LOG_ILLEGAL` diagnostic + `mtmsr`/MSR[VEC] AltiVec-detection probe (`112481f2`)
+
+- **Diagnostic:** env-gated (`SS_LOG_ILLEGAL=1`) log at the top of `execute_illegal` recording every
+  undecoded opcode reaching the handler, decoding `mtmsr` (op31/XO146) and testing the MSR[VEC] bit
+  `0x02000000` of rS. Reusable for any undecoded-opcode triage; zero cost when unset.
+- **Finding (falsified, task #21):** the "OS enables AltiVec via an `mtmsr` WRITE we silently drop"
+  theory is **false**. Confirmed `mtmsr` is *not* NOP-stubbed (JIT `compile_one`→false→inline-interp
+  →`execute_illegal`; validated with `SS_TEST_HEX=7C600124` in JIT+interp), then booted **Mac OS 9 +
+  Fractal Carbon** via the E2E workload: **zero `mtmsr`, zero illegal opcodes** all run. `mtmsr`-enable
+  is downstream of detection.
+- **Correction:** the gestalt `'ppcf'` vector-bit computation is **System-side** (`'ppcf'`: 17 hits in
+  the Mac OS 9 System file on disk, 0 in the OldWorld ROM) — **not** a ROM/NanoKernel routine as the
+  prior entry stated. So enabling AltiVec is not a ROM patch; it is Phase-3 "widen emulation" work
+  (System-side `'ppcf'` + VR context-switch save/restore). `make test-jit` **332/332**. See LEARNINGS
+  2026-06-07 "AltiVec detection is NOT an `mtmsr`/MSR[VEC] path", ROADMAP B5, the in-code DORMANT banner.
 
 ### [shared] C2.0 Bidirectional UDS RPC — sub-16ms launcher↔emulator IPC
 

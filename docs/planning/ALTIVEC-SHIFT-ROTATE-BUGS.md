@@ -7,9 +7,16 @@
 
 *(Filename kept as `ALTIVEC-SHIFT-ROTATE-BUGS.md` for stable links; scope is now the whole
 AltiVec/FP differential sweep — shift/rotate, saturating arith, averages, FP `fctiw`, and (✅
-2026-06-07) the entire pack + halfword-multiply family. **Still open: pixel + sum-across** (new
-derivations) and `fctiw`/`fctid` non-default rounding. The reusable sweep tool is
+2026-06-07) the entire pack + halfword-multiply + 1-5-5-5 pixel family. **Still open: sum-across**
+(new derivation) and `fctiw`/`fctid` non-default rounding. The reusable sweep tool is
 `SheepShaver/tools/jit-diff-sweep.py`.)*
+
+> **⚠️ DORMANT — context for prioritizing this doc (2026-06-07).** All AltiVec codegen here is
+> currently exercised **only by this differential harness** — no booted guest issues AltiVec
+> instructions (the gestalt `'ppcf'` vector bit is never set; detection is a System-side Phase-3
+> task, see ROADMAP B5 + LEARNINGS "AltiVec detection is NOT an `mtmsr`/MSR[VEC] path"). Closing the
+> remaining families is still worthwhile — it makes flipping detection later a *pure win* rather than
+> silent corruption — but it is **correctness-banking, not a hot path**: do not perf-tune it.
 
 **Status:** 27 codegen bugs found + fixed 2026-06-06 (26 AltiVec + 1 FP); **2026-06-07 closed the
 entire ev_mixed multiply/pack family + the 1-5-5-5 pixel family** — all 7 packs (saturating

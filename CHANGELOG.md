@@ -28,7 +28,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
   instead of raw "No such file" messages.
 
-### [SheepShaver] AltiVec halfword multiplies + vpkuwum fixed (ev_mixed multiply/pack family complete)
+### [SheepShaver] AltiVec halfword multiplies + vpkuwum fixed (ev_mixed multiply/pack family complete) (`92594ea4`, `808c26db`, docs `c5f4e81c`)
 
 - `vmul{o,e}{u,s}h` (even/odd halfword multiplies, 72/328/584/840): were broken (no ev_mixed
   even/odd select; unsigned encoding `0x0E60A000` isn't UMULL). Fixed via `emit_vmul_hword` — the
@@ -40,7 +40,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   halfword mults). `make test-jit` **329/329**. Remaining open AltiVec are *new derivations* (not
   pattern-extensions): pixel `vpkpx`/`vupk{h,l}px` (1-5-5-5 bit-field) + sum-across.
 
-### [SheepShaver] AltiVec saturating packs fixed — all 6 (vpk{sh,uh,sw,uw}{ss,us})
+### [SheepShaver] AltiVec saturating packs fixed — all 6 (vpk{sh,uh,sw,uw}{ss,us}) (`17a73fac`, `f6326070`, docs `a3a72c66`)
 
 - The six saturating pack ops were broken (single-source narrow ignoring vB, no ev_mixed
   normalize, and a mislabeled `0x2E212800` "UQXTN" that is actually SQXTUN → unsigned packs
@@ -54,7 +54,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   differential vectors. `make test-jit` **324/324**. Remaining open AltiVec: pixel + sum-across
   families. See `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
 
-### [SheepShaver] fsel/frsp/frsqrte/fsqrt → zero-copy FP RA (P5b follow-up, completes FP-RA op conversion)
+### [SheepShaver] fsel/frsp/frsqrte/fsqrt → zero-copy FP RA (P5b follow-up, completes FP-RA op conversion) (`e67b3913`, docs `3cb5bb9f`)
 
 - Converted the last bridge-using FP ops to direct FP-RA access: `frsp`/`fsel` (differentially
   tested — added `fp_fsel_pos`/`fp_fsel_neg` exercising both select arms) and `frsqrte`/`fsqrt`
@@ -63,7 +63,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - The FP path now has **no `emit_*_fpr` bridge uses in any hot op**; the bridge remains only for
   genuinely struct-resident reads (mffs/mtfsf/fcmp). See OPTIMIZATION-PLAN §P5b.
 
-### [SheepShaver] FP indexed/update memory → zero-copy FP RA (P5b follow-up)
+### [SheepShaver] FP indexed/update memory → zero-copy FP RA (P5b follow-up) (`d1ca48ae`, eviction test `fa66964a`, docs `6ad47bc7`)
 
 - Converted the FP **indexed** loads/stores (`lf{s,d}x`/`lf{s,d}ux`/`stf{s,d}x`/`stf{s,d}ux`,
   opcode-31 cases 535/567/599/631/663/695/727/759) and **D-form update** forms
@@ -75,7 +75,7 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   test-jit` **315/315** (was 303). FC renders identically (pHash unchanged), guest-MIPS within noise
   (FC's loop is register FP arith — the win accrues to array-heavy FP code). See OPTIMIZATION-PLAN §P5b.
 
-### [SheepShaver] mfmsr JIT/interp divergence fix + AltiVec-detection finding (mfmsr[VEC] is NOT the gate)
+### [SheepShaver] mfmsr JIT/interp divergence fix + AltiVec-detection finding (mfmsr[VEC] is NOT the gate) (`cd6df179`, docs `65588767`)
 
 - **Fix (`cd6df179`):** the aarch64 JIT's `mfmsr` (case 83) returned `0`, while the
   interpreter's `execute_mfmsr` returns `0xf072` — a latent JIT/interp divergence for any

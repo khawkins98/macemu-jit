@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-06
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-07
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -245,10 +245,11 @@ two bugs — non-widening `MUL.8B` (must widen 8×8→16) and no ev_mixed even/o
 widen → `REV32.8H` output. Distinct operands exercise BOTH bugs (even-lane products >255 catch a
 non-widening op). xfail→xpass, scored gate 262→264. **The ev_mixed quarantine lane is now EMPTY.**
 
-**Remaining siblings (untested, no test vector — NOT in quarantine):** halfword multiplies
-`vmul{o,e}{u,s}h` (need the hw→word analogue: `UZP` on `.8H` + `[SU]MULL.4S`; `word_element` is
-identity so no output rev), and signed byte multiplies `vmulosb`/`vmulesb` (share `emit_vmul_byte`
-with `SMULL`, emitted as *prospective* — no signed test vector). All flagged in `ppc-jit.cpp`.
+**Siblings — ✅ FIXED 2026-06-07:** halfword multiplies `vmul{o,e}{u,s}h` (`emit_vmul_hword`:
+`UZP` on `.8H` + `[SU]MULL.4S`, no output rev) + vectored, and all 7 packs (saturating +
+`vpkuwum`). 🟡 **Still prospective** (no signed test vector): signed byte multiplies
+`vmulosb`/`vmulesb` (share `emit_vmul_byte` with `SMULL`). 🔜 **New derivations remain:** AltiVec
+pixel (`vpkpx`/`vupk{h,l}px`) + sum-across `vsum*`. All flagged in `ppc-jit.cpp`.
 
 **🐛 REOPENED by the broad sweep (2026-06-06) — the pack/pixel family is broken, not "complete".**
 The A1 differential sweep proved several more `ev_mixed`/2-source ops are still wrong (they never had
@@ -294,15 +295,17 @@ masks it — sums don't carry across byte boundaries, so byteswap stays invisibl
 force inter-byte carries). Only matters for *broad* VR-codegen changes, not per-op approach B.
 
 **Order of attack (simplest → hardest):** ✅ word merges → ✅ byte/halfword merges → ✅ pack
-(`vpkuhum`) → ✅ byte multiplies (`vmuleub`/`vmuloub`). **All tested ops done.** Leftover:
-write test vectors for the untested siblings (halfword multiplies, `vpkuwum`, signed byte
-multiplies) and verify — overlaps A1 "broaden AltiVec coverage".
+(`vpkuhum`) → ✅ byte multiplies (`vmuleub`/`vmuloub`) → ✅ **all packs + halfword multiplies
+(2026-06-07)**. **All tested ops done.** Leftover: a signed byte-mult vector (`vmulosb/esb`,
+prospective) + the new-derivation families (pixel, sum-across) — overlaps A1 "broaden AltiVec coverage".
 
-**Done when:** ✅ all quarantine vectors `xpass`+promoted (quarantine now empty) — DONE for the
-tested class. **Still pending:** (a) the `SS_JIT_VERIFY=1` boot for `vpkuhum` + the multiplies
-(new `UMULL.8H`/`REV32.8H`/`UZP` instructions the merge boot never ran), and (b) real-AltiVec
-software validation (→ A3). The harness flip is necessary but not sufficient — its input coverage
-is one pattern per op.
+**Done when:** ✅ all quarantine vectors `xpass`+promoted (quarantine now empty); ✅ all
+packs + byte/halfword multiplies fixed+vectored (2026-06-07). **Still pending:** (a) the
+`SS_JIT_VERIFY=1` boot — **NOTE:** AltiVec is dormant (no guest issues it, detection deferred —
+B5/#23), so a verify boot does *not* exercise these ops; they're guarded by the differential
+harness instead. (b) real-AltiVec software validation depends on detection landing first (→ A3/B5).
+Harness coverage is one (saturation/signedness-crossing) pattern per op; a 2026-06-07 adversarial
+sweep added 27 sets across the saturating packs (zero divergence).
 
 **Depends on:** A1. **Needs boot verification** (yours) — the harness AltiVec coverage is partial.
 **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P1b/P5c; `CHANGELOG.md` [SheepShaver] 2026-06-04; `ppc-jit.cpp`.
@@ -475,8 +478,9 @@ creating a false sense of coverage):
 - **A5-C. Don't let the system harness mask the per-instruction coverage holes.** `make e2e`
   passing is necessary, not sufficient — the open per-op gaps stay the real safety net and must
   still be closed in A1/A2, NOT considered covered because the boot is green:
-  - **A2 leftovers (untested):** halfword multiplies `vmul{o,e}{u,s}h`, word pack `vpkuwum`,
-    signed byte multiplies `vmulosb`/`vmulesb` — need distinct/signed test vectors + a per-op fix.
+  - **A2 leftovers:** ✅ halfword multiplies `vmul{o,e}{u,s}h` + word pack `vpkuwum` fixed+vectored
+    (2026-06-07). 🟡 signed byte multiplies `vmulosb`/`vmulesb` still prospective (no signed vector).
+    🔜 pixel + sum-across families (new derivations).
   - **A1 leftover:** the scored *arithmetic* word-op vectors (`vadduwm`/`vsubuwm`/`vmaxsw`/…)
     still use byteswap-palindrome operands (`0x05..`/`0x03..`) that can't catch a byteswap/lane
     bug — regenerate with **distinct AND carry-inducing** operands.
@@ -542,7 +546,8 @@ Inspector" data layer (Track C). **Detail:** `OPTIMIZATION-PLAN.md` §P0/§P0b.
 ## B3. 🟡 High-effort levers
 
 - **FP register allocator — ✅ DONE (P5b, 2026-06-07).** Speedometer Math +16% (~1.89× interp),
-  Fractal Carbon +8% MIPS. Remaining FP follow-ups: update/indexed FP memory, cross-block FP pinning.
+  Fractal Carbon +8% MIPS. ✅ 2026-06-07: update/indexed FP memory + fsel/frsp/frsqrte/fsqrt all
+  zero-copy (no `emit_*_fpr` bridge in any hot FP op). Remaining FP follow-up: cross-block FP pinning.
 - **Per-block prologue/epilogue overhead — 🔴 the new top lever** (the ~12–14 `a64/guest-op` ceiling
   the profiler surfaced): caller-save only the clobbered regs / block-merging / **bclr chaining (P9)**.
 - Remaining: constant folding (P5), instruction scheduling (P6), byte-swap opt (P7), **cross-block
@@ -759,7 +764,8 @@ not map to our native networking goals).
   {b,h,w}`, pack `vpkuhum`, byte multiplies `vmulo/eub` — promoted to the scored gate (**264/100**,
   quarantine empty; all boot-verified — zero VR/FPR divergence). Per-op `REV32.16B`
   normalize: merges=ZIP, pack=UZP2 (`emit_vmrg`); byte mults=UZP1/2+UMULL.8H+REV32.8H
-  (`emit_vmul_byte`). Untested siblings (halfword mults, `vpkuwum`, signed byte mults) flagged.
+  (`emit_vmul_byte`). Siblings then flagged; ✅ halfword mults + `vpkuwum` fixed 2026-06-07
+  (`emit_vmul_hword`/`emit_vpk_w2h`); signed byte mults still prospective.
 - Doc hygiene: fork-wide `CHANGELOG.md`, `docs/ARCHITECTURE.md` extracted, handoff docs retired
   (durables → DIAGNOSTICS/LEARNINGS), harness counts de-hardcoded, memories pruned.
 - Upstream backports: **VDE networking**, **SDL3 default backend** (boot-verified), **Wayland

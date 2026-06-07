@@ -1,8 +1,14 @@
 # AltiVec / FP JIT codegen bug hunt (2026-06-06)
 
+> **Status:** 🟡 Active · **Created:** 2026-06-06 · **Updated:** 2026-06-07
+> **Why this doc exists:** tracks the AltiVec/FP differential codegen bug hunt — the repro records,
+> root causes, and the reusable ev_mixed/saturation fix designs.
+> _Markers: ✅ done · 🟡 in progress · ⏸ deferred · ☐ todo._
+
 *(Filename kept as `ALTIVEC-SHIFT-ROTATE-BUGS.md` for stable links; scope is now the whole
-2026-06-06 AltiVec/FP differential sweep — shift/rotate **and** saturating arith, averages, FP
-`fctiw`, and the still-open pack/pixel/sum families. The reusable sweep tool is
+AltiVec/FP differential sweep — shift/rotate, saturating arith, averages, FP `fctiw`, and (✅
+2026-06-07) the entire pack + halfword-multiply family. **Still open: pixel + sum-across** (new
+derivations) and `fctiw`/`fctid` non-default rounding. The reusable sweep tool is
 `SheepShaver/tools/jit-diff-sweep.py`.)*
 
 **Status:** 27 codegen bugs found + fixed 2026-06-06 (26 AltiVec + 1 FP); **2026-06-07 closed the

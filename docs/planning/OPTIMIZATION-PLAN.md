@@ -153,8 +153,11 @@ on it.
 **Status**: real correctness bug; the entire *tested* element-order class is fixed +
 promoted (splats, merges, pack `vpkuhum`, byte multiplies `vmulo/eub`) — harness 264/100,
 quarantine empty. Boot-pending for pack+multiplies (new NEON ops); real-AltiVec validation
-→ A3. Untested siblings remain (halfword multiplies, `vpkuwum`, signed byte multiplies) —
-signposted in code + ROADMAP A2. Live tracker: ROADMAP A2.
+→ A3. **2026-06-07: closed the rest of the ev_mixed multiply/pack family** — all 7 packs
+(saturating + `vpkuwum`) and the halfword multiplies `vmul{o,e}{u,s}h` are fixed + vectored
+(`emit_vpk_h2b`/`emit_vpk_w2h`/`emit_vmul_hword`). Only the *signed byte* multiples
+`vmulosb`/`vmulesb` remain prospective (share the byte helper, no signed test vector). Live
+tracker: ROADMAP A2.
 
 VRs are stored in the interpreter's `ev_mixed` byte order (bytes reversed within
 each 32-bit word, word order preserved — `ppc-operands.hpp` `byte_element`/
@@ -174,9 +177,10 @@ or rearranges sub-word elements with raw NEON lanes is wrong.
 - ✅ **Fixed — byte multiplies `vmuloub`/`vmuleub`** (2026-06-04, boot-verified): two bugs —
   non-widening `MUL.8B` and no ev_mixed even/odd select. `emit_vmul_byte`: REV32.16B → UZP1
   (even)/UZP2(odd).16B → UMULL.8H → REV32.8H. Promoted 262→264; quarantine now empty.
-- 🟡 **Still broken / untested** (no test vector): halfword multiplies `vmul{o,e}{u,s}h` (need the
-  hw→word analogue: UZP on `.8H` + `[SU]MULL.4S`, word_element identity so no output rev), the
-  word pack `vpkuwum` (ignores vA), and signed byte multiplies `vmulosb`/`vmulesb` (share
+- ✅ **FIXED 2026-06-07** — halfword multiplies `vmul{o,e}{u,s}h` (`emit_vmul_hword`: REV32.8H
+  normalize → UZP1/2.8H → `[SU]MULL.4S`, no output rev) and the word pack `vpkuwum`
+  (`emit_vpk_w2h` + `XTN`), both vectored. 🟡 **Still prospective** (no signed test vector):
+  signed byte multiplies `vmulosb`/`vmulesb` (share
   `emit_vmul_byte` w/ SMULL — emitted as *prospective*, no signed test vector).
 
 **Fix approach — settled: per-op (approach B).** Make each op's codegen ev_mixed-aware
@@ -629,8 +633,9 @@ single-precision + FP-memory + single-op follow-ups all landed via the staged/br
 
 Tracked as **P1b** in the "Open — Hardening" section above (single source of
 truth). Summary: the entire *tested* ev_mixed class — `vspltb`/`vsplth`, the `vmrg*` merge
-family, `vpkuhum`, and the byte multiplies `vmulo/eub` — is fixed (per-op normalize: ZIP/UZP
-+ widening). Only untested siblings remain (halfword mults, `vpkuwum`, signed byte mults).
+family, `vpkuhum`, the byte multiplies `vmulo/eub`, **all 7 packs + the halfword multiplies
+`vmul{o,e}{u,s}h` (2026-06-07)** — is fixed (per-op normalize: ZIP/UZP + widening). Remaining:
+pixel + sum-across (new derivations); signed byte mults `vmulosb/esb` (prospective, no vector).
 
 ### P6: Instruction Scheduling
 

@@ -37,6 +37,22 @@ def lfd(fD, d, rA): return 0xC8000000 | (fD << 21) | (rA << 16) | (d & 0xFFFF)
 def lfs(fD, d, rA): return 0xC0000000 | (fD << 21) | (rA << 16) | (d & 0xFFFF)
 def stfd(fS, d, rA):return 0xD8000000 | (fS << 21) | (rA << 16) | (d & 0xFFFF)
 def stfs(fS, d, rA):return 0xD0000000 | (fS << 21) | (rA << 16) | (d & 0xFFFF)
+def addi(rD, rA, imm): return 0x38000000 | (rD << 21) | (rA << 16) | (imm & 0xFFFF)  # addi rD,rA,imm
+# FP D-form UPDATE loads/stores (lfsu/lfdu/stfsu/stfdu): EA=rA+d, rA:=EA. Opcodes 49/51/53/55.
+def lfsu(fD, d, rA): return 0xC4000000 | (fD << 21) | (rA << 16) | (d & 0xFFFF)
+def lfdu(fD, d, rA): return 0xCC000000 | (fD << 21) | (rA << 16) | (d & 0xFFFF)
+def stfsu(fS, d, rA):return 0xD4000000 | (fS << 21) | (rA << 16) | (d & 0xFFFF)
+def stfdu(fS, d, rA):return 0xDC000000 | (fS << 21) | (rA << 16) | (d & 0xFFFF)
+# FP INDEXED loads/stores (X-form, opcode 31): EA=(rA?rA:0)+rB; the *ux variants also rA:=EA.
+def _fx(fD, rA, rB, xo): return 0x7C000000 | (fD << 21) | (rA << 16) | (rB << 11) | (xo << 1)
+def lfsx(fD, rA, rB):  return _fx(fD, rA, rB, 535)
+def lfsux(fD, rA, rB): return _fx(fD, rA, rB, 567)
+def lfdx(fD, rA, rB):  return _fx(fD, rA, rB, 599)
+def lfdux(fD, rA, rB): return _fx(fD, rA, rB, 631)
+def stfsx(fS, rA, rB): return _fx(fS, rA, rB, 663)
+def stfsux(fS, rA, rB):return _fx(fS, rA, rB, 695)
+def stfdx(fS, rA, rB): return _fx(fS, rA, rB, 727)
+def stfdux(fS, rA, rB):return _fx(fS, rA, rB, 759)
 # A-form FP op (fadd/fsub/fmul/fdiv/fmadd/...): opcode, frD, frA, frB, frC, XO, Rc.
 def aform(op, fD, fA, fB, fC, xo, rc=0):
     return (op << 26) | (fD << 21) | (fA << 16) | (fB << 11) | (fC << 6) | (xo << 1) | rc
@@ -111,6 +127,34 @@ ev = (setd(10, 0x4000, 0x100)
       + [aform(63, k, 10, 0, 10, 25) for k in range(9)]   # fmul fK,f10,f10  (K=0..8)
       + [stfd(0, 0x130, 1), lwz(4, 0x130, 1), lwz(5, 0x134, 1)])  # grab f0 (the evicted one)
 add("fp_evict_writeback", ev, "9 FP dests (f0..f8) force FP-RA eviction; evicted f0 must read back 4.0")
+
+# ---- FP INDEXED + UPDATE memory (P5b follow-up 2026-06-07) ----
+# These cover the indexed (lf{s,d}x / lf{s,d}ux / stf{s,d}x / stf{s,d}ux) and D-form
+# UPDATE (lf{s,d}u / stf{s,d}u) FP loads/stores, which were converted from the FMOV
+# bridge to zero-copy FP-RA access. The D-form non-update lf{s,d}/stf{s,d} (already
+# zero-copy) are covered by fp_lfs_stfs / fp_lfd_stfd above; these 12 were UNCOVERED.
+# Construction: operand 5.0 written to [r1+0x100]; EA reached two ways so a bad EA
+# diverges — indexed via base r6=r1+0x80 + index r7=0x80, update via base r6=r1 + d=0x100.
+# The FP result lands in r4(/r5) via grab (REGDUMP captures GPRs, not FPRs -> non-vacuous);
+# the UPDATE forms additionally writeback rA into r6, which REGDUMP captures directly, so a
+# wrong EA-writeback also diverges. 5.0 double=0x40140000:0 ; 5.0 single=0x40A00000.
+def wr_dbl(off, hi16): return [lis(3, hi16), stw(3, off, 1), li(3, 0), stw(3, off + 4, 1)]
+def wr_sgl(off, hi16): return [lis(3, hi16), stw(3, off, 1)]
+# indexed loads: r6=r1+0x80, r7=0x80 -> EA=r1+0x100
+add("fp_lfdx",   wr_dbl(0x100, 0x4014) + [addi(6,1,0x80), li(7,0x80), lfdx(1,6,7)]  + grabd(0x130), "lfdx f1,r6,r7: load 5.0 double via indexed EA")
+add("fp_lfdux",  wr_dbl(0x100, 0x4014) + [addi(6,1,0x80), li(7,0x80), lfdux(1,6,7)] + grabd(0x130), "lfdux f1,r6,r7: load 5.0 + rA(r6):=EA")
+add("fp_lfsx",   wr_sgl(0x100, 0x40A0) + [addi(6,1,0x80), li(7,0x80), lfsx(1,6,7)]  + grabd(0x130), "lfsx f1,r6,r7: load 5.0f single via indexed EA")
+add("fp_lfsux",  wr_sgl(0x100, 0x40A0) + [addi(6,1,0x80), li(7,0x80), lfsux(1,6,7)] + grabd(0x130), "lfsux f1,r6,r7: load 5.0f + rA(r6):=EA")
+# indexed stores: load 5.0 into f1 (slot 0x110), store to [r1+0x100] via EA, read back
+add("fp_stfdx",  setd(1,0x4014,0x110) + [addi(6,1,0x80), li(7,0x80), stfdx(1,6,7)]  + [lwz(4,0x100,1), lwz(5,0x104,1)], "stfdx f1,r6,r7: store 5.0 double via indexed EA")
+add("fp_stfdux", setd(1,0x4014,0x110) + [addi(6,1,0x80), li(7,0x80), stfdux(1,6,7)] + [lwz(4,0x100,1), lwz(5,0x104,1)], "stfdux f1,r6,r7: store 5.0 + rA(r6):=EA")
+add("fp_stfsx",  setd(1,0x4014,0x110) + [addi(6,1,0x80), li(7,0x80), stfsx(1,6,7)]  + [lwz(4,0x100,1)], "stfsx f1,r6,r7: store 5.0f single via indexed EA")
+add("fp_stfsux", setd(1,0x4014,0x110) + [addi(6,1,0x80), li(7,0x80), stfsux(1,6,7)] + [lwz(4,0x100,1)], "stfsux f1,r6,r7: store 5.0f + rA(r6):=EA")
+# D-form update: r6=r1, d=0x100 -> EA=r1+0x100, r6:=EA
+add("fp_lfdu",   wr_dbl(0x100, 0x4014) + [addi(6,1,0), lfdu(1,0x100,6)]  + grabd(0x130), "lfdu f1,0x100(r6): load 5.0 double + r6:=EA")
+add("fp_lfsu",   wr_sgl(0x100, 0x40A0) + [addi(6,1,0), lfsu(1,0x100,6)]  + grabd(0x130), "lfsu f1,0x100(r6): load 5.0f single + r6:=EA")
+add("fp_stfdu",  setd(1,0x4014,0x110) + [addi(6,1,0), stfdu(1,0x100,6)]  + [lwz(4,0x100,1), lwz(5,0x104,1)], "stfdu f1,0x100(r6): store 5.0 double + r6:=EA")
+add("fp_stfsu",  setd(1,0x4014,0x110) + [addi(6,1,0), stfsu(1,0x100,6)]  + [lwz(4,0x100,1)], "stfsu f1,0x100(r6): store 5.0f single + r6:=EA")
 
 if __name__ == "__main__":
     print("# ==== FP arithmetic coverage (generated by gen-fp-vectors.py) ================")

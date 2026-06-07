@@ -338,22 +338,64 @@ returning 0 for mfspr SPRG** → garbage pointer → deadlock.
   **initialize SPRG0** (mimic the Trampoline) — but that is **parcels-environment-specific**, not a
   general fix (the 1.1 path uses `XLM_KERNEL_DATA`, not SPRG0).
 
-### ⛔ STOP-RULE (set 2026-06-08, after a lateral strategy review)
+### 🎯 GUIDING POLICY (set 2026-06-08; clarified by the maintainer) — boot as forcing-function for JIT correctness
 
-The 9.1/9.2 boot is a **poor user-value bet** (AltiVec already works on 1.1; 9.0.4 already boots; no
-prior art anywhere; a likely unbounded "second wall" = nanokernel MP/exception/timing fidelity vs
-SheepShaver's stubs) but an **excellent correctness fuzzer + learning quest** (it already surfaced the
-real SPRG bug). So the policy is **"treat the bugs as the product, the boot as the bonus":**
-**continue parcels work ONLY while each wall yields a *generally-useful* emulator fix.** STOP and mark
-the quest deferred the moment the remaining work is parcels-only environment plumbing / `find_rom_data`
-pattern-relocation grind (Trampoline/SPRG0 init, jump68k handoff RE, 68k HLE shims) with no spillover.
-By that rule we are **at the stop line now** — the SPRG correctness win is banked; the next steps
-(SPRG0 init → jump68k → HLE → second wall) are parcels-specific with diminishing general value.
-Re-evaluate against the higher-EV backlog (OPTIMIZATION-PLAN, CopyBits perf, e2e, Silicon Sheep)
-before resuming.
+**The primary goal is increasing emulation CORRECTNESS — especially the JIT.** SheepShaver only models
+a thin slice of the PPC supervisor stack; that thinness is *why* the New World ROM won't fully boot.
+So the New World ROM / 9.2 boot is deliberately used as a **forcing function** to surface and fix those
+PPC/JIT correctness gaps (the SPRG bug is the first harvest). Framing:
+
+- **The product = general PPC/JIT correctness fixes** discovered along the way (SPRG was one).
+- **The parcels boot = the driver/stimulus.** Each new region of nanokernel/OS code it reaches
+  exercises PPC paths nothing else does.
+- **Environment plumbing (SPRG0/Trampoline init, jump68k redirect, 68k HLE) = the test harness.** Do
+  the *minimum* needed to advance the boot into new code — its value is the *stimulus it unlocks*, not
+  the plumbing itself.
+
+**Revised stop-rule:** keep advancing the boot as long as doing so keeps surfacing fixable PPC/JIT
+correctness gaps (the common case). Only pause when the remaining step is pure mechanical
+`find_rom_data` pattern-relocation that unlocks *no new executed code* — that's harness drudgery with
+no stimulus payoff. Once the parcels ROM boots far enough, the **9.2 ISO itself** becomes the next,
+richer stimulus. (The earlier "stop now" read under-weighted the maintainer's actual goal — correctness
+discovery — for which this path is on-target, not a tunnel.)
 
 **Next (if/when resumed):** initialize SPRG0 to the per-CPU/KDP pointer at nanokernel entry (Trampoline
 emulation), re-boot, expect the deadlock to clear and advance to the `jump68k` handoff.
+
+### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
+
+Drilling past the SPRG register fix exposed the actual gap, and it's a *general* supervisor-fidelity
+hole (the maintainer's real target — "SheepShaver models only a thin slice of the PPC stack"):
+
+**The New World nanokernel expects a Trampoline-established supervisor environment that SheepShaver
+never builds.** Concretely, the early routine at parcels `0x3263e0` (reached at boot block ~10) does:
+```
+mfspr r1, SPRG0          ; r1 = per-CPU block ptr (Trampoline-set)
+stmw  r24, -0x108(r1)    ; save regs in the per-CPU area BELOW the block ptr
+lwz   r1, -4(r1)         ; r1 = KDP pointer (stored just below the block)
+lwz   r28, -0x900(r1)    ; read a KDP field
+```
+So it requires: (a) **SPRG0** = a per-CPU block pointer, (b) writable RAM in `[SPRG0-0x108 .. SPRG0)`,
+(c) `[SPRG0-4]` = the KDP pointer, (d) the KDP populated with the fields it then reads
+(`-0x900(KDP)`, etc.). On real HW the **Trampoline ELF** sets SPRG0 + builds the per-CPU/KDP block,
+placing the KDP relative to the real SDR1/HTAB it just created. SheepShaver: uses a fixed
+`KernelDataAddr`, fakes SDR1 (`0xdead001f` / HTAB ptr `0xdead0000`), runs no Trampoline → SPRG0=0 →
+garbage KDP → the first spinlock deadlocks (see drilldown above).
+
+**Why this matters beyond parcels:** it's the boundary where SheepShaver's "fake the MMU / skip the
+firmware" model stops being sufficient. Cross-references `MMU-NANOKERNEL-MP-PLAN.md`. The fix is a
+real build-out, roughly:
+1. Add SPRG read/write reach to `set_register` (or a direct setter) — currently `set_register` aborts
+   on non-GPR/standard SPRs, so even injecting SPRG0 needs a small plumbing change.
+2. In `init_emul_ppc` (sheepshaver_glue.cpp ~1283), construct a per-CPU block: carve a region, write
+   `KDP` at `[block-4]`, ensure `[block-0x108..block)` is writable, set `SPRG0 = block`.
+3. Boot, observe the next KDP field the nanokernel reads (the forcing-function then surfaces each
+   missing KDP/per-CPU field in turn — harvest as it goes).
+4. Likely eventually needs a *consistent* SDR1/HTAB↔KDP relationship (the MMU work), since the
+   nanokernel derives KDP from HTAB in its own Init path.
+
+This is a focused multi-iteration correctness effort (best started fresh, not at the tail of a long
+session). It IS on-target for "increase JIT/PPC correctness via the New World forcing-function."
 
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 

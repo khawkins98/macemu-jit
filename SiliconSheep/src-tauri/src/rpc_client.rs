@@ -25,6 +25,7 @@ pub const METHOD_DUMP_REGISTERS: i32 = 16;
 pub const METHOD_UI_SNAPSHOT: i32 = 17;
 pub const METHOD_GET_PROFILE: i32 = 18;
 pub const METHOD_GET_FALLBACKS: i32 = 19;
+pub const METHOD_GET_TIMING: i32 = 20;
 
 pub struct RpcClient {
     stream: UnixStream,

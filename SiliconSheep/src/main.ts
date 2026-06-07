@@ -1881,6 +1881,14 @@ function renderInspectorWindow(vmId: string) {
             </div>
           </div>
           <div class="inspector-section">
+            <h3 class="inspector-heading">Block Timing (P3)</h3>
+            <p class="ss-text-muted" style="margin-bottom: 8px;">Wall-clock time per block — which blocks consume the most CPU time.</p>
+            <button class="btn btn-secondary btn-sm" id="insp-refresh-timing">↻ Refresh</button>
+            <div id="insp-timing" style="margin-top: 8px;">
+              <p class="ss-text-muted">Click "Refresh" after a profiled run.</p>
+            </div>
+          </div>
+          <div class="inspector-section">
             <h3 class="inspector-heading">Interpreter Fallbacks</h3>
             <p class="ss-text-muted" style="margin-bottom: 8px;">PCs where the JIT fell through to the interpreter — potential optimization targets.</p>
             <button class="btn btn-secondary btn-sm" id="insp-refresh-fallbacks">↻ Refresh</button>
@@ -2208,6 +2216,76 @@ function renderInspectorWindow(vmId: string) {
             const addrInput = document.getElementById("insp-mem-addr") as HTMLInputElement;
             if (addrInput) addrInput.value = addr;
             // Switch to memory tab
+            document.querySelectorAll(".inspector-toolbar__tab").forEach(t => t.classList.remove("inspector-toolbar__tab--active"));
+            document.querySelector('[data-panel="memory"]')?.classList.add("inspector-toolbar__tab--active");
+            document.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");
+            document.getElementById("panel-memory")!.style.display = "";
+            readMemory();
+          }
+        });
+      });
+    } catch {
+      el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
+    }
+  });
+
+  // Block timing (P3)
+  document.getElementById("insp-refresh-timing")?.addEventListener("click", async () => {
+    const result = await rpcCall(
+      () => invoke("rpc_get_timing", { id: vmId }) as Promise<string>,
+      "Timing data"
+    );
+    const el = document.getElementById("insp-timing");
+    if (!el || !result) {
+      if (el) el.innerHTML = '<p class="ss-text-muted">Not available.</p>';
+      return;
+    }
+    try {
+      const data = JSON.parse(result);
+      if (!data.enabled) {
+        el.innerHTML = '<p class="ss-text-muted">Profiler not enabled.</p>';
+        return;
+      }
+      const blocks = data.blocks || [];
+      const totalMs = (data.totalTimeNs || 0) / 1e6;
+      el.innerHTML = `
+        <div class="ss-text-muted" style="margin-bottom: 8px;">
+          Total measured time: <strong>${totalMs.toFixed(1)} ms</strong>
+        </div>
+        <table style="width:100%; font-size: 10px; font-family: 'SF Mono', Menlo, monospace; border-collapse: collapse;">
+          <tr style="color: var(--ss-text-muted);">
+            <th style="text-align:left; padding: 2px 4px;">#</th>
+            <th style="text-align:left;">PC</th>
+            <th style="text-align:right;">Time</th>
+            <th style="text-align:right;">%</th>
+            <th style="text-align:right;">Count</th>
+            <th style="text-align:right;">Avg</th>
+            <th style="text-align:left; padding-left: 8px;">Bar</th>
+          </tr>
+          ${blocks.map((b: any, i: number) => {
+            const timeMs = (b.timeNs || 0) / 1e6;
+            const barWidth = Math.max(1, Math.round(b.pct * 2));
+            return `<tr style="border-top: 1px solid var(--ss-border);">
+              <td style="padding: 2px 4px; color: var(--ss-text-dim);">${i + 1}</td>
+              <td style="padding: 2px 4px;"><a href="#" data-action="mem-jump" data-memaddr="${b.pc}" style="color: var(--ss-accent);">${escapeHtml(b.pc)}</a></td>
+              <td style="text-align:right; padding: 2px 4px;">${timeMs.toFixed(1)}ms</td>
+              <td style="text-align:right; padding: 2px 4px;">${b.pct?.toFixed(1)}%</td>
+              <td style="text-align:right; padding: 2px 4px;">${b.count?.toLocaleString()}</td>
+              <td style="text-align:right; padding: 2px 4px;">${b.avgNs?.toFixed(0)}ns</td>
+              <td style="padding: 2px 4px 2px 8px;"><div style="background: var(--ss-danger); height: 10px; width: ${barWidth}px; border-radius: 2px;"></div></td>
+            </tr>`;
+          }).join("")}
+        </table>
+      `;
+
+      // Wire up PC links
+      el.querySelectorAll("[data-action='mem-jump']").forEach(link => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const addr = (link as HTMLElement).dataset.memaddr;
+          if (addr) {
+            const addrInput = document.getElementById("insp-mem-addr") as HTMLInputElement;
+            if (addrInput) addrInput.value = addr;
             document.querySelectorAll(".inspector-toolbar__tab").forEach(t => t.classList.remove("inspector-toolbar__tab--active"));
             document.querySelector('[data-panel="memory"]')?.classList.add("inspector-toolbar__tab--active");
             document.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");

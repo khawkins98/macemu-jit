@@ -49,6 +49,7 @@ extern uint8 *ROMBaseHost;
 #include "cpu/jit/aarch64/jit-heartbeat.hpp"
 #include <cstddef>
 #include <unordered_map>
+#include <mach/mach_time.h>
 
 // B1 execution-weighted profiler: per-PC block execution counts.
 // Lightweight: one hash-map increment per block dispatch. Guarded by
@@ -61,6 +62,45 @@ static uint64_t jit_profile_total = 0;
 // Fallback trace: per-PC fallback counts (blocks that went to interpreter instead of JIT)
 static std::unordered_map<uint32_t, uint64_t> jit_fallback_counts;
 static uint64_t jit_fallback_total = 0;
+
+// P3 flame chart: per-PC cumulative execution time (mach_absolute_time ticks)
+static std::unordered_map<uint32_t, uint64_t> jit_profile_time;
+static mach_timebase_info_data_t jit_timebase = {0, 0};
+
+static double jit_ticks_to_ns(uint64_t ticks) {
+	if (jit_timebase.denom == 0) mach_timebase_info(&jit_timebase);
+	return (double)ticks * jit_timebase.numer / jit_timebase.denom;
+}
+
+// Returns top N blocks by time as JSON
+extern "C" void jit_profile_time_get_json(char *buf, int bufsz, int top_n) {
+	if (!jit_profile_enabled || jit_profile_time.empty()) {
+		snprintf(buf, bufsz, "{\"enabled\":false,\"blocks\":[]}");
+		return;
+	}
+	std::vector<std::pair<uint32_t, uint64_t>> sorted(jit_profile_time.begin(), jit_profile_time.end());
+	std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+	if (top_n > (int)sorted.size()) top_n = sorted.size();
+	if (top_n > 100) top_n = 100;
+
+	uint64_t total_time = 0;
+	for (const auto &p : jit_profile_time) total_time += p.second;
+
+	int pos = 0;
+	pos += snprintf(buf + pos, bufsz - pos,
+		"{\"enabled\":true,\"totalTimeNs\":%.0f,\"blocks\":[", jit_ticks_to_ns(total_time));
+	for (int i = 0; i < top_n && pos < bufsz - 200; i++) {
+		if (i > 0) pos += snprintf(buf + pos, bufsz - pos, ",");
+		double ns = jit_ticks_to_ns(sorted[i].second);
+		double pct = total_time > 0 ? (100.0 * sorted[i].second / total_time) : 0;
+		uint64_t count = jit_profile_counts.count(sorted[i].first) ? jit_profile_counts[sorted[i].first] : 0;
+		double avg_ns = count > 0 ? ns / count : 0;
+		pos += snprintf(buf + pos, bufsz - pos,
+			"{\"pc\":\"0x%08x\",\"timeNs\":%.0f,\"pct\":%.2f,\"count\":%llu,\"avgNs\":%.1f}",
+			sorted[i].first, ns, pct, (unsigned long long)count, avg_ns);
+	}
+	pos += snprintf(buf + pos, bufsz - pos, "]}");
+}
 
 extern "C" void jit_fallback_get_json(char *buf, int bufsz, int top_n) {
 	if (!jit_profile_enabled || jit_fallback_counts.empty()) {
@@ -1339,12 +1379,16 @@ void powerpc_cpu::execute(uint32 entry)
 								if (jit_verify_n_insns == 0)
 									jit_verify_n_insns = jblk.n_insns; /* freshly compiled */
 							}
-						// B1 profiler: count block executions (guarded, ~0 cost when off)
+						// B1 profiler: count block executions + timing (guarded, ~0 cost when off)
 						if (__builtin_expect(jit_profile_enabled, false)) {
 							jit_profile_counts[jit_block_start_pc]++;
 							jit_profile_total++;
-						}
+							uint64_t t0 = mach_absolute_time();
+							fn((void*)regs_ptr());
+							jit_profile_time[jit_block_start_pc] += mach_absolute_time() - t0;
+						} else {
 						fn((void*)regs_ptr());
+						}
 						if (__builtin_expect(chain_log_enabled && jit_block_start_pc == 0x50132ec8, false)) {
 							static int chain_log_budget = 20;
 							if (chain_log_budget > 0) {

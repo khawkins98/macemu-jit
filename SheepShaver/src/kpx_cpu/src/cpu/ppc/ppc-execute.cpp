@@ -56,6 +56,29 @@
 
 void powerpc_cpu::execute_illegal(uint32 opcode)
 {
+	/* SS_LOG_ILLEGAL=1: log every undecoded opcode reaching this handler, with
+	 * special attention to mtmsr (op31/XO146) and the MSR[VEC] bit (0x02000000).
+	 * Probe for AltiVec-detection task #21: does the OS try to enable the vector
+	 * unit via an mtmsr WRITE that we currently silently drop? Placed at the very
+	 * top so it fires in SS_TEST_HEX mode (probe self-validation) and before the
+	 * ignoreillegal early-return that would otherwise swallow the op silently. */
+	if (getenv("SS_LOG_ILLEGAL") && *getenv("SS_LOG_ILLEGAL") &&
+	    *getenv("SS_LOG_ILLEGAL") != '0') {
+		uint32 primary = opcode >> 26;
+		uint32 xo = (opcode >> 1) & 0x3FF;
+		if (primary == 31 && xo == 146) { /* mtmsr */
+			uint32 rs = (opcode >> 21) & 0x1F;
+			uint32 val = gpr(rs);
+			fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsr pc=%08x op=%08x rS=r%u val=%08x MSR[VEC]=%s\n",
+			        pc(), opcode, rs, val, (val & 0x02000000) ? "SET" : "clear");
+		} else if (primary == 31 && xo == 178) { /* mtmsrd (64-bit, unlikely) */
+			fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsrd pc=%08x op=%08x\n", pc(), opcode);
+		} else {
+			fprintf(stderr, "[SS_LOG_ILLEGAL] illegal pc=%08x op=%08x primary=%u xo=%u\n",
+			        pc(), opcode, primary, xo);
+		}
+	}
+
 	/* In opcode test mode, illegal instruction = clean exit */
 	if (getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) {
 		spcflags().set(SPCFLAG_CPU_EXEC_RETURN);

@@ -3,6 +3,32 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — AltiVec detection is NOT an `mtmsr`/MSR[VEC] path — the gate is upstream (gestalt `'ppcf'`)
+
+Probed the hypothesis "the OS enables AltiVec by writing MSR[VEC] via `mtmsr`, which we silently drop."
+**Result: falsified.** Added an env-gated diagnostic (`SS_LOG_ILLEGAL=1`) at the top of
+`execute_illegal` (ppc-execute.cpp) that logs every undecoded opcode, decoding `mtmsr` (op31/XO146) and
+testing the MSR[VEC] bit `0x02000000` of rS. Confirmed the path is real first: `mtmsr` is **not**
+NOP-stubbed in the JIT — `compile_one` returns false → `emit_inline_interp_call` → `ppc_jit_interp_one`
+→ `jit_interp_one` → `decode()` → `execute_illegal` (validated with `SS_TEST_HEX=7C600124`, fires in
+both JIT and interp). Then booted **Mac OS 9 + Fractal Carbon (the AltiVec app)** via the sanctioned E2E
+workload (`SS_LOG_ILLEGAL=1 make e2e-workload`; make exports env → recipe child inherits, verified):
+**ZERO `mtmsr` and zero illegal opcodes across the entire boot+launch+render+shutdown.**
+
+Interpretation (consistent with the [AltiVec-dormant finding](#2026-06-07--altivec-may-be-unreachable-by-real-guest-software-despite-pvrg4--our-vector-codegen-unexercised)):
+`mtmsr`-enable is *downstream* of detection. Because the gestalt `'ppcf'`
+(gestaltPowerPCProcessorFeatures) **vector bit is not set**, no app issues AltiVec, so nothing ever
+needs to enable MSR[VEC] → no `mtmsr`. **The lever is the gestalt `'ppcf'` computation, which is
+System-side** (`'ppcf'` = 17 hits in the Mac OS 9 System file on disk, 0 in the OldWorld ROM).
+SCOPE REFRAME (per advisor): this is NOT a contained CPU-model fix and NOT a ROM-patch. Two cheap
+ROM-agnostic follow-on probes remain: (1) static-disassemble the `'ppcf'` computation to see what it
+reads — PVR-direct → ROM-orthogonal (NewWorld ROM won't help); ROM-table → NewWorld *might* matter;
+(2) experimentally force the `'ppcf'` vector bit and observe whether the guest then emits AltiVec
+blocks — but a gestalt-only hack is **unsafe** in production without VR context-switch save/restore.
+NewWorld ROM is worth doing for **Mac OS 9.1/9.2 support**, but is unlikely to be the AltiVec unlock —
+don't bundle the two. The `SS_LOG_ILLEGAL` diagnostic was kept (cheap, env-gated, reusable for any
+undecoded-opcode triage).
+
 ## 2026-06-07 — FP register allocator (P5b) landed in one session via a staged "RA-aware bridge"
 
 The FP RA looked like a High-effort multi-session job, but two design choices made it a safe single

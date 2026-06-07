@@ -1121,6 +1121,32 @@ static void emit_vpk_h2b(int va, int vb, int vd, uint32_t qxtn_lo, uint32_t qxtn
 	emit_store_vr(2, vd);
 }
 
+/* AltiVec saturating WORD->HALFWORD pack (vpkswss/vpkswus/vpkuwus) -- ev_mixed-aware.
+ * Like emit_vpk_h2b but element sizes shift up: source words, dest halfwords.
+ *   1. REV32.16B both -> NEON .4S lanes hold the correct PPC WORD values in order
+ *      (word_element is identity, so no REV16 needed on input — only the in-word byte
+ *      reverse REV32 undoes).
+ *   2. [SU]QXTN  v2.4H, vA.4S -> vA's 4 saturated halfwords in lanes 0-3 (low half).
+ *      [SU]QXTN2 v2.8H, vB.4S -> vB's 4 in lanes 4-7 (high half).
+ *   3. Output is HALFWORDS -> ev_mixed store normalize = inverse of the halfword load
+ *      normalize (REV32 then REV16), i.e. REV16.16B then REV32.16B.
+ * Narrow encodings (.4S->.4H, size=01): SQXTN .4H=0x0E614800/.8H=0x4E614800;
+ * SQXTUN .4H=0x2E612800/.8H=0x6E612800; UQXTN .4H=0x2E614800/.8H=0x6E614800. */
+static void emit_vpk_w2h(int va, int vb, int vd, uint32_t qxtn_lo, uint32_t qxtn2_hi)
+{
+	emit_load_vr(0, va); emit_load_vr(1, vb);
+	/* NO input normalize: raw .4S lanes already hold the correct PPC word VALUES in order
+	 * (word_element is identity, and NEON's little-endian .4S read cancels the ev_mixed
+	 * in-word byte reverse). A REV32 here would byte-swap the words — the bug just fixed. */
+	emit32(qxtn_lo  | (0 << 5) | 2); /* [SU]QXTN  v2.4H, v0.4S (vA -> low 4 halfwords) */
+	emit32(qxtn2_hi | (1 << 5) | 2); /* [SU]QXTN2 v2.8H, v1.4S (vB -> high 4 halfwords) */
+	/* halfword-output ev_mixed store = swap adjacent halfwords within each word, values
+	 * intact = REV32.16B (swap halfwords + byteswap each) then REV16.16B (undo byteswap). */
+	emit32(0x6E200800 | (2 << 5) | 2); /* REV32.16B v2 */
+	emit32(0x4E201800 | (2 << 5) | 2); /* REV16.16B v2 */
+	emit_store_vr(2, vd);
+}
+
 /* AltiVec even/odd BYTE multiply (vmul{o,e}{u,s}b) -- ev_mixed-aware widening.
  * Two bugs the old codegen had: it emitted a non-widening MUL.8B (must widen 8x8->16),
  * and it ignored ev_mixed even/odd element selection. Fix, on REV32.16B-normalized
@@ -3763,12 +3789,12 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 398: emit_vpk_h2b(va, vb, vd, 0x0E214800, 0x4E214800); return true; /* vpkshss SQXTN */
 		case 270: emit_vpk_h2b(va, vb, vd, 0x2E212800, 0x6E212800); return true; /* vpkshus SQXTUN */
 		case 142: emit_vpk_h2b(va, vb, vd, 0x2E214800, 0x6E214800); return true; /* vpkuhus UQXTN */
-		/* WORD->halfword saturating packs (462/334/206) still use the old (broken)
-		 * single-narrow path — separate fix pass (different normalize: word values +
-		 * halfword output ordering). Tracked: ALTIVEC-SHIFT-ROTATE-BUGS.md. */
-		case 462: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E616800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswus SQXTUN.4H (BROKEN) */
-		case 334: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x0E614800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkswss SQXTN.4H (BROKEN) */
-		case 206: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x2E612800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwus UQXTN.4H (BROKEN) */
+		/* WORD->halfword saturating packs via emit_vpk_w2h (2026-06-07). XOs:
+		 * 462=vpkswss (signed->signed, SQXTN), 334=vpkswus (signed->unsigned, SQXTUN),
+		 * 206=vpkuwus (unsigned->unsigned, UQXTN). */
+		case 462: emit_vpk_w2h(va, vb, vd, 0x0E614800, 0x4E614800); return true; /* vpkswss SQXTN.4H */
+		case 334: emit_vpk_w2h(va, vb, vd, 0x2E612800, 0x6E612800); return true; /* vpkswus SQXTUN.4H */
+		case 206: emit_vpk_w2h(va, vb, vd, 0x2E614800, 0x6E614800); return true; /* vpkuwus UQXTN.4H */
 		case 814: emit_load_vr(0,vb); emit32(0x0E212800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupkhsb SXTL.8H (unpack high signed byte) */
 		case 878: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupkhsh SXTL.4S */
 		case 942: emit_load_vr(0,vb); emit32(0x4E212800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupklsb SXTL2.8H */

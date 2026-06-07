@@ -134,6 +134,17 @@ def packop(xo): return load_bytes(1,_PK_A)+load_bytes(3,_PK_B)+[vx(2,1,3,xo)]+gr
 p("av_vpkshss", packop(398), "vpkshss: halfword->byte signed source, signed-saturate (SQXTN)")
 p("av_vpkshus", packop(270), "vpkshus: halfword->byte signed source, unsigned-saturate (SQXTUN)")
 p("av_vpkuhus", packop(142), "vpkuhus: halfword->byte unsigned source, unsigned-saturate (UQXTN)")
+# --- saturating WORD->halfword packs FIXED 2026-06-07 (ppc-jit.cpp emit_vpk_w2h): NO input
+# normalize (raw .4S already = correct word values; word_element identity), [SU]QXTN/QXTN2
+# .4S->.4H (vA low, vB high), then halfword-output normalize REV32+REV16. Word operands cross
+# the int16 saturation boundaries (negatives + >65535 + >32767) so signedness is DISTINCT.
+# big-endian words: vA={00000001,00010000,00008000,80000000}, vB={FFFF0000,00007FFF,12345678,0000FFFF}.
+_PKW_A=[0x00,0x00,0x00,0x01, 0x00,0x01,0x00,0x00, 0x00,0x00,0x80,0x00, 0x80,0x00,0x00,0x00]
+_PKW_B=[0xFF,0xFF,0x00,0x00, 0x00,0x00,0x7F,0xFF, 0x12,0x34,0x56,0x78, 0x00,0x00,0xFF,0xFF]
+def packwop(xo): return load_bytes(1,_PKW_A)+load_bytes(3,_PKW_B)+[vx(2,1,3,xo)]+grab()
+p("av_vpkswss", packwop(462), "vpkswss: word->halfword signed source, signed-saturate (SQXTN.4H)")
+p("av_vpkswus", packwop(334), "vpkswus: word->halfword signed source, unsigned-saturate (SQXTUN.4H)")
+p("av_vpkuwus", packwop(206), "vpkuwus: word->halfword unsigned source, unsigned-saturate (UQXTN.4H)")
 # --- variable byte shifts: FIXED 2026-06-06 (ppc-jit.cpp case 260/516/772). Were
 # emitting unmasked, signed, rounding NEON shifts; vsrb shifted the wrong direction.
 # data=0x80..0x8F (high bit -> logical vs arith fill), amounts=0x00..0x0F (>=8 -> mask mod 8). ---

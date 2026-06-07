@@ -16,9 +16,11 @@ only making the existing slice faster. The work is sequenced so each phase rests
    harness, end-to-end boot/workload harness, Speedometer/MacBench capture, a per-block profiler). The
    safety net that makes everything after it measurable.
 3. **Widen emulation** 🔜 *(emerging primary thrust)* — close the structural gaps SheepShaver never
-   could (e.g. AltiVec actually reachable by guest software, fuller device/OS modeling), correctness
-   first, measured continuously against the Phase-2 benchmarks. [DingusPPC](https://github.com/dingusdev/dingusppc)
-   is our reference for fuller PPC-Mac-stack modeling.
+   could, correctness first, measured continuously against the Phase-2 benchmarks. **First win:
+   preliminary AltiVec (Velocity Engine) support** — the JIT translates PowerPC AltiVec → ARM64 NEON,
+   and with the opt-in `altivec` pref a real app (AltiVec Fractal Carbon) now detects and runs its
+   vector kernel through the JIT (see below). [DingusPPC](https://github.com/dingusdev/dingusppc) is
+   our reference for fuller PPC-Mac-stack modeling.
 4. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, HLE), with the
    benchmarks gating every change against regressions.
 
@@ -87,6 +89,22 @@ cd SheepShaver && ./jit-test/run.sh
 # Expected: score=100 (fail=0, pass==total).
 # The vector count is not fixed — it drifts as vectors are added; query it with: make harness-count
 ```
+
+### AltiVec (Velocity Engine) — preliminary support
+
+The AArch64 JIT **does** translate PowerPC AltiVec vector instructions to native ARM64 NEON (it's
+JIT-compiled, not interpreted) — extensively hardened against an interpreter oracle (`make test-jit`).
+What was historically missing wasn't the codegen but *detection*: under SheepShaver's OldWorld ROM the
+guest OS never advertises a vector unit, so apps fell back to scalar code.
+
+Set **`altivec true`** in your prefs to advertise AltiVec to the guest. With it, AltiVec Fractal Carbon
+detects the Velocity Engine and runs its vector kernel through the JIT (verified via the profiler:
+`SS_JIT_PROFILE` → `[JIT-COMPILED-MIX] AltiVec=N`, with AltiVec blocks in the hot path).
+
+It's **opt-in / preliminary**: Mac OS 8.6/9.0 here don't save/restore vector registers across task
+switches, so it's safe for a focused compute app but not yet general-purpose multitasking vector use;
+and `VSCR[SAT]` is not modeled. Making it fully safe (model VR context save/restore) is on the roadmap
+(§B5). See [`SheepShaver/docs/USER-HANDBOOK.md`](SheepShaver/docs/USER-HANDBOOK.md) for the caveat.
 
 ### Known limitations
 

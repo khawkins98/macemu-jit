@@ -62,6 +62,15 @@ Integer values accept `K`, `M`, `G` suffixes and `0x` hex prefix.
 | `vncserver` | bool | false | Enable VNC server for headless access |
 | `jitcachesize` | int | 256M | JIT code cache size (virtual memory, no cost until used) |
 | `vncport` | int | 5999 | VNC server port |
+| `altivec` | bool | false | **Advertise AltiVec (Velocity Engine) to the guest** so apps detect and use the vector unit. The JIT always compiles AltiVec→ARM64 NEON; this only registers the `'ppcf'` gestalt the guest OS otherwise lacks under the OldWorld ROM. **Opt-in** — see caveat below. |
+
+> **`altivec` caveat.** The AArch64 JIT translates PowerPC AltiVec to ARM NEON regardless of this
+> pref; `altivec true` only makes Mac OS *report* a vector unit so apps take their AltiVec path
+> (verified: AltiVec Fractal Carbon then runs its vector kernel through the JIT). It's **off by
+> default** because Mac OS 8.6/9.0 in SheepShaver's OldWorld environment don't save/restore the
+> vector registers across task switches — safe for a single compute app, but advertising AltiVec
+> system-wide risks vector-state corruption under heavy multitasked vector use. Enable it when you
+> want a specific AltiVec app to use the vector unit. (Dev override: `SS_FORCE_ALTIVEC=1`/`=0`.)
 
 ## Shutdown and Restart
 
@@ -126,6 +135,8 @@ A register allocator caches PPC GPRs in ARM64 callee-saved registers
 | `SS_JIT_TRACE_RING=1` | Enable block-level execution history ring |
 | `SS_JIT_CACHE_KB=N` | Override code cache size in KB (default 262144 = 256 MB) |
 | `SS_JIT_DIAG_LOG=/path` | Override diagnostic log path |
+| `SS_JIT_PROFILE=/path` | Write an execution profile on clean shutdown (hot blocks + `[JIT-COMPILED-MIX]` per-class op counts incl. `AltiVec=N`) |
+| `SS_FORCE_ALTIVEC=1`/`=0` | Dev override for the `altivec` pref (force AltiVec advertisement on/off regardless of prefs) |
 
 ### Benchmarking
 

@@ -50,6 +50,7 @@ Representative (real chaining/everything) but needs a reasonably quiet host. The
 | 2026-06-07 | **Speedometer (compute)** | **2413** | 141M/s | **9.79** | JIT — **2.3× the boot guest-MIPS** (compute isn't I/O-bound); a64/guest-op 9.79 ≪ boot's 14.6 because Speedometer's hot blocks are large (20–163 insns) so per-block prologue/epilogue amortizes far better |
 | 2026-06-07 | **Fractal Carbon** (pre-single-prec FP RA) | 1046 | 111M/s | 12.88 | JIT — ⚠️ runs its **scalar-FP path, NOT AltiVec** (#19); hot loop is **single-precision** FP (`fmuls`/`fmadds`/`fsubs`/`fnmsubs` + `fmr`, opcode 59). Unchanged by the double-only P5b MVP. |
 | 2026-06-07 | **Fractal Carbon** (+ single-prec FP RA) | **1132** | 122M/s | 12.75 | JIT — single-precision FP RA conversion: **guest-MIPS +8%** (1046→1132), render 18.3→15.3s (−16.6%, but render is poll-quantized/visual-convergence → coarse; MIPS is the finer signal). The store→load-serialization win doesn't show in whole-block-weighted a64/op (12.88→12.75). Confirms the FP RA helps FC's FP-bound loop. |
+| 2026-06-07 | **Fractal Carbon — AltiVec path** (`altivec true`) | 654* | 91M/s | 13.81 | JIT — ⭐ **MILESTONE: FC now runs its AltiVec kernel** (#21/#26 SOLVED). `[JIT-COMPILED-MIX] AltiVec=160`, multiple AltiVec hot blocks ~74M exec each (vs `AltiVec=0` with the pref off). This is the *structural* proof the JIT compiles+runs real-app AltiVec→NEON. **\*The MIPS figure is NOT a clean perf A/B** — the AltiVec vs FP runs weren't identically driven (FC was launched, not driven to a fixed workload), so MIPS/render aren't comparable across paths here. A controlled AltiVec-on-vs-off perf delta needs the Carbon-menu driver (ROADMAP S5b). |
 | _TODO_ | boot→Finder (ISO) | — | — | — | interpreter (`SS_USE_JIT=0`) — produces no JIT profile (interpreter compiles no blocks); use Speedometer score ratio instead for the headline |
 
 The interpreter-vs-JIT guest-MIPS ratio is the headline "how much the JIT buys us" —
@@ -159,7 +160,10 @@ Desktop confirmed via VNC screenshot (menu bar + Finder window visible).
 - [x] Run-profile guest-MIPS (JIT boot = 1037 MIPS) — established 2026-06-06 (#2)
 - [ ] **Interpreter boot guest-MIPS** (`SS_USE_JIT=0`) — the JIT-vs-interpreter headline ratio; emulator-gated
 - [ ] **Fresh Speedometer (JIT + interpreter)** — pending the e2e bench completion-detection fix
-- [ ] **Fractal Carbon (AltiVec) run-profile** — the third workload profile, once the emulator is free
+- [x] **Fractal Carbon (AltiVec) run-profile** — ✅ 2026-06-07: with `altivec true`, FC runs its AltiVec
+  kernel through the JIT (`[JIT-COMPILED-MIX] AltiVec=160`; see the table row above). **Remaining: a
+  CONTROLLED AltiVec-on-vs-off perf A/B** (identical workload via the Carbon-menu driver, ROADMAP S5b) —
+  the current MIPS figures aren't comparable across paths.
 - [ ] **Power Fractal 1.4.1 (Carbon CFM) — absolute-GFLOPS reference** (Dauger Research). Self-reports GigaFlops, so it yields a citable number against real PowerPC hardware: **G4/450 ≈ 1.5 GFLOPS, DPG5/2GHz ≈ 13.5 GFLOPS** (single-machine). AltiVec when present but computes on single-CPU too → runs on our guest. Carbon CFM build needs OS 8.5+/CarbonLib 1.2+ (we have 1.6). Install host-side onto the apps disk like Fractal Carbon. See `MACOS9-STRESS-WORKLOADS.md` (AltiVec pick 1b). The "our JIT vs a real G4" headline.
 - [ ] MacBench 5.0 benchmark (requires HD install)
 - [ ] Application launch timing (SimpleText, TeachText)

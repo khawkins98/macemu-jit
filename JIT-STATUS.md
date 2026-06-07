@@ -174,7 +174,7 @@ VNC keyboard and mouse work for remote control:
 | FP move/convert | 7 | ✅ fmr/fneg/fabs/fnabs/frsp/fctiw/fctiwz/fsel/frsqrte |
 | FP compare | 2 | ✅ fcmpu/fcmpo |
 | FPSCR | 5 | ✅ mffs/mtfsf/mtfsfi/mtfsb0/mtfsb1/mcrfs — syncs ARM64 FPCR rounding |
-| AltiVec (NEON) | 140 | ✅ Full VMX via AArch64 NEON intrinsics |
+| AltiVec (NEON) | 140 | ✅ Full VMX via AArch64 NEON. **Reachable by real apps via the opt-in `altivec` pref** (registers the `'ppcf'` gestalt; verified: Fractal Carbon runs its vector kernel through the JIT — 2026-06-07). Codegen validated by `make test-jit` (incl. the 2026-06-07 sum-across/shift/round XO-scramble + saturation fixes). |
 | Cache/Sync/NOP | 8 | ✅ dcbf/dcbst/dcbt/dcbtst/dcba/icbi/isync/sync/eieio |
 | System | 4 | ✅ sc/mfmsr/eciwx/ecowx (terminators/NOPs) |
 | **Total** | **285** | **+ all record forms (. suffix)** |

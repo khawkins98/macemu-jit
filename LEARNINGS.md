@@ -3,6 +3,20 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+---
+**⭐ BOTTOM LINE — AltiVec (read this first; the entries below are the journey, incl. one wrong turn).**
+Real-app AltiVec WORKS end-to-end as of 2026-06-07. The AArch64 JIT always compiles PPC AltiVec→ARM64
+NEON (validated by `make test-jit`, 349/349). The only gap was *detection*: under the OldWorld 1.1 ROM
+the guest never registers the `'ppcf'` gestalt, so apps ran scalar. Fix = **opt-in `altivec` pref**
+(`prefs_items.cpp`; `SS_FORCE_ALTIVEC` env = dev override) → `emul_op.cpp force_altivec_idle_service`
+registers `'ppcf'` via `_NewGestalt $A3AD` with the vector-feature mask **`0x10` = `1<<gestaltPowerPC`
+`HasVectorInstructions` (bit 4 — NOT 0x40, that's the 64-bit bit; the 0x40 typo caused a multi-hour
+wrong "FC ignores gestalt" detour)**. Verified: AltiVec Fractal Carbon detects AltiVec and runs its
+vector kernel through the JIT (`SS_JIT_PROFILE` → `[JIT-COMPILED-MIX] AltiVec=160`). Opt-in/default-off
+because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadmap: ROADMAP §B5;
+`docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
+---
+
 ## 2026-06-07 — AltiVec FORCE WORKS: 'ppcf' is UNREGISTERED (8.6 AND 9.0); we register it ourselves
 
 Big progress on the AltiVec de-risk (task #26), user-authorized live boots (isolated config, VNC, clean

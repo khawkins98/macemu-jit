@@ -711,9 +711,27 @@ static bool patch_nanokernel_boot(void)
 	lp = (uint32 *)(ROMBaseHost + base);
 	*lp = htonl(0x81800000 + XLM_PVR);	// lwz	r12,(theoretical PVR)
 
-	// Set CPU specific data (even if ROM doesn't have support for that CPU)
-	if (ntohl(lp[6]) != 0x2c0c0001)
-		return false;
+	// Set CPU specific data (even if ROM doesn't have support for that CPU).
+	//
+	// PARCELS layout (2001+ G4-aware ROMs, e.g. 9.0.1/9.2.x): the inline CPU-detect was
+	// restructured, so lp[6] is no longer `cmpwi r12,1` (it's a BAT/SPR-clear init). On those ROMs
+	// this per-CPU-data injection is UNNECESSARY: mfpvr already returns our faked PVR (default
+	// 0x000c0000 = 7400; ppc-execute.cpp SPR_PVR), and the ROM's OWN CPU-detect chain (e.g. 0x310a1c
+	// on 9.0.1: cmpwi r12,1/3/4/.../0xc/0xd -> common handler) has a native 7400 (0xc) entry that
+	// selects the right per-CPU data itself. So SKIP the injection and derive `loc` (the per-CPU
+	// handler, used by the SPRG3/MQ/MSR/DEC neutralizations below) from the ROM's own detect chain.
+	// Gated on g_rom_904_lenient (set only for the 9.0.4 cksum or SS_ROM_LENIENT), and lp[6] only
+	// ever differs on parcels — so the 1.1 LZSS path (lp[6] == 0x2c0c0001) is byte-identical.
+	if (ntohl(lp[6]) != 0x2c0c0001) {
+		if (!g_rom_904_lenient) return false;
+		static const uint8 cpudet_dat[] = {0x2c, 0x0c, 0x00, 0x01};	// cmpwi r12,1 (chain head)
+		uint32 cd;
+		if ((cd = find_rom_data(0x310000, 0x320000, cpudet_dat, sizeof(cpudet_dat))) == 0) return false;
+		uint32 beqw = ntohl(*(uint32 *)(ROMBaseHost + cd + 8));		// chain: cmpwi; addi; beq
+		loc = (uint32)((cd + 8) + (int32)(int16)(beqw & 0xfffc));	// follow beq -> common handler
+		fprintf(stderr, "[ROMPATCH] parcels: per-CPU-data injection SKIPPED (ROM self-handles faked "
+		        "PVR=%08x); CPU-detect @%06x, handler loc=%06x\n", PVR, cd, loc);
+	} else {
 	uint32 ofs = ntohl(lp[7]) & 0xffff;
 	D(bug("ofs %08lx\n", ofs));
 	lp[8] = htonl((ntohl(lp[8]) & 0xffff) | 0x48000000);	// beq -> b
@@ -845,6 +863,7 @@ static bool patch_nanokernel_boot(void)
 		default:
 			printf("WARNING: Unknown CPU type\n");
 			break;
+	}
 	}
 
 	// Don't set SPRG3, don't test MQ

@@ -4934,6 +4934,27 @@ static void jit_profile_dump(void)
 		}
 	}
 
+	/* SS_JIT_PROFILE_PC=<hexpc>[,<hexpc>...]: print the execution count for SPECIFIC block PCs,
+	 * even if they're not in the top-40 (e.g. the _CopyBits entry PC from SS_COPYBITS_TRACE, to get
+	 * its call frequency under a graphics workload). Scans all profiled slots. */
+	if (const char *pcs = getenv("SS_JIT_PROFILE_PC")) {
+		fprintf(out, "[JIT-PROFILE-PC] requested block PCs (exec count):\n");
+		const char *p = pcs;
+		while (*p) {
+			uint32_t want = (uint32_t)strtoul(p, NULL, 16);
+			uint64_t cnt = 0; int found = 0;
+			for (int i = 0; i < n; i++) {
+				struct jit_prof_slot *s = &jit_prof_slots[order[i]];
+				if (s->pc == want) { cnt = s->count; found = 1; break; }
+			}
+			fprintf(out, "  %08x : %s%llu%s\n", want, found ? "" : "(not compiled) ",
+			        (unsigned long long)cnt, found ? " executions" : "");
+			const char *comma = strchr(p, ',');
+			if (!comma) break;
+			p = comma + 1;
+		}
+	}
+
 	if (f) { fclose(f); fprintf(stderr, "[JIT-PROFILE] written to %s\n", path); }
 }
 

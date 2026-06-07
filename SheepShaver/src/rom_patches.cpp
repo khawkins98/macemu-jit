@@ -620,6 +620,14 @@ bool PatchROM(void)
 			g_rom_904_lenient = true;
 			fprintf(stderr, "[ROMPATCH] 9.0.4 G4 ROM (cksum %08x) detected — lenient patch mode ON (experimental)\n", cksum);
 		}
+		// SS_ROM_LENIENT=1: diagnostic override — force lenient mode for ANY ROM (e.g. the versioned
+		// New World parcels ROMs whose 31 relocated patches the whole-image fallback auto-resolves).
+		// Lets us probe how far PatchROM gets on a new ROM without hardcoding its checksum. The ~17
+		// absent patches still need RE; this just stops the early relocated-pattern aborts.
+		else if (getenv("SS_ROM_LENIENT") && ROMType == ROMTYPE_NEWWORLD) {
+			g_rom_904_lenient = true;
+			fprintf(stderr, "[ROMPATCH] SS_ROM_LENIENT — lenient patch mode FORCED for NewWorld ROM (cksum %08x, diagnostic)\n", cksum);
+		}
 	}
 
 	// Check that other ROM addresses point to really free regions

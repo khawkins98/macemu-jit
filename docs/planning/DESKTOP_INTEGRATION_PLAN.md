@@ -702,7 +702,7 @@ occurred, what was slow. This is the JIT equivalent of a flame chart.
   file (JSON or binary). Timestamped.
 - [x] **Session timeline** — replay the recording as a scrollable waterfall. X-axis = time,
   Y-axis = events. Zoom in/out. Click an event to see its detail.
-- [ ] **Fallback trace** — log every interpreter fallback with the PC and opcode (needs a new
+- [x] **Fallback trace** — log every interpreter fallback with the PC and opcode (needs a new
   emitter in `ppc-cpu.cpp`, guarded by an env var or RPC command to avoid overhead when not
   recording). This is the "why was this slow?" data.
 - [x] **Export/share** — save the session as a `.sheepshaver-profile` file that can be reopened

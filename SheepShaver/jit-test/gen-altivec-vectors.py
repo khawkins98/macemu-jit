@@ -162,6 +162,15 @@ p("av_vpkuwus", packwop(206), "vpkuwus: word->halfword unsigned source, unsigned
 _PKM_A=[0x11,0x11,0xAA,0xAA, 0x22,0x22,0xBB,0xBB, 0x33,0x33,0xCC,0xCC, 0x44,0x44,0xDD,0xDD]
 _PKM_B=[0x55,0x55,0xEE,0xEE, 0x66,0x66,0x00,0x01, 0x77,0x77,0x00,0x02, 0x88,0x88,0x00,0x03]
 p("av_vpkuwum", load_bytes(1,_PKM_A)+load_bytes(3,_PKM_B)+[vx(2,1,3,78)]+grab(), "vpkuwum: word->halfword modulo (low 16 bits, XTN)")
+# vpkpx FIXED 2026-06-07 (ppc-jit.cpp emit_vpkpx): pack 4+4 words -> 8 1-5-5-5 pixels via per-word
+# USHR+AND bit-field extract ((a>>9)&0xfc00 | (a>>6)&0x3e0 | (a>>3)&0x1f) then word->halfword pack tail.
+# Distinct words exercising all 3 fields + the high bits that DON'T appear in the pixel (so a missing
+# mask diverges). Words built one-per-stw via a 4-word lvx load.
+def _lw4(vT, words):
+    out=[]
+    for k,w in enumerate(words): out+=[lis(3,(w>>16)&0xFFFF), ori(3,w&0xFFFF), stw(3,OFF+k*4,1)]
+    return out+[li(3,OFF), lvx(vT,1,3)]
+p("av_vpkpx", _lw4(1,[0xFFAABBCC,0x12345678,0x80FF00FF,0x00010203])+_lw4(3,[0xDEADBEEF,0xCAFEBABE,0x7FFFFFFF,0x01020304])+[vx(2,1,3,782)]+grab(), "vpkpx: pack 4+4 words -> 1-5-5-5 pixels")
 # --- variable byte shifts: FIXED 2026-06-06 (ppc-jit.cpp case 260/516/772). Were
 # emitting unmasked, signed, rounding NEON shifts; vsrb shifted the wrong direction.
 # data=0x80..0x8F (high bit -> logical vs arith fill), amounts=0x00..0x0F (>=8 -> mask mod 8). ---

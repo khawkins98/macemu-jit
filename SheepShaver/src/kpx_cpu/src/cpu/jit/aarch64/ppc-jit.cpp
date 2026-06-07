@@ -1149,6 +1149,38 @@ static void emit_vpk_w2h(int va, int vb, int vd, uint32_t qxtn_lo, uint32_t qxtn
 	emit_store_vr(2, vd);
 }
 
+/* AltiVec vpkpx — pack 4+4 words into 8 1-5-5-5 pixel halfwords (vA high half, vB low half).
+ * Per word a, the interpreter (execute_vector_pack_pixel) builds the 16-bit pixel as
+ *   ((a>>9)&0xfc00) | ((a>>6)&0x03e0) | ((a>>3)&0x001f)
+ * i.e. three bit-fields from a[24:19], a[15:11], a[7:3]. NEON has no pixel-pack, so extract
+ * each field with USHR.4S + AND-mask, OR them, then narrow .4S->.4H and use the word->halfword
+ * pack tail (XTN vA->low, XTN2 vB->high, REV32+REV16 halfword-output ev_mixed normalize).
+ * Words need no input normalize (raw .4S already = arch word). Masks materialized once (v5/v6/v7).
+ * All emit32 words capstone-verified. Scratch v0-v7 (caller-saved; FP RA owns v16-v23). */
+static void emit_vpkpx(int va, int vb, int vd)
+{
+	emit_load_vr(0, va); emit_load_vr(1, vb);
+	emit32(0x4F072786);                 /* MOVI v6.4s, #0xfc, LSL #8  -> 0x0000fc00 */
+	emit32(0x4F002467);                 /* MOVI v7.4s, #0x03, LSL #8  -> 0x00000300 */
+	emit32(0x4F071407);                 /* ORR  v7.4s, #0xe0          -> 0x000003e0 */
+	emit32(0x4F0007E5);                 /* MOVI v5.4s, #0x1f          -> 0x0000001f */
+	/* vA (v0) -> pixels in v2 */
+	emit32(0x6F370403); emit32(0x4E261C63);   /* USHR v3.4s,v0.4s,#9 ; AND v3.16b,v3,v6 */
+	emit32(0x6F3A0404); emit32(0x4E271C84);   /* USHR v4.4s,v0.4s,#6 ; AND v4.16b,v4,v7 */
+	emit32(0x6F3D0402); emit32(0x4E251C42);   /* USHR v2.4s,v0.4s,#3 ; AND v2.16b,v2,v5 */
+	emit32(0x4EA31C42); emit32(0x4EA41C42);   /* ORR v2.16b,v2,v3 ; ORR v2.16b,v2,v4 */
+	/* vB (v1) -> pixels in v0 (vA already consumed) */
+	emit32(0x6F370423); emit32(0x4E261C63);   /* USHR v3.4s,v1.4s,#9 ; AND v3.16b,v3,v6 */
+	emit32(0x6F3A0424); emit32(0x4E271C84);   /* USHR v4.4s,v1.4s,#6 ; AND v4.16b,v4,v7 */
+	emit32(0x6F3D0420); emit32(0x4E251C00);   /* USHR v0.4s,v1.4s,#3 ; AND v0.16b,v0,v5 */
+	emit32(0x4EA31C00); emit32(0x4EA41C00);   /* ORR v0.16b,v0,v3 ; ORR v0.16b,v0,v4 */
+	/* combine: vA pixels -> low 4 halfwords, vB -> high 4; then ev_mixed halfword normalize */
+	emit32(0x0E612842);                 /* XTN  v2.4h, v2.4s */
+	emit32(0x4E612802);                 /* XTN2 v2.8h, v0.4s */
+	emit32(0x6E200842); emit32(0x4E201842); /* REV32.16b v2 ; REV16.16b v2 */
+	emit_store_vr(2, vd);
+}
+
 /* AltiVec even/odd BYTE multiply (vmul{o,e}{u,s}b) -- ev_mixed-aware widening.
  * Two bugs the old codegen had: it emitted a non-widening MUL.8B (must widen 8x8->16),
  * and it ignored ev_mixed even/odd element selection. Fix, on REV32.16B-normalized
@@ -3830,18 +3862,12 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 1100: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E20B800|(1<<5)|1); emit32(0x6E205400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsr NEG+USHL.16B (negate shift, then shift left = right shift) */
 		case 1604: return true; /* mtvscr NOP */
 		case 1540: emit_load_imm32(RTMP0,0); emit32(0x4E010C00|(RTMP0<<5)|0); emit_store_vr(0,vd); return true; /* mfvscr - return 0 */
-case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
-			emit_load_vr(0, va); emit_load_vr(1, vb);
-			emit32(0x0E612800 | (1 << 16) | (0 << 5) | 0);
-			emit_store_vr(0, vd); return true;
-		case 974: /* vupkhpx — unpack high pixel (widen) */
-			emit_load_vr(0, vb);
-			emit32(0x2F10A400 | (0 << 5) | 0);
-			emit_store_vr(0, vd); return true;
-		case 1038: /* vupklpx — unpack low pixel */
-			emit_load_vr(0, vb);
-			emit32(0x6F10A400 | (0 << 5) | 0);
-			emit_store_vr(0, vd); return true;
+		case 782: /* vpkpx — pack 4+4 words to 8 1-5-5-5 pixels (ev_mixed-aware, 2026-06-07) */
+			emit_vpkpx(va, vb, vd); return true;
+		/* vupkhpx=846 / vupklpx=974 (unpack pixel): the prior codegen was mislabeled (974 was
+		 * tagged "vupkhpx") and used a plain widen, which is NOT the 1-5-5-5 expand the interp
+		 * does. Fall back to the interpreter until the per-op expand is implemented (next pass).
+		 * The bogus case 1038 (not a real pixel XO) is removed -> also interp. */
 		case 1928: /* vsum4ubs */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
 			emit32(0x6E202800 | (0 << 5) | 0);

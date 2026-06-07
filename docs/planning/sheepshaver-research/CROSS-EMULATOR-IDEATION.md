@@ -168,7 +168,8 @@ spuriously and desync interp/JIT). Frequency-probe first; payoff is small unless
 ## References
 - Existing plans this feeds: [`OPTIMIZATION-PLAN.md`](../OPTIMIZATION-PLAN.md) (R8/R9 + HLE),
   [`MULTICORE-OFFLOAD-PLAN.md`](../MULTICORE-OFFLOAD-PLAN.md),
-  [`MMU-NANOKERNEL-MP-PLAN.md`](../MMU-NANOKERNEL-MP-PLAN.md),
+  [`MMU-NANOKERNEL-MP-PLAN.md`](../MMU-NANOKERNEL-MP-PLAN.md) (canonical MMU verdict + dossier; evidence:
+  [`MMU-WITHOUT-GUTTING-FLATMEM.md`](MMU-WITHOUT-GUTTING-FLATMEM.md) design, [`MMU-DEFERRAL-REDTEAM.md`](../MMU-DEFERRAL-REDTEAM.md) red-team),
   [`NEW-WORLD-ROM-SUPPORT-PLAN.md`](../NEW-WORLD-ROM-SUPPORT-PLAN.md),
   [`DESKTOP_INTEGRATION_PLAN.md`](../DESKTOP_INTEGRATION_PLAN.md),
   [`BASILISKII-CROSS-POLLINATION.md`](BASILISKII-CROSS-POLLINATION.md) (the fast-hardware framing).

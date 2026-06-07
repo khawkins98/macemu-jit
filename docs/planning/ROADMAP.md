@@ -809,12 +809,17 @@ deferred/exploratory:
 - **Second wall (maybe) — supervisor-level fidelity.** 9.2.x may also depend on machinery SS
   deliberately stubs: the **MMU** (faked V=P), the **nanokernel** exception/interrupt model
   (bypassed; host-signal timer instead of a real decrementer), and **preemptive MP tasks**
-  (absent). Specced with a dependency analysis (MP rides on nanokernel fidelity, which mostly
-  *doesn't* need the MMU) + a cheap "stub-pressure" probe runnable now.
-  **Detail:** `docs/planning/MMU-NANOKERNEL-MP-PLAN.md`.
+  (absent). **Feasibility settled 2026-06-07 (2 opposed agents):** the MMU *is* implementable
+  without gutting the flat model — **shadow-arena / "Dynamic BAT"** (Dolphin-proven; cost on the rare
+  map-change, not per-access) — but it's **deferred "never-unless-proven"**: no evidence any wanted 9.x
+  software needs non-identity translation, untestable until a New World ROM boots. Hinge = host 16 KB vs
+  PPC 4 KB page. The `SS_STUB_TRACE` probe (shipped) measured **zero runtime supervisor pressure on 9.0.4**.
+  **Detail:** `docs/planning/MMU-NANOKERNEL-MP-PLAN.md` (canonical, with the headline verdict + dossier);
+  evidence memos `MMU-WITHOUT-GUTTING-FLATMEM.md` (design) + `MMU-DEFERRAL-REDTEAM.md` (red-team).
 
-Run the New World Phase 0 (and optionally the stub-pressure probe) before committing to either —
-the first wall may be the only one. Large, exploratory, low priority vs. Tracks A/C.
+Run the New World Phase 0 before committing — the first wall (ROM) is the gate; the MMU "second wall" has
+no runtime footprint on the OS we run today and a ready design if it ever surfaces. Large, exploratory,
+deferred vs. the EV compatibility levers.
 
 ## D4. 🟡 DingusPPC comparative investigation (exploratory)
 

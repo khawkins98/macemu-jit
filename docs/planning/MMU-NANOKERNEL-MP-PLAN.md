@@ -1,8 +1,42 @@
 # Plan: Supervisor-level fidelity — MMU, nanokernel, and preemptive (MP) tasks
 
-> **Status:** ⏸ Not started — exploratory / pick-up-later · **Created:** 2026-06-06 · **Updated:** 2026-06-06
-> **Why this doc exists:** Specs the three things SheepShaver deliberately *stubs* instead of emulating — the PowerPC MMU, the Mac OS nanokernel exception/interrupt model, and Multiprocessing-Services preemptive tasks — what real emulation of each would take, what it would unlock, and the dependency order between them. Written so the reasoning survives if/when someone chases post-9.0.4 compatibility or MP-app support.
+> **Status:** ⏸ Deferred — "never, unless a specific trigger appears" (researched, not scheduled) · **Created:** 2026-06-06 · **Updated:** 2026-06-07
+> **Why this doc exists:** The **canonical reference + implementation dossier** for the privileged layer
+> SheepShaver deliberately *stubs* instead of emulating — the PowerPC MMU, the Mac OS nanokernel
+> exception/interrupt model, and Multiprocessing-Services preemptive tasks. Holds: what real emulation of
+> each would take, what it unlocks, the dependency order, the **feasibility verdict** (with the concrete
+> implementation design if it's ever needed), and the **evidence** — so if we hit the point where a real
+> MMU is required, the research and the build direction are ready, not restarted.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+---
+
+## ⭐ Headline verdict (2026-06-07 — read this first)
+
+**Q: Can SheepShaver emulate the PowerPC MMU on Apple Silicon? A: Yes, with a known design — but it is
+deferred ("never, unless proven needed"), and the prerequisite is the New World ROM, not the MMU.**
+
+- **Feasible design (if ever needed):** **shadow-arena / "Dynamic BAT"** — rebuild the host NATMEM arena
+  at the *rare* guest map-change; per-access codegen stays bit-identical (no hot-path cost). Dolphin ships
+  this on Apple Silicon. This is NOT the per-access **softmmu** the original verdict feared (that stays the
+  anti-pattern). Full design + ranking: [`sheepshaver-research/MMU-WITHOUT-GUTTING-FLATMEM.md`](sheepshaver-research/MMU-WITHOUT-GUTTING-FLATMEM.md).
+- **The single hinge:** host **16 KB** page vs PPC **4 KB** page (verified). Shadow-arena works only if
+  Mac OS 9.x maps memory *coarsely* (BAT/≥16 KB); fine 4 KB runtime paging would force softmmu. Currently
+  **inferred** coarse — see the discriminator experiment below to make it data.
+- **Why deferred, honestly:** **no primary evidence** any wanted 9.1/9.2 software needs non-identity
+  translation; the "no MMU ⇒ no 9.1" claim is unbisected folklore; QEMU/DingusPPC "proofs" are ROM-axis
+  confounds; Hypervisor.framework can't host a PPC guest. Red-team memo:
+  [`MMU-DEFERRAL-REDTEAM.md`](MMU-DEFERRAL-REDTEAM.md).
+- **The trigger that would schedule it:** a New-World-ROM-accepted **Mac OS 9.2.2 boot that bisects to a
+  translation-dependent DSI/ISI fault in a hot path.** Untestable until the ROM loads → **New World ROM
+  first** ([`NEW-WORLD-ROM-SUPPORT-PLAN.md`](NEW-WORLD-ROM-SUPPORT-PLAN.md)) is unconditionally the gate.
+- **Caveat on our own data:** the `SS_STUB_TRACE` boot=0/steady=0 result (below) is zero *partly by
+  construction* (ROM-patching strips supervisor ops pre-runtime); it shows "no runtime supervisor hot path
+  on 9.0.4 as-patched," NOT "9.x will never need translation." Don't over-cite it.
+- **Cheap open experiment (runs on today's 9.0.4):** `SS_STUB_TRACE=1` with the guest's **Virtual Memory
+  ENABLED** — the one runtime-translation trigger available without a New World ROM. Zero ⇒ coarse mapping
+  (shadow-arena viable); non-zero ⇒ fine paging (the 16 KB hinge bites). Converts the central inferred
+  assumption into data. See "MMU feasibility — RECONCILED verdict" below for the detail.
 
 ---
 
@@ -10,9 +44,9 @@
 
 These three are the **supervisor / system-software fidelity** frontier: the privileged layer
 SheepShaver replaces with stubs so it can run the guest as a single, flat-addressed, cooperatively-
-multitasked CPU. They are **deeply interrelated**, **large and exploratory**, and **low priority**
-against the project's actual goals (Track A correctness, Track C Silicon Sheep). This doc specs them
-so the option is mapped — not because it's scheduled.
+multitasked CPU. They are **deeply interrelated**, **large and exploratory**, and **deferred**
+against the project's actual goals (compatibility EV levers, Track C Silicon Sheep) — *but now with a
+concrete feasibility verdict + implementation design (see Headline above), not just "mapped."*
 
 Three findings that should govern any pickup:
 

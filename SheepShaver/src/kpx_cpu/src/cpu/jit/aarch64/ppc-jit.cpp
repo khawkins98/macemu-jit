@@ -5296,6 +5296,14 @@ bool ppc_jit_aarch64_compile(
 			fprintf(stderr, "[JIT] SS_JIT_MAX_INSNS=%d (diagnostic block-length cap)\n", s_max_insns);
 	}
 
+	/* SS_LOG_PPCF=1: log where guest code materializes the 'ppcf' gestalt selector
+	 * (0x70706366 = gestaltPowerPCProcessorFeatures) via lis 0x7070 + ori/addi 0x6366.
+	 * Finds the Gestalt registration/dispatch site for the AltiVec-detection force
+	 * experiment (task #26). Read-only diagnostic; no codegen effect. */
+	static int s_log_ppcf = -1;
+	if (s_log_ppcf < 0) { const char *e = getenv("SS_LOG_PPCF"); s_log_ppcf = (e && *e && *e != '0') ? 1 : 0; }
+	uint32_t ppcf_hi_reg = 0xff;
+
 	for (int i = 0; i < 512; i++) {
 		const uint8_t *p = jit_fetch_ptr(cur_pc, ram, ramsize);
 		if (!p)
@@ -5303,6 +5311,18 @@ bool ppc_jit_aarch64_compile(
 
 		uint32_t op = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
 		              ((uint32_t)p[2] << 8) | p[3];
+
+		if (s_log_ppcf) {
+			uint32_t pop = op >> 26;
+			if (pop == 15 && ((op >> 16) & 0x1f) == 0 && (op & 0xffff) == 0x7070)
+				ppcf_hi_reg = (op >> 21) & 0x1f;                 /* lis rD,0x7070 */
+			else if (((pop == 24 && ((op >> 21) & 0x1f) == ppcf_hi_reg) ||  /* ori  rA,rS,0x6366 */
+			          (pop == 14 && ((op >> 16) & 0x1f) == ppcf_hi_reg))    /* addi rD,rA,0x6366 */
+			         && (op & 0xffff) == 0x6366) {
+				fprintf(stderr, "[PPCF] 'ppcf' selector built at guest PC=%08x (block %08x)\n", cur_pc, pc);
+				ppcf_hi_reg = 0xff;
+			}
+		}
 
 		if (jit_profile_enabled) mix_cnt[jit_mix_classify(op)]++;  /* P0 mix tally */
 		if (prof_idx >= 0 && i < JIT_PROF_WORDS) jit_prof_words[prof_idx][i] = op;  /* disasm capture */

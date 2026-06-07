@@ -2329,6 +2329,10 @@ void InstallDrivers(void)
 	M68kRegisters r;
 	SheepArray<SIZEOF_IOParam> pb_var;
 	const uintptr pb = pb_var.addr();
+	// NOTE: SS_FORCE_ALTIVEC probe was here but InstallDrivers is TOO EARLY — Gestalt('ppcf')
+	// returns gestaltUndefSelectorErr (0xEA51) because the System registers 'ppcf' later in
+	// boot. The probe now lives at OP_IDLE_TIME (emul_op.cpp), which fires only once the System
+	// is fully up and idle. See task #26.
 
 #if DISABLE_SCSI
 	// Setup fake SCSI Globals

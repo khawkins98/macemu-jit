@@ -3,6 +3,38 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — AltiVec FORCE WORKS: 'ppcf' is UNREGISTERED (8.6 AND 9.0); we register it ourselves
+
+Big progress on the AltiVec de-risk (task #26), user-authorized live boots (isolated config, VNC, clean
+shutdown via SIGUSR1, always a fresh disk **copy**). Method: an env-gated `SS_FORCE_ALTIVEC=1` one-shot
+in `OP_IDLE_TIME` (`emul_op.cpp` `force_altivec_idle_service`) that reads/forces the gestalt from host
+code via `Execute68kTrap`.
+
+**Decisive finding — System version is NOT the gate.** Under the working OldWorld 1.1 ROM,
+`Gestalt('ppcf')` (gestaltPowerPCProcessorFeatures) returns **gestaltUndefSelectorErr (0xEA51) — the
+selector is NOT REGISTERED — under BOTH Mac OS 8.6 (`sysv`=0x0860) AND Mac OS 9.0 (`sysv`=0x0900)**
+(the `sysv` control reads correctly, so the probe is sound). So the long-standing "vector bit is clear"
+framing was wrong: there is no bit — the selector doesn't exist. (Caveat: the 9.0 disk is the e2e
+*mini-boot*, a stripped install; a full 9.x install MIGHT ship the component that registers it. But the
+likely root cause is that SheepShaver's OldWorld environment never advertises a vector unit.)
+**Method note:** the `macos921.dsk` asset is mislabeled — it's actually Mac OS 8.5/8.6 (raw-scan: 327×
+"8.5", 0× "9.x"). The real Mac OS 9.0 disk is the **e2e harness's** `e2e-macos9-mini-boot.dsk` (boots
+under the 1.1 ROM). *Follow the e2e config for assets.*
+
+**WORKING FORCE.** Since there's nothing to flip, we REGISTER 'ppcf' ourselves:
+- `NewPtrSysClear` ($A71E) a 32-byte block; write a tiny **68k Gestalt SelectorFunction** (Pascal ABI:
+  `pascal OSErr fn(OSType, long*)` — on entry `4(sp)`=response, `8(sp)`=selector, `12(sp)`=result word;
+  write `*response=0x40`, result=noErr, then Pascal-return dropping 8 bytes of params).
+- `NewGestalt` = trap **`$A3AD`** (NOT `$A0AD` — the Gestalt family uses trap-word bits 9-10 to pick the
+  op: `$A1AD`=Gestalt, `$A3AD`=NewGestalt, `$A5AD`=ReplaceGestalt, `$A7AD`=GetGestaltProcPtr. `$A0AD` is
+  just `_Gestalt` with bit-8/auto-pop clear → still a *query*, which is why the first attempt returned
+  undefSelector). Pass the raw 68k proc as the UPP; Mixed Mode calls it as 68k via the ProcInfo.
+- **Verified:** `NewGestalt err=0`, and the **read-back** (`Gestalt('ppcf')`, which CALLS our selector
+  function) returns `features=0x40 vectorBit SET`, emulator alive — so the selectorProc ABI is correct.
+
+So a guest app now SEES AltiVec. **Still to prove:** does a real app then EXECUTE AltiVec (profiler
+`MIX_ALTIVEC>0`)? — the next step (Fractal Carbon on `e2e-apps.dsk` + `SS_JIT_PROFILE=1`). [[altivec-gestalt-gate]]
+
 ## 2026-06-07 — NewWorld 9.0.4 boot attempt (blocks at XPRAM HLE) + AltiVec-force injection hunt (banked)
 
 User authorized booting a NewWorld ROM to test AltiVec. Two tracks, both run to their honest stopping point:

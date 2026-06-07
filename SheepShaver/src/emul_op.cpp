@@ -119,6 +119,83 @@ static bool e2e_front_window_title(uint32 win, char *out, int outsz)
 	return valid;
 }
 
+// SS_FORCE_ALTIVEC=1 (experimental, throwaway — task #26): the AltiVec-detection de-risk.
+// Called from OP_IDLE_TIME (System fully booted, safe to call traps). One-shot.
+// FINDING (2026-06-07): in SheepShaver's OldWorld-1.1-ROM environment, the 'ppcf'
+// (gestaltPowerPCProcessorFeatures) selector is NOT registered at all — Gestalt('ppcf')
+// returns gestaltUndefSelectorErr under BOTH Mac OS 8.6 AND 9.0 (verified; sysv control reads
+// fine). So System version is not the gate. WORKING FORCE: register 'ppcf' ourselves via
+// _NewGestalt ($A3AD) with a tiny 68k SelectorFunction that returns the vector bit (0x40), then
+// read back (which calls the function). Verified: NewGestalt err=0, readback features=0x40 SET.
+// This lets a real app SEE AltiVec; whether it then EXECUTES AltiVec is the profiler test
+// (SS_JIT_PROFILE=1, MIX_ALTIVEC>0). CAVEAT: 8.6/9.0 here never enable VR context save/restore,
+// so this is a VALIDITY experiment, not production-safe multitasking AltiVec.
+static void force_altivec_idle_service(void)
+{
+	static int s_enabled = -1;
+	static bool s_done = false;
+	if (s_enabled < 0) { const char *e = getenv("SS_FORCE_ALTIVEC"); s_enabled = (e && *e && *e != '0') ? 1 : 0; }
+	if (!s_enabled || s_done)
+		return;
+	// Gate on a KNOWN-registered selector ('sysv' = system version) so we don't act before the
+	// System Gestalt is up. Once 'sysv' resolves, the System is initialized.
+	M68kRegisters sv = {};
+	sv.d[0] = 0x73797376;			// 'sysv'
+	Execute68kTrap(0xa1ad, &sv);		// Gestalt()
+	if ((sv.d[0] & 0xffff) == 0xea51)	// System gestalt not up yet; retry next idle
+		return;
+	s_done = true;
+
+	// Read 'ppcf' (gestaltPowerPCProcessorFeatures). In SheepShaver's OldWorld environment it is
+	// NOT registered (undefSelectorErr) under 8.6 or 9.0 — so there is no bit to flip. FORCE it by
+	// REGISTERING the selector ourselves with the vector bit set, then read it back to confirm.
+	M68kRegisters pf = {};
+	pf.d[0] = 0x70706366;			// 'ppcf'
+	Execute68kTrap(0xa1ad, &pf);		// Gestalt()
+	uint32 pre_err = pf.d[0] & 0xffff;
+
+	uint32 reg_err = 0xffff, proc = 0;
+	if (pre_err != 0) {
+		// Allocate a system-heap block for a tiny 68k Gestalt SelectorFunction and write it.
+		// SelectorFunction ABI (Pascal): pascal OSErr fn(OSType selector, long *response).
+		// On entry: 0(sp)=retaddr, 4(sp)=response(long*), 8(sp)=selector, 12(sp)=result(OSErr,2B).
+		// We ignore the selector, write *response = 0x40 (gestaltPowerPCHasVectorInstructions),
+		// set result=noErr, and Pascal-return (pop retaddr, drop 8B params, leave result slot).
+		M68kRegisters m = {};
+		m.d[0] = 32;
+		Execute68kTrap(0xa71e, &m);	// NewPtrSysClear()
+		proc = m.a[0];
+		if (proc) {
+			static const uint16 sel_code[] = {
+				0x206F, 0x0004,			// movea.l 4(a7),a0      ; a0 = response
+				0x20BC, 0x0000, 0x0040,		// move.l  #$40,(a0)      ; *response = vector bit
+				0x426F, 0x000C,			// clr.w   12(a7)        ; result = noErr
+				0x205F,				// movea.l (a7)+,a0      ; pop return addr
+				0x4FEF, 0x0008,			// lea     8(a7),a7      ; drop 2 params (8B)
+				0x4ED0				// jmp     (a0)
+			};
+			for (unsigned i = 0; i < sizeof(sel_code)/sizeof(sel_code[0]); i++)
+				WriteMacInt16(proc + i*2, sel_code[i]);
+			// NewGestalt(selector=d0, selectorFunction=a0). Raw 68k proc ptr → Mixed Mode calls
+			// it as 68k via the SelectorFunction ProcInfo. Trap _NewGestalt = $A0AD.
+			M68kRegisters n = {};
+			n.d[0] = 0x70706366;		// 'ppcf'
+			n.a[0] = proc;
+			Execute68kTrap(0xa3ad, &n);	// NewGestalt() = $A3AD (Gestalt family: bits 9-10 select op)
+			reg_err = n.d[0] & 0xffff;
+		}
+	}
+
+	// Read back — this CALLS our selector function, exercising the whole chain.
+	M68kRegisters rb = {};
+	rb.d[0] = 0x70706366;			// 'ppcf'
+	Execute68kTrap(0xa1ad, &rb);		// Gestalt()
+	fprintf(stderr, "[FORCE_AV] sysv=0x%08x | ppcf pre:err=%u | NewGestalt(proc=%08x):err=%u | "
+	        "readback:err=%u features=0x%08x vectorBit(0x40)=%s\n",
+	        (unsigned)sv.a[0], (unsigned)pre_err, (unsigned)proc, (unsigned)reg_err,
+	        (unsigned)(rb.d[0] & 0xffff), (unsigned)rb.a[0], (rb.a[0] & 0x40) ? "SET" : "clear");
+}
+
 static void e2e_emit_idle_signals(void)
 {
 	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars). Sanitize to log-safe ASCII so an
@@ -732,6 +809,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME:
+			force_altivec_idle_service();
 			e2e_emit_idle_signals();
 			e2e_check_host_shutdown();	// inject Power key (with dwell) if host asked (A5)
 			ui_introspect_service();
@@ -742,6 +820,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME_2:
+			force_altivec_idle_service();
 			e2e_emit_idle_signals();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
 			e2e_check_host_shutdown();
 			ui_introspect_service();

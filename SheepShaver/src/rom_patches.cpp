@@ -646,7 +646,17 @@ bool PatchROM(void)
 	if (!patch_nanokernel_boot()) return false;
 	if (!patch_68k_emul()) return false;
 	if (!patch_nanokernel()) return false;
-	if (!patch_68k()) return false;
+	if (!patch_68k()) {
+		// DIAGNOSTIC boot (parcels, SS_ROM_SKIP_JUMP68K + lenient): patch_68k installs 68k-side EMUL_OP
+		// HLE (nvram/via/drivers/time) whose parcels byte-patterns are absent. NONE of it is reached
+		// before the un-redirected jump68k handoff wedges the boot, so let PatchROM complete anyway to
+		// observe the PPC-side runtime via [ALARM]/[HB]. ⚠ A REAL port must port these HLE shims.
+		if (g_rom_904_lenient && getenv("SS_ROM_SKIP_JUMP68K"))
+			fprintf(stderr, "[ROMPATCH] parcels: patch_68k incomplete — DIAGNOSTIC boot continues "
+			        "(68k HLE unreached before jump68k wedge)\n");
+		else
+			return false;
+	}
 
 #ifdef M68K_BREAK_POINT
 	// Install 68k breakpoint
@@ -1003,9 +1013,24 @@ static bool patch_nanokernel_boot(void)
 		}
 	}
 
-	// Jump to 68k emulator
+	// Jump to 68k emulator.
+	// PARCELS: the resume-68k routine (mtsprg2;mtsrr0;mtsrr1;rfi) signature is absent, and the 1.1
+	// jump68k_caller byte-anchor maps to a page-table/debug-logging region on parcels (NOT the boot
+	// handoff). So the boot-time PPC->68k redirect cannot yet be located statically — it needs
+	// boot-flow tracing (the genuine RE frontier; see NEW-WORLD-ROM-SUPPORT-PLAN.md). DIAGNOSTIC
+	// path (SS_ROM_SKIP_JUMP68K + lenient): leave the handoff UN-redirected so PatchROM completes and
+	// we can boot to observe where the parcels nanokernel wedges via the [ALARM]/[HB] watchdog +
+	// trace ring. The boot WILL NOT reach the 68k OS this way (it wedges at the un-redirected handoff)
+	// — this is purely to gather the first runtime trace of a parcels ROM. 1.1 path unchanged.
 	static const uint8 jump68k_dat[] = {0x7d, 0x92, 0x43, 0xa6, 0x7d, 0x5a, 0x03, 0xa6, 0x7d, 0x7b, 0x03, 0xa6};
-	if ((loc = find_rom_data(0x310000, 0x320000, jump68k_dat, sizeof(jump68k_dat))) == 0) return false;
+	if ((loc = find_rom_data(0x310000, 0x320000, jump68k_dat, sizeof(jump68k_dat))) == 0) {
+		if (g_rom_904_lenient && getenv("SS_ROM_SKIP_JUMP68K")) {
+			fprintf(stderr, "[ROMPATCH] parcels: jump68k NOT patched (DIAGNOSTIC) — boot will wedge "
+			        "at the PPC->68k handoff; watching via [ALARM]/[HB]\n");
+			return true;
+		}
+		return false;
+	}
 	static const uint8 jump68k_caller_dat[] = {0x85, 0x13, 0x00, 0x08, 0x56, 0xbf, 0x50, 0x3e, 0x63, 0xff, 0x0c, 0x00};
 	if ((base = find_rom_data(0x310000, 0x320000, jump68k_caller_dat, sizeof(jump68k_caller_dat))) == 0) return false;
 	if ((base = find_rom_powerpc_branch(base + 12, 0x320000, loc)) == 0) return false;

@@ -446,7 +446,12 @@ extern "C" void ss_boot_stall_check(double now_s, unsigned compiled, double rate
 	}
 
 	double quiet = now_s - s_comp_progress_t;	// seconds since the last new block compiled
-	bool spinning = rate_mhz > 1.0;			// CPU busy in a tight (already-compiled) loop
+	// "Executing but not progressing": any non-trivial block rate. The threshold is deliberately low
+	// (0.01M/s) — the real false-positive guard is the pre-idle scoping + self-disarm at [BOOT] idle,
+	// NOT the rate. A higher gate (1M/s) caught the fast tight-loop wedge (model-rejection DSAlert,
+	// ~150M/s) but MISSED a slow interrupt-idle wedge (e.g. a parcels nanokernel idling at ~0.1M/s
+	// with no 68k OS to run — observed 2026-06-08). >0.01 still excludes a truly-dead/starved process.
+	bool spinning = rate_mhz > 0.01;
 	bool stalled = (now_s >= s_grace) && (quiet >= (double)s_threshold - s_grace) && spinning;
 
 	// Best-effort name the front screen — works only if the WindowManager is up (later dialogs:

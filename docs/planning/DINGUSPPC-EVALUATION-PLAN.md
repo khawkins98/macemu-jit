@@ -17,8 +17,17 @@ potentially strong ideas for correctness infrastructure.
 > GitHub's detected metadata (`spdx_id: GPL-3.0`). *(An earlier note in this doc briefly claimed
 > "BSD-3-Clause"; that was a bad web-scrape — corrected. GPL-3.0 is the same copyleft family as our
 > GPL SheepShaver, so idea-borrowing is unconstrained and code-level reuse is feasible under GPL terms
-> — not "more permissive than us." Note the usual GPLv2-vs-GPLv3 nuance if code reuse is ever actually
-> proposed; we treat this ideas-first regardless.)*
+> — not "more permissive than us."*
+>
+> **GPLv2-vs-GPLv3 nuance — RESOLVED (2026-06-07).** macemu/SheepShaver source headers state
+> *"version 2 of the License, **or (at your option) any later version**"* (e.g. `SheepShaver/src/main.cpp:8`)
+> — i.e. **GPLv2-or-later**. So combining DingusPPC (GPLv3) code is **license-feasible**: we exercise the
+> "or later" option and the combined/derived work is distributed under **GPLv3**. No special permission
+> needed beyond normal GPL compliance (attribution + provenance per CONTRIBUTING/backport-hygiene; source
+> availability). The only real decision is accepting that any DingusPPC-derived files become effectively
+> GPLv3. **In practice we remain ideas-first**: DingusPPC is a pure *interpreter* (no JIT), so there is no
+> JIT-codegen to import — its value is interpreter/MMU/exception/device *modeling* as reference, and small
+> mechanisms (e.g. MSR[VEC]/AltiVec, the active 2026-06-07 lead) are cheaper to clean-room than to import.
 > It's a **pure C++ interpreter** (no JIT) for PowerPC Macs (NuBus/Old World, early New World, Pippin;
 > Power Mac 6100/7500/G3-Beige most complete), with **real MMU translation, 601/FPU support, and CPU
 > exceptions via setjmp/longjmp**, plus modeled hardware devices and a **CLI debugger** (show code;
@@ -86,6 +95,11 @@ After P2 results, update track priorities with explicit decisions:
   and profile report hooks that make triage faster without changing execution semantics.
 - **Likely defer:** deeper nanokernel/MMU/MP fidelity work unless/until D3 demand hardens.
 - **Likely avoid-now:** interpreter-oriented core shifts that disrupt JIT momentum.
+- **Active consultation (2026-06-07):** DingusPPC as the reference for **MSR[VEC] / AltiVec
+  enablement** (ROADMAP B5 / task #21). SheepShaver doesn't model MSR, so the guest can't enable
+  AltiVec; DingusPPC models the real MSR/exception machinery, so it's the concrete reference for
+  whether "set MSR[VEC] + read back" is the OS's real gate (→ a small clean-room fix) or a deeper
+  enable/context-switch path is needed.
 
 ---
 

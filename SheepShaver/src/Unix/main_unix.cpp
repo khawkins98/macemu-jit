@@ -264,6 +264,19 @@ static const char *crash_reason = NULL;		// Reason of the crash (SIGSEGV, SIGBUS
 static rpc_connection_t *gui_connection = NULL;	// RPC connection to the GUI
 static const char *gui_connection_path = NULL;	// GUI connection identifier
 
+// C2.0: bidirectional RPC server — accepts commands from SiliconSheep launcher
+rpc_connection_t *ss_rpc_server = NULL;
+bool ss_rpc_client_connected = false;
+static char ss_rpc_socket_path[256] = "";
+
+void ss_rpc_try_accept(void) {
+	if (!ss_rpc_server || ss_rpc_client_connected) return;
+	if (rpc_listen_socket_nb(ss_rpc_server) == RPC_ERROR_NO_ERROR) {
+		ss_rpc_client_connected = true;
+		fprintf(stderr, "[RPC] C2.0 client connected\n");
+	}
+}
+
 // Shutdown/restart flags (set by emul_op handlers, read by main loop)
 bool power_off_requested = false;
 bool restart_requested = false;
@@ -846,6 +859,84 @@ static void gui_activate (GtkApplication *app)
 #endif
 #endif
 
+// C2.0 bidirectional RPC handlers — SiliconSheep → emulator
+// These run from the video refresh thread via rpc_dispatch(), so they must be
+// quick and not block. Heavy work (memory reads) is bounded by the request size.
+
+// These are defined in video_sdl3.cpp (non-static for C2.0 RPC access)
+extern bool input_lockout;
+extern uint32 frame_skip;
+
+static int ss_rpc_handle_input_lockout(rpc_connection_t *conn) {
+	int32_t val;
+	if (rpc_method_get_args(conn, RPC_TYPE_INT32, &val, RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+	input_lockout = (val != 0);
+	fprintf(stderr, "[RPC] input_lockout → %s\n", input_lockout ? "ON" : "OFF");
+	return rpc_method_send_reply(conn, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_frameskip(rpc_connection_t *conn) {
+	int32_t val;
+	if (rpc_method_get_args(conn, RPC_TYPE_INT32, &val, RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+	frame_skip = (uint32)val;
+	fprintf(stderr, "[RPC] frameskip → %u\n", frame_skip);
+	return rpc_method_send_reply(conn, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_get_stats(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	int blocks = 0, pool_size = 0;
+	size_t cache_used = 0, cache_total = 0;
+	extern void ppc_jit_aarch64_get_stats(int*, int*, size_t*, size_t*);
+	ppc_jit_aarch64_get_stats(&blocks, &pool_size, &cache_used, &cache_total);
+	char buf[256];
+	snprintf(buf, sizeof buf, "blocks=%d pool=%d cache=%zu/%zuK",
+	         blocks, pool_size, cache_used/1024, cache_total/1024);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+#else
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, "no-jit", RPC_TYPE_INVALID);
+#endif
+}
+
+static int ss_rpc_handle_read_memory(rpc_connection_t *conn) {
+	uint32_t addr, len;
+	if (rpc_method_get_args(conn, RPC_TYPE_UINT32, &addr, RPC_TYPE_UINT32, &len, RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+	if (len > 65536) len = 65536;  // cap at 64K per read
+	uint8 *host = Mac2HostAddr(addr);
+	return rpc_method_send_reply(conn, RPC_TYPE_ARRAY, RPC_TYPE_CHAR, (int)len, host, RPC_TYPE_INVALID);
+}
+
+static rpc_method_descriptor_t ss_rpc_methods[] = {
+	{ RPC_METHOD_INPUT_LOCKOUT,  ss_rpc_handle_input_lockout },
+	{ RPC_METHOD_FRAMESKIP,      ss_rpc_handle_frameskip },
+	{ RPC_METHOD_GET_STATS,      ss_rpc_handle_get_stats },
+	{ RPC_METHOD_READ_MEMORY,    ss_rpc_handle_read_memory },
+};
+
+static void ss_rpc_init_server(void) {
+	snprintf(ss_rpc_socket_path, sizeof ss_rpc_socket_path,
+	         "/tmp/sheepshaver-%d", (int)getpid());
+	ss_rpc_server = rpc_init_server(ss_rpc_socket_path);
+	if (!ss_rpc_server) {
+		fprintf(stderr, "[RPC] Failed to init server at %s\n", ss_rpc_socket_path);
+		return;
+	}
+	rpc_method_add_callbacks(ss_rpc_server, ss_rpc_methods,
+	                         sizeof(ss_rpc_methods) / sizeof(ss_rpc_methods[0]));
+	fprintf(stderr, "[RPC] C2.0 server listening at %s\n", ss_rpc_socket_path);
+
+	// Write socket path to .sheepvm/rpc_socket for launcher discovery
+	FILE *f = fopen("rpc_socket", "w");
+	if (f) {
+		fprintf(f, "%s\n", ss_rpc_socket_path);
+		fclose(f);
+	}
+}
+
 int main(int argc, char **argv)
 {
 #if defined(__linux__) && defined(__aarch64__)
@@ -1000,6 +1091,9 @@ int main(int argc, char **argv)
 	// Only use nogui preference if not passed as command line argument
 	if (use_gui == -1)
 		use_gui = !PrefsFindBool("nogui");
+
+	// C2.0: start bidirectional RPC server for SiliconSheep launcher commands
+	ss_rpc_init_server();
 
 #if SDL_PLATFORM_MACOS && SDL_VERSION_ATLEAST(2,0,0)
 	// On Mac OS X hosts, SDL2 will create its own menu bar.  This is mostly OK,
@@ -1296,6 +1390,15 @@ quit:
 
 static void Quit(void)
 {
+	// C2.0: clean up RPC server
+	if (ss_rpc_server) {
+		rpc_exit(ss_rpc_server);
+		ss_rpc_server = NULL;
+		if (ss_rpc_socket_path[0])
+			unlink(ss_rpc_socket_path);
+		unlink("rpc_socket");  // remove discovery file
+	}
+
 	// Stop video first — the redraw thread accesses guest memory and will
 	// segfault if we tear down the CPU or unmap RAM before it exits.
 	VideoExit();

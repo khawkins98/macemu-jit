@@ -63,6 +63,9 @@
 #if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
 #include "cpu/jit/aarch64/ppc-jit.h"
 #endif
+#ifdef SHEEPSHAVER
+#include "rpc.h"
+#endif
 #include "adb.h"
 #include "macos_util.h"
 #include "prefs.h"
@@ -112,7 +115,7 @@ const char KEYCODE_FILE_NAME2[] = DATADIR "/BasiliskII_keycodes";
 
 
 // Global variables
-static uint32 frame_skip;							// Prefs items
+uint32 frame_skip;									// Prefs items (non-static for C2.0 RPC)
 static int16 mouse_wheel_mode;
 static int16 mouse_wheel_lines;
 static bool mouse_wheel_reverse;
@@ -175,7 +178,7 @@ static bool mouse_grabbed = false;
 // mouse + keyboard input and never grabs/captures the cursor.  VNC-injected events
 // (tagged with VNC_SYNTHETIC_INPUT_ID) still pass through so an automated VNC-driven
 // test cannot be disturbed by the host.  SDL2 parity is a follow-up.
-static bool input_lockout = false;
+bool input_lockout = false;  // non-static for C2.0 RPC
 
 // Mutex to protect SDL events
 static SDL_Mutex *sdl_events_lock = NULL;
@@ -2900,6 +2903,23 @@ static inline void do_video_refresh(void)
 				SDL_RunOnMainThread([](void *userdata) {
 					set_window_name((const char *)userdata);
 				}, title_buf, false);
+			}
+		}
+	}
+#endif
+
+	// C2.0: non-blocking poll for launcher RPC commands (sub-16ms latency)
+#ifdef SHEEPSHAVER
+	{
+		extern rpc_connection_t *ss_rpc_server;
+		extern bool ss_rpc_client_connected;
+		extern void ss_rpc_try_accept(void);
+		if (ss_rpc_server) {
+			if (!ss_rpc_client_connected)
+				ss_rpc_try_accept();
+			if (ss_rpc_client_connected) {
+				int ret = rpc_wait_dispatch(ss_rpc_server, 0);
+				if (ret > 0) rpc_dispatch(ss_rpc_server);
 			}
 		}
 	}

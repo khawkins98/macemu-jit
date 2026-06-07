@@ -389,6 +389,35 @@ int rpc_listen_socket(rpc_connection_t *connection)
   return connection->socket;
 }
 
+// Non-blocking accept: returns RPC_ERROR_NO_ERROR if a client connected,
+// RPC_ERROR_ERRNO_SET with errno=EAGAIN if no client is waiting.
+int rpc_listen_socket_nb(rpc_connection_t *connection)
+{
+  if (connection == NULL)
+    return RPC_ERROR_CONNECTION_NULL;
+  if (connection->type != RPC_CONNECTION_SERVER)
+    return RPC_ERROR_CONNECTION_TYPE_MISMATCH;
+  if (connection->socket >= 0)
+    return RPC_ERROR_NO_ERROR; // already have a client
+
+  // Use select to check if anyone is waiting
+  fd_set rfds;
+  FD_ZERO(&rfds);
+  FD_SET(connection->server_socket, &rfds);
+  struct timeval tv = {0, 0}; // immediate return
+  int ready = select(connection->server_socket + 1, &rfds, NULL, NULL, &tv);
+  if (ready <= 0)
+    return RPC_ERROR_ERRNO_SET; // no client waiting
+
+  struct sockaddr_un addr;
+  socklen_t addr_len = sizeof(addr);
+  connection->socket = accept(connection->server_socket, (struct sockaddr *)&addr, &addr_len);
+  if (connection->socket < 0)
+    return RPC_ERROR_ERRNO_SET;
+
+  return RPC_ERROR_NO_ERROR;
+}
+
 // Listen for incoming messages on RPC connection
 #ifdef USE_THREADS
 int rpc_listen(rpc_connection_t *connection)

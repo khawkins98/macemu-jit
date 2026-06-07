@@ -104,6 +104,17 @@ p("av_vcmpequw",[vspltisb(0,5),vx(2,0,0,134)]+grab(), "vcmpequw v2,v0,v0: equal 
 # vector yet; halfword vmul*h still broken — ROADMAP A2.)
 p("av_vmuloub", merge2(8),   "vmuloub v2,v1,v3: odd  unsigned byte multiply -> halfword products")
 p("av_vmuleub", merge2(520), "vmuleub v2,v1,v3: even unsigned byte multiply -> halfword products")
+# even/odd HALFWORD multiplies FIXED 2026-06-07 (ppc-jit.cpp emit_vmul_hword): REV32.8H normalize
+# -> UZP1/2.8H even/odd select -> [SU]MULL.4S widen (16x16->32) -> word output (no normalize).
+# Operands include high-bit-set halfwords (0x8000,0xFFFF,0x7FFF) so signed vs unsigned products
+# DIFFER (non-vacuous signedness). vA={0002,8000,0003,FFFF,0004,7FFF,0005,0006}, vB={0003,0002,FFFE,0002,0010,0002,0007,0008}.
+_MH_A=[0x00,0x02, 0x80,0x00, 0x00,0x03, 0xFF,0xFF, 0x00,0x04, 0x7F,0xFF, 0x00,0x05, 0x00,0x06]
+_MH_B=[0x00,0x03, 0x00,0x02, 0xFF,0xFE, 0x00,0x02, 0x00,0x10, 0x00,0x02, 0x00,0x07, 0x00,0x08]
+def mulhop(xo): return load_bytes(1,_MH_A)+load_bytes(3,_MH_B)+[vx(2,1,3,xo)]+grab()
+p("av_vmulouh", mulhop(72),  "vmulouh: odd  unsigned halfword multiply -> word products (UMULL.4S)")
+p("av_vmulosh", mulhop(328), "vmulosh: odd  signed   halfword multiply -> word products (SMULL.4S)")
+p("av_vmuleuh", mulhop(584), "vmuleuh: even unsigned halfword multiply -> word products (UMULL.4S)")
+p("av_vmulesh", mulhop(840), "vmulesh: even signed   halfword multiply -> word products (SMULL.4S)")
 
 # --- ev_mixed element-order class: byte/halfword/word MERGES and the PACK.
 # DISTINCT operands (vA=v1=00..0F, vB=v3=10..1F) so every output byte uniquely

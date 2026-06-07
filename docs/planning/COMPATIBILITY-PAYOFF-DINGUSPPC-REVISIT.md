@@ -109,6 +109,27 @@ and/or under a **graphics workload** identify CopyBits's hot PPC block from the 
 The **graphics workload is the real prerequisite** (Finder barely blits — confirmed: 0 exec). Tooling
 (`SS_COPYBITS_TRACE` resolver + RD-follow, `SS_JIT_PROFILE_PC`) is in place.
 
+#### ✅ Graphics workload ACHIEVED (2026-06-07) — 3D Ultra Pinball runs; profile-capture gap found
+
+The user staged `3D_pinball_demo.hqx`. Pipeline that worked, fully autonomous: `unar` decodes the BinHex
+→ "3D Ultra Pinball Demo ƒ" (a **PowerPC PEF app** + data; resource fork + type/creator `APPL`/`PBJ!`
+preserved as native macOS xattrs). Mounted host-side into the guest via **`extfs /Users/Shared/macemu/pinball_ext`**
+(SheepShaver sees it as the "Unix" volume). Launched via VNC type-select → the game runs and **renders its
+pinball table** (`[APP] frontApp='3D Pinball Demo' title='Ultra Pinball'`, screenshot `/tmp/pinball_running.png`).
+Non-fatal init dialogs handled: "could not create Sierra folder" (read-only extfs — OK'd, game continues
+without saves) and "could not init sound" (we boot `nosound` — OK'd, expected). **So a real graphics
+workload is reachable today on the booting 9.0 disk — no NewWorld ROM needed.** Decoded game kept at
+`/Users/Shared/macemu/pinball_ext` for re-use.
+
+**⚠️ Profile-capture gap (the remaining blocker for the CopyBits number):** the JIT profile only dumps on
+**clean shutdown** (`ppc_jit_aarch64_exit` → `jit_profile_dump`), but the **fullscreen game resists
+automated quit** (Esc / Cmd-Q / the SIGUSR1 Power-key shutdown all fail to return to Finder while it grabs
+the screen), so a force-kill yields no profile. **Fix (small, generic, next step):** add a
+*dump-profile-without-clean-shutdown* path — e.g. a host signal that sets a flag the JIT heartbeat checks
+and calls `jit_profile_dump()` mid-run (the heartbeat runs even during the game). Then: run pinball with
+`SS_JIT_PROFILE` + the new signal → read the top-40 (the graphics hot path: how much is load/store/blit vs
+FP/int) → the CopyBits-HLE go/no-go. (Combine with the `0x102daa5c` identification, still open.)
+
 ---
 
 ## CONFIRM / CHALLENGE of the standing verdict

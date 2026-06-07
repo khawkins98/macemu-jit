@@ -22,6 +22,8 @@ pub const METHOD_INPUT_LOCKOUT: i32 = 11;
 pub const METHOD_FRAMESKIP: i32 = 12;
 pub const METHOD_MOUSE_GRAB: i32 = 13;
 pub const METHOD_GET_STATS: i32 = 14;
+pub const METHOD_READ_MEMORY: i32 = 15;
+pub const METHOD_DUMP_REGISTERS: i32 = 16;
 
 pub struct RpcClient {
     stream: UnixStream,

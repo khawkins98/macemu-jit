@@ -1771,9 +1771,11 @@ function renderInspectorWindow(vmId: string) {
           <button class="inspector-toolbar__tab inspector-toolbar__tab--active" data-panel="overview">Overview</button>
           <button class="inspector-toolbar__tab" data-panel="timeline">Timeline</button>
           <button class="inspector-toolbar__tab" data-panel="log">Log</button>
+          <button class="inspector-toolbar__tab" data-panel="registers">Registers</button>
           <button class="inspector-toolbar__tab" data-panel="debug">Debug</button>
         </div>
         <div style="flex:1"></div>
+        <span id="inspector-rpc-status" class="ss-text-muted" style="font-size: 10px;"></span>
         <button class="btn btn-secondary btn-sm" id="inspector-record-btn">⏺ Record</button>
       </div>
       <div class="inspector-panels">
@@ -1793,6 +1795,15 @@ function renderInspectorWindow(vmId: string) {
           <div class="inspector-section">
             <h3 class="inspector-heading">Emulator Log</h3>
             <div id="insp-log" class="inspector-log"><p class="ss-text-muted">No log output yet.</p></div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-registers" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">PowerPC Registers</h3>
+            <button class="btn btn-secondary btn-sm" id="insp-refresh-regs">↻ Snapshot</button>
+            <div id="insp-registers" style="margin-top: 8px;">
+              <p class="ss-text-muted">Click "Snapshot" to capture register state (requires running VM + RPC).</p>
+            </div>
           </div>
         </div>
         <div class="inspector-panel" id="panel-debug" style="display:none">
@@ -1852,39 +1863,104 @@ function renderInspectorWindow(vmId: string) {
   });
 
   // RPC controls
+  const updateRpcStatus = (connected: boolean) => {
+    const el = document.getElementById("inspector-rpc-status");
+    if (el) el.innerHTML = connected
+      ? '<span style="color: var(--ss-success);">● RPC connected</span>'
+      : '<span style="color: var(--ss-text-dim);">○ RPC disconnected — start a VM first</span>';
+  };
+
+  const rpcCall = async <T>(fn: () => Promise<T>, label: string): Promise<T | null> => {
+    try {
+      const result = await fn();
+      updateRpcStatus(true);
+      return result;
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("not available") || msg.includes("No such file") || msg.includes("not running")) {
+        updateRpcStatus(false);
+      } else {
+        showToast(`${label}: ${msg}`, "error");
+      }
+      return null;
+    }
+  };
+
+  updateRpcStatus(false); // initial state
+
   document.getElementById("insp-input-lockout")?.addEventListener("change", async (e) => {
     const val = (e.target as HTMLSelectElement).value;
-    try {
-      await invoke("rpc_set_input_lockout", { id: vmId, enabled: val === "1" });
-      showToast(`Input lockout ${val === "1" ? "enabled" : "disabled"} — instant`, "info", 2000);
-    } catch (err) {
-      showToast(`RPC failed: ${err}`, "error");
-    }
+    await rpcCall(
+      () => invoke("rpc_set_input_lockout", { id: vmId, enabled: val === "1" }),
+      "Input lockout"
+    );
   });
 
   document.getElementById("insp-frameskip")?.addEventListener("change", async (e) => {
     const val = parseInt((e.target as HTMLSelectElement).value);
-    try {
-      await invoke("rpc_set_frameskip", { id: vmId, value: val });
-      showToast(`Frameskip set to ${val} — instant`, "info", 2000);
-    } catch (err) {
-      showToast(`RPC failed: ${err}`, "error");
-    }
+    await rpcCall(
+      () => invoke("rpc_set_frameskip", { id: vmId, value: val }),
+      "Frameskip"
+    );
   });
 
   document.getElementById("insp-rpc-query")?.addEventListener("click", async () => {
+    const result = await rpcCall(
+      () => invoke("rpc_get_stats", { id: vmId }) as Promise<string>,
+      "Stats query"
+    );
+    const el = document.getElementById("insp-rpc-result");
+    if (el) el.textContent = result || "(VM not running or RPC not connected)";
+  });
+
+  // Register snapshot
+  let prevRegs: Record<string, string> = {};
+  document.getElementById("insp-refresh-regs")?.addEventListener("click", async () => {
+    const result = await rpcCall(
+      () => invoke("rpc_dump_registers", { id: vmId }) as Promise<string>,
+      "Register dump"
+    );
+    const el = document.getElementById("insp-registers");
+    if (!el || !result) {
+      if (el) el.innerHTML = '<p class="ss-text-muted">Failed — VM not running or RPC not connected.</p>';
+      return;
+    }
     try {
-      const result = await invoke("rpc_get_stats", { id: vmId }) as string;
-      const el = document.getElementById("insp-rpc-result");
-      if (el) el.textContent = result || "(no data)";
-    } catch (err) {
-      const el = document.getElementById("insp-rpc-result");
-      if (el) el.textContent = `Error: ${err}`;
+      const regs = JSON.parse(result);
+      const gprs = regs.gpr as string[];
+      let html = '<div class="register-grid">';
+      // SPRs
+      for (const [name, val] of [["PC", regs.pc], ["LR", regs.lr], ["CTR", regs.ctr], ["CR", regs.cr], ["XER", regs.xer]]) {
+        const changed = prevRegs[name] && prevRegs[name] !== val;
+        html += `<div class="register-cell ${changed ? "register-cell--changed" : ""}"><span class="register-cell__name">${name}</span><span class="register-cell__value">${escapeHtml(val)}</span></div>`;
+        prevRegs[name] = val;
+      }
+      html += '</div><div class="register-grid" style="margin-top: 8px;">';
+      // GPRs
+      for (let i = 0; i < 32; i++) {
+        const name = `r${i}`;
+        const val = gprs[i];
+        const changed = prevRegs[name] && prevRegs[name] !== val;
+        html += `<div class="register-cell ${changed ? "register-cell--changed" : ""}"><span class="register-cell__name">${name}</span><span class="register-cell__value">${escapeHtml(val)}</span></div>`;
+        prevRegs[name] = val;
+      }
+      html += '</div>';
+      el.innerHTML = html;
+    } catch {
+      el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
     }
   });
 
-  // Poll for updates
+  // Poll for updates + try RPC connection
   inspectorInterval = setInterval(async () => {
+    // Try to establish/verify RPC connection
+    try {
+      await invoke("rpc_get_stats", { id: vmId });
+      updateRpcStatus(true);
+    } catch {
+      updateRpcStatus(false);
+    }
+
     try {
       const data = (await invoke("get_vm_inspector", { id: vmId })) as InspectorState;
 

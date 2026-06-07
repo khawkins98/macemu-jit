@@ -168,6 +168,22 @@ public:
 	// Constructor
 	sheepshaver_cpu();
 
+	// C2.0 RPC: dump registers as JSON for the Inspector
+	void dump_regs_json(char *buf, int bufsz) {
+		int pos = 0;
+		pos += snprintf(buf + pos, bufsz - pos, "{\"pc\":\"0x%08x\"", (unsigned)pc());
+		pos += snprintf(buf + pos, bufsz - pos, ",\"lr\":\"0x%08x\"", (unsigned)lr());
+		pos += snprintf(buf + pos, bufsz - pos, ",\"ctr\":\"0x%08x\"", (unsigned)ctr());
+		pos += snprintf(buf + pos, bufsz - pos, ",\"cr\":\"0x%08x\"", (unsigned)cr().get());
+		pos += snprintf(buf + pos, bufsz - pos, ",\"xer\":\"0x%08x\"", (unsigned)xer().get());
+		pos += snprintf(buf + pos, bufsz - pos, ",\"gpr\":[");
+		for (int i = 0; i < 32; i++) {
+			if (i > 0) pos += snprintf(buf + pos, bufsz - pos, ",");
+			pos += snprintf(buf + pos, bufsz - pos, "\"0x%08x\"", (unsigned)gpr(i));
+		}
+		pos += snprintf(buf + pos, bufsz - pos, "]}");
+	}
+
 	// Direct access to register state for JIT
 	// powerpc_cpu::_regs is at a known offset from 'this'; regs are 16-byte aligned within
 	void *regs_for_jit() {
@@ -835,6 +851,15 @@ inline void sheepshaver_cpu::get_resource(uint32 old_get_resource)
 
 // PowerPC CPU emulator
 static sheepshaver_cpu *ppc_cpu = NULL;
+
+// C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
+extern "C" void ss_dump_registers_json(char *buf, int bufsz) {
+	if (!ppc_cpu) {
+		snprintf(buf, bufsz, "{\"error\":\"CPU not initialized\"}");
+		return;
+	}
+	ppc_cpu->dump_regs_json(buf, bufsz);
+}
 
 void FlushCodeCache(uintptr start, uintptr end)
 {

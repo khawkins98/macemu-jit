@@ -432,6 +432,26 @@ fn rpc_get_stats(id: String, state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn rpc_dump_registers(id: String, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap()
+        .invoke_get_string(rpc_client::METHOD_DUMP_REGISTERS)
+}
+
+#[tauri::command]
+fn rpc_read_memory(id: String, addr: u32, len: u32, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    // For now, use get_string — the emulator returns bytes but we'll format as hex
+    // TODO: proper binary read via invoke_bytes when needed
+    vm.rpc.as_mut().unwrap()
+        .invoke_get_string(rpc_client::METHOD_GET_STATS) // placeholder — wire READ_MEMORY properly later
+}
+
+#[tauri::command]
 fn get_vm_inspector(id: String, state: State<AppState>) -> Result<VmInspectorState, String> {
     let map = state.inspector.lock().map_err(|e| e.to_string())?;
     Ok(map.get(&id).cloned().unwrap_or_default())
@@ -800,6 +820,8 @@ fn main() {
             rpc_set_input_lockout,
             rpc_set_frameskip,
             rpc_get_stats,
+            rpc_dump_registers,
+            rpc_read_memory,
             generate_bug_report,
             set_runtime_control,
             capture_vm_screenshot,

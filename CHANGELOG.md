@@ -11,6 +11,27 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] Boot-stall watchdog — early-boot dead-ends now alarm in the log
+
+- **Problem:** early-boot dead-ends (the ROM "This startup disk will not work on this Macintosh
+  model" alert, a hang, a sad Mac) were invisible — a ~0.2s burst of JIT compilation then silence,
+  because `[BOOT]`/`[APP]`/`[SYSV]`/`[READY]` all ride the `SynchIdleTime` idle hook, which a wedged
+  guest never reaches. Operators were left waiting on a GUI screen the log couldn't see.
+- **Fix:** `ss_boot_stall_check` (`emul_op.cpp`), driven by the host-side JIT heartbeat (which keeps
+  ticking through the wedge), raises a loud **`[ALARM]`** the moment the pre-idle stall shape holds
+  (blocks spinning fast, no new compiles, idle never reached), then re-states **`[STALL]`** every 30s
+  so a `tail` shows the live state instead of silence. Verified: `[ALARM]` at 15.0s on the failing
+  9.2.1 NewWorld boot.
+- **False-positive safe:** scoped strictly pre-idle (unlike the forbidden post-boot "same-PC" rule —
+  cf. CLAUDE.md), self-disarms when `[BOOT] idle` fires (healthy boot ~10s « 15s threshold), re-arms
+  if compilation resumes. Names the front dialog when the WindowManager is up; for a pre-System
+  DSAlert it says so and points to a screenshot. Tunable via `SS_BOOT_STALL_SECS` (default 15; 0 off).
+  Docs: `SheepShaver/docs/DIAGNOSTICS.md`.
+- **`SS_NW_MODEL` probe (default off):** inject a New World device-tree identity (`model` +
+  `compatible`) to test booting 9.2 on the 1.1 ROM without the parcels-ROM port. FINDING (via the new
+  watchdog): **insufficient alone** — 9.2.1 still rejects the model; needs the real New World ROM
+  environment. Kept as default-off groundwork. See `NEW-WORLD-ROM-SUPPORT-PLAN.md`.
+
 ### [SheepShaver] Preliminary AltiVec support — opt-in `altivec` pref; real app runs vector code
 
 - **Real-app AltiVec achieved.** The AArch64 JIT already compiled PPC AltiVec → ARM64 NEON (validated by

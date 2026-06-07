@@ -32,8 +32,35 @@ under the 1.1 ROM). *Follow the e2e config for assets.*
 - **Verified:** `NewGestalt err=0`, and the **read-back** (`Gestalt('ppcf')`, which CALLS our selector
   function) returns `features=0x40 vectorBit SET`, emulator alive — so the selectorProc ABI is correct.
 
-So a guest app now SEES AltiVec. **Still to prove:** does a real app then EXECUTE AltiVec (profiler
-`MIX_ALTIVEC>0`)? — the next step (Fractal Carbon on `e2e-apps.dsk` + `SS_JIT_PROFILE=1`). [[altivec-gestalt-gate]]
+So a guest app now SEES AltiVec.
+
+**FC EXECUTION TEST (2026-06-07) — force works, but FC's hot path is FP, not AltiVec (question still OPEN).**
+Booted Mac OS 9.0.4 (`e2e-macos9-workload-boot.dsk`, which has CarbonLib 1.6 — `macos9_fresh.dsk` lacks
+`GetPortBitMapForCopyBits` so FC won't launch there) + `e2e-apps.dsk`, with the force + `SS_JIT_PROFILE`.
+Added a definitive profiler metric `[JIT-COMPILED-MIX]` (global per-class op-compile histogram across ALL
+blocks, not just top-40 hot). A/B:
+- **Forced** (`ppcf`=0x40): AltiVec=**0** compiled, FP=4335, 38.8B guest-insns, 651 MIPS; hot path =
+  FC's fractal loop `1e5d55d0` (FP, 19 insns) + `1e5d5658` (int) + `1e5d561c` (branch), ~58% of execution.
+- **Baseline** (no force): AltiVec=**0**, FP=2996, 8.4B guest-insns, 147 MIPS; hot path = ROM/idle (no FC loop).
+So the force DID change FC's behavior (4.4× more work; its compute loop only runs when AltiVec is advertised)
+— but **zero PPC AltiVec (op==4) instructions are compiled/executed either way**; the fractal kernel is
+scalar double-precision FP.
+
+**Honest interpretation (do NOT overclaim a "detection-insufficiency"):** I did NOT drive FC to an explicit
+AltiVec/Calculate mode — I watched its *passive default* render for 30s. "Zero AltiVec" is equally
+consistent with "the AltiVec workload was never triggered" or "this Carbon binary emits no PPC AltiVec".
+The classic-Mac UI introspection (`SS_UI_DUMP_DIR`) returns an EMPTY menu bar for FC (a Carbon app — the
+toolbox-menu structures it reads don't apply), so I can't enumerate its actions host-side. Caveats: (1)
+`[JIT-COMPILED-MIX]` counts JIT-compiled ops only, so the precise claim is "no AltiVec in FC's JIT-compiled
+hot path," not "FC executed zero AltiVec instructions ever"; (2) the hot-loop-is-visibly-FP evidence is what
+carries the claim.
+
+**Bankable regardless:** the gestalt force works (readback 0x40 SET); `'ppcf'` unregistered under BOTH 8.6
+and 9.0/9.0.4 (System version is not the gate); the `_NewGestalt $A3AD` register-it-ourselves mechanism;
+the `[JIT-COMPILED-MIX]` profiler. **The AltiVec codegen remains validated by `make test-jit` (349/349) —
+that is the validation of record; "real app issues AltiVec" was always bonus confirmation, not validation,
+so a null FC result does not dent codegen confidence.** OPEN: does a real app emit AltiVec here — needs FC
+driven to its compute action (user knows the app), or a different AltiVec vehicle. [[altivec-gestalt-gate]]
 
 ## 2026-06-07 — NewWorld 9.0.4 boot attempt (blocks at XPRAM HLE) + AltiVec-force injection hunt (banked)
 

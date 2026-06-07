@@ -1027,19 +1027,20 @@ function bindEvents() {
     el.addEventListener("click", handleAction);
   });
 
-  // Runtime control toggles: write to .sheepvm/runtime_control for live changes
+  // C2.0 RPC: instant runtime control via UDS (replaces file-polling)
   document.querySelectorAll("[data-action='runtime-toggle']").forEach((el) => {
     el.addEventListener("change", async () => {
       if (!selectedVmId) return;
       const input = el as HTMLSelectElement;
       const rkey = input.dataset.rkey;
-      if (rkey) {
-        const val = input.value === "1" ? "1" : "0";
+      if (rkey === "input_lockout") {
         try {
-          await invoke("set_runtime_control", { id: selectedVmId, key: rkey, value: val });
-          showToast(`${rkey} ${val === "1" ? "enabled" : "disabled"} — takes effect within ~5s`, "info", 3000);
+          await invoke("rpc_set_input_lockout", { id: selectedVmId, enabled: input.value === "1" });
+          showToast(`Input lockout ${input.value === "1" ? "enabled" : "disabled"} — instant`, "info", 2000);
         } catch (err) {
-          showToast(`Failed: ${err}`, "error");
+          // Fallback to file-based control if RPC not connected
+          await invoke("set_runtime_control", { id: selectedVmId, key: rkey, value: input.value === "1" ? "1" : "0" }).catch(() => {});
+          showToast(`Input lockout set (file fallback — ~5s delay)`, "info", 3000);
         }
       }
     });

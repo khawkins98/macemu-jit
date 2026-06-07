@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod prefs;
+mod rpc_client;
 mod vm;
 
 use std::collections::HashMap;
@@ -41,6 +42,7 @@ pub struct VmInspectorState {
 struct RunningVm {
     child: Child,
     vncport: u16,
+    rpc: Option<rpc_client::RpcClient>,
 }
 
 struct AppState {
@@ -327,7 +329,7 @@ fn launch_vm(id: String, env_vars: Option<std::collections::HashMap<String, Stri
         });
     }
 
-    running.insert(id, RunningVm { child, vncport });
+    running.insert(id, RunningVm { child, vncport, rpc: None });
 
     Ok(())
 }
@@ -384,6 +386,49 @@ fn read_vm_log(id: String, log_name: String) -> Result<String, String> {
     let vm_dir = vm::vm_dir_for(&id);
     let log_path = vm_dir.join("logs").join(&log_name);
     std::fs::read_to_string(&log_path).map_err(|e| format!("Cannot read log: {}", e))
+}
+
+/// Ensure the RPC client is connected for a running VM (lazy connect)
+fn ensure_rpc(running: &mut HashMap<String, RunningVm>, id: &str) -> Result<(), String> {
+    let vm = running.get_mut(id).ok_or("VM not running")?;
+    if vm.rpc.is_some() {
+        return Ok(());
+    }
+    let vm_dir = vm::vm_dir_for(id);
+    match rpc_client::RpcClient::connect_from_vm(&vm_dir) {
+        Ok(client) => {
+            vm.rpc = Some(client);
+            Ok(())
+        }
+        Err(e) => Err(format!("RPC not available yet: {}", e)),
+    }
+}
+
+#[tauri::command]
+fn rpc_set_input_lockout(id: String, enabled: bool, state: State<AppState>) -> Result<(), String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap()
+        .invoke_int32(rpc_client::METHOD_INPUT_LOCKOUT, if enabled { 1 } else { 0 })
+}
+
+#[tauri::command]
+fn rpc_set_frameskip(id: String, value: i32, state: State<AppState>) -> Result<(), String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap()
+        .invoke_int32(rpc_client::METHOD_FRAMESKIP, value)
+}
+
+#[tauri::command]
+fn rpc_get_stats(id: String, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap()
+        .invoke_get_string(rpc_client::METHOD_GET_STATS)
 }
 
 #[tauri::command]
@@ -752,6 +797,9 @@ fn main() {
             import_from_prefs,
             get_vm_screenshot,
             get_vm_inspector,
+            rpc_set_input_lockout,
+            rpc_set_frameskip,
+            rpc_get_stats,
             generate_bug_report,
             set_runtime_control,
             capture_vm_screenshot,

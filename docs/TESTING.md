@@ -200,9 +200,15 @@ app exercises the 156 NEON-mapped vector ops. Run one **under `SS_JIT_VERIFY=1`*
 - QuickTime playback (AltiVec codecs)
 - GraphicConverter
 
-Reminder (see CLAUDE.md / the G3-vs-G4 discussion): SheepShaver advertises a
-**7400 (G4) with AltiVec** by default (`PVR = 0x000c0000`), so Mac OS turns
-AltiVec on and these apps will actually issue vector instructions.
+⚠️ **AltiVec is currently DORMANT in real guest software (2026-06-07).** SheepShaver
+advertises a **7400 (G4) with AltiVec** (`PVR = 0x000c0000`), but the guest still runs the
+**scalar/FP path** — confirmed by profiling AltiVec Fractal Carbon (its hot loop is FP, not
+vector). Root cause: **MSR isn't modeled** (`mfmsr`→`0xf072`, VEC bit clear), so the OS can't
+*enable* AltiVec despite the PVR. So the apps above currently issue **no vector instructions**,
+and our AltiVec codegen is exercised **only by the `test-jit` harness**, not real software. They
+will exercise the vector path **once the detection gap is closed** (model MSR[VEC] — see
+LEARNINGS 2026-06-07 / ROADMAP B5). Until then, AltiVec correctness rests on the in-harness
+vectors, not `SS_JIT_VERIFY` on real apps.
 
 ---
 

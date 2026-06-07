@@ -189,6 +189,7 @@ VNC keyboard and mouse work for remote control:
 | FP compare → CR | ✅ fcmpu/fcmpo with XER[SO] |
 | FPSCR rounding modes | ✅ PPC RN → ARM64 FPCR RMode mapping (nearest/zero/+inf/-inf) |
 | FP load/store | ✅ lfs (single→double)/lfd/stfs (double→single)/stfd + indexed |
+| **FP register allocator (P5b, 2026-06-07)** | ✅ Block-local cache of PPC FPRs → ARM64 **V16–V23** (mirrors the integer RA). Double + single arithmetic, moves (fmr/fneg/fabs/fnabs), and D-form memory (lfs/lfd/stfs/stfd) are **zero-copy**; other FP ops stay coherent via the RA-aware `emit_load_fpr`/`emit_store_fpr` bridge. **Speedometer Math +16%** (~1.89× interpreter, was 1.29×). |
 | FP exceptions | ⚠️ Not tracked (ARM64 defaults match PPC defaults) |
 
 ### XER (Carry/Overflow) Implementation

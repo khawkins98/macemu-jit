@@ -9,6 +9,63 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-07
+
+### [SheepShaver] FP register allocator (P5b) — Speedometer Math +16%, the top throughput lever
+
+The JIT had no FP register cache, so every FP op round-tripped the guest FPRs through the
+`powerpc_registers` struct (store→load serialization). Added a **block-local FP register
+allocator** mirroring the integer RA, mapping PPC FPRs → ARM64 **V16–V23** (caller-saved →
+no prologue change → integer blocks stay byte-identical, zero regression). `emit_load_fpr`/
+`emit_store_fpr` made RA-aware (FMOV bridge) so unconverted FP handlers stay coherent;
+`ra_fp_flush_all` coupled into `ra_flush_all`. Converted to zero-copy: **double + single-
+precision arithmetic** (fadd…fnmsub / fadds…fnmsubs / fres / fsqrts), **moves**
+(fmr/fneg/fabs/fnabs), and **D-form memory** (lfs/lfd/stfs/stfd). Results: **Speedometer
+Math 13,000 → 15,075 (+16%)** — JIT Math vs interpreter ~1.29× → **~1.89×**, in line with
+integer (2.2×); **Fractal Carbon +8% guest-MIPS**; `fp-add`/`fp-fma` microbench **a64/op
+4/5 → 1.0** (ns/insn ~14×/~9×). Validated: `make test-jit` **303/303** (added an
+eviction-writeback vector); two adversarial reviews clean (V16–V23 confirmed exclusively
+owned; all flush sites block-terminating; the integer RTMP/NZCV-across-`ra_store` landmine
+cannot recur on the FP side). See OPTIMIZATION-PLAN §P5b. Follow-ups: FP update/indexed
+memory, cross-block FP pinning.
+
+### [SheepShaver] Native `lwarx`/`stwcx.` (P3a) + the 0f/0h codegen sweep
+
+- **P3a — native `lwarx`/`stwcx.`** (single-CPU reservation in the shared regs struct): were
+  interpreter fallbacks (two JIT→interp transitions per atomic iteration); now compiled
+  natively. Correctness-validated (differential success/fail/reservation-cleared paths).
+  Boot-profiler evidence showed atomics were the #1 *concentrated* hot block; the e2e-bench
+  profile then showed they're ~5% of compute (not idle-driven) but **not** the dominant
+  throughput cost — so this is banked as a correctness/architecture win, not a measured speedup.
+- **0f sweep**: `divw` / `mulhw` / `mulhwu` drop their trailing MOV (write result via the final
+  CSEL / shift directly into the dest). Plus a divw `ra_store` hoist removing a latent
+  NZCV-clobber hazard (adversarial-review finding).
+- **0h**: `rlwinm` `slwi`/`srwi` → single ARM64 `LSL`/`LSR` (UBFM) and `clrlwi`/`clrrwi` →
+  AND-direct-from-rS (drop the mov). Hot (4× `slwi` in the Speedometer matrix block);
+  microbench a64/op 2.0 → 1.0. Exhaustively validated (slwi/srwi 248/248 differential).
+
+### [SheepShaver] Deterministic `a64/op` microbench metric + `SS_JIT_PROFILE` run-profile
+
+- **`a64/op`** (`make bench`): emitted ARM64 instructions per PPC op, from the JIT's own
+  `code_size` — **zero host-noise, machine-independent, CI-gateable**. The prior "<1% noise"
+  claim corrected: it holds only on a *quiet* host (a fixed binary swung ±25% under load —
+  P/E-core migration + DVFS). Added a CV-gate (`NOISY` instead of a bogus delta), QoS P-core
+  pin, and `CLOCK_THREAD_CPUTIME_ID`. New `compute`/`shift` kernels model real hot blocks.
+- **`SS_JIT_PROFILE` run-profile**: at exit emits `[JIT-RUN-PROFILE]` — empirical **guest-MIPS**
+  (ops/sec for the whole run) + deterministic execution-weighted `a64/guest-op`. Captured per
+  workload (boot 1040 MIPS, Speedometer 2413, Fractal Carbon 1132). `SS_JIT_PROFILE_DISASM`
+  dumps hot-block PPC words for offline capstone disassembly.
+
+### [docs] Findings: AltiVec dormant (MSR not modeled); JIT-vs-interpreter headline; benchmark series
+
+- **AltiVec is dormant for real guest software** despite PVR=0x000c0000 (G4): MSR isn't modeled
+  (`mfmsr`→`0xf072`, VEC bit clear), so the OS can't enable AltiVec → all software takes the
+  scalar/FP path. Our AltiVec codegen is correct but **only exercised by the test harness**.
+  Tracked as a fix (model MSR[VEC]) — would unlock real vector workloads.
+- **`SS_E2E_TIMEOUT_SCALE`** env knob for profiled workload runs (profiler ~2× slows the guest,
+  tripping the 45s launch gate). Documented benchmark series in BENCHMARKS.md (codegen-density /
+  run-profile / Speedometer, with the interpreter floor). Host recorded: M5 MacBook Air, 32 GB.
+
 ## 2026-06-06
 
 ### [SheepShaver] P0 execution-weighted hot-block profiler (`SS_JIT_PROFILE`) — Track B start

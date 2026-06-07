@@ -55,9 +55,11 @@ all of these; they're why naive guest-SMP is Tier 3, not Tier 1:
 - **Shared mutable flat memory + weak ordering.** Guest RAM is one flat host region
   (`DIRECT_ADDRESSING`/`NATMEM_OFFSET`; `vm.hpp:208`). PPC has a stronger memory model than ARM64;
   two host threads touching guest RAM need barriers that reproduce PPC ordering, or guest code races.
-- **No atomic emulation today.** `lwarx`/`stwcx.` (load-reserve/store-conditional) currently fall
-  back to the interpreter and assume a single CPU — "reservation state from CPU object"
-  (`OPTIMIZATION-PLAN.md:438`). Real SMP needs real reservation/atomic emulation across cores.
+- **Single-CPU atomics only.** `lwarx`/`stwcx.` (load-reserve/store-conditional) are now compiled
+  **natively** (P3a, 2026-06-07) but model a **single-CPU** reservation in the shared regs struct
+  (`reserve_valid`/`reserve_addr`; stwcx. always succeeds if the reservation matches). Real SMP
+  needs cross-core reservation/atomic emulation with memory-coherence barriers — the native
+  single-CPU path is a correctness baseline, not multicore-ready.
 - **Single-CPU assumptions throughout.** SMC invalidation, the shared JIT code cache + its W^X
   toggling, low-memory globals, and the nanokernel are all written for one CPU.
 - **The cooperative world is indivisible.** The Blue/Process-Manager environment is one logical

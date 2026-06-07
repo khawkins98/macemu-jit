@@ -295,6 +295,33 @@ exactly: (1) `jump68k` — redirect the parcels PPC→68k handoff to SheepShaver
 RE; boot-flow trace from the nanokernel idle/handoff at 0x503127xx), then (2) port the 68k-side HLE
 shims (nvram/via) that `patch_68k` currently can't find. With (1)+(2) the 68k OS should start.
 
+### Trace-ring diagnosis of the wedge (2026-06-08) — it's a self-deadlocked spinlock, not a benign idle
+
+`SS_JIT_TRACE_RING=1` + live `lldb … ppc_jit_dump_trace_ring()` at the wedge. The full 262k-entry ring
+is **only the 5-PC loop** `0x503127a8/b8/bc/c0/c4` — nothing else runs. Disassembled, the loop is a
+**spinlock-acquire with a decrementer timeout**:
+```
+entry: r29 = DEC_start - (timeout<<3)              ; deadline
+loop:  if flag(-0xb30(r30)) != 0: r29 = DEC; addis -1   ; this path DISABLES the timeout
+       if (DEC_now - r29) > 0: try-acquire (0x312818)    ; else -> "Timeout ... locked CPU" panic
+try:   if [r31] != 0: goto loop                    ; lock HELD -> spin; else lwarx/stwcx acquire
+```
+Findings: (a) the lock `[r31]` is held and never released; (b) the `-0xb30` flag is nonzero, routing
+through the path that recomputes `r29` from DEC each iteration → the timeout never fires (this is why
+`SS_SYNTH_DEC` didn't break it out); (c) the diag log shows interrupts *delivered but not taken* →
+**MSR[EE]=0 (interrupts masked)**, so no other context runs to release the lock; (d) a nearby ROM
+string is **"Recursive spinlock"**. ⇒ This is a **self-deadlock**: the nanokernel is acquiring a lock
+it already holds, with interrupts off — a classic **"faulted while holding a spinlock, panic path
+re-took it"** signature.
+
+**Most likely cause:** the diagnostic skip of `jump68k` leaves the PPC→68k handoff un-redirected, so
+when the nanokernel reaches it, the `rfi` enters the wrong target → fault → recursive-spinlock panic
+deadlock. So skipping `jump68k` does NOT cleanly idle; it faults — which *strengthens* "`jump68k` is
+the real blocker." (Caveat: the fault could also be a JIT codegen issue on a nanokernel instruction;
+`SS_JIT_VERIFY` would discriminate, but the un-redirected handoff is the leading hypothesis.)
+**Next:** implement `jump68k` for real (locate the parcels boot handoff caller + apply the
+EmulatorData/opcode-table/init redirect) — that is now the single highest-value step, not the DEC.
+
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 
 - **No prior art boots a parcels ROM / 9.1-9.2 anywhere [verified].** Upstream `cebix/macemu` has

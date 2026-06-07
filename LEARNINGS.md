@@ -3,6 +3,28 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — AltiVec coverage audit found a 2nd scrambled family: whole-vector shifts (vsl/vslo/vsro)
+
+Ran the advisor's suggested **coverage audit** (grep JIT `case` labels vs `TEST_ORDER` vector names)
+after the sum-across fix. Trap: a naive substring match (`"vsl" in "vslw"`) hides ops — `vsl/vsr/vsldoi`
+looked "covered" because of `vslb/vslw/vslh`; only `vslo/vsro` (the 'o' breaks the substring) surfaced.
+**Match on whole mnemonics, not substrings.** Audit (after correction) found the **whole-vector shift
+family was scrambled like sum-across**:
+- Authoritative XOs (ppc-decode.cpp): `vsl=452 vsr=708 vslo=1036 vsro=1100` (+ `vsldoi` VA-form XO 44).
+- JIT had: `case 452` (really `vsl`) running **vsldoi EXT-by-constant** code; `case 1036` (really `vslo`)
+  running **per-lane SSHL.16B**; `case 1100` (really `vsro`) running **per-lane NEG+USHL** — all WRONG,
+  because these shift the **full 128-bit register**, not each lane. `case 1356/1420` were dead (no real
+  op). `vsr` (708) and `vsldoi` (varying vxo) already fell through to the **correct interp** fallback.
+- Confirmed by 4 new vectors (`av_vsl/av_vslo/av_vsro` diverged; `av_vsr` passed) — empirical, not assumed.
+
+**Fix:** routed `vsl/vslo/vsro` to `return false` (correct interp fallback), removed dead cases. Chose
+fallback over native because the dynamic whole-vector shift is awkward in NEON and these ops are rare
+(project rule: *simple by default, performance by earned sophistication*). Documented the native plan in
+the code (vslo/vsro = `TBL.16B` with a runtime `[0..15]±sh` index vector; vsl = per-byte shift + cross-byte
+carry). `make test-jit` 343/343, score=100. Two scrambled families in one sitting → **the AltiVec XO tables
+were never differentially audited**; the remaining audit hits (fctid/fctidz/fcfid/fcmpo/fsqrt etc.) deserve
+the same whole-mnemonic check before trusting their "coverage." [[altivec-detection-not-pure-pvr]]
+
 ## 2026-06-07 — AltiVec sum-across JIT bug: XO map was SCRAMBLED + no saturation (5 ops, caught by ground-truth diff)
 
 Hardening the dormant AltiVec codegen (task #22) immediately paid off: the **sum-across family was

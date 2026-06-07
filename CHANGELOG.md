@@ -35,6 +35,16 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
   instead of raw "No such file" messages.
 
+### [SheepShaver] AltiVec whole-vector shifts fixed — vsl/vslo/vsro had scrambled XOs + per-lane codegen
+
+- A coverage audit (JIT `case` labels vs test-vector names) found a second scrambled family. The
+  whole-128-bit shifts `vsl` (XO 452), `vslo` (1036), `vsro` (1100) were running the *wrong* ops'
+  **per-lane** NEON codegen (vsl→vsldoi EXT-by-constant, vslo→per-byte SSHL, vsro→per-byte NEG+USHL);
+  `case 1356/1420` were dead (non-existent XOs). `vsr` (708) and `vsldoi` already fell back correctly.
+- **Fix**: route `vsl/vslo/vsro` to the interpreter (correct) and remove the dead cases; native
+  TBL-based codegen documented as a perf follow-up. Confirmed by 4 new vectors (`av_vsl/av_vslo/av_vsro`
+  diverged before the fix; `av_vsr` already passed). `make test-jit` 343/343, score=100.
+
 ### [SheepShaver] AltiVec sum-across family fixed — scrambled XO map + missing saturation (5 ops)
 
 - The horizontal-reduce-and-saturate ops (`vsum4ubs`/`vsum4sbs`/`vsum4shs`/`vsum2sws`/`vsumsws`)

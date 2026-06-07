@@ -3904,9 +3904,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 878: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupkhsh SXTL.4S */
 		case 942: emit_load_vr(0,vb); emit32(0x4E212800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupklsb SXTL2.8H */
 		case 1006: emit_load_vr(0,vb); emit32(0x4E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vupklsh SXTL2.4S */
-		case 452: { uint32_t sh=(op>>6)&0xF; emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E010000|(sh<<11)); emit_store_vr(0,vd); return true; } /* vsldoi EXT.16B */
-		case 1036: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E205400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsl SSHL.16B (shift left by register) */
-		case 1100: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x6E20B800|(1<<5)|1); emit32(0x6E205400|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vsr NEG+USHL.16B (negate shift, then shift left = right shift) */
+		/* WHOLE-VECTOR shifts vsl/vslo/vsro (XOs 452/1036/1100) -- these XOs were SCRAMBLED
+		 * and given PER-LANE NEON codegen, which is WRONG: they shift the full 128-bit
+		 * register, not each lane. (case 452/vsl ran vsldoi EXT-by-constant; 1036/vslo ran
+		 * per-byte SSHL; 1100/vsro ran per-byte NEG+USHL.) Confirmed diverging by the
+		 * av_vsl/av_vslo/av_vsro vectors. vsr (708) and vsldoi already fall back correctly.
+		 * Routed to the interpreter (correct) until native codegen lands. Native plan
+		 * (perf follow-up): vslo/vsro = TBL.16B with a runtime index vector ([0..15] +/- sh,
+		 * sh from vB[121:124]); vsl-by-bits = per-byte shift + cross-byte carry merge.
+		 * Fixed 2026-06-07 (gated by av_vsl/av_vslo/av_vsro). */
+		case 452:  return false; /* vsl  -- interp fallback (was vsldoi EXT code; wrong op) */
+		case 1036: return false; /* vslo -- interp fallback (was per-lane SSHL; wrong) */
+		case 1100: return false; /* vsro -- interp fallback (was per-lane NEG+USHL; wrong) */
 		case 1604: return true; /* mtvscr NOP */
 		case 1540: emit_load_imm32(RTMP0,0); emit32(0x4E010C00|(RTMP0<<5)|0); emit_store_vr(0,vd); return true; /* mfvscr - return 0 */
 		case 782: /* vpkpx — pack 4+4 words to 8 1-5-5-5 pixels (ev_mixed-aware, 2026-06-07) */
@@ -3966,10 +3975,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x4F000400 | 2);                     /* MOVI v2.4S, #0 */
 			emit32(0x6E1C0400 | (0 << 5) | 2);          /* INS v2.S[3], v0.S[0] -> [0,0,0,sat] */
 			emit_store_vr(2, vd); return true;
-		case 1356: /* vslo — shift left by octet (approx: pass through) */
-			emit_load_vr(0, va); emit_store_vr(0, vd); return true;
-		case 1420: /* vsro — shift right by octet (approx) */
-			emit_load_vr(0, va); emit_store_vr(0, vd); return true;
+		/* (dead cases 1356/1420 removed: not real XOs; vslo=1036/vsro=1100 above.) */
 		default: break;
 		}
 		switch (vao) {

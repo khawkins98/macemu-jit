@@ -204,6 +204,19 @@ p("av_vsraw", shift2(900, 0x80, 0x20), "vsraw: word ARITHMETIC shift-right (sign
 p("av_vrlb",  shift2(4,   0x80, 0x00), "vrlb: rotate-left byte (mod 8), wrap-around")
 p("av_vrlh",  shift2(68,  0x80, 0x10), "vrlh: rotate-left halfword (mod 16), wrap-around")
 p("av_vrlw",  shift2(132, 0x80, 0x20), "vrlw: rotate-left word (mod 32), wrap-around")
+# --- WHOLE-VECTOR shifts (vsl bit-shift, vslo/vsro octet-shift). Authoritative XOs:
+# vsl=452 vsr=708 vslo=1036 vsro=1100 (ppc-decode.cpp). The JIT had these SCRAMBLED:
+# case 452 (really vsl) ran vsldoi EXT code; 1036 (vslo) ran per-byte SSHL; 1100 (vsro) ran
+# per-byte NEG+USHL; vsr/vsldoi fell back to interp (correct); 1356/1420 were dead. These
+# operate on the FULL 128-bit register, NOT per-lane, so the per-lane NEON ops were wrong.
+# Operands: vA=v1 distinct bytes 0x10..0x1F; vB=v3 carries the shift count.
+def shiftwv(xo, vb): return load_pattern(1,0x10)+load_bytes(3,vb)+[vx(2,1,3,xo)]+grab()
+# vslo/vsro shift count = vB bits 121-124 (octet count); byte15=sh<<3. sh=4 -> 0x20 (set all bytes).
+p("av_vslo", shiftwv(1036, [0x20]*16), "vslo: shift whole vector LEFT 4 octets, zero-fill")
+p("av_vsro", shiftwv(1100, [0x20]*16), "vsro: shift whole vector RIGHT 4 octets, zero-fill")
+# vsl/vsr shift count = vB bits 125-127 (bit count 0-7); all bytes' low 3 bits must match. sh=3.
+p("av_vsl",  shiftwv(452,  [0x03]*16), "vsl: shift whole vector LEFT 3 bits, cross-byte carry")
+p("av_vsr",  shiftwv(708,  [0x03]*16), "vsr: shift whole vector RIGHT 3 bits, cross-byte carry")
 # Saturating add/sub + signed averages: FIXED 2026-06-06. Were emitting the wrong NEON op
 # (SABA/UABA abs-diff for adds, SMAXP for signed avg) and/or swapped signedness (sat-sub).
 # Now SQADD/UQADD/SQSUB/UQSUB/SRHADD (capstone-verified). Boundary operands exercise the

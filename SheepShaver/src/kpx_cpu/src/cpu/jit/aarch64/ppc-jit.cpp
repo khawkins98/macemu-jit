@@ -3970,58 +3970,50 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		return true;
 	}
 
+	/* FP memory (D-form) — FPR side via the FP RA (P5b); EA/memory logic unchanged.
+	 * Loads write the cached hD directly; stores read the cached hS and use V0/S0 as
+	 * FP scratch for the single conversion so the cached value is never clobbered. */
 	case 48: /* lfs frD,d(rA) — load float single */
-		rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
+	{	rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-		/* Load 32-bit float, byte-swap, convert to double */
 		a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV Wd */
-		/* Move int to float reg: FMOV Sd, Wn */
-		emit32(0x1E270000 | (RTMP1 << 5) | 0); /* FMOV S0, Wn */
-		/* Convert single to double: FCVT Dd, Sd */
-		emit32(0x1E22C000 | (0 << 5) | 0); /* FCVT D0, S0 */
-		emit_store_fpr(0, rd);
-		return true;
+		int hD = ra_fp_store(rd);
+		emit32(0x1E270000 | (RTMP1 << 5) | hD); /* FMOV S(hD), Wn */
+		emit32(0x1E22C000 | (hD << 5) | hD);    /* FCVT D(hD), S(hD) */
+		return true; }
 
 	case 50: /* lfd frD,d(rA) — load float double */
-		rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
+	{	rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-		/* Load 64-bit, byte-swap */
 		a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Xt, [Xn] (64-bit) */
-		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xd, Xn (64-bit byte-swap) */
-		/* Move to FP reg: FMOV Dd, Xn */
-		emit32(0x9E670000 | (RTMP1 << 5) | 0); /* FMOV D0, Xn */
-		emit_store_fpr(0, rd);
-		return true;
+		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xd, Xn */
+		int hD = ra_fp_store(rd);
+		emit32(0x9E670000 | (RTMP1 << 5) | hD); /* FMOV D(hD), Xn */
+		return true; }
 
 	case 52: /* stfs frS,d(rA) — store float single */
-		rd = PPC_RS(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
-		emit_load_fpr(0, rd);
-		/* Convert double to single: FCVT Sd, Dd */
-		emit32(0x1E624000 | (0 << 5) | 0);
-		/* Move float to int: FMOV Wn, Sd */
-		emit32(0x1E260000 | (0 << 5) | RTMP1);
-		/* Byte-swap and store */
+	{	rd = PPC_RS(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
+		int hS = ra_fp_load(rd);
+		emit32(0x1E624000 | (hS << 5) | 0);    /* FCVT S0, D(hS) — scratch V0 */
+		emit32(0x1E260000 | (0 << 5) | RTMP1); /* FMOV Wn, S0 */
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP2, (int32_t)simm); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
 		a64_str_w_reg(RTMP1, RMEMBASE, RTMP0); /* STR Wt, [Xn] */
-		return true;
+		return true; }
 
 	case 54: /* stfd frS,d(rA) — store float double */
-		rd = PPC_RS(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
-		emit_load_fpr(0, rd);
-		/* Move FP to int: FMOV Xn, Dd */
-		emit32(0x9E660000 | (0 << 5) | RTMP1);
-		/* Byte-swap 64-bit */
+	{	rd = PPC_RS(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
+		int hS = ra_fp_load(rd);
+		emit32(0x9E660000 | (hS << 5) | RTMP1); /* FMOV Xn, D(hS) */
 		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xd, Xn */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP2, (int32_t)simm); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-		/* STR Xt, [Xn] (64-bit store) */
-		a64_str_x_reg(RTMP1, RMEMBASE, RTMP0);
-		return true;
+		a64_str_x_reg(RTMP1, RMEMBASE, RTMP0); /* STR Xt, [Xn] (64-bit) */
+		return true; }
 
 	case 63: /* double-precision FP ops */
 	{

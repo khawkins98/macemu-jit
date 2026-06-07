@@ -4034,29 +4034,26 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 
 		/* X-form FP ops (10-bit XO) */
 		switch (xo10) {
-		case 72: /* fmr frD,frB — FP move register */
-			emit_load_fpr(0, frb);
-			emit_store_fpr(0, frd);
-			return true;
+		case 72: /* fmr frD,frB — FP move register (zero-copy via FP RA) */
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			if (hD != hB) emit_fmov_d(hD, hB);
+			return true; }
 
 		case 40: /* fneg frD,frB — FP negate */
-			emit_load_fpr(0, frb);
-			emit32(0x1E614000 | (0 << 5) | 0); /* FNEG Dd, Dn */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E614000 | (hB << 5) | hD); /* FNEG D(hD),D(hB) */
+			return true; }
 
 		case 264: /* fabs frD,frB — FP absolute value */
-			emit_load_fpr(0, frb);
-			emit32(0x1E60C000 | (0 << 5) | 0); /* FABS Dd, Dn */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E60C000 | (hB << 5) | hD); /* FABS D(hD),D(hB) */
+			return true; }
 
 		case 136: /* fnabs frD,frB — FP negative absolute */
-			emit_load_fpr(0, frb);
-			emit32(0x1E60C000 | (0 << 5) | 0); /* FABS */
-			emit32(0x1E614000 | (0 << 5) | 0); /* FNEG */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E60C000 | (hB << 5) | hD); /* FABS D(hD),D(hB) */
+			emit32(0x1E614000 | (hD << 5) | hD); /* FNEG D(hD),D(hD) */
+			return true; }
 
 		case 0: /* fcmpu crD,frA,frB */
 		{
@@ -4540,72 +4537,62 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		(void)fra; (void)frc; (void)frb; (void)frd;
 		/* Single-precision: compute in double, round to single, store as double */
 		switch (xo5) {
+		/* Single-precision — zero-copy via the FP RA (P5b): compute in double into the
+		 * cached hD, then round-to-single in place (FCVT S(hD),D(hD); FCVT D(hD),S(hD)).
+		 * Load all sources before ra_fp_store(frd) so frd aliasing a source is safe.
+		 * This is the Fractal Carbon hot path (fmuls/fmadds/fsubs/fnmsubs). */
 		case 21: /* fadds */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frb);
-			emit32(0x1E602800 | (1 << 16) | (0 << 5) | 0); /* FADD (double) */
-			/* Round to single: FCVT Sd, Dd then FCVT Dd, Sd */
-			emit32(0x1E624000 | (0 << 5) | 0); /* FCVT Sd, Dd */
-			emit32(0x1E22C000 | (0 << 5) | 0); /* FCVT Dd, Sd */
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E602800 | (hB << 16) | (hA << 5) | hD); /* FADD D(hD),D(hA),D(hB) */
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD); /* round single */
+			return true; }
 		case 20: /* fsubs */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frb);
-			emit32(0x1E603800 | (1 << 16) | (0 << 5) | 0);
-			emit32(0x1E624000 | (0 << 5) | 0);
-			emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd);
-			return true;
-		case 25: /* fmuls */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit32(0x1E600800 | (1 << 16) | (0 << 5) | 0);
-			emit32(0x1E624000 | (0 << 5) | 0);
-			emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E603800 | (hB << 16) | (hA << 5) | hD);
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
+		case 25: /* fmuls (frA,frC) */
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hD = ra_fp_store(frd);
+			emit32(0x1E600800 | (hC << 16) | (hA << 5) | hD);
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
 		case 18: /* fdivs */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frb);
-			emit32(0x1E601800 | (1 << 16) | (0 << 5) | 0);
-			emit32(0x1E624000 | (0 << 5) | 0);
-			emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd);
-			return true;
+		{	int hA = ra_fp_load(fra); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E601800 | (hB << 16) | (hA << 5) | hD);
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
 		case 29: /* fmadds */
-			emit_load_fpr(0, fra); emit_load_fpr(1, frc); emit_load_fpr(2, frb);
-			emit32(0x1F400000 | (1 << 16) | (2 << 10) | (0 << 5) | 0);
-			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd); return true;
-		case 28: /* fmsubs = frA*frC - frB (single-precision) */
-			emit_load_fpr(0, fra); emit_load_fpr(1, frc); emit_load_fpr(2, frb);
-			emit32(0x1F608000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FNMSUB */
-			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd); return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F400000 | (hC << 16) | (hB << 10) | (hA << 5) | hD);
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
+		case 28: /* fmsubs = frA*frC - frB */
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F608000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FMSUB */
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
 		case 31: /* fnmadds */
-			emit_load_fpr(0, fra); emit_load_fpr(1, frc); emit_load_fpr(2, frb);
-			emit32(0x1F600000 | (1 << 16) | (2 << 10) | (0 << 5) | 0);
-			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd); return true;
-		case 30: /* fnmsubs = -(frA*frC - frB) = frB - frA*frC (single-precision) */
-			emit_load_fpr(0, fra); emit_load_fpr(1, frc); emit_load_fpr(2, frb);
-			emit32(0x1F408000 | (1 << 16) | (2 << 10) | (0 << 5) | 0); /* FMSUB */
-			emit32(0x1E624000 | (0 << 5) | 0); emit32(0x1E22C000 | (0 << 5) | 0);
-			emit_store_fpr(0, frd); return true;
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F600000 | (hC << 16) | (hB << 10) | (hA << 5) | hD);
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
+		case 30: /* fnmsubs = -(frA*frC - frB) = frB - frA*frC */
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FNMSUB */
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
 		case 24: /* fres frD,frB — reciprocal estimate */
-			emit_load_fpr(0, frb);
-			emit32(0x1E624000 | (0 << 5) | 0); /* FCVT Sd,Dd */
-			emit32(0x1E20F800 | (0 << 5) | 0); /* FRECPE Sd,Sn */
-			emit32(0x1E22C000 | (0 << 5) | 0); /* FCVT Dd,Sd */
-			emit_store_fpr(0, frd); return true;
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E624000 | (hB << 5) | hD); /* FCVT S(hD),D(hB) */
+			emit32(0x1E20F800 | (hD << 5) | hD); /* FRECPE S(hD),S(hD) */
+			emit32(0x1E22C000 | (hD << 5) | hD); /* FCVT D(hD),S(hD) */
+			return true; }
 
-		case 22: /* fsqrts frD,frB — floating-point square root (single) */
-			emit_load_fpr(0, frb);
-			emit32(0x1E61C000 | (0 << 5) | 0); /* FSQRT Dd, Dn (double precision) */
-			emit32(0x1E624000 | (0 << 5) | 0); /* FCVT Sd, Dd (round to single) */
-			emit32(0x1E22C000 | (0 << 5) | 0); /* FCVT Dd, Sd (widen back) */
-			emit_store_fpr(0, frd); return true;
+		case 22: /* fsqrts frD,frB — square root (single) */
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E61C000 | (hB << 5) | hD); /* FSQRT D(hD),D(hB) */
+			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
+			return true; }
 		default:
 			return false; /* unknown opcode: stop compilation */
 		}

@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [docs] SiliconSheep Inspector — Tier 2 machine state + P1 session recording
+
+- **Register Inspector** — GPR r0-r31, SPR (PC/LR/CTR/CR/XER) snapshot via
+  `RPC_METHOD_DUMP_REGISTERS`. Change-highlighting between snapshots (Snow-style).
+  `dump_regs_json()` method added to `sheepshaver_cpu` class.
+- **Memory hex viewer** — read guest RAM at any address via `RPC_METHOD_READ_MEMORY`
+  (capped at 4K). Classic hex+ASCII dump with preset address buttons (Low Memory,
+  CurApName, WindowList, ROM Base, RAM Base).
+- **Guest State panel** — live OS version, window list (title/kind/bounds/visibility),
+  screen size, modal state, front window via `RPC_METHOD_UI_SNAPSHOT`. Reuses the
+  existing `ui_introspect.cpp` `serialize_snapshot()` backend directly.
+- **Session recording** — Record button captures events + JIT stats + guest state
+  every 2s. Saves to `.sheepshaver-profile` JSON. Load button replays with sparkline
+  chart (block rate over time), event timeline with timestamps, stats table.
+- **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
+  instead of raw "No such file" messages.
+
 ### [SheepShaver] AltiVec halfword multiplies + vpkuwum fixed (ev_mixed multiply/pack family complete)
 
 - `vmul{o,e}{u,s}h` (even/odd halfword multiplies, 72/328/584/840): were broken (no ev_mixed

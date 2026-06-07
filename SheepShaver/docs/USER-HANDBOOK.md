@@ -4,10 +4,11 @@ A guide to running SheepShaver on Apple Silicon Macs.
 
 > **Prefer a GUI?** SiliconSheep (`SiliconSheep/` in the repo) is a Tauri-based
 > launcher that wraps SheepShaver with a first-run wizard, VM library, settings
-> editor, and debug tools — no prefs file editing required. See
-> `SiliconSheep/README.md` to get started. Everything below still applies if you
-> prefer the command line or need to understand what SiliconSheep is doing under
-> the hood.
+> editor, and a full **Inspector** (live JIT stats, register/memory viewer, guest
+> window state, session recording/replay — like Chrome DevTools for the emulator).
+> See `SiliconSheep/README.md` to get started. Everything below still applies if
+> you prefer the command line or need to understand what SiliconSheep is doing
+> under the hood.
 
 ## Quick Start
 

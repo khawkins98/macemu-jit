@@ -657,7 +657,7 @@ one else has solved coherence for classic Mac OS either.
 
 ---
 
-## Developer Inspector (Snow-inspired) — 🟡 Tier 1 shipped, Profiler planned
+## Developer Inspector (Snow-inspired) — 🟡 Tier 2 complete, P1 shipped
 
 **Architecture: the Inspector is a separate window** — like Chrome DevTools detaching from the
 browser, or Xcode Instruments being its own app. The settings panel is a control panel (trivial:
@@ -678,16 +678,16 @@ surfaces matter"*, not its architecture. Full crosswalk: `SNOW-EVALUATION-PLAN.m
 Heartbeat parsing, signal timeline, log viewer, stats gauges — all working in the Inspector
 tab. Data flows: emulator stderr → Rust thread → AppState cache → Tauri command → web UI.
 
-### Machine State — Tier 2 (C2.0 RPC enables these)
+### Machine State — ✅ Tier 2 complete
 
-- [ ] **Register inspector** — GPR (r0-r31), SPR (LR/CTR/XER/CR), PC via `RPC_METHOD_DUMP_REGISTERS`.
+- [x] **Register inspector** — GPR (r0-r31), SPR (LR/CTR/XER/CR), PC via `RPC_METHOD_DUMP_REGISTERS`.
   Change-highlighting between snapshots (Snow-style yellow).
-- [ ] **Memory hex viewer** — read N bytes at guest address via `RPC_METHOD_READ_MEMORY` (already
+- [x] **Memory hex viewer** — read N bytes at guest address via `RPC_METHOD_READ_MEMORY` (already
   implemented in emulator, capped at 64K). Classic hex+ASCII grid with navigable address input.
-- [ ] **Guest state sidebar** — CurApName, WindowList, Ticks, SysVersion, MBarHeight from
+- [x] **Guest state panel** — CurApName, WindowList, Ticks, SysVersion, MBarHeight from
   low-memory globals (`HOST-GUEST-CHANNELS.md`). Periodic poll via C2.0 RPC.
 
-### Profiler / Session Recording — ☐ planned (Chrome DevTools-inspired)
+### Profiler / Session Recording — 🟡 P1 shipped (Chrome DevTools-inspired)
 
 **The vision:** a "Performance" panel like Chrome DevTools — click Record, run something in the
 guest, click Stop, see a timeline of what happened. Which blocks were hot, where fallbacks
@@ -697,15 +697,15 @@ occurred, what was slow. This is the JIT equivalent of a flame chart.
 (timeline + detail), Firefox Profiler (web-based, shareable).
 
 **Tier P1 — Session recording (existing data, new recording/playback UI):**
-- [ ] **Start/Stop recording** button in the Inspector window. While recording, capture all
+- [x] **Start/Stop recording** button in the Inspector window. While recording, capture all
   `[HB]` heartbeats, `[BOOT]`/`[APP]`/`[STALL]` signals, and j2i/fallback events to a session
   file (JSON or binary). Timestamped.
-- [ ] **Session timeline** — replay the recording as a scrollable waterfall. X-axis = time,
+- [x] **Session timeline** — replay the recording as a scrollable waterfall. X-axis = time,
   Y-axis = events. Zoom in/out. Click an event to see its detail.
 - [ ] **Fallback trace** — log every interpreter fallback with the PC and opcode (needs a new
   emitter in `ppc-cpu.cpp`, guarded by an env var or RPC command to avoid overhead when not
   recording). This is the "why was this slow?" data.
-- [ ] **Export/share** — save the session as a `.sheepshaver-profile` file that can be reopened
+- [x] **Export/share** — save the session as a `.sheepshaver-profile` file that can be reopened
   or shared for diagnosis (like Firefox Profiler's shareable URLs).
 
 **Tier P2 — Per-block profiling (needs B1, the execution-weighted profiler):**

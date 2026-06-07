@@ -72,17 +72,25 @@ pnpm typecheck     # TypeScript only
   creation/selection + optional CD → Review & Boot
 - **VM library** — Master-detail layout: sidebar VM list + integrated detail pane with
   screenshot, config tabs, and action buttons. Start/Stop/Settings/Duplicate/Reveal/Delete
-- **Settings panel** — Sidebar sections (General, Display, Storage, Network, Advanced)
-  with hot-reload badges and Save button
-- **Prefs bridge** — Round-trip faithful parser for SheepShaver's text format (comments,
-  K/M/G suffixes, multi-value keys)
-- **VM lifecycle** — Launch with emulator discovery, SIGUSR1 clean shutdown, running
-  status polling via `try_wait()`
-- **Disk backup** — APFS `clonefile` copy-on-write snapshot of disk images
-- **VM duplicate** — Instant APFS clone with path rewriting
-- **Toast notifications** — Launch coach marks, save confirmation, error feedback
-- **Dark/light mode** — CSS `prefers-color-scheme`
-- **Accessibility** — `focus-visible` styles, semantic buttons, keyboard navigation
+- **Settings panel** — 4 tabs (General, Hardware, Storage, Network) with immediate-apply
+  (Mac OS 9 HIG modeless pattern — no Save button). Expert fold-out for advanced prefs.
+- **Inspector window** (🔬) — separate Chrome DevTools-style window with 6 panels:
+  - Overview: guest state (windows, screen, OS version) + JIT stats gauges
+  - Timeline: signal events + session replay with sparkline charts
+  - Log: scrollable emulator stderr
+  - Registers: GPR/SPR snapshot with change highlighting
+  - Memory: hex+ASCII dump at any guest address
+  - Debug: instant RPC controls (input lockout, frameskip)
+- **Session recording** — Record/Stop captures events, stats, and guest state snapshots.
+  Saves to `.sheepshaver-profile` for analysis, sharing, or replay.
+- **C2.0 RPC** — bidirectional Unix domain socket IPC (sub-16ms latency) for live
+  register dumps, memory reads, stats queries, and instant control toggles.
+- **Prefs bridge** — Round-trip faithful parser (preserves comments, K/M/G suffixes)
+- **VM lifecycle** — Multi-VM support, SIGUSR1 clean shutdown, running status polling
+- **Disk management** — APFS clonefile backup/duplicate, resize, add/remove
+- **Bug report bundle** (🐛) — zip with UI + guest screenshots, logs, stats, prefs
+- **Mac OS 9 Platinum styling** — warm greys, beveled buttons, Geneva font, pixel art icons
+- **Accessibility** — keyboard navigation, ARIA roles, focus-visible styles
 
 ## Relation to SheepShaver
 

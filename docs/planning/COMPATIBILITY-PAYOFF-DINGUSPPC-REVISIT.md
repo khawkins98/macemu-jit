@@ -74,6 +74,24 @@ trap patches in `rom_patches.cpp`/`emul_op.cpp`; scoped 2026-06-07):
   `SS_COPYBITS_TRACE` runs would fail, caught immediately by a boot that doesn't reach Finder). Land
   Phase 1, validate one boot, then Phase 2.
 
+#### STATUS (2026-06-07) — come-from stub abandoned; profile-correlation shipped (phase 1 partial)
+
+- ❌ **The come-from heap-stub crashed** (EMUL_OP + `move.l #orig,a0` + `jmp (a0)` via
+  `SetToolboxTrapAddress`). Crash report: first CopyBits call from the **ADB cursor-draw** path →
+  `jmp (a0)` → garbage PC **0x55590000** (RAM top). The EMUL_OP mis-resumed inside *nested*
+  `execute_68k`, so `move.l` was skipped and `a0` held a stale (stack-ish) value. Lesson: **don't
+  do come-from heap stubs that EMUL_OP from within nested 68k execution.** Never committed.
+- ✅ **Shipped instead — `SS_COPYBITS_TRACE` safe resolver** (commit `9fbfcff6`): resolves `_CopyBits`'s
+  guest PC via `GetToolboxTrapAddress(0xA8EC)` at first idle and logs it (e.g. `102daa5c`); zero guest
+  patching, clean shutdown verified. **Frequency = correlate that PC with `SS_JIT_PROFILE`'s per-block
+  (PC-keyed) counts.**
+- ⏭ **Remaining for the go/no-go number:** (1) the profiler prints only the **top-40** hot blocks — add a
+  small `SS_JIT_PROFILE_PC=<pc>` hook to print an *arbitrary* block's exec count (CopyBits won't be top-40
+  under light use); (2) run it under a **graphics-heavy workload** (an app/game on the apps disk), not
+  just Finder menu nudges, to get a representative call rate + (Phase 2) rect sizes.
+- **Phase 2 interception (rect sizes):** do it the **ROM-patch way** (EMUL_OP written into the routine at
+  PatchROM time, like the existing `adbop`/nvram patches), NOT a runtime heap come-from.
+
 ---
 
 ## CONFIRM / CHALLENGE of the standing verdict

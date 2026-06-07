@@ -515,3 +515,10 @@ void ui_introspect_service(void) {
         return;                              // data write failed -> no sentinel (consumer times out)
     write_atomic(dir, "ss_ui.done", std::string("{\"nonce\":\"") + json_escape(nonce) + "\"}");
 }
+
+// C2.0 RPC: return a guest UI snapshot as JSON string
+extern "C" void ss_ui_snapshot_json(char *buf, int bufsz) {
+    std::string json = serialize_snapshot("rpc");
+    if ((int)json.size() >= bufsz) json.resize(bufsz - 1);
+    memcpy(buf, json.c_str(), json.size() + 1);
+}

@@ -19,4 +19,7 @@ static inline bool guest_ptr_ok(uint32 a)
 // file is present; otherwise polls/services one UI-snapshot request.
 extern void ui_introspect_service(void);
 
+// C2.0 RPC: get a JSON snapshot of guest UI state (windows, menu bar, screen, etc.)
+extern "C" void ss_ui_snapshot_json(char *buf, int bufsz);
+
 #endif // UI_INTROSPECT_H

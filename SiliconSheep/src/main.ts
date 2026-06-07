@@ -1782,6 +1782,12 @@ function renderInspectorWindow(vmId: string) {
       <div class="inspector-panels">
         <div class="inspector-panel" id="panel-overview">
           <div class="inspector-section">
+            <h3 class="inspector-heading">Guest State</h3>
+            <div id="insp-guest-state" class="inspector-guest-state">
+              <p class="ss-text-muted">Waiting for data...</p>
+            </div>
+          </div>
+          <div class="inspector-section">
             <h3 class="inspector-heading">JIT Stats</h3>
             <div id="insp-stats" class="inspector-stats"><p class="ss-text-muted">Waiting for data...</p></div>
           </div>
@@ -2024,6 +2030,42 @@ function renderInspectorWindow(vmId: string) {
     }
 
     try {
+      // Fetch guest UI state via RPC
+      try {
+        const uiJson = await invoke("rpc_ui_snapshot", { id: vmId }) as string;
+        if (uiJson) {
+          const ui = JSON.parse(uiJson);
+          const guestEl = document.getElementById("insp-guest-state");
+          if (guestEl) {
+            const windows = ui.windows || [];
+            const frontApp = windows.length > 0 ? (windows[0].title || "—") : "—";
+            guestEl.innerHTML = `
+              <div class="inspector-gauge-grid">
+                <div class="inspector-gauge"><span class="inspector-gauge__label">OS</span><span class="inspector-gauge__value">${escapeHtml(ui.sysVersion || "—")}</span></div>
+                <div class="inspector-gauge"><span class="inspector-gauge__label">Ticks</span><span class="inspector-gauge__value">${ui.ticks || "—"}</span></div>
+                <div class="inspector-gauge"><span class="inspector-gauge__label">Screen</span><span class="inspector-gauge__value">${ui.screen ? ui.screen.width + "×" + ui.screen.height : "—"}</span></div>
+                <div class="inspector-gauge"><span class="inspector-gauge__label">Windows</span><span class="inspector-gauge__value">${windows.length}</span></div>
+                <div class="inspector-gauge"><span class="inspector-gauge__label">Modal</span><span class="inspector-gauge__value">${ui.modalActive ? "Yes" : "No"}</span></div>
+                <div class="inspector-gauge"><span class="inspector-gauge__label">Front</span><span class="inspector-gauge__value">${escapeHtml(frontApp)}</span></div>
+              </div>
+              ${windows.length > 0 ? `
+              <div style="margin-top: 8px;">
+                <table style="width: 100%; font-size: 10px; font-family: 'SF Mono', Menlo, monospace; border-collapse: collapse;">
+                  <tr style="color: var(--ss-text-muted);"><th style="text-align:left; padding: 2px 4px;">Title</th><th>Kind</th><th>Bounds</th><th>Visible</th></tr>
+                  ${windows.slice(0, 10).map((w: any) => `
+                  <tr style="border-top: 1px solid var(--ss-border);">
+                    <td style="padding: 2px 4px;">${escapeHtml(w.title || "(untitled)")}</td>
+                    <td style="text-align:center;">${escapeHtml(w.role || w.kind || "?")}</td>
+                    <td style="text-align:center; font-size: 9px;">${w.bounds ? `${w.bounds.x},${w.bounds.y} ${w.bounds.w}×${w.bounds.h}` : "—"}</td>
+                    <td style="text-align:center;">${w.visible ? "✓" : "·"}</td>
+                  </tr>`).join("")}
+                </table>
+              </div>` : ""}
+            `;
+          }
+        }
+      } catch { /* UI snapshot not available */ }
+
       const data = (await invoke("get_vm_inspector", { id: vmId })) as InspectorState;
 
       // Overview panel

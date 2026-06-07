@@ -470,6 +470,15 @@ fn rpc_read_memory(id: String, addr: u32, len: u32, state: State<AppState>) -> R
 }
 
 #[tauri::command]
+fn rpc_ui_snapshot(id: String, state: State<AppState>) -> Result<String, String> {
+    let mut running = state.running.lock().map_err(|e| e.to_string())?;
+    ensure_rpc(&mut running, &id)?;
+    let vm = running.get_mut(&id).unwrap();
+    vm.rpc.as_mut().unwrap()
+        .invoke_get_string(rpc_client::METHOD_UI_SNAPSHOT)
+}
+
+#[tauri::command]
 fn get_vm_inspector(id: String, state: State<AppState>) -> Result<VmInspectorState, String> {
     let map = state.inspector.lock().map_err(|e| e.to_string())?;
     Ok(map.get(&id).cloned().unwrap_or_default())
@@ -840,6 +849,7 @@ fn main() {
             rpc_get_stats,
             rpc_dump_registers,
             rpc_read_memory,
+            rpc_ui_snapshot,
             generate_bug_report,
             set_runtime_control,
             capture_vm_screenshot,

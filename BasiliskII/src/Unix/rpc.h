@@ -106,7 +106,8 @@ enum {
   RPC_METHOD_MOUSE_GRAB     = 13,  // (int32 on_off) → ACK — immediate toggle
   RPC_METHOD_GET_STATS      = 14,  // () → reply with stats string
   RPC_METHOD_READ_MEMORY    = 15,  // (uint32 addr, uint32 len) → reply with bytes
-  RPC_METHOD_DUMP_REGISTERS = 16,  // () → reply with register dump string
+  RPC_METHOD_DUMP_REGISTERS = 16,
+  RPC_METHOD_UI_SNAPSHOT    = 17,  // () → reply with guest UI state JSON  // () → reply with register dump string
 };
 
 // C2.0: server-side connection for receiving launcher commands

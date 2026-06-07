@@ -920,12 +920,23 @@ static int ss_rpc_handle_dump_registers(rpc_connection_t *conn) {
 	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
 }
 
+// C2.0: defined in ui_introspect.cpp
+extern "C" void ss_ui_snapshot_json(char *buf, int bufsz);
+
+static int ss_rpc_handle_ui_snapshot(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[16384];
+	ss_ui_snapshot_json(buf, sizeof(buf));
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
 static rpc_method_descriptor_t ss_rpc_methods[] = {
 	{ RPC_METHOD_INPUT_LOCKOUT,  ss_rpc_handle_input_lockout },
 	{ RPC_METHOD_FRAMESKIP,      ss_rpc_handle_frameskip },
 	{ RPC_METHOD_GET_STATS,      ss_rpc_handle_get_stats },
 	{ RPC_METHOD_READ_MEMORY,    ss_rpc_handle_read_memory },
 	{ RPC_METHOD_DUMP_REGISTERS, ss_rpc_handle_dump_registers },
+	{ RPC_METHOD_UI_SNAPSHOT,    ss_rpc_handle_ui_snapshot },
 };
 
 static void ss_rpc_init_server(void) {

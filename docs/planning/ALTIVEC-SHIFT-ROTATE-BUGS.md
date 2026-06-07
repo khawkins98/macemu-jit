@@ -1,6 +1,6 @@
 # AltiVec / FP JIT codegen bug hunt (2026-06-06)
 
-> **Status:** 🟡 Active · **Created:** 2026-06-06 · **Updated:** 2026-06-07
+> **Status:** 🟡 Active · **Created:** 2026-06-06 · **Updated:** 2026-06-07 (pixel family closed)
 > **Why this doc exists:** tracks the AltiVec/FP differential codegen bug hunt — the repro records,
 > root causes, and the reusable ev_mixed/saturation fix designs.
 > _Markers: ✅ done · 🟡 in progress · ⏸ deferred · ☐ todo._
@@ -12,12 +12,13 @@ derivations) and `fctiw`/`fctid` non-default rounding. The reusable sweep tool i
 `SheepShaver/tools/jit-diff-sweep.py`.)*
 
 **Status:** 27 codegen bugs found + fixed 2026-06-06 (26 AltiVec + 1 FP); **2026-06-07 closed the
-entire ev_mixed multiply/pack family** — all 7 packs (saturating `vpk{sh,uh,sw,uw}{ss,us}` +
-modulo `vpkuwum`) and all even/odd multiplies (byte + halfword `vmul{o,e}{u,s}h`). Each
-oracle-validated against the **real emulator** interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`).
-**Remaining open** are *new derivations*, not pattern-extensions: **pixel** `vpkpx`/`vupk{h,l}px`
-(1-5-5-5 bit-field expand) + **sum-across** `vsum*` (horizontal reduce + saturate), plus the
-`fctiw`/`fctid` non-default-RN gap. The reusable ev_mixed normalize rules are in LEARNINGS
+entire ev_mixed multiply/pack family + the 1-5-5-5 pixel family** — all 7 packs (saturating
+`vpk{sh,uh,sw,uw}{ss,us}` + modulo `vpkuwum`), all even/odd multiplies (byte + halfword
+`vmul{o,e}{u,s}h`), and `vpkpx`/`vupkhpx`/`vupklpx` (the last also uncovered vcfsx/vcfux at wrong
+XOs miscompiling vupkhpx — fixed). Each oracle-validated against the **real emulator** interpreter
+(`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`). **Remaining open** are *new derivations*: **sum-across**
+`vsum*` (horizontal reduce + saturate), **scaled converts** vcfsx/vcfux/vctsxs/vctuxs (UIMM scale,
+need their real XOs), plus the `fctiw`/`fctid` non-default-RN gap. The reusable ev_mixed normalize rules are in LEARNINGS
 (2026-06-07) — use them for the remaining families.
 
 > **Gate-coverage note (2026-06-07):** the committed regression vectors are **one operand set per
@@ -190,8 +191,9 @@ Reuse `gen-altivec-vectors.py` `load_bytes` for crafted operands. This is the sa
 as `emit_vmrg` (which took several rounds) — **do it as a focused pass, not inline**, validating
 each op against the real interp before moving on.
 
-(Pixel `vpkpx`/`vupkhpx`/`vupklpx` and sum-across `vsumsws`/`vsum2sws`/`vsum4sbs` remain separately
-— pixel needs 1-5-5-5 field expansion; sum-across has rotated case labels + missing saturation.)
+(✅ **Pixel `vpkpx`/`vupkhpx`/`vupklpx` FIXED 2026-06-07** — `emit_vpkpx` (USHR+AND field extract
+→ pack tail) and `emit_vupkpx` (UXTL select+widen → AND/SHL field expand + `SSHR` sign-bit alpha).
+Sum-across `vsumsws`/`vsum2sws`/`vsum4sbs` remain separately — rotated case labels + missing saturation.)
 
 ### Attempt log (2026-06-06) — what NOT to repeat
 

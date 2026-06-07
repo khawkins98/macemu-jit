@@ -1041,13 +1041,15 @@ static void emit_load_ea_base(int ra_num) {
  *           ALL packs — saturating vpk{sh,uh}{ss,us}/vpk{sw,uw}{ss,us} (emit_vpk_h2b/
  *           emit_vpk_w2h) + modulo vpkuwum (case 78, emit_vpk_w2h+XTN); ALL even/odd
  *           multiplies — byte vmul{o,e}{u,s}b (emit_vmul_byte) + halfword vmul{o,e}{u,s}h
- *           (72/328/584/840, emit_vmul_hword). 2026-06-07: 11 ops, all with committed
- *           saturation/signedness-crossing vectors. (The earlier "UQXTN" 0x2E212800 was
- *           actually SQXTUN, and the unsigned halfword-mult 0x0E60A000 was not UMULL — fixed.)
- *   STILL BROKEN / remaining (all ev_mixed + new derivations, NOT pattern-extensions of the
- *           above; ROADMAP A2, full worklist in docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md):
- *           - pixel vpkpx/vupkhpx/vupklpx (1-5-5-5 bit-field expand, not a narrow);
- *           - sum-across vsumsws/vsum2sws/vsum4sbs (horizontal reduce + saturate).
+ *           (72/328/584/840, emit_vmul_hword). The 1-5-5-5 PIXEL family — vpkpx (emit_vpkpx),
+ *           vupkhpx/vupklpx (emit_vupkpx). 2026-06-07: 14 ops, all with committed
+ *           saturation/signedness/pixel-field-crossing vectors. (The earlier "UQXTN" 0x2E212800 was
+ *           actually SQXTUN; the unsigned halfword-mult 0x0E60A000 was not UMULL; and vcfsx/vcfux
+ *           were at wrong XOs (846/910 vs 842/778) miscompiling vupkhpx — all fixed.)
+ *   STILL BROKEN / remaining (new derivations, NOT pattern-extensions of the above; ROADMAP A2,
+ *           full worklist in docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md):
+ *           - sum-across vsumsws/vsum2sws/vsum4sbs (horizontal reduce + saturate);
+ *           - scaled converts vcfsx/vcfux/vctsxs/vctuxs (UIMM scale factor) at their real XOs.
  *
  * FIX APPROACH — (B) per-op ev_mixed-aware codegen is the CHOSEN + SHIPPED one
  * (the splat remap, emit_vmrg, emit_vmul_byte all follow it). **(A) REJECTED — do

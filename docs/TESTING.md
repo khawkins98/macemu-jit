@@ -128,9 +128,11 @@ semantics depend on sub-word byte position is suspect.** Status (2026-06-04):
      UZP1/UZP2 select + `UMULL.8H` widen + `REV32.8H`), and all element-symmetric ops.
    - **✅ FIXED + vectored 2026-06-07:** halfword multiplies `vmul{o,e}{u,s}h`
      (`emit_vmul_hword`), all 7 packs (saturating `vpk{sh,uh,sw,uw}{ss,us}` via
-     `emit_vpk_h2b`/`emit_vpk_w2h` + modulo `vpkuwum`). 🟡 **Still prospective** (no signed
+     `emit_vpk_h2b`/`emit_vpk_w2h` + modulo `vpkuwum`), and the **1-5-5-5 pixel family**
+     `vpkpx`/`vupkhpx`/`vupklpx` (`emit_vpkpx`/`emit_vupkpx`). 🟡 **Still prospective** (no signed
      test vector): signed byte multiplies `vmulosb`/`vmulesb`. 🔜 **New derivations remain:**
-     pixel `vpkpx`/`vupk{h,l}px` (1-5-5-5 bit-field), sum-across `vsum*`. ROADMAP A2.
+     sum-across `vsum*` (horizontal reduce + saturate), scaled converts `vcfsx`/`vcfux` (UIMM
+     scale, at their real XOs 842/778). ROADMAP A2.
    See the `case 12` / `emit_vmrg` note in ppc-jit.cpp; the global load/store REV32
    approach is ruled out (per-op is the path). Live tracker: ROADMAP A2.
 

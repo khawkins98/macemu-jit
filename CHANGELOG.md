@@ -28,6 +28,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
   instead of raw "No such file" messages.
 
+### [SheepShaver] AltiVec 1-5-5-5 pixel family fixed (vpkpx/vupkhpx/vupklpx) + convert-op XO bugs (`ff8e9504`, `e8e30c2e`)
+
+- `vpkpx` (pack, 782): new `emit_vpkpx` builds each 1-5-5-5 pixel from a word via USHR.4S + AND-mask
+  field extraction, then the word→halfword pack tail. `vupkhpx`/`vupklpx` (unpack, 846/974): new
+  `emit_vupkpx` selects+widens 4 halfwords (UXTL/UXTL2) and expands the 5-5-5 channels (AND/SHL) +
+  synthesizes the sign-bit alpha via `SSHR((h&0x8000)<<16, 7)` → `0xff000000`. All capstone-verified.
+- **Uncovered + corrected two pre-existing XO bugs:** `vcfsx` is XO 842 (not 846) and `vcfux` is 778
+  (not 910) — the 846 entry was actively miscompiling `vupkhpx` as `SCVTF`. Removed both wrong cases;
+  `vcfsx`/`vcfux` now fall to the interpreter (their plain `[SU]CVTF.4S` ignored the UIMM scale anyway).
+- 2 differential vectors (8 distinct pixels, sign-bit mix). `make test-jit` **332/332**. The AltiVec
+  pixel family is complete; remaining open AltiVec: sum-across, scaled converts, fctiw rounding.
+
 ### [SheepShaver] AltiVec halfword multiplies + vpkuwum fixed (ev_mixed multiply/pack family complete) (`92594ea4`, `808c26db`, docs `c5f4e81c`)
 
 - `vmul{o,e}{u,s}h` (even/odd halfword multiplies, 72/328/584/840): were broken (no ev_mixed

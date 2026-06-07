@@ -11,9 +11,13 @@ bug. After filtering parser false-positives (the FP table interleaves X/XFL/A fo
 regex mis-pulled primary-31 ops like `mfmsr`/`mcrxr`/`icbi` into the 63 table — verify each hit by hand):
 - **`mtfsf`/`mtfsfi` code bodies were SWAPPED vs their XOs.** `case 711` (real `mtfsf`, XFL XO 711) ran
   the *mtfsfi* decode (`crfD`/`imm`); `case 134` (real `mtfsfi`, X XO 134) ran the *mtfsf* decode
-  (`fm`/`frB`). Both write `PPCR_FPSCR` + sync rounding — so a guest `mtfsf` (the common one: set
-  rounding mode / clear FP exceptions) corrupted FPSCR. **Fixed by swapping the two case labels** (the
-  swap is correct by inspection: each body decodes the OTHER instruction's operand fields). 349/349.
+  (`fm`/`frB`). Both write `PPCR_FPSCR` + sync rounding, so a guest `mtfsf`/`mtfsfi` would have set the
+  wrong FPSCR fields. **Fixed by swapping the two case labels** (correct by inspection: each body decodes
+  the OTHER instruction's operand fields). 349/349.
+  **Severity — latent, no observed boot impact (don't overstate):** SheepShaver boots Mac OS to Finder
+  cleanly, which it could not if a *frequently-executed* instruction were corrupting FPSCR every boot.
+  So in practice `mtfsf`/`mtfsfi` are either off the hot path during boot or their mis-set fields were
+  benign for the code that ran. Correctness fix worth landing; not evidence that prior boots were wrong.
 - **Benign (not bugs):** `fsel`/`fsqrt`/`frsqrte` are A-form ops sitting in the X-form (`xo10`) switch,
   but it works — `fsqrt`/`frsqrte` always have frC=0 (so `xo10` == their 5-bit XO), and `fsel` with
   frC≠0 simply misses its `xo10` case and falls through to the correct interp. No incorrectness.
@@ -125,15 +129,19 @@ vector bit (`gestaltPowerPCHasVectorInstructions`, bit 6):
   and `execute_vector_*` in `ppc-execute.cpp`. So a boot-time *execution* probe wouldn't fault. Not the gate.
 
 So the bit is cleared by the System's own `'ppcf'` selector computation, which task #23 already showed is
-**not pure-PVR**. **The discriminating handoff question for the next user-in-loop session** (don't write
-this up as "needs deep RE" — it isn't scoped): *is the vector bit computed in the ROM image (→ statically
-patchable with the existing `find_rom_data` infra — a cheap win) or in the System file loaded to RAM
-(→ boot-time RAM patch or a `_Gestalt`-trap intercept, neither of which exists today)?* Hypothesis worth
-testing first (advisor): classic Mac OS often gates `gestaltPowerPCHasVectorInstructions` on whether the
-OS/nanokernel promises **VR context save/restore on switch**, NOT on hardware capability — if the ROM
-routine checks a nanokernel vector-context flag, *that flag* is the patchable site. SheepShaver has the
-EMUL_OP routine-replacement machinery (XPRAM/NVRAM/SONY/DISK/CDROM/ADBOP in `rom_patches.cpp`) but **no
-`_Gestalt` trap intercept** today.
+**not pure-PVR**. **The ROM-vs-System question is ALREADY ANSWERED by #23 (see the entry below): the
+selector literal `0x70706366` appears 0× in the 1.1 ROM and 5× on the Mac OS 9 disk — the handler lives
+in the System file (disk→RAM), table-dispatched and relocated at load, so static is exhausted and a
+`find_rom_data` ROM patch is NOT the lever.** Therefore this is **decision-ready, not open** — every
+remaining unlock path needs a user-in-loop boot:
+  1. **NewWorld G4 ROM boot** (the #23 decisive test): the co-requirement the handler reads is plausibly a
+     nanokernel vector flag that only G4-era (NewWorld) ROMs set → boot `Mac OS ROM 9.0.4` and watch the
+     profiler `MIX_ALTIVEC`. Blocked on **D3 Phase 2** (9.0.4 ROM port; infra landed this session).
+  2. **Boot-time RAM patch / `_Gestalt`-trap intercept** to force the vector bit — needs new infra
+     (SheepShaver has EMUL_OP routine replacement for XPRAM/NVRAM/SONY/etc. but **no `_Gestalt` intercept**
+     today) + a boot to verify.
+  3. **PVR-read / handler-read hook** (à la `SS_LOG_ILLEGAL`) to observe what the handler reads — diagnostic, boot-level.
+All three need the user. The codegen is now hardened (this session) so it's correct *the moment* any path lands.
 
 **Why this is the consolidate signal, and the pivot:** every injection point needs a boot to verify, i.e.
 the user in the loop — AND the marginal value of an e2e gestalt-force over the existing differential

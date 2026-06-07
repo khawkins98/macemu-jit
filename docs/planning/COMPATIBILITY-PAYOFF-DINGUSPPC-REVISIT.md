@@ -47,6 +47,33 @@ investment.
 **Dependency note:** #1–#3 are independent and unblocked *today*. #4→#5 is a serial, exploratory
 chain where each step gates the next, and #5 is explicitly do-not-start-unless-proven-needed.
 
+### #1 CopyBits histogram probe — executable plan (the go/no-go gate; ready to build)
+
+The gate before any blitter work. Implement as a **two-phase, env-gated (`SS_COPYBITS_TRACE`) trap
+head-patch** — the probe IS the first increment of the HLE (mechanism mirrors the existing EMUL_OP
+trap patches in `rom_patches.cpp`/`emul_op.cpp`; scoped 2026-06-07):
+
+- **Phase 1 (frequency, low-risk — do first):** count `_CopyBits` calls, boot vs steady.
+  1. `emul_op.h`: add `OP_COPYBITS_PROBE` before `OP_MAX` → `M68K_EMUL_OP_COPYBITS_PROBE = M68K_EMUL_BREAK + OP_COPYBITS_PROBE` (lands in the 0xFExx EMUL range).
+  2. `emul_op.cpp` `EmulOp()` switch: `case OP_COPYBITS_PROBE:` → `g_copybits[phase]++;` (reuse the
+     SS_STUB_TRACE boot/steady `phase` flag). Read-only; must not disturb regs/stack (the stub's JMP
+     chains to the real CopyBits right after).
+  3. Install at first idle (the `e2e_emit_idle_signals` one-shot, where the System + traps are up), if
+     `SS_COPYBITS_TRACE`: `orig = Execute68kTrap(_GetToolboxTrapAddress 0xA146, d0=0xA8EC) → a0`; build a
+     stub via `NewPtrSysClear`: `[M68K_EMUL_OP_COPYBITS_PROBE][0x207C orig_hi orig_lo (move.l #orig,a0)][0x4ED0 (jmp (a0))]`;
+     `Execute68kTrap(_SetToolboxTrapAddress 0xA047, d0=0xA8EC, a0=stub)`.
+  4. Dump `g_copybits[boot|steady]` at exit (same teardown hook as SS_STUB_TRACE). Run on boot + an app +
+     a game (workload disk). **Go/no-go:** high steady CopyBits frequency ⇒ build the blitter.
+- **Phase 2 (rect/byte sizes — after Phase 1 proves it's hot):** the EMUL_OP reads the Pascal args off
+  `r->a[7]`: entry stack is `4(a7)=maskRgn, 8(a7)=mode(2B), 10(a7)=dstRect*, 14(a7)=srcRect*, 18(a7)=dstBits*, 22(a7)=srcBits*`
+  (Pascal pushes L→R; verify offsets empirically — log a few then check against a known blit). Deref the
+  Rect ptrs (guarded by `guest_ptr_ok`) → w×h histogram buckets. This sizes the blitter (small rects =
+  not worth native; large = high payoff) and confirms the **CopyBits-only split** (BlockMove-for-code is a
+  separate SMC trap — out of scope).
+- **Safety:** env-gated, default off → zero effect on normal boots even if the stub is mis-encoded (only
+  `SS_COPYBITS_TRACE` runs would fail, caught immediately by a boot that doesn't reach Finder). Land
+  Phase 1, validate one boot, then Phase 2.
+
 ---
 
 ## CONFIRM / CHALLENGE of the standing verdict

@@ -4106,12 +4106,11 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			return true;
 		}
 
-		case 12: /* frsp frD,frB — round to single precision */
-			emit_load_fpr(0, frb);
-			emit32(0x1E624000 | (0 << 5) | 0); /* FCVT Sd, Dd */
-			emit32(0x1E22C000 | (0 << 5) | 0); /* FCVT Dd, Sd */
-			emit_store_fpr(0, frd);
-			return true;
+		case 12: /* frsp frD,frB — round to single precision (zero-copy FP RA) */
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E624000 | (hB << 5) | hD); /* FCVT S(hD), D(hB) */
+			emit32(0x1E22C000 | (hD << 5) | hD); /* FCVT D(hD), S(hD) */
+			return true; }
 
 		/* fctiw/fctiwz: convert double->int32. The 32-bit ARM FCVT* gives PPC's INT32
 		   saturation for free (overflow -> 0x7FFFFFFF / 0x80000000); the only PPC-specific
@@ -4205,16 +4204,13 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			return true;
 		}
 
-		case 23: /* fsel frD,frA,frC,frB — if frA >= 0 then frC else frB */
-			emit_load_fpr(0, fra);
-			emit_load_fpr(1, frc);
-			emit_load_fpr(2, frb);
-			/* Compare frA with 0.0 */
-			emit32(0x1E602010 | (0 << 5)); /* FCMP Dn, #0.0 */
-			/* FCSEL Dd, Dc, Db, GE */
-			emit32(0x1E600C00 | (2 << 16) | (0xA << 12) | (1 << 5) | 0); /* FCSEL D0,D1,D2,GE */
-			emit_store_fpr(0, frd);
-			return true;
+		case 23: /* fsel frD,frA,frC,frB — if frA >= 0 then frC else frB (zero-copy FP RA) */
+		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb);
+			int hD = ra_fp_store(frd);
+			emit32(0x1E602010 | (hA << 5)); /* FCMP D(hA), #0.0 */
+			/* FCSEL D(hD), D(hC), D(hB), GE — frA>=0 ? frC : frB */
+			emit32(0x1E600C00 | (hB << 16) | (0xA << 12) | (hC << 5) | hD);
+			return true; }
 		
 		case 64: /* mcrfs crD,crS — move from FPSCR field to CR field */
 		{
@@ -4238,19 +4234,19 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			return true;
 		}
 
-		case 26: /* frsqrte frD,frB — reciprocal square root estimate */
-			emit_load_fpr(0, frb);
-			emit32(0x1E61C000 | (0 << 5) | 0); /* FSQRT Dd,Dn */
-			emit32(0x1E6E1000 | 1); /* FMOV D1, #1.0 */
-			emit32(0x1E611800 | (0 << 16) | (1 << 5) | 0); /* FDIV D0, D1, D0 */
-			emit_store_fpr(0, frd);
-			return true;
+		case 26: /* frsqrte frD,frB — reciprocal square root estimate (zero-copy FP RA;
+		          * not differentially tested — interp uses a different estimate, no vector) */
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E61C000 | (hB << 5) | hD); /* FSQRT D(hD),D(hB) */
+			emit32(0x1E6E1000 | 1); /* FMOV D1, #1.0 — scratch V1 */
+			emit32(0x1E611800 | (hD << 16) | (1 << 5) | hD); /* FDIV D(hD), D1, D(hD) */
+			return true; }
 
-		case 22: /* fsqrt frD,frB — floating-point square root (double) */
-			emit_load_fpr(0, frb);
-			emit32(0x1E61C000 | (0 << 5) | 0); /* FSQRT Dd, Dn */
-			emit_store_fpr(0, frd);
-			return true;
+		case 22: /* fsqrt frD,frB — square root (double); zero-copy FP RA (not differentially
+		          * tested — emulated 603/604/750 interp does not implement fsqrt) */
+		{	int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
+			emit32(0x1E61C000 | (hB << 5) | hD); /* FSQRT D(hD), D(hB) */
+			return true; }
 		default: break; /* fall through to 5-bit XO check */
 		}
 

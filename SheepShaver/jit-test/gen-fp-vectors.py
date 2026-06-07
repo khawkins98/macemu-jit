@@ -104,6 +104,10 @@ add("fp_fctiwz_nan",   setd(2,0x7FF8,0x110) + [xform(63,1,0,2,15)] + grabd(0x130
 add("fp_fneg_real",   A() + [xform(63, 1, 0, 1, 40)] + grabd(0x130), "fneg f1,f1: -(2.0)")
 add("fp_fabs_real",   A() + [aform(63, 1, 0, 1, 0, 264)] + grabd(0x130), "fabs f1,f1: |2.0|=2.0")
 add("fp_fmr_real",    B() + [xform(63, 1, 0, 2, 72)] + grabd(0x130), "fmr f1,f2: copy 3.0")
+# fsel frD,frA,frC,frB = (frA >= 0) ? frC : frB. aform packs frB(bits11-15) then frC(bits6-10),
+# so aform(63,frD,frA,frB,frC,23). Two vectors exercise BOTH select arms (zero-copy FP RA 2026-06-07).
+add("fp_fsel_pos", A() + B() + C() + [aform(63, 1, 1, 2, 3, 23)] + grabd(0x130), "fsel f1,f1(2.0>=0),f3,f2 -> frC=4.0")
+add("fp_fsel_neg", setd(1,0xBFF0,0x100) + B() + C() + [aform(63, 1, 1, 2, 3, 23)] + grabd(0x130), "fsel f1,f1(-1.0<0),f3,f2 -> frB=3.0")
 
 # ---- single-precision (opcode 59) ----
 As = lambda: sets(1, 0x4000, 0x100)  # 2.0f

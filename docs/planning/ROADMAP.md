@@ -449,8 +449,11 @@ read straight from Toolbox structures at the idle hook — no screenshot/OCR.
   same framework; perf-trend each; optional golden-image regression (`WorkloadSpec.golden_image`).
 - ⏸ **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()` calibration, ParamText, socket transport.
 See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference),
-`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan), and
-`docs/HOST-SIDE-MAC-SOFTWARE-INSTALL.md` (getting workload apps + system libs onto disks host-side).
+`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan),
+`docs/HOST-SIDE-MAC-SOFTWARE-INSTALL.md` (getting workload apps + system libs onto disks host-side),
+`SheepShaver/e2e/README.md` (the harness toolkit map), `SheepShaver/e2e/AGENT-API.md` (drive the guest from
+code — the agent surface), and `docs/planning/E2E-TOOLKIT-REVIEW-AND-MCP-PROPOSAL.md` (toolkit review + the
+parked MCP-server proposal).
 
 **🔜 New (2026-06-05) — connect the harness to per-instruction JIT correctness.** The lifecycle
 + benchmark harness proves the emulator runs *as a system*; it does not prove the JIT is
@@ -517,31 +520,41 @@ pass have largely **landed** (subfe/adde via ADCS, mullwo, CR0 cleanup/B1, Logic
 sizing, atomic spcflags). What remains is the bigger, measurement-gated work. Tracked here as
 buckets so they don't fall off the map:
 
-## B1. 🟡 P0 — Execution-weighted profiler (gates everything below)
+## B1. ✅ P0 — Execution-weighted profiler — DONE (2026-06-06/07)
 
-**Why:** prioritize the remaining levers by *real* hot-block / instruction-mix data instead of
-guessing. Nothing else in Track B should be tuned blind. **Unblocks B2–B4.** Also the **data layer
-for the SiliconSheep "Developer Inspector"** (Track C) — the recommended first concrete step toward a
-live build/debug-inspection UI. **Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P0;
-`docs/planning/DESKTOP_INTEGRATION_PLAN.md` → "Developer Inspector / Debug Chrome".
+**Done:** `SS_JIT_PROFILE` mix-aware profiler + `SS_JIT_PROFILE_DISASM` + `[JIT-RUN-PROFILE]`
+(guest-MIPS) + the deterministic **`a64/op`** microbench metric. Boot-validated; it directly drove
+P3a and P5b below. Remaining offshoots: routine-name attribution; the SiliconSheep "Developer
+Inspector" data layer (Track C). **Detail:** `OPTIMIZATION-PLAN.md` §P0/§P0b.
 
 ## B2. 🟡 Medium levers — fallback & branch handling
 
-- **Native `bcctr`** (98.5% of JIT misses) — complex; needs Mixed-Mode-Manager RE; gated on B1.
-  *Light alternative:* the §R2 guarded inline direct-mapped cache (BasiliskII cross-pollination
-  X3) sidesteps the RE.
-- **Reduce interpreter fallbacks** (`lwarx`/`stwcx`/`mftb`/`isync` native) — ~5–10%.
-- **`isync` inline BLR** (0c), **lazy CR0 re-enable** (0g — was disabled after a boot regression;
-  needs A1's boot verify first). *De-risk:* intra-block backward CR0-liveness as the missing
-  safety proof (BasiliskII cross-pollination X2).
-**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P2/P3/0c/0g/R2;
-`docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
+- **`lwarx`/`stwcx.` — ✅ native (P3a, 2026-06-07).** Were interpreter fallbacks; now compiled
+  natively (correctness/architecture win — ~5% of compute, not idle-driven). `mftb`/`isync`
+  fallbacks remain.
+- **Native `bcctr`** (98.5% of JIT misses) — complex; needs Mixed-Mode-Manager RE.
+  *Light alternative:* the §R2 guarded inline direct-mapped cache (BasiliskII X3).
+- **`isync` inline BLR** (0c), **lazy CR0 re-enable** (0g — `rc1`=12 a64/op, the broadest remaining
+  per-op lever; disabled after a boot regression). ⚠️ **New prereq (2026-06-07):** re-enabling lazy
+  CR0 would break divw/lwzx/mulhw/lwarx together (they hold RTMP/NZCV across `ra_store`); the divw
+  `ra_store` hoist was step 1. **Detail:** `OPTIMIZATION-PLAN.md` §0g/§P2/§P3/§R2.
 
 ## B3. 🟡 High-effort levers
 
-Constant folding, FP register allocator, instruction scheduling, byte-swap opt, **cross-block
-register pinning** (r1/SP, r2/RTOC — P8), **bclr indirect-branch chaining** (P9).
-**Detail:** `docs/planning/OPTIMIZATION-PLAN.md` §P5–P9.
+- **FP register allocator — ✅ DONE (P5b, 2026-06-07).** Speedometer Math +16% (~1.89× interp),
+  Fractal Carbon +8% MIPS. Remaining FP follow-ups: update/indexed FP memory, cross-block FP pinning.
+- **Per-block prologue/epilogue overhead — 🔴 the new top lever** (the ~12–14 `a64/guest-op` ceiling
+  the profiler surfaced): caller-save only the clobbered regs / block-merging / **bclr chaining (P9)**.
+- Remaining: constant folding (P5), instruction scheduling (P6), byte-swap opt (P7), **cross-block
+  register pinning** (r1/SP, r2/RTOC — P8). **Detail:** `OPTIMIZATION-PLAN.md` §P5–P9.
+
+## B5. 🔴 AltiVec is DORMANT for real guest software (2026-06-07)
+
+The AltiVec JIT codegen (extensively hardened) is **only exercised by the test harness** — no real
+app uses it, because the guest can't *enable* AltiVec: MSR isn't modeled (`mfmsr`→`0xf072`, VEC bit
+clear) despite PVR=G4. **Fix (model MSR[VEC] + AltiVec-enable path) would unlock real vector
+workloads** (Fractal Carbon, Power Fractal, Photoshop AltiVecCore, SoundJam). Multi-part. **Detail:**
+LEARNINGS 2026-06-07; `OPTIMIZATION-PLAN.md` §P0 (the e2e-bench profile finding).
 
 ## B4. 🟡 Strategic / from-research levers
 

@@ -80,6 +80,30 @@ cd SheepShaver && ./jit-test/run.sh
 
 ---
 
+## Documentation
+
+This is the **tracked map** of the project's docs (for both humans and AI agents). _A local `CLAUDE.md`,
+if present, is a fuller working index — but it is gitignored, so the canonical map is here._
+
+**Start here** (orientation for contributors & agents):
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to work in this repo: commit style, the documentation lifecycle, attribution.
+- [`LEARNINGS.md`](LEARNINGS.md) — non-obvious findings; read these at the start of a session.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — JIT structure (both emulators) + the macOS arm64 constraints.
+- [`docs/planning/ROADMAP.md`](docs/planning/ROADMAP.md) — outstanding work, arranged + tracked ("what's next").
+
+**Status & history:** [`JIT-STATUS.md`](JIT-STATUS.md) (pass/fail + boot status) · [`CHANGELOG.md`](CHANGELOG.md) (what changed, by date/component) · [`docs/UPSTREAM-LINEAGE-SYNC.md`](docs/UPSTREAM-LINEAGE-SYNC.md) (fork lineage).
+
+**JIT internals:** [`docs/planning/SheepShaver-AARCH64_JIT_PLAN.md`](docs/planning/SheepShaver-AARCH64_JIT_PLAN.md) (PPC→ARM64) · [`BasiliskII/docs/AARCH64_JIT_BRINGUP.md`](BasiliskII/docs/AARCH64_JIT_BRINGUP.md) (68K→ARM64 + bug history) · [`docs/planning/OPTIMIZATION-PLAN.md`](docs/planning/OPTIMIZATION-PLAN.md).
+
+**E2E testing & guest automation:**
+- [`SheepShaver/e2e/README.md`](SheepShaver/e2e/README.md) — the E2E harness: smoke / Speedometer benchmark / real-app workload gates, with the toolkit map.
+- [`SheepShaver/e2e/AGENT-API.md`](SheepShaver/e2e/AGENT-API.md) — **drive the classic-Mac guest from code** (the agent surface: `sse2e.uidump` + `vnc`).
+- [`SheepShaver/docs/UI-INTROSPECTION.md`](SheepShaver/docs/UI-INTROSPECTION.md) — host-side structured read of the guest UI.
+
+**Using it / the launcher:** [`SheepShaver/docs/USER-HANDBOOK.md`](SheepShaver/docs/USER-HANDBOOK.md) (prefs, networking, env vars, troubleshooting) · [`SiliconSheep/README.md`](SiliconSheep/README.md) (the Tauri launcher, "Silicon Sheep").
+
+---
+
 ## Provenance & lineage
 
 This repo is the macOS Apple Silicon tip of a four-link fork chain — each link adds a layer:

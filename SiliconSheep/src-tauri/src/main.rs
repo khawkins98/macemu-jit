@@ -445,10 +445,28 @@ fn rpc_read_memory(id: String, addr: u32, len: u32, state: State<AppState>) -> R
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
     ensure_rpc(&mut running, &id)?;
     let vm = running.get_mut(&id).unwrap();
-    // For now, use get_string — the emulator returns bytes but we'll format as hex
-    // TODO: proper binary read via invoke_bytes when needed
-    vm.rpc.as_mut().unwrap()
-        .invoke_get_string(rpc_client::METHOD_GET_STATS) // placeholder — wire READ_MEMORY properly later
+    let bytes = vm.rpc.as_mut().unwrap()
+        .invoke_read_memory(addr, len.min(4096))?;
+
+    // Format as hex dump with ASCII sidebar (classic debugger layout)
+    let mut result = String::new();
+    for (i, chunk) in bytes.chunks(16).enumerate() {
+        let offset = i * 16;
+        result.push_str(&format!("{:08x}  ", addr as usize + offset));
+        for (j, b) in chunk.iter().enumerate() {
+            result.push_str(&format!("{:02x} ", b));
+            if j == 7 { result.push(' '); }
+        }
+        for _ in chunk.len()..16 {
+            result.push_str("   ");
+        }
+        result.push_str(" |");
+        for b in chunk {
+            result.push(if *b >= 0x20 && *b < 0x7f { *b as char } else { '.' });
+        }
+        result.push_str("|\n");
+    }
+    Ok(result)
 }
 
 #[tauri::command]

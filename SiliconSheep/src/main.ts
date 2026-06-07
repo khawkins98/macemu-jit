@@ -1772,6 +1772,7 @@ function renderInspectorWindow(vmId: string) {
           <button class="inspector-toolbar__tab" data-panel="timeline">Timeline</button>
           <button class="inspector-toolbar__tab" data-panel="log">Log</button>
           <button class="inspector-toolbar__tab" data-panel="registers">Registers</button>
+          <button class="inspector-toolbar__tab" data-panel="memory">Memory</button>
           <button class="inspector-toolbar__tab" data-panel="debug">Debug</button>
         </div>
         <div style="flex:1"></div>
@@ -1803,6 +1804,36 @@ function renderInspectorWindow(vmId: string) {
             <button class="btn btn-secondary btn-sm" id="insp-refresh-regs">↻ Snapshot</button>
             <div id="insp-registers" style="margin-top: 8px;">
               <p class="ss-text-muted">Click "Snapshot" to capture register state (requires running VM + RPC).</p>
+            </div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-memory" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Guest Memory</h3>
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+              <label style="font-size: 11px; font-weight: 600;">Address:</label>
+              <input type="text" class="input" id="insp-mem-addr" value="0x00000000" style="width: 120px; font-family: 'SF Mono', Menlo, monospace; font-size: 11px;" />
+              <label style="font-size: 11px; font-weight: 600;">Bytes:</label>
+              <select class="input" id="insp-mem-len" style="width: 80px; font-size: 11px;">
+                <option value="64">64</option>
+                <option value="128">128</option>
+                <option value="256" selected>256</option>
+                <option value="512">512</option>
+                <option value="1024">1024</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" id="insp-mem-read">Read</button>
+            </div>
+            <div class="inspector-section" style="margin-bottom: 8px;">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="btn btn-secondary btn-sm" data-memaddr="0x00000000">Low Memory</button>
+                <button class="btn btn-secondary btn-sm" data-memaddr="0x00000910">CurApName</button>
+                <button class="btn btn-secondary btn-sm" data-memaddr="0x000009D6">WindowList</button>
+                <button class="btn btn-secondary btn-sm" data-memaddr="0x50000000">ROM Base</button>
+                <button class="btn btn-secondary btn-sm" data-memaddr="0x10000000">RAM Base</button>
+              </div>
+            </div>
+            <div id="insp-mem-dump" class="inspector-log">
+              <pre class="inspector-log-pre" id="insp-mem-content">Click "Read" or a preset to view guest memory.</pre>
             </div>
           </div>
         </div>
@@ -1949,6 +1980,37 @@ function renderInspectorWindow(vmId: string) {
     } catch {
       el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
     }
+  });
+
+  // Memory viewer
+  const readMemory = async () => {
+    const addrInput = document.getElementById("insp-mem-addr") as HTMLInputElement;
+    const lenSelect = document.getElementById("insp-mem-len") as HTMLSelectElement;
+    const contentEl = document.getElementById("insp-mem-content");
+    if (!addrInput || !lenSelect || !contentEl) return;
+
+    const addr = parseInt(addrInput.value, 16) || 0;
+    const len = parseInt(lenSelect.value) || 256;
+
+    const result = await rpcCall(
+      () => invoke("rpc_read_memory", { id: vmId, addr, len }) as Promise<string>,
+      "Memory read"
+    );
+    contentEl.textContent = result || "(Failed — VM not running or RPC not connected)";
+  };
+
+  document.getElementById("insp-mem-read")?.addEventListener("click", readMemory);
+
+  // Preset address buttons
+  document.querySelectorAll("[data-memaddr]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const addr = (btn as HTMLElement).dataset.memaddr || "0x00000000";
+      const addrInput = document.getElementById("insp-mem-addr") as HTMLInputElement;
+      if (addrInput) {
+        addrInput.value = addr;
+        readMemory();
+      }
+    });
   });
 
   // Poll for updates + try RPC connection

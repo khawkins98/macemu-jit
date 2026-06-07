@@ -9,13 +9,11 @@ use std::time::Duration;
 const RPC_MESSAGE_START: i32 = -3000;
 const RPC_MESSAGE_END: i32 = -3001;
 const RPC_MESSAGE_ACK: i32 = -3002;
-// const RPC_MESSAGE_REPLY: i32 = -3003;
-// const RPC_MESSAGE_FAILURE: i32 = -3004;
-
 const RPC_TYPE_INVALID: i32 = 0;
 const RPC_TYPE_INT32: i32 = -2002;
-// const RPC_TYPE_UINT32: i32 = -2003;
+const RPC_TYPE_UINT32: i32 = -2003;
 const RPC_TYPE_STRING: i32 = -2004;
+const RPC_TYPE_ARRAY: i32 = -2005;
 
 // Method IDs matching rpc.h
 pub const METHOD_INPUT_LOCKOUT: i32 = 11;
@@ -120,5 +118,40 @@ impl RpcClient {
             }
         }
         Ok(result)
+    }
+
+    /// Send READ_MEMORY(addr, len) and receive bytes back as hex string
+    pub fn invoke_read_memory(&mut self, addr: u32, len: u32) -> Result<Vec<u8>, String> {
+        self.write_i32(RPC_MESSAGE_START)?;
+        self.write_i32(METHOD_READ_MEMORY)?;
+        self.write_i32(RPC_TYPE_UINT32)?;
+        self.write_i32(addr as i32)?;
+        self.write_i32(RPC_TYPE_UINT32)?;
+        self.write_i32(len as i32)?;
+        self.write_i32(RPC_TYPE_INVALID)?;
+        self.write_i32(RPC_MESSAGE_END)?;
+
+        let reply_marker = self.read_i32()?;
+        if reply_marker == RPC_MESSAGE_ACK {
+            return Ok(Vec::new());
+        }
+        let type_tag = self.read_i32()?;
+        if type_tag == RPC_TYPE_ARRAY {
+            let _elem_type = self.read_i32()?;
+            let count = self.read_i32()? as usize;
+            let mut bytes = vec![0u8; count];
+            self.stream.read_exact(&mut bytes).map_err(|e| format!("read bytes: {}", e))?;
+            loop {
+                let v = self.read_i32()?;
+                if v == RPC_MESSAGE_ACK { break; }
+            }
+            Ok(bytes)
+        } else {
+            loop {
+                let v = self.read_i32()?;
+                if v == RPC_MESSAGE_ACK { break; }
+            }
+            Err("Unexpected reply type".to_string())
+        }
     }
 }

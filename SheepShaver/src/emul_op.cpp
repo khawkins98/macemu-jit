@@ -125,8 +125,9 @@ static bool e2e_front_window_title(uint32 win, char *out, int outsz)
 // (gestaltPowerPCProcessorFeatures) selector is NOT registered at all — Gestalt('ppcf')
 // returns gestaltUndefSelectorErr under BOTH Mac OS 8.6 AND 9.0 (verified; sysv control reads
 // fine). So System version is not the gate. WORKING FORCE: register 'ppcf' ourselves via
-// _NewGestalt ($A3AD) with a tiny 68k SelectorFunction that returns the vector bit (0x40), then
-// read back (which calls the function). Verified: NewGestalt err=0, readback features=0x40 SET.
+// _NewGestalt ($A3AD) with a tiny 68k SelectorFunction that returns the vector bit
+// (0x10 = 1<<gestaltPowerPCHasVectorInstructions; bit 4, per Apple Gestalt.h — an earlier
+// 0x40 was WRONG, that's the 64-bit-support bit), then read back (which calls the function).
 // This lets a real app SEE AltiVec; whether it then EXECUTES AltiVec is the profiler test
 // (SS_JIT_PROFILE=1, MIX_ALTIVEC>0). CAVEAT: 8.6/9.0 here never enable VR context save/restore,
 // so this is a VALIDITY experiment, not production-safe multitasking AltiVec.
@@ -159,7 +160,10 @@ static void force_altivec_idle_service(void)
 		// Allocate a system-heap block for a tiny 68k Gestalt SelectorFunction and write it.
 		// SelectorFunction ABI (Pascal): pascal OSErr fn(OSType selector, long *response).
 		// On entry: 0(sp)=retaddr, 4(sp)=response(long*), 8(sp)=selector, 12(sp)=result(OSErr,2B).
-		// We ignore the selector, write *response = 0x40 (gestaltPowerPCHasVectorInstructions),
+		// We ignore the selector, write *response = 0x10 = (1 << gestaltPowerPCHasVectorInstructions).
+		// CRITICAL: the gestalt constant is bit NUMBER 4, so the mask is 0x10 — NOT 0x40 (which is
+		// bit 6 = gestaltPowerPCHas64BitSupport). Verified against Apple CarbonCore Gestalt.h
+		// (2026-06-07). The earlier 0x40 set the wrong feature, confounding the FC experiment.
 		// set result=noErr, and Pascal-return (pop retaddr, drop 8B params, leave result slot).
 		M68kRegisters m = {};
 		m.d[0] = 32;
@@ -168,7 +172,7 @@ static void force_altivec_idle_service(void)
 		if (proc) {
 			static const uint16 sel_code[] = {
 				0x206F, 0x0004,			// movea.l 4(a7),a0      ; a0 = response
-				0x20BC, 0x0000, 0x0040,		// move.l  #$40,(a0)      ; *response = vector bit
+				0x20BC, 0x0000, 0x0010,		// move.l  #$10,(a0)      ; *response = 1<<4 (vector bit)
 				0x426F, 0x000C,			// clr.w   12(a7)        ; result = noErr
 				0x205F,				// movea.l (a7)+,a0      ; pop return addr
 				0x4FEF, 0x0008,			// lea     8(a7),a7      ; drop 2 params (8B)
@@ -191,9 +195,9 @@ static void force_altivec_idle_service(void)
 	rb.d[0] = 0x70706366;			// 'ppcf'
 	Execute68kTrap(0xa1ad, &rb);		// Gestalt()
 	fprintf(stderr, "[FORCE_AV] sysv=0x%08x | ppcf pre:err=%u | NewGestalt(proc=%08x):err=%u | "
-	        "readback:err=%u features=0x%08x vectorBit(0x40)=%s\n",
+	        "readback:err=%u features=0x%08x vectorBit(0x10)=%s\n",
 	        (unsigned)sv.a[0], (unsigned)pre_err, (unsigned)proc, (unsigned)reg_err,
-	        (unsigned)(rb.d[0] & 0xffff), (unsigned)rb.a[0], (rb.a[0] & 0x40) ? "SET" : "clear");
+	        (unsigned)(rb.d[0] & 0xffff), (unsigned)rb.a[0], (rb.a[0] & 0x10) ? "SET" : "clear");
 }
 
 static void e2e_emit_idle_signals(void)

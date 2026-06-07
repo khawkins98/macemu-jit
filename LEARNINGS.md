@@ -62,19 +62,28 @@ that is the validation of record; "real app issues AltiVec" was always bonus con
 so a null FC result does not dent codegen confidence.** OPEN: does a real app emit AltiVec here — needs FC
 driven to its compute action (user knows the app), or a different AltiVec vehicle. [[altivec-gestalt-gate]]
 
-**RESOLVED (2026-06-07, user drove FC interactively) — FC does NOT use gestalt 'ppcf'; the force is
-irrelevant to it.** With the force active, FC's File menu reads **"Turn AltiVec Code On/Off — (not
-detected)"** in BOTH toggle states (user screenshots), and "Turn Multiprocessor Code Off (one processor
-detected)" — so FC's MP probe works but its AltiVec probe reports **not-detected despite our forced
-gestalt bit**. The user's full 235s interactive session (165B guest-insns, toggling the menu) profiled
-**`[JIT-COMPILED-MIX] AltiVec=0`** — the fractal kernel stays scalar FP (`1e5c1d90`, 19 insns) throughout.
-Conclusion: **FC detects AltiVec by a NON-gestalt mechanism** (most likely an exception-guarded
-try-an-AltiVec-instruction probe, or an MSR[VEC]/hardware check) that SheepShaver's OldWorld environment
-doesn't satisfy — and FC refuses to emit vector code until its own probe passes, so the menu toggle is
-cosmetic when "not detected". *This is why no force at the gestalt layer will ever make FC use AltiVec.*
-Next: (a) lateral-thinking on how FC/typical apps actually probe AltiVec + whether we can satisfy it or
-validate AltiVec-runs without a full app / without booting; (b) make FC a perf e2e test; (c) needs the
-Carbon-menu driver to read/drive FC's toggle. [[altivec-gestalt-gate]]
+**❌ WRONG TURN then ✅ RESOLVED (2026-06-07) — FC DOES use gestalt; my force set the WRONG BIT.**
+First (confounded) conclusion was "FC ignores gestalt": with the force active, FC's File menu read
+"Turn AltiVec Code On/Off — (not detected)" and a 235s session profiled `AltiVec=0`. **That experiment
+was invalid** — a research subagent caught (and I verified against Apple's CarbonCore `Gestalt.h`) that
+`gestaltPowerPCHasVectorInstructions` is **bit NUMBER 4 → mask `1<<4 = 0x10`**, but my force wrote
+**`0x40`** (= bit 6 = `gestaltPowerPCHas64BitSupport`). So I set the 64-bit-support bit, not vector; FC
+tested bit 4, saw it clear, and *correctly* said "not detected." The readback "confirmed" only because it
+tested the same wrong bit.
+**Fixed `0x40`→`0x10` and re-ran — DECISIVE SUCCESS:** `[FORCE_AV] features=0x10 vectorBit SET`, and
+`[JIT-COMPILED-MIX] AltiVec=160` (vs 0 every confounded run), with AltiVec blocks in FC's hot path
+(`1e5bd98c` AltiVec/7, `1e5bd9a8` AltiVec/15). **Fractal Carbon now detects AltiVec via gestalt, takes
+its vector path, and our AArch64 JIT compiles+runs the PPC AltiVec instructions — real-app end-to-end
+AltiVec, achieved.** So: (1) FC DOES use `Gestalt('ppcf')` bit 4; (2) the register-it-ourselves
+`_NewGestalt $A3AD` mechanism is the working unlock under the OldWorld 1.1 ROM; (3) no NewWorld ROM port
+needed for AltiVec after all. **LESSON: a bit-NUMBER constant is not a mask — `1<<N`. One wrong nibble
+produced a fully self-consistent wrong conclusion (set+readback both tested 0x40) that survived until an
+independent agent checked the primary-source header. Differential/oracle checks don't catch "both sides
+share my constant error" — verify magic numbers against the authoritative source.**
+Also corrected: `mfmsr` returns `0xf072` → MSR[VEC] (0x02000000) is **CLEAR**, not set (the prior-session
+"reads SET / 0x0200f072" note was wrong; both interp `ppc-execute.cpp:1180` and JIT `ppc-jit.cpp:2719`
+hard-code `0xf072`). Irrelevant to FC (it uses gestalt, not MSR), but a latent correctness gap (a real
+7400 sets VEC). [[altivec-gestalt-gate]]
 
 ## 2026-06-07 — NewWorld 9.0.4 boot attempt (blocks at XPRAM HLE) + AltiVec-force injection hunt (banked)
 

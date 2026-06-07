@@ -194,6 +194,27 @@ For each: disassemble the equivalent code in 9.0.4 vs the working 1.1 image (bot
 (needs the user / a 9.0.4-bootable disk). Phase 3 risk is LOW here: SheepShaver+1.1 already boots
 the 9.0.4 *OS*, so the 9.0.4-era environment is proven — this is "just" ROM-patch parity.
 
+**RUNTIME boot attempt 2026-06-07 (user-authorized):** ran `./src/Unix/SheepShaver --config <isolated
+9.0.4 prefs>`. Confirmed at runtime: lenient fallback resolves the relocated patches, the SKIP guards
+let PatchROM progress, and it blocks exactly at the **`nvram2_dat` `48e71ce0`** XPRAM-HLE patch
+(`rom_patches.cpp:1557`, range `[0xa000,0xd000)`) — absent even whole-image. **Decision: do NOT
+brute-guard the remaining HLE chain** — those EMUL_OP shims replace ROM routines that poke
+VIA/Cuda/PMU hardware SheepShaver doesn't emulate, so skipping them just moves the failure to a runtime
+hang (inference, not slogged). The path is per-patch *porting* (find the rewritten routine, re-apply the
+EMUL_OP), boot-verified. The 12-absent list above IS the worklist.
+
+### De-risk FIRST: force `'ppcf'` under the working 1.1 ROM (Track 2)
+Before investing the multi-session HLE port, prove the premise — *is the gestalt vector bit (bit 6)
+sufficient to make a real app issue AltiVec?* Forcing it + seeing the profiler `MIX_ALTIVEC>0` proves
+"bit 6 sufficient AND codegen runs real-app AltiVec end-to-end" (it does NOT prove "NewWorld sets bit 6").
+Injection-point hunt (static, 2026-06-07): `'ppcf'` literal is **0× in the 1.1 ROM** (System registers it
+from disk); ROM `InitGestalt` (`rom_patches.cpp:1757`) sets CPU-type/page-size but not `'ppcf'`; the ROM
+`a1ad` (`_Gestalt`) **dispatcher is ROM-resident** (base selectors `sysv/proc/mmu/fpu/qd/kbd` present;
+`~0x12c00` is a consumer, not the dispatcher). **Next step (needs a boot):** boot 1.1 under the e2e
+harness, locate the `a1ad` dispatcher via the toolbox trap table (single careful lldb attach — heed the
+VBL-timer caution), wrap it with an env-gated `SS_FORCE_ALTIVEC=1` EMUL_OP that ORs bit 6 when
+selector==`'ppcf'`, run Fractal Carbon, check `MIX_ALTIVEC`. See LEARNINGS 2026-06-07.
+
 ### Phase 2 — original notes
 For each failing `find_rom_data` pattern:
 - Disassemble the region in both a working ROM (1.1) and the parcels ROM (lldb +

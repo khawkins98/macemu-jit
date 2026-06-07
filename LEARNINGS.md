@@ -3,6 +3,45 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — NewWorld 9.0.4 boot attempt (blocks at XPRAM HLE) + AltiVec-force injection hunt (banked)
+
+User authorized booting a NewWorld ROM to test AltiVec. Two tracks, both run to their honest stopping point:
+
+**Track 1 — boot the 9.0.4 G4 ROM (`MacOS-ROM-9.0.4-G4-extracted.rom`).** Ran the real emulator
+(`./src/Unix/SheepShaver --config <isolated prefs>`, lenient mode auto-on for cksum `b8d0b672`):
+- Type-detects as NewWorld; the `g_rom_904_lenient` whole-image fallback resolves all RELOCATED patches;
+  the SKIP guards (mdec/suspend/run_diags) let PatchROM progress.
+- **Blocks at the XPRAM/NVRAM HLE** (`nvram2_dat` `48e71ce0`, range `[0xa000,0xd000)`) — absent even
+  whole-image (the routine was rewritten in 9.0.4), unguarded → `return false` → "Unsupported ROM type".
+- **Why brute-guarding the rest won't yield a boot (inference, not slogged-to-proof):** the absent patches
+  are EMUL_OP **HLE shims** (XPRAM/NVRAM/page-size/cpu-speed/time-via/OpenFirmware) that replace ROM
+  routines which poke VIA/Cuda/PMU hardware SheepShaver doesn't emulate. SKIP-ing them moves the failure
+  from PatchROM-time to a runtime hang in the first un-shimmed hardware access. The static sizing (12
+  applicable-absent, NEW-WORLD-ROM-SUPPORT-PLAN.md) already IS the per-patch port worklist; each needs the
+  rewritten-routine located + the EMUL_OP re-applied, **boot-verified**. That's the genuine multi-session
+  D3 Phase 2 (now unblocked: user is available to boot-verify).
+
+**Track 2 — force the `'ppcf'` vector bit under the WORKING 1.1 ROM (the de-risk for the whole NewWorld
+investment).** Forcing bit 6 and seeing `MIX_ALTIVEC>0` would prove *"bit 6 is sufficient AND the codegen
+runs real-app AltiVec end-to-end"* — BEFORE committing to the ROM port. (It would NOT prove "NewWorld sets
+bit 6"; it only rules out the worst failure mode.) Injection-point hunt (static):
+- `'ppcf'` literal `0x70706366` = **0× in the 1.1 ROM** (confirms #23: the System registers it from disk).
+- ROM `InitGestalt` patch (`rom_patches.cpp:1757`) sets gestalt **CPU-type (0x1d(a2)) + page-size (0x1e)**
+  but **NOT `'ppcf'`** — so it's not the lever.
+- The base Gestalt selectors `sysv`/`proc`/`mmu`/`fpu`/`qd`/`kbd` ARE ROM-resident, but the ROM region at
+  `~0x12c00` is a **consumer** (`move.l #'sel',d0; _Gestalt(a1ad); tst.w d0; …` building the HW inventory),
+  not the `a1ad` dispatcher. The dispatcher that services `_Gestalt` (and where a `'ppcf'`→OR-bit-6 wrapper
+  would go) isn't statically locatable in a few steps; it needs a boot-trace of the `a1ad` trap + a new
+  EMUL_OP wrapper. **Per the timebox rule, BANKED** (task: "SS_FORCE_ALTIVEC injection point").
+- **Cheapest next step for Track 2 (needs a boot):** boot the 1.1 ROM under the e2e harness with a hook that
+  logs/Wraps the `a1ad` (`_Gestalt`) trap for selector `'ppcf'`, OR the result bit 6, run Fractal Carbon,
+  check the profiler. The dispatcher is ROM-resident (good) — locating it is the work.
+
+**Tradeoff for the user (surfaced):** (a) 9.0.4 NewWorld boot = multi-session HLE port (authentic run);
+(b) the force experiment tests the AltiVec hypothesis cheaply and *may deliver real-app AltiVec now* (the
+story), demoting the ROM port to nice-to-have. The JIT AltiVec codegen is hardened (this session) so it's
+correct the moment either lands. [[altivec-detection-not-pure-pvr]] [[altivec-gestalt-gate]]
+
 ## 2026-06-07 — Extended the XO audit to SCALAR FP (live, not dormant) — found mtfsf/mtfsfi body swap
 
 Ran the same scramble logic against the scalar-FP switches (primary 63/59). Unlike AltiVec (dormant

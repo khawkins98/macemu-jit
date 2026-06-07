@@ -21,12 +21,16 @@ targeted. That headroom lets us *widen* what we emulate — model more of the co
 Mac stack, more faithfully — rather than only making the existing narrow slice faster. The
 strategy is deliberately sequenced so each phase rests on the one before it:
 
+Lifecycle (the README narrative): **run it → drive/test it → measure it → widen what it runs → make it
+fast.** The four phases below are that lifecycle grouped for tracking — **phase 2 "Instrumentation"
+covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and the benchmarks):
+
 | Phase | Thrust | State |
 |-------|--------|-------|
-| **1. Foundation** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen. | ✅ done |
-| **2. Instrumentation** | **Automated testing + CI tooling + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness, Speedometer/MacBench capture, per-block profiler. The safety net that makes everything after it measurable. | ✅ done (now maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (e.g. AltiVec actually reachable by guests, fuller device/OS modeling). Leverage host headroom; correctness first, measured continuously against the Phase-2 benchmarks. **This is the emerging primary thrust.** | 🔜 next |
-| **4. Optimize** | *Then* make it faster — close the per-block overhead ceiling, cross-block pinning, HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
+| **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
+| **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: New World ROM → 9.1/9.2, fuller device/OS modeling). Correctness first, measured against the Phase-2 benchmarks. **Current primary thrust.** | 🔜 next |
+| **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
 **Reference for Phase 3:** [DingusPPC](https://github.com/dingusdev/dingusppc) is the active

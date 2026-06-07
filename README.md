@@ -9,20 +9,26 @@ This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit]
 
 SheepShaver was built for a resource-constrained era; an M-series Mac is not. That headroom lets us
 **widen what we emulate** — model more of the complete PowerPC Mac stack, more faithfully — rather than
-only making the existing slice faster. The work is sequenced so each phase rests on the previous one:
+only making the existing slice faster. The work follows a deliberate lifecycle, each stage resting on
+the previous: **get it running → make it drivable/testable → make it measurable → broaden what it runs
+→ then make it fast.**
 
-1. **Foundation** ✅ — a native AArch64 JIT (PowerPC → ARM64); SheepShaver boots Mac OS 8.6/9 to Finder.
-2. **Instrumentation** ✅ — automated testing, CI tooling, and empirical benchmarks (differential opcode
-   harness, end-to-end boot/workload harness, Speedometer/MacBench capture, a per-block profiler). The
-   safety net that makes everything after it measurable.
-3. **Widen emulation** 🔜 *(emerging primary thrust)* — close the structural gaps SheepShaver never
-   could, correctness first, measured continuously against the Phase-2 benchmarks. **First win:
-   preliminary AltiVec (Velocity Engine) support** — the JIT translates PowerPC AltiVec → ARM64 NEON,
-   and with the opt-in `altivec` pref a real app (AltiVec Fractal Carbon) now detects and runs its
-   vector kernel through the JIT (see below). [DingusPPC](https://github.com/dingusdev/dingusppc) is
-   our reference for fuller PPC-Mac-stack modeling.
-4. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, HLE), with the
-   benchmarks gating every change against regressions.
+1. **Run** ✅ — a native AArch64 JIT (PowerPC → ARM64); SheepShaver boots Mac OS 8.6/9 to Finder on
+   Apple Silicon.
+2. **Drive & test** ✅ — tools to *control and validate* the guest: a differential opcode harness
+   (interp-vs-JIT, score=100), an end-to-end boot/workload harness with clean-shutdown signalling, and
+   read-only guest-UI introspection + VNC drive. The correctness safety net.
+3. **Measure** ✅ — empirical, regression-tracked performance: Speedometer/MacBench capture, a boot-free
+   kernel microbench (`a64/op`), and a per-block + instruction-mix profiler. Makes every later change
+   quantifiable.
+4. **Widen emulation** 🔜 *(current primary thrust)* — close the structural gaps SheepShaver never could,
+   correctness first, measured continuously against stage 3. **First win: preliminary AltiVec (Velocity
+   Engine) support** — the JIT translates PowerPC AltiVec → ARM64 NEON, and with the opt-in `altivec`
+   pref a real app (AltiVec Fractal Carbon) now detects and runs its vector kernel through the JIT (see
+   below). Next: broader OS/software reach (New World ROM → Mac OS 9.1/9.2, fuller device/OS modeling).
+   [DingusPPC](https://github.com/dingusdev/dingusppc) is our reference for fuller PPC-Mac-stack modeling.
+5. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, a vector register
+   allocator, HLE), with the stage-3 benchmarks gating every change against regressions.
 
 Running alongside all of this, **Silicon Sheep** (the Tauri desktop app) improves the day-to-day
 usability experience. The full tactical backlog lives in [`docs/planning/ROADMAP.md`](docs/planning/ROADMAP.md).

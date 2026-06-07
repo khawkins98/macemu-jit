@@ -1,6 +1,6 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** 🟡 Phase 0 done (2026-06-07) — Phase 1 next · **Created:** 2026-06-03 · **Updated:** 2026-06-07
+> **Status:** 🟡 Phase 2 in progress (2026-06-07) — infra landed, ~6-8 absent patches need RE; target = 9.0.4 G4 ROM · **Created:** 2026-06-03 · **Updated:** 2026-06-07
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
 > **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`
@@ -164,8 +164,37 @@ Work:
 
 ---
 
-## Phase 2 — Patch adaptation (if Phase 0 points here, or after Phase 1)
+## Phase 2 — Patch adaptation 🟡 IN PROGRESS (2026-06-07, target = 9.0.4 G4 ROM)
 
+**Infrastructure landed (safe, 1.1 boot verified byte-identical):**
+- ROM-version discrimination by checksum (`g_rom_904_lenient`, auto-on ONLY for the 9.0.4 G4
+  ROM cksum `0xb8d0b672`; 1.1 `0xfd86d120` path untouched; opt-out `SS_ROM_NO_904`).
+- `find_rom_data` whole-image fallback in lenient mode → **auto-resolves all RELOCATED patterns**
+  (e.g. `via_init2/3` found at 0x10874/0x10920). Logged as `RELOCATED` under `SS_ROM_PATCH_TRACE`.
+- A clean 9.0.4 ROM extracted to `/Users/Shared/macemu/MacOS-ROM-9.0.4-G4-extracted.rom`
+  (2.32 MB, < 4 MB read cap — so `load_mac_rom` is fine; no read-cap fix needed for 9.0.4).
+
+**Remaining work = the ABSENT patches (each needs proper RE; they are load-bearing, so the
+current `g_rom_904_lenient` SKIP placeholders make PatchROM progress but WON'T boot yet).**
+Enumerate the rest by iterating `SS_ROM_PATCH_TRACE=1 ./SheepShaver --config <9.0.4 prefs>`.
+Known absent NewWorld-path patches so far (in execution order), with role + current state:
+| pattern | bytes | role | state |
+|---------|-------|------|-------|
+| `mdec_dat` | `7ff602a6…` | nanokernel: neutralize decrementer (`mfdec`→`li 0`) | SKIP placeholder |
+| `suspend_dat` | `7c886839…` | nanokernel: suspend `bgt`→`b` | SKIP placeholder |
+| `run_diags_dat` | `60ff000c` | early 68k: set a6 = RAM top (stack) | SKIP placeholder |
+| nvram (`48e71ce0…`) | — | nvram access neutralize | next blocker (unguarded) |
+| `page_size`/`page_size2` | — | InitGestalt page size / CPU-type byte | guarded SKIP (9.0.4 ROM may self-supply) |
+| `cpu_speed`/`time_via`/`open_firmware` | — | clock-speed gestalt / VIA timing / OF pointer | guarded SKIP |
+
+For each: disassemble the equivalent code in 9.0.4 vs the working 1.1 image (both dumped via
+`rom-inspect --dump`; capstone, big-endian), find where the rewritten routine lives, and either
+(a) add a `g_rom_904_lenient` pattern/offset variant that patches the real 9.0.4 site, or
+(b) confirm it's genuinely unnecessary for 9.0.4 and leave the SKIP. **Boot-verify after each**
+(needs the user / a 9.0.4-bootable disk). Phase 3 risk is LOW here: SheepShaver+1.1 already boots
+the 9.0.4 *OS*, so the 9.0.4-era environment is proven — this is "just" ROM-patch parity.
+
+### Phase 2 — original notes
 For each failing `find_rom_data` pattern:
 - Disassemble the region in both a working ROM (1.1) and the parcels ROM (lldb +
   byte-swap, or capstone — see CLAUDE.md "lldb Workflow"). Find the equivalent code whose

@@ -3,6 +3,30 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — D3 Phase 2 started: 9.0.4 G4 ROM multi-version patching infra (1.1 boot verified safe)
+
+Began the actual 9.0.4-ROM port (the AltiVec unlock). Built the **multi-ROM-version patching
+infrastructure** in `rom_patches.cpp`, all guarded so the working 1.1 boot stays byte-identical
+(**verified: `make e2e` still PASS after the changes**):
+- **Checksum-based version flag** `g_rom_904_lenient` (auto-on only for 9.0.4 cksum `0xb8d0b672`;
+  1.1 is `0xfd86d120`; opt-out `SS_ROM_NO_904`). 1.1 and 9.0.4 share ROMTYPE_NEWWORLD AND version
+  `0x77d`, so checksum (or sub-version `@0x18`) is the only discriminator.
+- **`find_rom_data` whole-image fallback** in lenient mode → auto-resolves every RELOCATED pattern
+  (no per-site edits). This alone handles ~14 of the 9.0.4 drifted patterns.
+- Clean 9.0.4 ROM extracted to `/Users/Shared/macemu/MacOS-ROM-9.0.4-G4-extracted.rom` (2.32 MB,
+  under the 4 MB `load_mac_rom` cap — so no read-cap fix needed for 9.0.4; that caveat was 9.2.x-only).
+- SKIP-placeholder guards for the first few ABSENT patches (mdec/suspend/run_diags + page_size/
+  cpu_speed/time_via/open_firmware) so PatchROM progresses.
+
+**Honest state:** the ABSENT patches (~6-8 in the NewWorld path) are **load-bearing** (decrementer
+neutralize, 68k-stack setup, nvram, page-size) — SKIP-ing them gets PatchROM further but won't yield
+a boot; each needs proper RE of the rewritten 9.0.4 equivalent, **boot-verified** (needs the user /
+a 9.0.4-bootable disk). So I stopped the skip-chain rather than ship a known-broken boot. Worklist +
+roles are in NEW-WORLD-ROM-SUPPORT-PLAN.md Phase 2. **Key de-risk:** SheepShaver + the 1.1 ROM
+*already boots the 9.0.4 OS*, so the 9.0.4-era supervisor environment is proven — this is ROM-patch
+parity work, not the 9.1/9.2 "second wall". Method per absent patch: `rom-inspect --dump` both ROMs,
+capstone-diff the region, add a `g_rom_904_lenient` variant or confirm unnecessary.
+
 ## 2026-06-07 — NewWorld ROM boot trial: blocked on D3 (parcels-ROM support); but the AltiVec evidence firmed up
 
 Tried the decisive AltiVec test — boot the 2001 `Mac OS ROM 9.0.1.rom` and watch for AltiVec blocks.

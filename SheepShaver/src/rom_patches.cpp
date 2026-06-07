@@ -92,24 +92,51 @@ bool DecodeROM(uint8 *data, uint32 size)
 
 
 /*
+ *  ROM-version discrimination for multi-version NewWorld patching.
+ *
+ *  The byte-pattern patches below are calibrated to the 1998 LZSS "Mac OS ROM 1.1"
+ *  (ROMTYPE_NEWWORLD, checksum 0xfd86d120). Newer NewWorld ROMs (e.g. the G4-era 9.0.4
+ *  parcels ROM, checksum 0xb8d0b672, which carries the 'ppcf' AltiVec gestalt) share the
+ *  same ROMTYPE but have a drifted/rewritten layout. `g_rom_904_lenient` enables a
+ *  best-effort port path for that ROM WITHOUT disturbing the byte-identical 1.1 path:
+ *    - find_rom_data falls back to a whole-image search (handles RELOCATED patterns), and
+ *    - patch sites may treat a miss as skip-with-warning (handles ABSENT patterns).
+ *  See docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md (D3 Phase 2). EXPERIMENTAL — 9.0.4 only.
+ */
+static bool g_rom_904_lenient = false;
+
+/*
  *  Search ROM for byte string, return ROM offset (or 0)
  */
 
 static uint32 find_rom_data(uint32 start, uint32 end, const uint8 *data, uint32 data_len)
 {
+	const bool trace = getenv("SS_ROM_PATCH_TRACE") != NULL;
 	uint32 ofs = start;
 	while (ofs < end) {
 		if (!memcmp(ROMBaseHost + ofs, data, data_len)) {
-			if (getenv("SS_ROM_PATCH_TRACE"))
+			if (trace)
 				fprintf(stderr, "[ROMPATCH] find_rom_data [%06x,%06x) len=%u pat=%02x%02x%02x%02x -> HIT @%06x\n",
 				        start, end, data_len, data[0], data_len>1?data[1]:0, data_len>2?data[2]:0, data_len>3?data[3]:0, ofs);
 			return ofs;
 		}
 		ofs++;
 	}
-	if (getenv("SS_ROM_PATCH_TRACE"))
-		fprintf(stderr, "[ROMPATCH] find_rom_data [%06x,%06x) len=%u pat=%02x%02x%02x%02x -> MISS (abort point)\n",
-		        start, end, data_len, data[0], data_len>1?data[1]:0, data_len>2?data[2]:0, data_len>3?data[3]:0);
+	// 9.0.4 lenient: pattern may have RELOCATED — retry across the whole image.
+	if (g_rom_904_lenient) {
+		for (uint32 o = 0; o + data_len <= ROM_SIZE; o++) {
+			if (!memcmp(ROMBaseHost + o, data, data_len)) {
+				if (trace)
+					fprintf(stderr, "[ROMPATCH] find_rom_data [%06x,%06x) pat=%02x%02x%02x%02x -> RELOCATED @%06x (904 whole-image fallback)\n",
+					        start, end, data[0], data_len>1?data[1]:0, data_len>2?data[2]:0, data_len>3?data[3]:0, o);
+				return o;
+			}
+		}
+	}
+	if (trace)
+		fprintf(stderr, "[ROMPATCH] find_rom_data [%06x,%06x) len=%u pat=%02x%02x%02x%02x -> MISS%s\n",
+		        start, end, data_len, data[0], data_len>1?data[1]:0, data_len>2?data[2]:0, data_len>3?data[3]:0,
+		        g_rom_904_lenient ? " (absent even whole-image)" : " (abort point)");
 	return 0;
 }
 
@@ -582,7 +609,19 @@ bool PatchROM(void)
 	ROMType = rom_detect_type(ROMBaseHost);
 	if (ROMType < 0)
 		return false;
-	
+
+	// EXPERIMENTAL (D3 Phase 2): best-effort patching of the G4-era 9.0.4 parcels ROM
+	// (checksum 0xb8d0b672), which carries the 'ppcf' AltiVec gestalt. Auto-enabled ONLY
+	// for that exact checksum, so the working 1.1 ROM (0xfd86d120) path is byte-identical.
+	// Opt-out with SS_ROM_NO_904. See NEW-WORLD-ROM-SUPPORT-PLAN.md.
+	{
+		uint32 cksum = ntohl(*(uint32 *)ROMBaseHost);
+		if (cksum == 0xb8d0b672 && !getenv("SS_ROM_NO_904")) {
+			g_rom_904_lenient = true;
+			fprintf(stderr, "[ROMPATCH] 9.0.4 G4 ROM (cksum %08x) detected — lenient patch mode ON (experimental)\n", cksum);
+		}
+	}
+
 	// Check that other ROM addresses point to really free regions
 	if (!check_rom_patch_space(CHECK_LOAD_PATCH_SPACE, 0x40))
 		return false;
@@ -1239,7 +1278,9 @@ static bool patch_nanokernel(void)
 	*lp = htonl(0x48000000 | (ntohl(*lp) & 0xffff));	// bl	0x00312e88
 
 	static const uint8 mdec_dat[] = {0x7f, 0xf6, 0x02, 0xa6, 0x2c, 0x08, 0x00, 0x00, 0x93, 0xe1, 0x06, 0x68, 0x7d, 0x16, 0x03, 0xa6};
-	if ((base = find_rom_data(0x310000, 0x314000, mdec_dat, sizeof(mdec_dat))) == 0) return false;
+	base = find_rom_data(0x310000, 0x314000, mdec_dat, sizeof(mdec_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("mdec %08lx\n", base));
 	lp = (uint32 *)(ROMBaseHost + base);		// Don't modify DEC
 	lp[0] = htonl(0x3be00000);					// li	r31,0
@@ -1250,6 +1291,7 @@ static bool patch_nanokernel(void)
 	lp[3] = htonl(0x39000040);					// li	r8,0x40
 	lp[4] = htonl(0x990600e4);					// stb	r8,0xe4(r6)
 #endif
+	} else fprintf(stderr, "[ROMPATCH] SKIP mdec (decrementer neutralize — absent in 9.0.4; boot may need this)\n");
 
 	static const uint8 restore_fpu_caller_dat[] = {0x81, 0x06, 0x00, 0xf4, 0x81, 0x46, 0x00, 0xfc, 0x7d, 0x09, 0x03, 0xa6, 0x40};
 	if ((base = find_rom_data(0x310000, 0x314000, restore_fpu_caller_dat, sizeof(restore_fpu_caller_dat))) == 0) return false;
@@ -1288,10 +1330,13 @@ static bool patch_nanokernel(void)
 	// Disable suspend (FE0F opcode)
 	// TODO: really suspend SheepShaver?
 	static const uint8 suspend_dat[] = {0x7c, 0x88, 0x68, 0x39, 0x41, 0x9d};
-	if ((base = find_rom_data(0x315000, 0x316000, suspend_dat, sizeof(suspend_dat))) == 0) return false;
+	base = find_rom_data(0x315000, 0x316000, suspend_dat, sizeof(suspend_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("suspend %08lx\n", base));
 	lp = (uint32 *)(ROMBaseHost + base + 4);
 	*lp = htonl((ntohl(*lp) & 0xffff) | 0x48000000);	// bgt -> b
+	} else fprintf(stderr, "[ROMPATCH] SKIP suspend (absent in 9.0.4)\n");
 
 	// Patch trap return routine
 	static const uint8 trap_return_dat[] = {0x80, 0xc1, 0x00, 0x18, 0x80, 0x21, 0x00, 0x04, 0x4c, 0x00, 0x00, 0x64};
@@ -1480,12 +1525,15 @@ static bool patch_68k(void)
 	// Don't RunDiags, get BootGlobs pointer directly
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static const uint8 run_diags_dat[] = {0x60, 0xff, 0x00, 0x0c};
-		if ((base = find_rom_data(0x110, 0x128, run_diags_dat, sizeof(run_diags_dat))) == 0) return false;
+		base = find_rom_data(0x110, 0x128, run_diags_dat, sizeof(run_diags_dat));
+		if (base == 0 && !g_rom_904_lenient) return false;
+		if (base) {
 		D(bug("run_diags %08lx\n", base));
 		wp = (uint16 *)(ROMBaseHost + base);
 		*wp++ = htons(0x4df9);			// lea	xxx,a6
 		*wp++ = htons((RAMBase + RAMSize - 0x1c) >> 16);
 		*wp = htons((RAMBase + RAMSize - 0x1c) & 0xffff);
+		} else fprintf(stderr, "[ROMPATCH] SKIP run_diags (absent in 9.0.4; sets 68k stack — boot likely needs this)\n");
 	} else {
 		static const uint8 run_diags_dat[] = {0x74, 0x00, 0x2f, 0x0e};
 		if ((base = find_rom_data(0xd0, 0xf0, run_diags_dat, sizeof(run_diags_dat))) == 0) return false;
@@ -1694,7 +1742,9 @@ static bool patch_68k(void)
 
 	// Get PowerPC page size (InitVMemMgr, via 0x240)
 	static const uint8 page_size_dat[] = {0x20, 0x30, 0x81, 0xf2, 0x5f, 0xff, 0xef, 0xd8, 0x00, 0x10};
-	if ((base = find_rom_data(0xb000, 0x12000, page_size_dat, sizeof(page_size_dat))) == 0) return false;
+	base = find_rom_data(0xb000, 0x12000, page_size_dat, sizeof(page_size_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("page_size %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x203c);			// move.l	#$1000,d0
@@ -1702,10 +1752,13 @@ static bool patch_68k(void)
 	*wp++ = htons(0x1000);
 	*wp++ = htons(M68K_NOP);
 	*wp = htons(M68K_NOP);
+	} else fprintf(stderr, "[ROMPATCH] SKIP page_size (absent in 9.0.4)\n");
 
 	// Gestalt PowerPC page size, CPU type, RAM size (InitGestalt, via 0x25c)
 	static const uint8 page_size2_dat[] = {0x26, 0x79, 0x5f, 0xff, 0xef, 0xd8, 0x25, 0x6b, 0x00, 0x10, 0x00, 0x1e};
-	if ((base = find_rom_data(0x50000, 0x70000, page_size2_dat, sizeof(page_size2_dat))) == 0) return false;
+	base = find_rom_data(0x50000, 0x70000, page_size2_dat, sizeof(page_size2_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("page_size2 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x257c);			// move.l	#$1000,$1e(a2)
@@ -1733,6 +1786,7 @@ static bool patch_68k(void)
 		wp = (uint16 *)(ROMBaseHost + base + 0x28);
 	*wp++ = htons(M68K_NOP);
 	*wp = htons(M68K_NOP);
+	} else fprintf(stderr, "[ROMPATCH] SKIP page_size2/CPU-type gestalt (absent in 9.0.4; ROM does its own)\n");
 
 	// Gestalt CPU/bus clock speed (InitGestalt, via 0x25c)
 	if (ROMType == ROMTYPE_ZANZIBAR) {
@@ -1811,14 +1865,17 @@ static bool patch_68k(void)
 
 	// Patch GetCPUSpeed (via 0x27a) (some ROMs have two of them)
 	static const uint8 cpu_speed_dat[] = {0x20, 0x30, 0x81, 0xf2, 0x5f, 0xff, 0xef, 0xd8, 0x00, 0x04, 0x4c, 0x7c};
-	if ((base = find_rom_data(0x6000, 0xa000, cpu_speed_dat, sizeof(cpu_speed_dat))) == 0) return false;
+	base = find_rom_data(0x6000, 0xa000, cpu_speed_dat, sizeof(cpu_speed_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("cpu_speed %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x203c);			// move.l	#(MHz<<16)|MHz,d0
 	*wp++ = htons(CPUClockSpeed / 1000000);
 	*wp++ = htons(CPUClockSpeed / 1000000);
 	*wp = htons(M68K_RTS);
-	if ((base = find_rom_data(base, 0xa000, cpu_speed_dat, sizeof(cpu_speed_dat))) != 0) {
+	} else fprintf(stderr, "[ROMPATCH] SKIP cpu_speed (absent in 9.0.4)\n");
+	if (base && (base = find_rom_data(base, 0xa000, cpu_speed_dat, sizeof(cpu_speed_dat))) != 0) {
 		D(bug("cpu_speed2 %08lx\n", base));
 		wp = (uint16 *)(ROMBaseHost + base);
 		*wp++ = htons(0x203c);			// move.l	#(MHz<<16)|MHz,d0
@@ -1829,17 +1886,22 @@ static bool patch_68k(void)
 
 	// Don't poke VIA in InitTimeMgr (via 0x298)
 	static const uint8 time_via_dat[] = {0x40, 0xe7, 0x00, 0x7c, 0x07, 0x00, 0x28, 0x78, 0x01, 0xd4, 0x43, 0xec, 0x10, 0x00};
-	if ((base = find_rom_data(0x30000, 0x40000, time_via_dat, sizeof(time_via_dat))) == 0) return false;
+	base = find_rom_data(0x30000, 0x40000, time_via_dat, sizeof(time_via_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("time_via %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x4cdf);			// movem.l	(sp)+,d0-d5/a0-a4
 	*wp++ = htons(0x1f3f);
 	*wp = htons(M68K_RTS);
+	} else fprintf(stderr, "[ROMPATCH] SKIP time_via (absent in 9.0.4)\n");
 
 	// Don't read from 0xff800000 (Name Registry, Open Firmware?) (via 0x2a2)
 	// Remove this if FE03 works!!
 	static const uint8 open_firmware_dat[] = {0x2f, 0x79, 0xff, 0x80, 0x00, 0x00, 0x00, 0xfc};
-	if ((base = find_rom_data(0x48000, 0x58000, open_firmware_dat, sizeof(open_firmware_dat))) == 0) return false;
+	base = find_rom_data(0x48000, 0x58000, open_firmware_dat, sizeof(open_firmware_dat));
+	if (base == 0 && !g_rom_904_lenient) return false;
+	if (base) {
 	D(bug("open_firmware %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x2f7c);			// move.l		#deadbeef,0xfc(a7)
@@ -1849,6 +1911,7 @@ static bool patch_68k(void)
 	wp = (uint16 *)(ROMBaseHost + base + 0x1a);
 	*wp++ = htons(M68K_NOP);		// (FE03 opcode, tries to jump to 0xdeadbeef)
 	*wp = htons(M68K_NOP);
+	} else fprintf(stderr, "[ROMPATCH] SKIP open_firmware (absent in 9.0.4)\n");
 
 	// Don't EnableExtCache (via 0x2b2)
 	static const uint8 ext_cache2_dat[] = {0x4f, 0xef, 0xff, 0xec, 0x20, 0x4f, 0x10, 0xbc, 0x00, 0x01, 0x11, 0x7c, 0x00, 0x1b};

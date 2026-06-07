@@ -138,6 +138,32 @@ bit 6"; it only rules out the worst failure mode.) Injection-point hunt (static)
 story), demoting the ROM port to nice-to-have. The JIT AltiVec codegen is hardened (this session) so it's
 correct the moment either lands. [[altivec-detection-not-pure-pvr]] [[altivec-gestalt-gate]]
 
+## 2026-06-07 — Autonomous session: NewWorld ROM frontier blocker pinpointed + CopyBits probe limits
+
+User staged the frontier assets (`Downloads/New_World_Mac_Roms/New World ROM/` = 19 Mac OS ROM versions,
+`macos_921_ppc.iso`, `macos-922-uni.zip`, `3D_pinball_demo.hqx`) and said proceed autonomously. Diagnostics:
+
+- **All 9.x NewWorld ROMs are equivalent** (rom-inspect: CHRP-parcels NewWorld; patch-sizing identical:
+  27 in-range / 31 relocated / 17 applicable-absent). No "closer" candidate among them.
+- **The frontier blocker is STRUCTURAL, not just absent patterns** (key finding). Added `SS_ROM_LENIENT=1`
+  (force lenient mode for any NewWorld ROM → the 31 relocated patterns auto-resolve). Booting 9.1.1 then
+  aborts at the FIRST nanokernel-boot patch: `rom_patches.cpp:715` `if (ntohl(lp[6]) != 0x2c0c0001) return
+  false;` — the patch logic assumes `cmpwi r12,1` sits at `pvr_read+24`, but the parcels ROM rewrote the
+  CPU-detect routine (that word is a `mtspr`; the real compare is ~0x520 bytes away). **So `patch_nanokernel_boot`
+  needs RE-reverse-engineering for the parcels layout, not incremental pattern-filling. Patch-sizing
+  UNDERCOUNTS the work** — it checks byte-pattern presence, blind to `lp[N]==const` structural assumptions.
+  Genuine multi-session RE; not autonomous-away work. (Tooling shipped: `SS_ROM_LENIENT`, `SS_ROM_PATCH_TRACE`.)
+- **CopyBits frequency probe hit a PPC/Mixed-Mode wall.** Added `SS_JIT_PROFILE_PC=<pc>` (print any block's
+  exec count) + the `SS_COPYBITS_TRACE` resolver. But `_CopyBits` trap addr `0x102daa5c` reads back as
+  **"(not compiled) 0"** — on a PPC Mac CopyBits is PowerPC code reached via Mixed Mode, so the 68k trap
+  address ≠ the JIT block PC. A RoutineDescriptor-follow (magic 0xAAFE) also said it's **not a standard RD**.
+  Identifying CopyBits's real PPC block needs a live memory dump at the trap addr + a **graphics workload**
+  (Finder activity blits ~0 — confirmed). The pinball app is the workload, but installing the `.hqx`
+  (BinHex → guest install) is fiddly host-side. Tooling in place; identification + workload are the remaining steps.
+- **Method that worked all session:** env-gated, default-off probes (zero risk to normal boots), boot from a
+  disk COPY, clean shutdown via SIGUSR1. A crashing approach (the earlier CopyBits come-from stub) only ever
+  affected its own enabled run.
+
 ## 2026-06-07 — Extended the XO audit to SCALAR FP (live, not dormant) — found mtfsf/mtfsfi body swap
 
 Ran the same scramble logic against the scalar-FP switches (primary 63/59). Unlike AltiVec (dormant

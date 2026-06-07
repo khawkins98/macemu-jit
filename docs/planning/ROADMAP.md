@@ -481,11 +481,14 @@ read straight from Toolbox structures at the idle hook — no screenshot/OCR.
   (2) **AltiVec detection** — once the Carbon-menu driver lands (see the 🔧 item below), read FC's File-menu
   "Turn AltiVec Code On/Off — (detected|not detected)" string to assert whether the guest detects AltiVec,
   and drive the toggle; (3) **execution proof** — verify with the `[JIT-COMPILED-MIX] AltiVec=N` profiler
-  metric (`SS_JIT_PROFILE`) whether vector ops actually run. **Finding 2026-06-07 that motivates this:** FC
-  reports "(not detected)" and emits 0 AltiVec even with our gestalt `'ppcf'` force — FC uses a non-gestalt
-  AltiVec probe SheepShaver doesn't satisfy (see LEARNINGS / the AltiVec-detection research note). So this
-  test currently asserts the *negative* (AltiVec not yet reaching real apps); it flips to a positive perf
-  A/B (AltiVec-on vs FP) once we satisfy FC's probe (Track-2 follow-up). Depends on: Carbon-menu driver.
+  metric (`SS_JIT_PROFILE`) whether vector ops actually run. **✅ RESOLVED 2026-06-07 — real-app AltiVec
+  ACHIEVED:** with the corrected `SS_FORCE_ALTIVEC` (gestalt vector bit `0x10`, not the earlier wrong
+  `0x40`), FC detects AltiVec via `Gestalt('ppcf')`, takes its vector path, and our JIT runs it —
+  `[JIT-COMPILED-MIX] AltiVec=160`, multiple AltiVec hot blocks (~74M exec each). (The earlier "FC uses a
+  non-gestalt probe / 0 AltiVec" claim was a confounded experiment — wrong gestalt bit; see LEARNINGS.)
+  So FC IS a positive AltiVec perf A/B vehicle now (AltiVec-on vs forced-off). Remaining for the e2e test:
+  the Carbon-menu driver to read/assert FC's "(detected)" string + drive the toggle headlessly, and a
+  decision on whether to ship the gestalt-register as a real (non-throwaway) opt-in pref. Depends on: Carbon-menu driver.
 - 🔧 **TO IMPROVE — Carbon-app menu introspection.** `SS_UI_DUMP_DIR` returns an **empty menu bar for
   Carbon apps** (confirmed 2026-06-07 driving Fractal Carbon): Backend A reads the classic Toolbox
   global menu list (`MenuList`/`GetMenuBar`), but Carbon apps own their menus via the Carbon Event/HIToolbox
@@ -599,12 +602,25 @@ Inspector" data layer (Track C). **Detail:** `OPTIMIZATION-PLAN.md` §P0/§P0b.
 - Remaining: constant folding (P5), instruction scheduling (P6), byte-swap opt (P7), **cross-block
   register pinning** (r1/SP, r2/RTOC — P8). **Detail:** `OPTIMIZATION-PLAN.md` §P5–P9.
 
-## B5. 🔴 AltiVec is DORMANT for real guest software — a *detection* gap → **Phase-3 (widen) foundational work**
+## B5. ✅ AltiVec detection SOLVED (2026-06-07) — gestalt `'ppcf'` register-it-ourselves; real-app AltiVec achieved
 
-The AltiVec JIT codegen (extensively hardened — 54 differential vectors, 27 bugs fixed) is **only
-exercised by the test harness**: no real app issues AltiVec because the guest never *detects* it.
-This is the prototypical **Phase-3 "widen emulation"** item — not a codegen fix and not a perf lever,
-but modeling more of the stack so an existing capability becomes reachable.
+> **RESOLVED.** The gate was the gestalt `'ppcf'` vector bit, AND it's registerable from host code under
+> the existing OldWorld 1.1 ROM — **no NewWorld ROM port needed.** `SS_FORCE_ALTIVEC=1` registers `'ppcf'`
+> via `_NewGestalt $A3AD` with a 68k SelectorFunction returning the vector bit (`1<<4 = 0x10`). With it,
+> **Fractal Carbon detects AltiVec, takes its vector path, and our AArch64 JIT compiles+runs the PPC
+> AltiVec instructions** — `[JIT-COMPILED-MIX] AltiVec=160`, multiple AltiVec hot blocks (~74M exec each).
+> So the JIT's AltiVec codegen is now validated **end-to-end by a real app**, not just the harness.
+> **False-start caveat (kept as a lesson):** the first attempt wrote bit `0x40` (= `gestaltPowerPCHas64Bit`
+> Support`) instead of `0x10`, producing a self-consistent WRONG conclusion ("FC ignores gestalt; 0
+> AltiVec") that survived until a research subagent checked Apple's `Gestalt.h` (the constant is bit
+> *number* 4). Verify magic numbers against the primary source; `1<<N` ≠ N. Full story: LEARNINGS 2026-06-07.
+> **Open follow-ups:** (a) decide whether to ship `SS_FORCE_ALTIVEC` as a real opt-in pref (vs throwaway) —
+> note 8.6/9.0 here don't do VR context save/restore, so weigh multitasking-safety; (b) wire FC's
+> "(detected)" assertion + toggle into the S5b e2e test once the Carbon-menu driver lands.
+
+**Historical (the investigation that led here — falsified theories retained for the record):**
+The AltiVec JIT codegen (extensively hardened — 54 differential vectors, 27 bugs fixed) was **only
+exercised by the test harness** until the gestalt unlock above; the work below traces how the gate was found.
 
 - ❌ **`mfmsr[VEC]` READ is NOT the gate — falsified.** Advertising MSR[VEC]=1 (`mfmsr`→`0x0200f072`)
   and booting Fractal Carbon left the profile at **0 AltiVec blocks**. (Kept the JIT `mfmsr`→`0xf072`

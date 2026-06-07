@@ -2375,3 +2375,26 @@ divergence for any guest reading MSR). test-jit 303/303.
 `SS_TEST_HEX` differential harness (needs no guest detection at all) *before* attempting
 gestalt enablement, so that whenever the `'ppcf'` site is found, flipping it is a pure
 win and not silent corruption for apps that hit the open families. See ROADMAP B5.
+
+## 2026-06-07 — FP-RA op conversion clean; lazy-CR0 RTMP1-clobber landmine documented
+
+Completed the P5b FP register-allocator op conversion: all FP **indexed/update memory**
+(`lf{s,d}x`/`lf{s,d}ux`/`stf{s,d}x`/`stf{s,d}ux`/`lf{s,d}u`/`stf{s,d}u`) and the single-op
+`frsp`/`fsel`/`frsqrte`/`fsqrt` moved from the FMOV bridge to zero-copy `ra_fp_load`/`ra_fp_store`.
+test-jit 303→317 (added 14 vectors: 12 FP-mem + 2 fsel; `frsqrte`/`fsqrt` are prospective —
+not differentially testable). FC perf-neutral (its Mandelbrot loop is register FP arith, doesn't
+use these ops). **No hot FP op uses the `emit_*_fpr` bridge anymore** (it survives only as the
+coherence shim for struct-resident mffs/mtfsf/fcmp).
+
+**Adversarial review (subagent) found no new bug**, but surfaced a *pre-existing* landmine that
+matters for [[the §0g lazy-CR0 re-enable]]: when lazy-CR0 is armed, `ra_evict` →
+`emit_materialize_cr0` emits **`CSET RTMP1, GT`**, clobbering RTMP1. The FP **store** forms
+(stf*x/stf*ux/stf*u) and `lmw` hold a live value in **RTMP1 across a trailing integer
+`ra_load`** → silent store corruption *the moment §0g is wired up*. It is **dead today**
+(`lazy_cr0_valid` is never set `true`). Fix when re-enabling lazy-CR0: compute the EA via
+`ra_load` *before* materializing the store value into RTMP1 (mirror the load forms). Recorded in
+OPTIMIZATION-PLAN §0g. (The load/update forms are already safe — `ra_fp_*` eviction is GP-clean.)
+
+Minor pre-existing nit (not fixed — untestable, invisible): `fsel` emits signaling `FCMPE` vs
+`#0.0`; PPC `fsel` is exception-free, so `FCMP` would be more correct, but FPSCR exceptions aren't
+surfaced so it's unobservable and the differential harness can't validate a change.

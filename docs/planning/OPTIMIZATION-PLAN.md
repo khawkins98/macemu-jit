@@ -451,6 +451,21 @@ eliminates them.
    register is used for lazy CR0, eviction must flush CR0 first
 3. Re-enable, run `SS_JIT_VERIFY=1`, then boot + benchmark
 
+> **⚠️ RTMP1-clobber landmine — MUST fix before re-enabling (found 2026-06-07 adversarial review).**
+> When lazy-CR0 is armed (`lazy_cr0_valid=true`), `ra_evict` calls `emit_materialize_cr0`, which
+> emits **`CSET RTMP1, GT`** (ppc-jit.cpp ~1293) — clobbering RTMP1. Several ops hold a live value
+> in **RTMP1 across a later integer `ra_load`/`ra_store`** (which can trigger eviction):
+> the FP **store** forms `stf{s,d}x`/`stf{s,d}ux`/`stf{s,d}u` (cases 663/695/727/759, 53/55 — RTMP1 =
+> byte-swapped store value set *before* the trailing `ra_load(ra)/ra_load(rb)` EA computation) and
+> **`lmw`** (case 46). Today this is **dead/safe** (lazy_cr0_valid is never set `true` anywhere — the
+> `emit_materialize_cr0` branch in `ra_evict` is unreachable), so integer eviction emits only a
+> GP-clean `a64_str_w_imm`. The instant §0g arms lazy-CR0, these become **silent store-corruption**
+> bugs. **Fix:** in those store forms, compute the EA (`ra_load(ra)/ra_load(rb)` → RTMP0) *before*
+> materializing the store value into RTMP1 — mirror the load forms' ordering. Audit every site that
+> holds a GPR-scratch value live across an `ra_load`/`ra_store`. (The load/update forms are already
+> safe: `ra_fp_*` eviction is GP-clean — STR/LDR Dn only — and their `ra_store(ra)` precedes the
+> RTMP1 load.)
+
 ---
 
 ## Open — Medium Effort

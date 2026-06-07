@@ -945,15 +945,30 @@ static bool patch_nanokernel_boot(void)
 	lp = (uint32 *)(ROMBaseHost + base);
 	*lp = htonl(POWERPC_NOP);
 
-	// Don't load SRs and BATs
+	// Don't load SRs and BATs.
+	// PARCELS: the SR/BAT-load routine was restructured (its 1.1 signature `7c0004ac 839d0000
+	// 938105e8` is absent even whole-image). But the ops it performs — `mtsrin` (segment-register
+	// load) + `mt{i,d}bat{l,u}` (BAT setup) — are DROPPED no-ops on the aarch64 JIT (ppc-jit.cpp
+	// supervisor stub), and its only real-RAM effect is saving the (ignored) BAT values into
+	// KernelData (0x300-0x324). Under flat virtual=physical addressing there are no live SRs/BATs to
+	// corrupt, so letting the routine RUN is harmless — we SKIP the neutralization on parcels instead
+	// of re-RE'ing the routine+caller (the 1.1 `sr_load_caller` byte-pattern false-matches a
+	// page-table loop on parcels, so it can't be trusted here anyway). ⚠ PATCH-ADVANCING BUT
+	// RUNTIME-UNVALIDATED: confirm at boot that the nanokernel doesn't depend on the KernelData BAT
+	// fields. Gated on g_rom_904_lenient; the 1.1 LZSS path runs the else branch byte-identically.
 	static const uint8 sr_load[] = {0x7c, 0x00, 0x04, 0xac, 0x83, 0x9d, 0x00, 0x00, 0x93, 0x81, 0x05, 0xe8};
-	if ((loc = find_rom_data(0x310000, 0x320000, sr_load, sizeof(sr_load))) == 0) return false;
-	static const uint8 sr_load_caller[] = {0x3e, 0xd6, 0xff, 0xff, 0x41, 0x81, 0xff, 0xdc, 0xb2, 0xc8, 0x00, 0x02};
-	if ((base = find_rom_data(0x310000, 0x320000, sr_load_caller, sizeof(sr_load_caller))) == 0) return false;
-	if ((base = find_rom_powerpc_branch(base + 12, 0x320000, loc)) == 0) return false;
-	D(bug("sr_load %08lx, called from %08lx\n", loc, base));
-	lp = (uint32 *)(ROMBaseHost + base);
-	*lp = htonl(POWERPC_NOP);
+	if ((loc = find_rom_data(0x310000, 0x320000, sr_load, sizeof(sr_load))) == 0) {
+		if (!g_rom_904_lenient) return false;
+		fprintf(stderr, "[ROMPATCH] parcels: sr_load (SR/BAT-load) absent — SKIP neutralization "
+		        "(SR/BAT are JIT no-ops; RUNTIME-UNVALIDATED)\n");
+	} else {
+		static const uint8 sr_load_caller[] = {0x3e, 0xd6, 0xff, 0xff, 0x41, 0x81, 0xff, 0xdc, 0xb2, 0xc8, 0x00, 0x02};
+		if ((base = find_rom_data(0x310000, 0x320000, sr_load_caller, sizeof(sr_load_caller))) == 0) return false;
+		if ((base = find_rom_powerpc_branch(base + 12, 0x320000, loc)) == 0) return false;
+		D(bug("sr_load %08lx, called from %08lx\n", loc, base));
+		lp = (uint32 *)(ROMBaseHost + base);
+		*lp = htonl(POWERPC_NOP);
+	}
 
 	// Don't mess with SRs
 	static const uint8 sr_load2_dat[] = {0x83, 0xa1, 0x05, 0xe8, 0x57, 0x7c, 0x3e, 0x78, 0x7f, 0xbd, 0xe0, 0x2e};

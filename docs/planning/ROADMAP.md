@@ -476,6 +476,16 @@ read straight from Toolbox structures at the idle hook — no screenshot/OCR.
   window list.
 - 🟡 **S5 (next)** — grow the workload library (POV-Ray, MacBench; Word once Office is installed) on the
   same framework; perf-trend each; optional golden-image regression (`WorkloadSpec.golden_image`).
+- 🔧 **TO IMPROVE — Carbon-app menu introspection.** `SS_UI_DUMP_DIR` returns an **empty menu bar for
+  Carbon apps** (confirmed 2026-06-07 driving Fractal Carbon): Backend A reads the classic Toolbox
+  global menu list (`MenuList`/`GetMenuBar`), but Carbon apps own their menus via the Carbon Event/HIToolbox
+  manager, not those classic structures — so we can't enumerate or `click_item` a Carbon app's menu actions
+  host-side. This blocked driving FC to an explicit AltiVec/Calculate mode for the AltiVec-execution test
+  (task #26) — we could only watch its passive default. Options to investigate: (a) Backend B
+  Toolbox-trap oracle could hook `CountMenuItems`/`GetMenuItemText` per registered MenuRef rather than the
+  global list; (b) read the Carbon menu bar via the HIToolbox menu-tracking globals (needs RE); (c) accept
+  the limit and drive Carbon apps by known cmd-keys / screenshot-pHash regions instead of named menu items.
+  Pairs with the existing Carbon-canvas limitation noted below (fullscreen canvas isn't a `WindowRecord`).
 - ⏸ **Plan 3** — Backend B (Toolbox-trap oracle), `compare()`/`overlay()` calibration, ParamText, socket transport.
 See `SheepShaver/docs/UI-INTROSPECTION.md` (canonical reference),
 `docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md` (action plan),

@@ -11,6 +11,13 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] B1 execution profiler + fallback trace + P3 block timing
+
+- **B1 profiler**: per-block execution counter (`SS_JIT_PROFILE=1`). Hot Blocks panel.
+- **Fallback trace**: per-PC interpreter fallback counts with opcode ID. Fallbacks panel.
+- **P3 block timing**: wall-clock per-block via `mach_absolute_time()`. Block Timing panel.
+- All via C2.0 RPC (methods 18-20). Zero overhead when profiler is off.
+
 ### [docs] SiliconSheep Inspector — Tier 2 machine state + P1 session recording
 
 - **Register Inspector** — GPR r0-r31, SPR (PC/LR/CTR/CR/XER) snapshot via

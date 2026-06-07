@@ -709,7 +709,7 @@ occurred, what was slow. This is the JIT equivalent of a flame chart.
   or shared for diagnosis (like Firefox Profiler's shareable URLs).
 
 **Tier P2 — Per-block profiling (needs B1, the execution-weighted profiler):**
-- [ ] **Hot block table** — sorted by execution count. Shows PPC address, instruction count,
+- [x] **Hot block table** — sorted by execution count. Shows PPC address, instruction count,
   native code size, hit count. Source: B1 profiler data via C2.0 RPC.
 - [ ] **Heat map** — visual representation of ROM/RAM regions by execution density.
   Color-coded: red = hot, blue = cold. Click a region to see its blocks.
@@ -717,7 +717,7 @@ occurred, what was slow. This is the JIT equivalent of a flame chart.
   ranked list. Identifies optimization targets.
 
 **Tier P3 — Flame chart (needs block-level timing):**
-- [ ] **Block-level timing** — measure wall-clock time per JIT block execution. Needs
+- [x] **Block-level timing** — measure wall-clock time per JIT block execution. Needs
   `mach_absolute_time()` instrumentation in the dispatch loop (very low overhead with the
   rdtsc approach, but still a cost — guarded by recording mode only).
 - [ ] **Flame chart** — Chrome DevTools-style visualization. Each row = a JIT block, width =

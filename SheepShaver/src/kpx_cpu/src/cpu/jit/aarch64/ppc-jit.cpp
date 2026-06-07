@@ -4284,7 +4284,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 
 		case 28: /* fmsub frD,frA,frC,frB = frA*frC-frB */
 		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
-			emit32(0x1F608000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FMSUB */
+			emit32(0x1F608000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* ARM FNMSUB = Rn*Rm-Ra = frA*frC-frB (PPC fmsub; ARM/PPC names are crossed) */
 			return true; }
 
 		case 31: /* fnmadd frD,frA,frC,frB = -(frA*frC+frB) */
@@ -4294,7 +4294,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 
 		case 30: /* fnmsub frD,frA,frC,frB = -(frA*frC-frB) = frB - frA*frC */
 		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
-			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FNMSUB */
+			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* ARM FMSUB = Ra-Rn*Rm = frB-frA*frC (PPC fnmsub; ARM/PPC names are crossed) */
 			return true; }
 
 		/* 64-bit FP conversions (G5/PPC970) */
@@ -4560,7 +4560,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			return true; }
 		case 28: /* fmsubs = frA*frC - frB */
 		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
-			emit32(0x1F608000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FMSUB */
+			emit32(0x1F608000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* ARM FNMSUB = Rn*Rm-Ra = frA*frC-frB (PPC fmsub; ARM/PPC names are crossed) */
 			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
 			return true; }
 		case 31: /* fnmadds */
@@ -4570,7 +4570,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			return true; }
 		case 30: /* fnmsubs = -(frA*frC - frB) = frB - frA*frC */
 		{	int hA = ra_fp_load(fra); int hC = ra_fp_load(frc); int hB = ra_fp_load(frb); int hD = ra_fp_store(frd);
-			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* FNMSUB */
+			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* ARM FMSUB = Ra-Rn*Rm = frB-frA*frC (PPC fnmsub; ARM/PPC names are crossed) */
 			emit32(0x1E624000 | (hD << 5) | hD); emit32(0x1E22C000 | (hD << 5) | hD);
 			return true; }
 		case 24: /* fres frD,frB — reciprocal estimate */

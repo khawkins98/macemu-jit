@@ -9,6 +9,34 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-08
+
+### [SheepShaver] SPRG0-3 registers implemented — general JIT correctness fix
+
+- **Correctness fix (all guest OSes):** `mfspr`/`mtspr` for SPRG0-3 (SPR 272-275) were previously
+  **dropped** (writes ignored, reads returned 0) — simply wrong; SPRG0-3 are OS scratch / per-CPU
+  pointer registers. Added real `sprg[4]` storage (appended LAST in `powerpc_registers` so no JIT
+  hardcoded offset moves), wired interp `mfspr`/`mtspr`, zero-init in `init_registers`. `test-jit=100`.
+- **Found via the New World parcels nanokernel** (the correctness forcing-function), which stashes its
+  per-CPU/KernelData pointer in SPRG0 and reads it back — with SPRG dropped it read 0 → garbage pointer
+  → spinlock deadlock. See `docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md`.
+- **Build note:** changing `ppc-registers.hpp` needs all PPC TUs recompiled; the Makefile doesn't track
+  that header dep, so a stale incremental build silently mismatches struct offsets (manifests as
+  `test-jit=0`). `rm obj/ppc-*.o obj/sheepshaver_glue.o obj/ppc-jit.o` after struct changes.
+
+### [SheepShaver] New World parcels-ROM correctness probes (first runtime boot of a parcels ROM)
+
+- **`:715` CPU-detect skip + `sr_load` skip** (gated on `g_rom_904_lenient`; 1.1 path byte-identical):
+  the parcels ROM self-handles the faked G4 PVR, and SR/BAT loads are JIT no-ops, so both 1.1-era
+  patches are skippable on parcels. Got the **parcels (9.0.1) PPC nanokernel to RUN under the JIT for
+  the first time** (diagnostic config `SS_ROM_SKIP_JUMP68K` skips the un-ported 68k handoff + 68k HLE).
+- **`SS_SYNTH_DEC`** (env, default off): synthetic free-running decrementer (mfspr DEC was 0). Fidelity
+  tool; ruled out "time-based" for the parcels wedge.
+- **Diagnostics** (env, zero-cost off): `SS_LOG_FIRST_BLOCKS=N` dumps the first N block-entry PCs (boot
+  path) + a one-shot lock-state dump at the parcels spinlock-acquire. Reusable for any boot bring-up.
+- Root cause of the parcels wedge traced to the SPRG/Trampoline supervisor-environment gap (above +
+  plan doc). The 9.x boot is treated as a **forcing function for PPC/JIT correctness**, not an end.
+
 ## 2026-06-07
 
 ### [SheepShaver] Boot-stall watchdog — early-boot dead-ends now alarm in the log

@@ -50,3 +50,4 @@ SheepShaver/rom-inspect/*.dSYM
 CLAUDE.md
 .gstack/
 .claude/
+SheepShaver/src/rpc_socket

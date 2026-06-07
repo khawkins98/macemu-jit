@@ -4937,10 +4937,13 @@ static void jit_profile_dump(void)
 	if (f) { fclose(f); fprintf(stderr, "[JIT-PROFILE] written to %s\n", path); }
 }
 
+extern "C" void ss_stub_trace_dump(void);   /* SS_STUB_TRACE probe dump (ppc-execute.cpp); no-op unless enabled */
+
 void ppc_jit_aarch64_exit(void)
 {
 	jit_profile_dump();
 	jit_report_misses();
+	ss_stub_trace_dump();   /* supervisor-stub-pressure probe: dump on clean shutdown */
 	if (jit_cache_base) {
 		jit_cache_free(jit_cache_base, jit_cache_size);
 		jit_cache_base = NULL;

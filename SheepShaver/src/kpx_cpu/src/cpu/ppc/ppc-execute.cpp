@@ -75,6 +75,9 @@ static uint64 ss_stub_ill_other[2];         /* [phase] non-primop-31 illegal */
 
 static void ss_stub_dump(void)
 {
+	static bool dumped = false;   /* idempotent: atexit fallback + explicit teardown can both call */
+	if (dumped) return;
+	dumped = true;
 	FILE *o = stderr;
 	fprintf(o, "\n[STUB-TRACE] supervisor-stub pressure (boot | steady) — MMU 2nd-wall probe\n");
 	fprintf(o, "  (boot = before first guest idle; steady = after. Constant steady hits => deep change.)\n");
@@ -121,8 +124,19 @@ static inline bool ss_stub_on(void)
 	return ss_stub_enabled != 0;
 }
 
-/* Called from emul_op.cpp at the first guest idle ([BOOT] marker) to split boot vs steady. */
-extern "C" void ss_stub_trace_steady(void) { ss_stub_phase = 1; }
+/* Called from emul_op.cpp at the first guest idle ([BOOT] marker) to split boot vs steady.
+ * Also force-initializes the probe (ss_stub_on registers the atexit dump) so the result prints
+ * even if ZERO supervisor stubs were ever hit — a guaranteed-reached hook on any successful boot. */
+extern "C" void ss_stub_trace_steady(void) { ss_stub_on(); ss_stub_phase = 1; }
+/* Called from ppc_jit_aarch64_exit() on clean shutdown (the reliable teardown path — QuitEmulator
+ * doesn't run atexit). Idempotent. The atexit() registration in ss_stub_on() is the fallback. */
+extern "C" void ss_stub_trace_dump(void)
+{
+	/* ss_stub_on() force-initializes the env check, so we dump even when ZERO supervisor
+	 * stubs were hit — "TOTAL boot=0 steady=0" is itself the decisive result (2nd wall absent),
+	 * distinct from "the probe never ran". (ss_stub_dump is idempotent.) */
+	if (ss_stub_on()) ss_stub_dump();
+}
 #endif // SHEEPSHAVER
 
 /**

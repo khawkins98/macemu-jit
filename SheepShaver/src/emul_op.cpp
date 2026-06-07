@@ -76,9 +76,21 @@ static void copybits_probe_install(void)
 	M68kRegisters r = {};
 	r.d[0] = 0xA8EC;                 // _CopyBits
 	Execute68kTrap(0xa146, &r);      // GetToolboxTrapAddress -> a0
-	fprintf(stderr, "[COPYBITS] _CopyBits trap 0xA8EC resolves to guest PC %08x — "
-	        "run with SS_JIT_PROFILE and grep the hot-block table for that PC to get its exec count.\n",
-	        (unsigned)r.a[0]);
+	uint32 addr = r.a[0];
+	// On a PPC Mac, CopyBits is PowerPC code reached via Mixed Mode: the trap address is a
+	// RoutineDescriptor (magic 0xAAFE), not the PPC code the JIT runs. Follow RD -> first
+	// RoutineRecord.procDescriptor (@+0x18) -> PPC TVector -> [codeAddr, tocAddr]. Read-only.
+	uint32 ppc_entry = 0;
+	if (addr && guest_ptr_ok(addr) && (ReadMacInt16(addr) == 0xAAFE)) {
+		uint32 pd = ReadMacInt32(addr + 0x18);          // procDescriptor (TVector* for PPC)
+		if (pd && guest_ptr_ok(pd)) ppc_entry = ReadMacInt32(pd);  // TVector[0] = code address
+	}
+	fprintf(stderr, "[COPYBITS] _CopyBits trap 0xA8EC -> descriptor %08x%s. "
+	        "Use SS_JIT_PROFILE_PC=<the PPC entry> for the call count (Finder barely blits — use a graphics app).\n",
+	        (unsigned)addr,
+	        ppc_entry ? "" : " (not a RoutineDescriptor / no PPC TVector found)");
+	if (ppc_entry)
+		fprintf(stderr, "[COPYBITS] PPC code entry (the JIT block PC to profile): %08x\n", (unsigned)ppc_entry);
 }
 
 void PlayStartupSound();

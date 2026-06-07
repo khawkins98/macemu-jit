@@ -100,13 +100,14 @@ PowerPC Mac, QuickDraw's CopyBits is **PowerPC (CFM/PEF) code**; the 68k trap `0
 the **Mixed Mode Manager** via a **routine descriptor**. `GetToolboxTrapAddress` returns the
 descriptor/glue address (`0x102daa5c`), NOT the PPC code the JIT actually compiles+runs. So
 "resolve-trap-addr → correlate with the JIT PC-keyed profile" **does not work** for PPC Toolbox routines.
-**Fix for the frequency number:** follow the routine descriptor at `0x102daa5c` → its PPC `ProcPtr`/TVector
-→ the real PPC code entry, then `SS_JIT_PROFILE_PC=<that addr>`. (A RoutineDescriptor is `0x6666` `'mdes'`
-magic + fields; the PPC entry is reachable via its routine-record `procDescriptor`/TVector → `[code,toc]`.)
-Alternatively, identify CopyBits's PPC block from the top-40 hot blocks under a graphics workload by
-disassembling candidates. Either way the **graphics workload still matters** (Finder nudges barely blit).
-Tooling (`SS_COPYBITS_TRACE` resolver, `SS_JIT_PROFILE_PC`) is in place; the descriptor-follow is the
-remaining step.
+**Fix attempt + result (2026-06-07):** added a RoutineDescriptor-follow to the resolver (RD magic 0xAAFE
+→ procDescriptor @+0x18 → TVector[0]). **It reported `0x102daa5c` is NOT a RoutineDescriptor** (magic
+mismatch) — so the trap address isn't a standard Mixed-Mode RD either. CopyBits's real PPC code path is
+not trivially derivable from the trap address. **Remaining (needs live investigation, not autonomous):**
+dump guest memory at `0x102daa5c` to see what it actually is (68k glue? a non-standard descriptor?),
+and/or under a **graphics workload** identify CopyBits's hot PPC block from the top-40 by disassembly.
+The **graphics workload is the real prerequisite** (Finder barely blits — confirmed: 0 exec). Tooling
+(`SS_COPYBITS_TRACE` resolver + RD-follow, `SS_JIT_PROFILE_PC`) is in place.
 
 ---
 

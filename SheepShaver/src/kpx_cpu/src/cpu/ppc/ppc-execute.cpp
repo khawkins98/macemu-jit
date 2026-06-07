@@ -1298,6 +1298,14 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 		d = PVR;
 		break;
 	}
+	case powerpc_registers::SPR_SPRG0:
+	case powerpc_registers::SPR_SPRG0 + 1:
+	case powerpc_registers::SPR_SPRG0 + 2:
+	case powerpc_registers::SPR_SPRG3:
+		/* SPRG0-3: real scratch registers. The New World nanokernel stores its per-CPU/KernelData
+		 * pointer here and reads it back; dropping them (returning 0) caused a spinlock deadlock. */
+		d = regs().sprg[spr - powerpc_registers::SPR_SPRG0];
+		break;
 	case 22: {	/* DEC (decrementer) — SheepShaver has no real one (host-signal timer instead) */
 		/* SS_SYNTH_DEC: synthesize a free-running down-counter at the timebase rate so guest TIMED
 		 * spin-waits make progress (delta of two DEC reads advances). Default returns 0 like any
@@ -1335,10 +1343,18 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_LR:		lr() = s;		break;
 	case powerpc_registers::SPR_CTR:	ctr() = s;		break;
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
+#ifdef SHEEPSHAVER
+	case powerpc_registers::SPR_SPRG0:
+	case powerpc_registers::SPR_SPRG0 + 1:
+	case powerpc_registers::SPR_SPRG0 + 2:
+	case powerpc_registers::SPR_SPRG3:	/* real scratch regs — see execute_mfspr note */
+		regs().sprg[spr - powerpc_registers::SPR_SPRG0] = s;
+		break;
+#endif
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);
 #else
-	default:  /* SheepShaver drops all other SPR writes (BAT/SDR1/SPRG/DEC...) — stub */
+	default:  /* SheepShaver drops all other SPR writes (BAT/SDR1/DEC...) — stub */
 		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
 		break;
 #endif

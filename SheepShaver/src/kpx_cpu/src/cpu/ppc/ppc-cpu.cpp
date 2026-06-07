@@ -784,6 +784,7 @@ void powerpc_cpu::init_registers()
 	lr() = 0;
 	ctr() = 0;
 	pc() = 0;
+	for (int i = 0; i < 4; i++) regs().sprg[i] = 0;	// SPRG0-3 must start clean (uninit -> divergence)
 }
 
 void powerpc_cpu::init_flight_recorder()
@@ -1732,6 +1733,32 @@ void powerpc_cpu::execute(uint32 entry)
 						static uint32_t last_pc = 0;
 						static int stuck_count = 0;
 						jit_block_count++;
+						/* SS_LOG_FIRST_BLOCKS=N: dump the first N block-entry PCs to stderr — the
+						 * boot path. Only ~27 blocks run before the parcels nanokernel deadlock, so a
+						 * few hundred capture the whole init->fault->spinlock sequence. Off by default. */
+						{
+							static int fb = -1;
+							if (fb < 0) { const char *e = getenv("SS_LOG_FIRST_BLOCKS"); fb = e ? atoi(e) : 0; }
+							if (fb > 0 && jit_block_count <= (uint64_t)fb) {
+								fprintf(stderr, "[FB %llu] pc=%08x\n",
+								        (unsigned long long)jit_block_count, (uint32_t)jit_block_start_pc);
+								if (jit_block_count == (uint64_t)fb) fflush(stderr);
+							}
+							/* One-shot: at the first spinlock-acquire (parcels 0x50312700), dump the
+							 * lock address + value + KDP so we can see if the lock word is uninitialized
+							 * garbage. Gated by SS_LOG_FIRST_BLOCKS (same diagnostic switch). */
+							if (fb > 0 && (uint32_t)jit_block_start_pc == 0x50312700) {
+								static bool once = false;
+								if (!once) {
+									once = true;
+									uint32 r8 = gpr(8), r1g = gpr(1);
+									fprintf(stderr, "[LOCK] acquire pc=50312700 r8(lock)=%08x [r8]=%08x "
+									        "r1(KDP)=%08x r31=%08x r22=%08x\n",
+									        r8, vm_read_memory_4(r8), r1g, gpr(31), gpr(22));
+									fflush(stderr);
+								}
+							}
+						}
 						/* Region profiling: classify by block ENTRY pc (jit_block_start_pc),
 						 * since the exit pc may be in a different region. */
 						rgn_jit_blocks[rgn_classify(jit_block_start_pc)]++;

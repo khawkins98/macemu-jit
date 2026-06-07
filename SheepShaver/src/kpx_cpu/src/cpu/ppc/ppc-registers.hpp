@@ -220,6 +220,8 @@ struct powerpc_registers
 		SPR_SDR1	= 25,
 		SPR_PVR		= 287,
 		SPR_VRSAVE	= 256,
+		SPR_SPRG0	= 272,
+		SPR_SPRG3	= 275,
 	};
 
 	static inline int GPR(int r) { return GPR_BASE + r; }
@@ -247,6 +249,14 @@ struct powerpc_registers
 	static uint32 reserve_addr;
 	static uint32 reserve_data;
 #endif
+	// MUST stay LAST: the JIT hardcodes byte offsets for gpr/lr/ctr/xer/reserve (e.g.
+	// PPCR_RESERVE_VALID=1060). Appending here shifts nothing the JIT references.
+	uint32 sprg[4];				// SPRG0-3 (SPR 272-275) — OS scratch / per-CPU data pointers.
+								// Previously dropped; the New World parcels nanokernel stashes its
+								// per-CPU/KernelData pointer in SPRG0 (mtspr) and reads it back (mfspr),
+								// so dropping them left it reading 0 -> garbage KDP -> spinlock deadlock.
+								// JIT mfspr/mtspr fall back to the interpreter for SPRG, which uses this
+								// field by name — so its exact offset is irrelevant to codegen.
 };
 
 #endif /* PPC_REGISTERS_H */

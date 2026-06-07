@@ -48,6 +48,40 @@ extern uint8 *ROMBaseHost;
 #include "cpu/jit/aarch64/ppc-jit.h"
 #include "cpu/jit/aarch64/jit-heartbeat.hpp"
 #include <cstddef>
+#include <unordered_map>
+
+// B1 execution-weighted profiler: per-PC block execution counts.
+// Lightweight: one hash-map increment per block dispatch. Guarded by
+// SS_JIT_PROFILE=1 env var to avoid any overhead when not profiling.
+static bool jit_profile_enabled = false;
+static bool jit_profile_checked = false;
+static std::unordered_map<uint32_t, uint64_t> jit_profile_counts;
+static uint64_t jit_profile_total = 0;
+
+// Returns the top N hot blocks as a JSON string for the Inspector
+extern "C" void jit_profile_get_json(char *buf, int bufsz, int top_n) {
+	if (!jit_profile_enabled || jit_profile_counts.empty()) {
+		snprintf(buf, bufsz, "{\"enabled\":false,\"total\":0,\"blocks\":[]}");
+		return;
+	}
+	// Sort by count descending
+	std::vector<std::pair<uint32_t, uint64_t>> sorted(jit_profile_counts.begin(), jit_profile_counts.end());
+	std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+	if (top_n > (int)sorted.size()) top_n = sorted.size();
+	if (top_n > 100) top_n = 100;
+
+	int pos = 0;
+	pos += snprintf(buf + pos, bufsz - pos, "{\"enabled\":true,\"total\":%llu,\"uniqueBlocks\":%zu,\"blocks\":[",
+	                (unsigned long long)jit_profile_total, jit_profile_counts.size());
+	for (int i = 0; i < top_n && pos < bufsz - 100; i++) {
+		if (i > 0) pos += snprintf(buf + pos, bufsz - pos, ",");
+		double pct = jit_profile_total > 0 ? (100.0 * sorted[i].second / jit_profile_total) : 0;
+		pos += snprintf(buf + pos, bufsz - pos,
+			"{\"pc\":\"0x%08x\",\"count\":%llu,\"pct\":%.2f}",
+			sorted[i].first, (unsigned long long)sorted[i].second, pct);
+	}
+	pos += snprintf(buf + pos, bufsz - pos, "]}");
+}
 /* Compile-time verification of the spcflags mask offset used by the JIT's
  * block-entry interrupt poll.  PPCR_SPCFLAGS in ppc-jit.cpp must match.
  * basic_spcflags has `uint32 mask` as its FIRST member, so
@@ -1162,6 +1196,13 @@ void powerpc_cpu::execute(uint32 entry)
 				static const char *jit_env = getenv("SS_USE_JIT");
 				static bool jit_enabled = !(jit_env && jit_env[0] == '0' && jit_env[1] == '\0');
 				if (!jit_enabled) goto skip_jit; /* GATE 1: SS_USE_JIT=0 diagnostic override */
+				if (__builtin_expect(!jit_profile_checked, false)) {
+					jit_profile_checked = true;
+					const char *e = getenv("SS_JIT_PROFILE");
+					jit_profile_enabled = (e && e[0] && e[0] != '0');
+					if (jit_profile_enabled)
+						fprintf(stderr, "[PROFILE] B1 execution profiler ENABLED — per-block hit counts active\n");
+				}
 				if (!jit_init_done) {
 					/* Code cache size: default 256 MB.  MAP_JIT memory is virtual
 					 * — no physical cost until touched.  Override via
@@ -1262,6 +1303,11 @@ void powerpc_cpu::execute(uint32 entry)
 								if (jit_verify_n_insns == 0)
 									jit_verify_n_insns = jblk.n_insns; /* freshly compiled */
 							}
+						// B1 profiler: count block executions (guarded, ~0 cost when off)
+						if (__builtin_expect(jit_profile_enabled, false)) {
+							jit_profile_counts[jit_block_start_pc]++;
+							jit_profile_total++;
+						}
 						fn((void*)regs_ptr());
 						if (__builtin_expect(chain_log_enabled && jit_block_start_pc == 0x50132ec8, false)) {
 							static int chain_log_budget = 20;

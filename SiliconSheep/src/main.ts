@@ -1199,7 +1199,7 @@ function captureDebugEnvVars() {
   const debugIds = [
     "SS_JIT_VERIFY", "SS_JIT_NO_CHAIN", "SS_JIT_NO_ROM", "SS_USE_JIT",
     "SS_JIT_TRACE_RING", "SS_JIT_DIAG_LOG", "SS_JIT_WATCH_ADDR", "SS_JIT_SKIP_OPC",
-    "SS_INPUT_LOCKOUT",
+    "SS_INPUT_LOCKOUT", "SS_JIT_PROFILE",
   ];
   for (const envKey of debugIds) {
     const el = document.getElementById(`debug-${envKey}`) as HTMLInputElement | HTMLSelectElement | null;
@@ -1790,6 +1790,7 @@ function renderInspectorWindow(vmId: string) {
           <button class="inspector-toolbar__tab" data-panel="log">Log</button>
           <button class="inspector-toolbar__tab" data-panel="registers">Registers</button>
           <button class="inspector-toolbar__tab" data-panel="memory">Memory</button>
+          <button class="inspector-toolbar__tab" data-panel="hotblocks">Hot Blocks</button>
           <button class="inspector-toolbar__tab" data-panel="debug">Debug</button>
         </div>
         <div style="flex:1"></div>
@@ -1870,6 +1871,16 @@ function renderInspectorWindow(vmId: string) {
             </div>
           </div>
         </div>
+        <div class="inspector-panel" id="panel-hotblocks" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Hot Blocks (B1 Profiler)</h3>
+            <p class="ss-text-muted" style="margin-bottom: 8px;">Requires <code>SS_JIT_PROFILE=1</code> — set in Debug env vars before launching the VM.</p>
+            <button class="btn btn-secondary btn-sm" id="insp-refresh-profile">↻ Refresh</button>
+            <div id="insp-hotblocks" style="margin-top: 8px;">
+              <p class="ss-text-muted">Click "Refresh" to load profiler data.</p>
+            </div>
+          </div>
+        </div>
         <div class="inspector-panel" id="panel-debug" style="display:none">
           <div class="inspector-section">
             <h3 class="inspector-heading">Runtime Controls</h3>
@@ -1885,6 +1896,14 @@ function renderInspectorWindow(vmId: string) {
               <select class="input" id="insp-frameskip">
                 ${[0,1,2,4,8,12].map(v => `<option value="${v}">${v === 0 ? "Max (60fps)" : `Every ${v}${v === 1 ? "st" : v === 2 ? "nd" : "th"} (${Math.round(60/v)}fps)`}</option>`).join("")}
               </select>
+            </div>
+            <div class="form-group">
+              <label>Execution Profiler (B1)</label>
+              <select class="input" id="debug-SS_JIT_PROFILE">
+                <option value="" selected>Off</option>
+                <option value="1">On — count per-block executions (minimal overhead)</option>
+              </select>
+              <p class="ss-text-muted">Counts how many times each JIT block is dispatched. View results in the Hot Blocks tab. Set before launching the VM.</p>
             </div>
             <div class="form-group">
               <label>RPC Stats Query</label>
@@ -2128,6 +2147,71 @@ function renderInspectorWindow(vmId: string) {
     document.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");
     document.getElementById("panel-timeline")!.style.display = "";
   }
+
+  // Hot Blocks profiler (B1)
+  document.getElementById("insp-refresh-profile")?.addEventListener("click", async () => {
+    const result = await rpcCall(
+      () => invoke("rpc_get_profile", { id: vmId }) as Promise<string>,
+      "Profile data"
+    );
+    const el = document.getElementById("insp-hotblocks");
+    if (!el || !result) {
+      if (el) el.innerHTML = '<p class="ss-text-muted">Not available — enable SS_JIT_PROFILE=1 and restart the VM.</p>';
+      return;
+    }
+    try {
+      const profile = JSON.parse(result);
+      if (!profile.enabled) {
+        el.innerHTML = '<p class="ss-text-muted">Profiler not enabled. Set SS_JIT_PROFILE=1 in Debug env vars and restart the VM.</p>';
+        return;
+      }
+      const blocks = profile.blocks || [];
+      el.innerHTML = `
+        <div class="ss-text-muted" style="margin-bottom: 8px;">
+          Total dispatches: <strong>${profile.total?.toLocaleString() || "0"}</strong> · Unique blocks: <strong>${profile.uniqueBlocks?.toLocaleString() || "0"}</strong>
+        </div>
+        <table style="width:100%; font-size: 10px; font-family: 'SF Mono', Menlo, monospace; border-collapse: collapse;">
+          <tr style="color: var(--ss-text-muted);">
+            <th style="text-align:left; padding: 2px 4px;">#</th>
+            <th style="text-align:left;">PC</th>
+            <th style="text-align:right;">Count</th>
+            <th style="text-align:right;">%</th>
+            <th style="text-align:left; padding-left: 8px;">Bar</th>
+          </tr>
+          ${blocks.map((b: any, i: number) => {
+            const barWidth = Math.max(1, Math.round(b.pct * 2));
+            return `<tr style="border-top: 1px solid var(--ss-border);">
+              <td style="padding: 2px 4px; color: var(--ss-text-dim);">${i + 1}</td>
+              <td style="padding: 2px 4px;"><a href="#" data-action="mem-jump" data-memaddr="${b.pc}" style="color: var(--ss-accent);">${escapeHtml(b.pc)}</a></td>
+              <td style="text-align:right; padding: 2px 4px;">${b.count?.toLocaleString()}</td>
+              <td style="text-align:right; padding: 2px 4px;">${b.pct?.toFixed(1)}%</td>
+              <td style="padding: 2px 4px 2px 8px;"><div style="background: var(--ss-accent); height: 10px; width: ${barWidth}px; border-radius: 2px;"></div></td>
+            </tr>`;
+          }).join("")}
+        </table>
+      `;
+
+      // Wire up PC links to jump to memory viewer
+      el.querySelectorAll("[data-action='mem-jump']").forEach(link => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const addr = (link as HTMLElement).dataset.memaddr;
+          if (addr) {
+            const addrInput = document.getElementById("insp-mem-addr") as HTMLInputElement;
+            if (addrInput) addrInput.value = addr;
+            // Switch to memory tab
+            document.querySelectorAll(".inspector-toolbar__tab").forEach(t => t.classList.remove("inspector-toolbar__tab--active"));
+            document.querySelector('[data-panel="memory"]')?.classList.add("inspector-toolbar__tab--active");
+            document.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");
+            document.getElementById("panel-memory")!.style.display = "";
+            readMemory();
+          }
+        });
+      });
+    } catch {
+      el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
+    }
+  });
 
   // Memory viewer
   const readMemory = async () => {

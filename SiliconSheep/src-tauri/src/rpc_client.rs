@@ -23,6 +23,7 @@ pub const METHOD_GET_STATS: i32 = 14;
 pub const METHOD_READ_MEMORY: i32 = 15;
 pub const METHOD_DUMP_REGISTERS: i32 = 16;
 pub const METHOD_UI_SNAPSHOT: i32 = 17;
+pub const METHOD_GET_PROFILE: i32 = 18;
 
 pub struct RpcClient {
     stream: UnixStream,

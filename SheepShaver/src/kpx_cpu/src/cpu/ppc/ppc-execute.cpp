@@ -1277,6 +1277,8 @@ void powerpc_cpu::execute_mfmsr(uint32 opcode)
 	increment_pc(4);
 }
 
+static inline uint64 get_tb_ticks(void);	// defined below; used by the synthetic decrementer
+
 template< class SPR >
 void powerpc_cpu::execute_mfspr(uint32 opcode)
 {
@@ -1294,6 +1296,21 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_PVR: {
 		extern uint32 PVR;
 		d = PVR;
+		break;
+	}
+	case 22: {	/* DEC (decrementer) — SheepShaver has no real one (host-signal timer instead) */
+		/* SS_SYNTH_DEC: synthesize a free-running down-counter at the timebase rate so guest TIMED
+		 * spin-waits make progress (delta of two DEC reads advances). Default returns 0 like any
+		 * other stubbed SPR — which makes such waits never elapse. Surfaced by the parcels (9.0.1)
+		 * nanokernel init wait at ROM 0x3127a8 (mfspr DEC; subf.; bgt) that hangs with DEC frozen
+		 * at 0. Env-gated experiment; off by default so 1.1/8.6/9.0.4 paths are unchanged. */
+		static const int synth = (getenv("SS_SYNTH_DEC") && getenv("SS_SYNTH_DEC")[0] != '0') ? 1 : 0;
+		if (synth) {
+			d = (uint32)(0u - (uint32)get_tb_ticks());	// decreases over time at the TB rate
+			break;
+		}
+		d = 0;
+		if (ss_stub_on()) ss_stub_mfspr[ss_stub_phase][spr & 1023]++;
 		break;
 	}
 	default:

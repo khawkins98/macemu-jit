@@ -1291,9 +1291,17 @@ void init_emul_ppc(void)
 	// KernelData base as a first probe; watch the next read via SS_LOG_FIRST_BLOCKS. 1.1 sets its own
 	// SPRG0 in Init, so this initial value is harmless there. See NEW-WORLD-ROM-SUPPORT-PLAN.md.
 	if (getenv("SS_NW_TRAMPOLINE")) {
+		/* P1: SPRG0 = per-CPU block base. P2: the nanokernel does `lwz r1,-4(r1)` to get the KDP, and
+		 * indexes it at NEGATIVE offsets (lock word at [KDP-0xb50]); SheepShaver's KernelData is a
+		 * standalone 0x2000 region with nothing mapped below it. Back the negative KDP scratch (zero
+		 * 0x1000 below KernelDataAddr — within the NATMEM reservation, so writable) and point
+		 * [SPRG0-4] at the real KDP (= KernelDataAddr, so positive fields hit SheepShaver's setup).
+		 * Default off; gated so the 1.1 path is untouched. See SPRG0-KDP-DESIGN.md. */
 		ppc_cpu->sprg_reg(0) = KernelDataAddr;
-		fprintf(stderr, "[NW-TRAMP] SPRG0 = KernelDataAddr = %08x (parcels Trampoline probe)\n",
-		        (uint32)KernelDataAddr);
+		memset(Mac2HostAddr(KernelDataAddr - 0x1000), 0, 0x1000);   /* zero the negative KDP scratch */
+		WriteMacInt32(KernelDataAddr - 4, KernelDataAddr);          /* [SPRG0-4] = KDP */
+		fprintf(stderr, "[NW-TRAMP] SPRG0=%08x, [SPRG0-4]=KDP=%08x, zeroed [-0x1000,0) (parcels probe)\n",
+		        (uint32)KernelDataAddr, (uint32)KernelDataAddr);
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

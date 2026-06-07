@@ -4342,7 +4342,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_store_fpr(0, frd);
 			return true;
 
-		case 711: /* mtfsfi crfD,IMM — set FPSCR field to 4-bit immediate */
+		case 134: /* mtfsfi crfD,IMM — set FPSCR field to 4-bit immediate (XO 134; was wrongly at 711) */
 		{
 			uint32_t crfD = (op >> 23) & 0x7;
 			uint32_t imm = (op >> 12) & 0xF;
@@ -4379,7 +4379,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 		}
 
-		case 134: /* mtfsf FM,frB — move to FPSCR fields */
+		case 711: /* mtfsf FM,frB — move to FPSCR fields (XO 711; was wrongly at 134, swapped with mtfsfi) */
 		{
 			uint32_t fm = (op >> 17) & 0xFF;
 			emit_load_fpr(0, frb);

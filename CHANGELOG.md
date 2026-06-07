@@ -35,6 +35,20 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
   instead of raw "No such file" messages.
 
+### [SheepShaver] LIVE FP bug: mtfsf/mtfsfi code bodies were swapped vs their XOs
+
+- Extended the XO audit to the scalar-FP switch (primary 63), which — unlike dormant AltiVec — runs
+  in **every boot**. Found `mtfsf` (XFL XO 711) and `mtfsfi` (X XO 134) with their **code bodies
+  swapped**: `case 711` ran the mtfsfi decode (`crfD`/`imm`), `case 134` ran the mtfsf decode
+  (`fm`/`frB`). Both write FPSCR + sync rounding, so a guest `mtfsf` (set rounding mode / clear FP
+  exceptions) corrupted FPSCR. Fixed by swapping the case labels (correct by inspection — each body
+  decodes the other instruction's fields). `fsel`/`fsqrt`/`frsqrte` (A-form in the X-form switch)
+  audited as benign (frC=0 or correct interp fallback).
+- New QUARANTINE repro `fp_fctiw_dynround`: JIT `fctiw` uses a fixed rounding (FRINTA) and ignores the
+  dynamic FPSCR RN that `mtfsfi` sets (interp rounds 2.25→3, JIT→2). Separate minor limitation
+  (non-default `fctiw` rounding is rare); flips to xpass when fctiw honors dynamic RN. `make test-jit`
+  349/349, quarantine 1 xfail.
+
 ### [SheepShaver] AltiVec XO audit tool + FP round/compare fixes (vrfin/vrfiz/vcmpgefp) + vmsum→interp
 
 - New tool `tools/altivec-xo-audit.py`: cross-checks every JIT `case N:` (mnemonic from its comment)

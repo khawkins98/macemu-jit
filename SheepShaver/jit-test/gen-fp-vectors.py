@@ -59,6 +59,7 @@ def aform(op, fD, fA, fB, fC, xo, rc=0):
 # X-form FP op (fsqrt/frsp/fctiwz/fneg/fmr/...): opcode, frD, frB, XO, Rc (frA=0).
 def xform(op, fD, fA, fB, xo, rc=0):
     return (op << 26) | (fD << 21) | (fA << 16) | (fB << 11) | (xo << 1) | rc
+def mtfsfi(crfD, imm): return (63 << 26) | (crfD << 23) | (imm << 12) | (134 << 1)  # mtfsfi crfD,IMM (XO 134)
 def H(w): return "%08X" % (w & 0xFFFFFFFF)
 
 # ---- operand setup + result load-back helpers ----
@@ -101,6 +102,13 @@ add("fp_fctiwz_trunc", setd(2,0x4004,0x110) + [xform(63,1,0,2,15)] + grabd(0x130
 add("fp_fctiw_ovf",    setd(2,0x41E0,0x110) + [xform(63,1,0,2,14)] + grabd(0x130), "fctiw 2^31 -> 0x7FFFFFFF (saturate)")
 add("fp_fctiw_nan",    setd(2,0x7FF8,0x110) + [xform(63,1,0,2,14)] + grabd(0x130), "fctiw NaN -> 0x80000000")
 add("fp_fctiwz_nan",   setd(2,0x7FF8,0x110) + [xform(63,1,0,2,15)] + grabd(0x130), "fctiwz NaN -> 0x80000000")
+# NOTE: mtfsf/mtfsfi had their codegen bodies SWAPPED vs their XOs (case 711 ran the mtfsfi
+# decode, case 134 ran the mtfsf decode); fixed 2026-06-07 by swapping the case labels. The
+# obvious differential test (mtfsfi sets RN; fctiw rounds per it: `[mtfsfi(7,2)] + setd(2,0x4002,
+# 0x110) + [xform(63,1,0,2,14)] + grabd(0x130)`) does NOT pass, because JIT fctiw uses a FIXED
+# rounding mode (FRINTA) and ignores the dynamic FPSCR RN that mtfsfi sets — a SEPARATE limitation.
+# That repro lives in run.sh QUARANTINE (fp_fctiw_dynround) as a known divergence. The swap fix
+# itself is correct by inspection (each case body decodes the OTHER instruction's operand fields).
 add("fp_fneg_real",   A() + [xform(63, 1, 0, 1, 40)] + grabd(0x130), "fneg f1,f1: -(2.0)")
 add("fp_fabs_real",   A() + [aform(63, 1, 0, 1, 0, 264)] + grabd(0x130), "fabs f1,f1: |2.0|=2.0")
 add("fp_fmr_real",    B() + [xform(63, 1, 0, 2, 72)] + grabd(0x130), "fmr f1,f2: copy 3.0")

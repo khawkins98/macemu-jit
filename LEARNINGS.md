@@ -3,6 +3,29 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — Extended the XO audit to SCALAR FP (live, not dormant) — found mtfsf/mtfsfi body swap
+
+Ran the same scramble logic against the scalar-FP switches (primary 63/59). Unlike AltiVec (dormant
+behind the gestalt gate), **scalar FP runs in every boot**, so a scramble here is a *live* correctness
+bug. After filtering parser false-positives (the FP table interleaves X/XFL/A forms; a naive cross-entry
+regex mis-pulled primary-31 ops like `mfmsr`/`mcrxr`/`icbi` into the 63 table — verify each hit by hand):
+- **`mtfsf`/`mtfsfi` code bodies were SWAPPED vs their XOs.** `case 711` (real `mtfsf`, XFL XO 711) ran
+  the *mtfsfi* decode (`crfD`/`imm`); `case 134` (real `mtfsfi`, X XO 134) ran the *mtfsf* decode
+  (`fm`/`frB`). Both write `PPCR_FPSCR` + sync rounding — so a guest `mtfsf` (the common one: set
+  rounding mode / clear FP exceptions) corrupted FPSCR. **Fixed by swapping the two case labels** (the
+  swap is correct by inspection: each body decodes the OTHER instruction's operand fields). 349/349.
+- **Benign (not bugs):** `fsel`/`fsqrt`/`frsqrte` are A-form ops sitting in the X-form (`xo10`) switch,
+  but it works — `fsqrt`/`frsqrte` always have frC=0 (so `xo10` == their 5-bit XO), and `fsel` with
+  frC≠0 simply misses its `xo10` case and falls through to the correct interp. No incorrectness.
+
+**Second finding the test surfaced (separate limitation, quarantined not fixed):** the obvious differential
+for the swap — `mtfsfi 7,2` (RN=+inf) then `fctiw 2.25` — still diverges (interp 3, JIT 2) because **JIT
+`fctiw` uses a FIXED rounding (FRINTA) and ignores the dynamic FPSCR RN**. That's orthogonal to the swap
+(which IS fixed); `fctiw` with a non-default rounding mode is rare. Recorded as `run.sh` QUARANTINE
+`fp_fctiw_dynround` (xfail; flips to xpass when fctiw honors dynamic RN via FRINTI + host-FPCR sync).
+Note: FPSCR is NOT in the REGDUMP, so FPSCR effects are only testable indirectly (via a rounding-sensitive
+op) — and that indirection is exactly what entangled the swap with the fctiw limitation. [[altivec-xo-audit-fp-round-compare]]
+
 ## 2026-06-07 — Systematic AltiVec XO audit (now a tool) — fixed FP round/compare; vrfin is ties-AWAY not -even
 
 After two scrambled families by hand, built the audit as a **tool**: `SheepShaver/tools/altivec-xo-audit.py`

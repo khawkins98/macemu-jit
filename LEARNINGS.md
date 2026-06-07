@@ -62,6 +62,20 @@ that is the validation of record; "real app issues AltiVec" was always bonus con
 so a null FC result does not dent codegen confidence.** OPEN: does a real app emit AltiVec here — needs FC
 driven to its compute action (user knows the app), or a different AltiVec vehicle. [[altivec-gestalt-gate]]
 
+**RESOLVED (2026-06-07, user drove FC interactively) — FC does NOT use gestalt 'ppcf'; the force is
+irrelevant to it.** With the force active, FC's File menu reads **"Turn AltiVec Code On/Off — (not
+detected)"** in BOTH toggle states (user screenshots), and "Turn Multiprocessor Code Off (one processor
+detected)" — so FC's MP probe works but its AltiVec probe reports **not-detected despite our forced
+gestalt bit**. The user's full 235s interactive session (165B guest-insns, toggling the menu) profiled
+**`[JIT-COMPILED-MIX] AltiVec=0`** — the fractal kernel stays scalar FP (`1e5c1d90`, 19 insns) throughout.
+Conclusion: **FC detects AltiVec by a NON-gestalt mechanism** (most likely an exception-guarded
+try-an-AltiVec-instruction probe, or an MSR[VEC]/hardware check) that SheepShaver's OldWorld environment
+doesn't satisfy — and FC refuses to emit vector code until its own probe passes, so the menu toggle is
+cosmetic when "not detected". *This is why no force at the gestalt layer will ever make FC use AltiVec.*
+Next: (a) lateral-thinking on how FC/typical apps actually probe AltiVec + whether we can satisfy it or
+validate AltiVec-runs without a full app / without booting; (b) make FC a perf e2e test; (c) needs the
+Carbon-menu driver to read/drive FC's toggle. [[altivec-gestalt-gate]]
+
 ## 2026-06-07 — NewWorld 9.0.4 boot attempt (blocks at XPRAM HLE) + AltiVec-force injection hunt (banked)
 
 User authorized booting a NewWorld ROM to test AltiVec. Two tracks, both run to their honest stopping point:

@@ -476,6 +476,16 @@ read straight from Toolbox structures at the idle hook — no screenshot/OCR.
   window list.
 - 🟡 **S5 (next)** — grow the workload library (POV-Ray, MacBench; Word once Office is installed) on the
   same framework; perf-trend each; optional golden-image regression (`WorkloadSpec.golden_image`).
+- 🟡 **S5b — Fractal Carbon AltiVec perf + detection e2e test.** Promote FC from "render-time only" to an
+  AltiVec-aware workload: (1) **perf** — record render time as the standing benchmark (already wired);
+  (2) **AltiVec detection** — once the Carbon-menu driver lands (see the 🔧 item below), read FC's File-menu
+  "Turn AltiVec Code On/Off — (detected|not detected)" string to assert whether the guest detects AltiVec,
+  and drive the toggle; (3) **execution proof** — verify with the `[JIT-COMPILED-MIX] AltiVec=N` profiler
+  metric (`SS_JIT_PROFILE`) whether vector ops actually run. **Finding 2026-06-07 that motivates this:** FC
+  reports "(not detected)" and emits 0 AltiVec even with our gestalt `'ppcf'` force — FC uses a non-gestalt
+  AltiVec probe SheepShaver doesn't satisfy (see LEARNINGS / the AltiVec-detection research note). So this
+  test currently asserts the *negative* (AltiVec not yet reaching real apps); it flips to a positive perf
+  A/B (AltiVec-on vs FP) once we satisfy FC's probe (Track-2 follow-up). Depends on: Carbon-menu driver.
 - 🔧 **TO IMPROVE — Carbon-app menu introspection.** `SS_UI_DUMP_DIR` returns an **empty menu bar for
   Carbon apps** (confirmed 2026-06-07 driving Fractal Carbon): Backend A reads the classic Toolbox
   global menu list (`MenuList`/`GetMenuBar`), but Carbon apps own their menus via the Carbon Event/HIToolbox

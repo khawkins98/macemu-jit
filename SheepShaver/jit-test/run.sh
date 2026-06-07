@@ -1339,6 +1339,11 @@ TEST_ORDER+=(fp_fctiwz_real)
 # fctiw 2.5 -> 3 (round half-away per FPSCR)
 T_fp_fctiw_round="3C604004 90610110 38600000 90610114 C8410110 FC20101C D8210130 80810130 80A10134"
 TEST_ORDER+=(fp_fctiw_round)
+# fctiw with a non-default DYNAMIC rounding mode (mtfsfi 7,2 -> RN=+inf; fctiw 2.25 -> 3).
+# Promoted from QUARANTINE 2026-06-08: fctiw now selects FCVT{AS,ZS,PS,MS} by FPSCR[RN] instead of
+# hardcoding FCVTAS, so it honors the dynamic rounding mode and matches the interpreter.
+T_fp_fctiw_dynround="FF80210C 3C604002 90610110 38600000 90610114 C8410110 FC20101C D8210130 80810130 80A10134"
+TEST_ORDER+=(fp_fctiw_dynround)
 # fctiwz 2.5 -> 2 (toward zero)
 T_fp_fctiwz_trunc="3C604004 90610110 38600000 90610114 C8410110 FC20101E D8210130 80810130 80A10134"
 TEST_ORDER+=(fp_fctiwz_trunc)
@@ -1682,14 +1687,9 @@ TEST_ORDER+=(av_vsum2sws_neg)
 # ==== QUARANTINE: confirmed JIT divergences awaiting a fix (ROADMAP A2) ========
 # Run but do NOT count toward pass/fail/score — KNOWN-FAIL repros of a confirmed
 # divergence. When a fix lands they flip xfail→xpass and the harness says "promote".
-# fp_fctiw_dynround: mtfsfi 7,2 (set FPSCR RN=10, round toward +inf) then fctiw 2.25.
-# Interp rounds per the dynamic RN -> 3; JIT fctiw uses a FIXED rounding (FRINTA) and
-# ignores the dynamic FPSCR RN -> 2. Confirmed divergence (a real but minor limitation:
-# fctiw with a non-default rounding mode is rare). NOTE: this repro ALSO depends on the
-# 2026-06-07 mtfsf<->mtfsfi case-label swap fix to even set RN correctly. Flips to xpass
-# if/when fctiw honors the dynamic FPSCR rounding mode (FRINTI + host-FPCR sync).
-T_fp_fctiw_dynround="FF80210C 3C604002 90610110 38600000 90610114 C8410110 FC20101C D8210130 80810130 80A10134"
-QUARANTINE_ORDER=(fp_fctiw_dynround)
+# (empty — fp_fctiw_dynround was RESOLVED + promoted to TEST_ORDER on 2026-06-08: fctiw now selects
+#  the FCVT variant by FPSCR[RN], honoring dynamic rounding. Add new confirmed JIT divergences here.)
+QUARANTINE_ORDER=()
 
 # ---- Execute all tests -------------------------------------------------------
 PASS=0

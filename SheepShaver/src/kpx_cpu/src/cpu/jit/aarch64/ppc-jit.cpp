@@ -4322,13 +4322,31 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		   used 64-bit FCVTZS Xd, which mis-saturated overflow (0x80000000 not 0x7FFFFFFF) and
 		   treated fctiw as fctiwz. The int32 lands in the FPR's low 32 bits (high 32 zeroed by
 		   the W-form write); stored big-endian this is bits 32-63 of frD, per the PPC spec. */
-		case 14: /* fctiw frD,frB — round per FPSCR (default near = frin = ties-away) */
-			emit_load_fpr(0, frb);
-			emit32(0x1E640000 | (0 << 5) | RTMP0);                              /* FCVTAS Wd, Dn */
-			emit32(0x1E602000 | (0 << 16) | (0 << 5));                          /* FCMP Dn, Dn (NaN -> V) */
-			emit32(0x52B00000 | RTMP1);                                         /* MOVZ Wtmp, #0x8000, LSL #16 */
-			emit32(0x1A800000 | (RTMP0 << 16) | (0x6 << 12) | (RTMP1 << 5) | RTMP0); /* CSEL Wd = VS? Wtmp : Wd */
-			emit32(0x9E670000 | (RTMP0 << 5) | 0);                              /* FMOV Dd, Xn */
+		case 14: /* fctiw frD,frB — round per the DYNAMIC FPSCR[RN], matching the interpreter exactly */
+			/* The interpreter (execute_fp_int_convert, #else path) rounds by FPSCR[RN] via
+			 * op_fri{n,z,p,m}: RN=0 nearest-ties-AWAY (op_frin), RN=1 toward-zero, RN=2 +inf, RN=3 -inf.
+			 * ARM64 FPCR has no ties-away *mode*, so we can't use FRINTI; instead select the dedicated
+			 * FCVT instruction by RN at runtime: RN0=FCVTAS (ties-away), RN1=FCVTZS, RN2=FCVTPS,
+			 * RN3=FCVTMS. (Was hardcoded FCVTAS — correct only for RN=0; ignored dynamic RN, hence the
+			 * fp_fctiw_dynround divergence.) All encodings capstone-verified. RTMP0=acc, RTMP1=cand,
+			 * RTMP2=RN. NaN -> 0x80000000 (FCMP+CSEL.VS), out-of-range saturates (FCVT* behaviour). */
+			emit_load_fpr(0, frb);                                              /* D0 = frB */
+			a64_ldr_w_imm(RTMP2, RSTATE, PPCR_FPSCR);
+			emit32(0x12000442);                                                 /* AND w2,w2,#3  (RTMP2 = RN) */
+			emit32(0x1E640000 | (0 << 5) | RTMP0);                              /* FCVTAS Wacc, D0   (RN=0 default, ties-away) */
+			emit32(0x1E780000 | (0 << 5) | RTMP1);                              /* FCVTZS Wcand, D0  (toward zero) */
+			emit32(0x7100045F);                                                 /* CMP w2,#1 */
+			emit32(0x1A800000 | (RTMP0 << 16) | (RTMP1 << 5) | RTMP0);          /* CSEL Wacc = EQ? Wcand : Wacc */
+			emit32(0x1E680000 | (0 << 5) | RTMP1);                              /* FCVTPS Wcand, D0  (+inf) */
+			emit32(0x7100085F);                                                 /* CMP w2,#2 */
+			emit32(0x1A800000 | (RTMP0 << 16) | (RTMP1 << 5) | RTMP0);          /* CSEL EQ */
+			emit32(0x1E700000 | (0 << 5) | RTMP1);                              /* FCVTMS Wcand, D0  (-inf) */
+			emit32(0x71000C5F);                                                 /* CMP w2,#3 */
+			emit32(0x1A800000 | (RTMP0 << 16) | (RTMP1 << 5) | RTMP0);          /* CSEL EQ */
+			emit32(0x1E602000 | (0 << 16) | (0 << 5));                          /* FCMP D0, D0 (NaN -> V) */
+			emit32(0x52B00000 | RTMP1);                                         /* MOVZ Wcand, #0x8000, LSL #16 */
+			emit32(0x1A800000 | (RTMP0 << 16) | (0x6 << 12) | (RTMP1 << 5) | RTMP0); /* CSEL Wacc = VS? Wcand : Wacc */
+			emit32(0x9E670000 | (RTMP0 << 5) | 0);                              /* FMOV Dd, Xacc */
 			emit_store_fpr(0, frd);
 			return true;
 

@@ -23,6 +23,14 @@ standalone harness over the shared `src/include/rom_decode.hpp`) + an env-gated 
   sequence *rewritten* between the 1998 and 2001 ROMs, needs RE. So #1 (for *this* ROM) is the deep,
   multi-session "days-to-weeks, no guarantee" branch. NOT done tonight; report-back. Lesson: **don't
   trust the plan's heuristic decision gate — measure** (the gate said Phase 1; the data says Phase 2).
+- **CLOSER-ROM hunt (paid off): the 9.0.4 "MacROM for NewWorld" is the best AltiVec-unlock target.**
+  Extracted Mac OS ROM files from install media by `<CHRP-BOOT>` signature scan (modern macOS can't
+  mount HFS) + `rom-inspect --dump` + sizing. 9.0.4 (from `macos904.toast`, `<COMPATIBLE>` lists
+  PowerMac3,1/3,2 = **G4**, `'ppcf'`=2): **49 in-range / 14 relocated / 12 applicable-absent** — much
+  closer than 9.0.1/9.2.1 (27/31/17), and its **nanokernel-boot patches all match** (the absent ones
+  are peripheral hardware init). So the shortest path to a booting `'ppcf'` ROM + AltiVec is the
+  **9.0.4 parcels ROM**, not 9.0.1/9.2.x. Setup caveats for the port: clean file extraction + the
+  `load_mac_rom` 4 MB read cap. Comparative table in NEW-WORLD-ROM-SUPPORT-PLAN.md "ROM target strategy".
 - **TERMINOLOGY FIX (important):** the current working ROM `1998-07-21 - Mac OS ROM 1.1.rom` is **NOT
   "OldWorld"** (CLAUDE.md's label is loose). `rom_detect_type` classes it **`ROMTYPE_NEWWORLD`**
   (nanokernel ID "NewWorld v1.0.p."); it's a 1998 CHRP-**LZSS** NewWorld ROM. The real axis for AltiVec

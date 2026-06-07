@@ -198,12 +198,32 @@ patching can surface. Use the existing diagnostics (heartbeat + warnings, trace 
 
 ## ROM target strategy
 
-- **Phase 0 specimen:** the `Mac OS ROM 9.0.1` parcels ROM already on disk — simplest
-  failing parcels ROM, closest to working. Diagnose with this.
-- **End goal for breaking past 9.0.4:** a **9.2.x "Mac OS ROM"** file, extractable from the
-  9.2.1 / 9.2.2 install media in `/Users/Shared/macemu/` (the `Mac OS ROM` file inside the
-  installer's System Folder). Getting 9.0.1 to patch is the shared prerequisite; the 9.2
-  ROM is the actual ceiling-breaker. Note 9.1+ may have non-ROM blockers too.
+**Comparative pattern sizing (2026-06-07, `tools/rom-patch-sizing.py` vs the `1.1` control).** Mac OS
+ROM files extracted by signature-scanning install media for `<CHRP-BOOT>` (modern macOS can't mount
+HFS), then `rom-inspect --dump`:
+
+| Source | format | in-range | relocated | applicable-absent | `'ppcf'` | machines (CHRP `<COMPATIBLE>`) |
+|--------|--------|---------:|----------:|------------------:|:--------:|--------------------------------|
+| `1.1` (1998, current) | LZSS | 83 (all) | 0 | 0 | **0** | (working ROM, no vector gestalt) |
+| **9.0.4 (`macos904.toast`)** | parcels | **49** | 14 | **12** | ✅ 2 | iMac,1 PowerMac1,1…**PowerMac3,1 PowerMac3,2** (G4) |
+| 9.0.1 (`…9.0.1.rom`) | parcels | 27 | 31 | 17 | ✅ 2 | — |
+| 9.2.1 (`…9.2.1/macos_921_ppc.iso`) | parcels | 27 | 31 | 17 | ✅ 2 | — |
+
+- **⭐ Best AltiVec-unlock target: the 9.0.4 "MacROM for NewWorld"** (G4-compatible per its
+  `<COMPATIBLE>` list → carries `'ppcf'`). It is **markedly closer** than 9.0.1/9.2.1: **49/83 patterns
+  in-range, only 12 applicable-absent**, and — decisively — its **nanokernel-boot patches all match**
+  (`sr_init`/`pvr_read`/`virt2phys`/`ppc_excp_tbl`/`trap_return`/`fe0a*` are in-range; they're
+  absent/relocated in 9.0.1). Its 12 absent patches are mostly **peripheral hardware init**
+  (nvram/via/cpu_speed/time_via/open_firmware/page_size) — candidates to make `ROMType`-conditional
+  or skip under emulation. So 9.0.4 is the **shortest path to a booting `'ppcf'`-bearing ROM** (and to AltiVec).
+- **Extraction caveat:** the candidates above were pulled by contiguous signature-extraction from
+  install media; a clean file (proper fork extraction) is wanted before real use. Also `load_mac_rom`
+  caps its read at `ROM_SIZE` (4 MB) — if a CHRP file exceeds 4 MB it truncates (verify the 9.0.4 file
+  length; fix the read cap if needed). These are the first concrete Phase-2 setup steps.
+- **End goal for breaking past 9.0.4:** a **9.2.x "Mac OS ROM"** (the ceiling-breaker). 9.0.4 is the
+  cheapest *first* parcels ROM to make boot (shared parcels plumbing + fewest pattern fixes), and it
+  already unlocks the AltiVec experiment; 9.2.x can follow on the same machinery. Note 9.1+ may have
+  non-ROM blockers too (the "second wall").
 
 ---
 

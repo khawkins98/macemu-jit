@@ -99,10 +99,17 @@ static uint32 find_rom_data(uint32 start, uint32 end, const uint8 *data, uint32 
 {
 	uint32 ofs = start;
 	while (ofs < end) {
-		if (!memcmp(ROMBaseHost + ofs, data, data_len))
+		if (!memcmp(ROMBaseHost + ofs, data, data_len)) {
+			if (getenv("SS_ROM_PATCH_TRACE"))
+				fprintf(stderr, "[ROMPATCH] find_rom_data [%06x,%06x) len=%u pat=%02x%02x%02x%02x -> HIT @%06x\n",
+				        start, end, data_len, data[0], data_len>1?data[1]:0, data_len>2?data[2]:0, data_len>3?data[3]:0, ofs);
 			return ofs;
+		}
 		ofs++;
 	}
+	if (getenv("SS_ROM_PATCH_TRACE"))
+		fprintf(stderr, "[ROMPATCH] find_rom_data [%06x,%06x) len=%u pat=%02x%02x%02x%02x -> MISS (abort point)\n",
+		        start, end, data_len, data[0], data_len>1?data[1]:0, data_len>2?data[2]:0, data_len>3?data[3]:0);
 	return 0;
 }
 

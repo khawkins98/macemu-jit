@@ -1,7 +1,18 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** ⏸ Not started — pick-up-later plan · **Created:** 2026-06-03 · **Updated:** 2026-06-06
+> **Status:** 🟡 Phase 0 done (2026-06-07) — Phase 1 next · **Created:** 2026-06-03 · **Updated:** 2026-06-07
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
+>
+> **Phase 0 RESULT (2026-06-07):** Ran the env-gated `find_rom_data` tracer (`SS_ROM_PATCH_TRACE=1`,
+> landed in `rom_patches.cpp:98`) against `2001-12-19 - Mac OS ROM 9.0.1.rom` (CHRP-**parcels**,
+> decodes + type-detects NewWorld). **First failure = the very first `find_rom_data` in
+> `patch_nanokernel_boot`:** `sr_init_dat` (`35 4a ff fc 7d 86 50 2e`) not found in `[0x3101b0,0x3105b0)`
+> — though it *does* exist at `0x3106f8` in the decoded image (and `pvr_read_dat` is within its range).
+> Per the decision gate below ("fails very early in `patch_nanokernel_boot` → likely incomplete
+> decode"), and because the ROM is **parcels-format** (where `decode_parcels` extracts only the `'rom '`
+> parcel), **the indicated next step is Phase 1 (decode completeness), the tractable branch** — not the
+> deep Phase 2 RE. (Triggered while testing the AltiVec-detection hypothesis: this NewWorld ROM carries
+> `'ppcf'` (2× decoded) which the 1998 LZSS `1.1` ROM lacks (0× decoded) — see LEARNINGS 2026-06-07.)
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 ---
@@ -81,7 +92,11 @@ Phase 1 (structural, tractable) or Phase 2 (deep reverse-engineering, weeks).
 
 ---
 
-## Phase 0 — Diagnostic (do this first; cheap and decisive)
+## Phase 0 — Diagnostic ✅ DONE 2026-06-07 (see RESULT in the header)
+
+**Outcome:** the `SS_ROM_PATCH_TRACE` tracer (option A below, the env-gated tracer — realized at the
+`find_rom_data` level in `rom_patches.cpp:98`) named the first miss: `patch_nanokernel_boot`'s
+`sr_init_dat`. Decision gate → **Phase 1** (incomplete parcels decode). Phase 0 design retained below.
 
 **Goal:** one data point — the first `PatchROM` stage that fails on the 9.0.1 parcels ROM,
 then the specific `find_rom_data` pattern that isn't found within it.

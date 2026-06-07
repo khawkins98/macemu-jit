@@ -3,6 +3,37 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — NewWorld ROM boot trial: blocked on D3 (parcels-ROM support); but the AltiVec evidence firmed up
+
+Tried the decisive AltiVec test — boot the 2001 `Mac OS ROM 9.0.1.rom` and watch for AltiVec blocks.
+**It doesn't boot: "Unsupported ROM type."** Ran it down with proper decoded-image analysis (a
+standalone harness over the shared `src/include/rom_decode.hpp`) + an env-gated `find_rom_data` tracer
+(`SS_ROM_PATCH_TRACE=1`, landed in `rom_patches.cpp`). Findings:
+
+- **This is the existing ROADMAP D3 project** (`docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md`,
+  "New World parcels-ROM support — break the 9.0.4 ceiling"). I effectively completed its **Phase 0**:
+  the 9.0.1 ROM (CHRP-**parcels**) decodes + type-detects as NewWorld, but `PatchROM()` fails at the
+  **very first** `find_rom_data` (`patch_nanokernel_boot` `sr_init_dat`, range `[0x3101b0,0x3105b0)`;
+  the pattern exists at `0x3106f8`). Per the plan's decision gate + the parcels format (`decode_parcels`
+  extracts only the `'rom '` parcel), this points to **Phase 1 (incomplete decode) — the *tractable*
+  branch**, not deep pattern-RE. Still a multi-session, exploratory effort: NOT done tonight; report-back.
+- **TERMINOLOGY FIX (important):** the current working ROM `1998-07-21 - Mac OS ROM 1.1.rom` is **NOT
+  "OldWorld"** (CLAUDE.md's label is loose). `rom_detect_type` classes it **`ROMTYPE_NEWWORLD`**
+  (nanokernel ID "NewWorld v1.0.p."); it's a 1998 CHRP-**LZSS** NewWorld ROM. The real axis for AltiVec
+  is **ROM vintage / format**, not OldWorld-vs-NewWorld. Both ROMs are NEWWORLD; they differ by payload
+  format (1.1=LZSS works; 9.0.1=parcels fails PatchROM) and vintage (1998 vs 2001).
+- **AltiVec evidence, now on DECODED images (firmer than the earlier raw-file grep):**
+  `1.1` (1998 LZSS): `'ppcf'` = **0** in the decoded 4 MB image. `9.0.1` (2001 parcels): `'ppcf'` = **2**.
+  So the 1998 ROM genuinely lacks the PowerPC-processor-features (`'ppcf'`) gestalt the vector bit lives
+  in; the 2001 ROM carries it. Strongly consistent with "AltiVec detection can't succeed under the
+  current ROM" → a newer ROM is a **plausible unlock** (still gated on D3 to boot it).
+- **Caveat carried forward:** even a booting 9.x ROM only tests *detection*; a usable AltiVec also needs
+  VR save/restore on context switch, and 9.1+ may hit the "second wall" of supervisor-fidelity stubs
+  (MMU / nanokernel / MP — see `MMU-NANOKERNEL-MP-PLAN.md`). The MIX_ALTIVEC>0 probe stays valid regardless.
+
+Tooling kept: `SS_ROM_PATCH_TRACE` (env-gated `find_rom_data` tracer) — realizes D3 Phase 0's tracer,
+reusable for the next ROM-version triage. The standalone decode/`'ppcf'`-count harness is throwaway (`/tmp`).
+
 ## 2026-06-07 — AltiVec detection is NOT pure-PVR — there's a co-requirement, likely ROM/nanokernel-side → **NewWorld ROM may be the unlock after all**
 
 The session-earlier lean "NewWorld ROM is unlikely to help AltiVec" was **too confident — corrected here.**
@@ -54,7 +85,9 @@ Interpretation (consistent with the [AltiVec-dormant finding](#2026-06-07--altiv
 (gestaltPowerPCProcessorFeatures) **vector bit is not set**, no app issues AltiVec, so nothing ever
 needs to enable MSR[VEC] → no `mtmsr`. **The lever is the gestalt `'ppcf'` vector bit** — but note
 the *measured* fact vs the *open* one. MEASURED (2026-06-07): the `'ppcf'` selector byte-string =
-**0× in the OldWorld ROM, 5× in the Mac OS 9 boot disk** (so the selector is *referenced* on-disk).
+**0× in the (1998 LZSS `1.1`) ROM, 5× in the Mac OS 9 boot disk** (so the selector is *referenced* on-disk).
+[Superseded/refined by the newer entry above: on DECODED images the `1.1` ROM has `'ppcf'`=0 and the 2001
+`9.0.1` ROM has `'ppcf'`=2; and "OldWorld" is the wrong label — `1.1` is itself `ROMTYPE_NEWWORLD`.]
 OPEN (#23): WHERE the bit is *computed* — a ROM/NanoKernel handler the System merely invokes is fully
 consistent with the selector living on-disk, so "computed in ROM" is **unverified, not disproven**;
 do not over-read the string count as locating the computation.

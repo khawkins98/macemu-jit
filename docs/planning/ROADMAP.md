@@ -596,20 +596,21 @@ but modeling more of the stack so an existing capability becomes reachable.
   zero illegal opcodes** all run. `mtmsr`-enable is *downstream* of detection — nothing tries to
   enable the vector unit because nothing detects it.
 - 🎯 **The gate is the gestalt `'ppcf'` (`0x70706366`) vector bit — and detection is NOT pure-PVR
-  (established 2026-06-07, #23).** *Static measurement:* the `'ppcf'` selector literal = **0× in the
-  OldWorld ROM, 5× in the Mac OS 9 disk** — selector + handler live on-disk; static RE then hit a wall
-  (gestalt is table-dispatched, handler proc relocated at load — can't follow the pointer from raw disk).
+  (established 2026-06-07, #23).** *DECODED-image measurement:* `'ppcf'` = **0× in the current ROM
+  (`1998 Mac OS ROM 1.1`, CHRP-LZSS), 2× in `2001 Mac OS ROM 9.0.1` (CHRP-parcels)** — the 1998 ROM has
+  no PowerPC-processor-features gestalt at all. *Terminology fix:* both ROMs are `ROMTYPE_NEWWORLD`
+  ("OldWorld" was a loose label); the real axis is **ROM vintage/format**, not OldWorld-vs-NewWorld.
   *Key deduction:* the **PVR is already `0x000c0000` (7400 = G4 with AltiVec)** and the gestalt CPU-type
-  is patched to match, **yet the vector bit stays clear** → the handler reads **more than PVR**; there's
-  a **co-requirement**. Prime suspect (hypothesis, not yet verified): a **nanokernel/ROM-side
-  vector-enable** that exists in NewWorld (G4-era) ROMs but not in OldWorld (which only ran on pre-G4,
-  non-AltiVec CPUs). **This flips the earlier lean: NewWorld ROM is now a *plausible* AltiVec unlock,
-  not a non-factor.**
-- 🔬 **Decisive next test (boot-level): boot the staged NewWorld ROM (`Mac OS ROM 9.0.1`)** and check
-  whether AltiVec lights up (profiler MIX_ALTIVEC blocks > 0). Most direct; settles it regardless of the
-  nanokernel-mechanism guess. Alternative: a PVR-read (`mfspr` 287) hook (à la `SS_LOG_ILLEGAL`) to see
-  what the handler consults. Caveat: "New World CHRP ROMs don't scan cleanly" (rom-harness), so the
-  NewWorld boot path may need work — but `ROMTYPE_NEWWORLD` paths already exist.
+  is patched to match, **yet the vector bit stays clear** → the handler reads **more than PVR** /
+  needs a `'ppcf'` gestalt the 1998 ROM lacks; there's a **co-requirement**. **This flips the earlier
+  lean: a newer (G4-era) ROM is now a *plausible* AltiVec unlock, not a non-factor.**
+- 🔬 **Decisive next test (boot-level): boot a newer ROM that carries `'ppcf'`** and check whether
+  AltiVec lights up (profiler MIX_ALTIVEC > 0). **BUT this is blocked on ROADMAP D3** — the staged
+  `2001 Mac OS ROM 9.0.1` (parcels) does **not** boot: `PatchROM()` fails at the first `find_rom_data`
+  (`patch_nanokernel_boot` `sr_init_dat`; **D3 Phase 0 done 2026-06-07** via `SS_ROM_PATCH_TRACE`, points
+  to D3 Phase 1 = incomplete parcels decode). See `NEW-WORLD-ROM-SUPPORT-PLAN.md`. Cheaper alternative
+  that needs no NewWorld boot: a PVR-read (`mfspr` 287) hook (à la `SS_LOG_ILLEGAL`) under the *current*
+  ROM to confirm the handler isn't even consulting PVR.
 - ⚠️ **Full enable is foundational, not a hack.** Even if detection flips, a usable AltiVec needs VR
   save/restore on context switch (vector state would otherwise corrupt across task switches). That
   VR-context modeling is the real Phase-3 cost. [DingusPPC](https://github.com/dingusdev/dingusppc) is

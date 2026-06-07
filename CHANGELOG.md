@@ -11,6 +11,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] Preliminary AltiVec support — opt-in `altivec` pref; real app runs vector code
+
+- **Real-app AltiVec achieved.** The AArch64 JIT already compiled PPC AltiVec → ARM64 NEON (validated by
+  `make test-jit`); the missing piece was *detection* — under the OldWorld 1.1 ROM the guest never
+  registers the `'ppcf'` gestalt, so apps ran scalar. New opt-in **`altivec` pref** (default off;
+  `prefs_items.cpp`) registers `'ppcf'` with the vector-feature bit via `_NewGestalt $A3AD`
+  (`emul_op.cpp force_altivec_idle_service`; `SS_FORCE_ALTIVEC` env = dev override). With it, **AltiVec
+  Fractal Carbon detects the Velocity Engine and runs its vector kernel through the JIT** —
+  `SS_JIT_PROFILE` → `[JIT-COMPILED-MIX] AltiVec=160`, AltiVec hot blocks.
+- **New profiler metric** `[JIT-COMPILED-MIX]`: global per-class op-compile histogram (AltiVec/FP/int/…)
+  — the definitive "did vector code actually run" signal.
+- **Opt-in / preliminary by design:** Mac OS 8.6/9.0 here don't VR-context-switch, so it's safe for a
+  focused compute app, not general multitasking vector use; `VSCR[SAT]` unmodeled. Roadmap §B5 tracks
+  making it fully safe. Docs: README "AltiVec" section, USER-HANDBOOK pref+caveat, ALTIVEC-DETECTION-RESEARCH.md.
+- **Bug-hunt note:** first attempt set gestalt bit `0x40` (= 64-bit-support) instead of `0x10` (vector,
+  `1<<gestaltPowerPCHasVectorInstructions`), yielding a self-consistent wrong "FC ignores gestalt"
+  conclusion until a research agent checked Apple's `Gestalt.h`. Lesson: a bit-number constant is `1<<N`.
+
 ### [SheepShaver] B1 execution profiler + fallback trace + P3 block timing
 
 - **B1 profiler**: per-block execution counter (`SS_JIT_PROFILE=1`). Hot Blocks panel.

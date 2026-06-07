@@ -37,6 +37,14 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 reference for fuller PowerPC-Mac-stack emulation (interpreter-only, so ideas not codegen;
 GPLv3 reuse is license-feasible — see `docs/planning/DINGUSPPC-EVALUATION-PLAN.md`).
 
+> **Phase-3 priority decision (2026-06-07):** see `docs/planning/COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md`.
+> Bottom line: the biggest compatibility payoff is **not** the OS-version frontier (NewWorld ROM →
+> maybe MMU) but **making the already-booting 8.6–9.0.4 range run wanted software *usably*** —
+> `CopyBits` HLE + idle-skipping + `.ndrv` video (the "attack the worst layer" levers, gated by a
+> half-day call/rect histogram probe). "ROM-first, MMU-deferred" ordering is CONFIRMED but re-ranked
+> as a *lower-EV exploratory* track. NOTE these top levers blur the Phase-3/Phase-4 line: "runs
+> unusably slow" is arguably a *compatibility* gap, but the work is perf-shaped — a strategy call.
+
 > **How this maps to the four tracks below.** The phases are the *narrative*; Tracks A–D are
 > the *tactical backlog*. Phase 2 ≈ Track A (verification) now in maintenance. Phase 3 (widen)
 > is new work that will mostly land as new Track-A correctness items + targeted Track-D breadth.

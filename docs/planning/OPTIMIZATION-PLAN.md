@@ -579,12 +579,20 @@ the hot arithmetic** (fadd/fsub/fmul/fdiv + fmadd/fmsub/fnmadd/fnmsub) to zero-c
   eviction/aliasing); Speedometer Math sane + improved; integer kernels byte-identical.
 
 **Landmine ruled out**: FP evict emits only `STR Dn` (no RTMP/NZCV), no lazy-FP state — the
-integer "RTMP/NZCV across ra_store" hazard cannot recur. **Follow-ups** (still coherent via
-the bridge): convert FP **moves** (fmr/fneg/fabs/fnabs/fsel/fsqrt/frsqrte/frsp) and **memory**
-(lfd/lfs/lfdu/lfsu/stfd/stfs + indexed) to zero-copy; later, cross-block FP pinning (would need
-callee-saved d8–d15 + prologue save — multi-session). Not yet SS_JIT_VERIFY-booted (Speedometer
-Math correctness is strong evidence; a VERIFY boot is the belt-and-suspenders follow-up).
-**Effort**: was High — landed in one session via the staged/bridge approach.
+integer "RTMP/NZCV across ra_store" hazard cannot recur.
+
+**Extended (2026-06-07, same session):** converted **single-precision** arithmetic (opcode 59:
+fadds/fsubs/fmuls/fdivs/fmadds/fmsubs/fnmadds/fnmsubs/fres/fsqrts) + the **move/sign** ops
+(fmr/fneg/fabs/fnabs) to zero-copy. This is Fractal Carbon's hot Mandelbrot loop → **FC guest-MIPS
++8%** (1046→1132). test-jit **303/303** (added an eviction-writeback vector closing the FP-RA
+review's only gap: >8 live FPRs → evict + dirty-writeback + reload). Adversarial review of the FP
+RA: no correctness bugs, V16–V23 confirmed exclusively owned, all flush sites block-terminating.
+
+**Remaining follow-ups** (still coherent via the bridge): FP **memory** (lfd/lfs/lfdu/lfsu/stfd/stfs
++ indexed), fsel, frsp, frsqrte to zero-copy; later cross-block FP pinning (callee-saved d8–d15 +
+prologue save — multi-session); a belt-and-suspenders `SS_JIT_VERIFY` boot (Speedometer Math + FC
+correctness already strong evidence). **Effort**: was High — MVP + single-precision both landed in
+one session via the staged/bridge approach.
 
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 

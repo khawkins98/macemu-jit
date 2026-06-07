@@ -17,6 +17,47 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-07 — Early-boot dead-ends were invisible in the log → pre-idle boot-stall watchdog ([ALARM])
+
+**Symptom the user kept hitting:** boot a ROM/OS that fails early (the NewWorld "This startup disk
+will not work on this Macintosh model" alert) and the log shows ~0.2s of `[JIT … first compile …]`
+then **silence** — so you wait on a GUI screen, then screenshot, then realize it failed. Twice the
+user asked "why so long?" / "do we not have diagnostic tooling to see this in the logs?"
+
+**Root cause (confirmed from the actual log, not theorized):** every higher-level boot signal —
+`[BOOT]`/`[APP] modal`/`[SYSV]`/`[READY]` — rides the `SynchIdleTime` idle hook, which only fires
+once the guest reaches Process-Manager idle. A wedged guest **never reaches idle**, so the idle hook
+never runs and those signals never emit. Grepping the failed run proved it: **zero** `[BOOT]`/`[APP]`
+lines, but **16,350 `[HB]`** heartbeats at ~150M/s, 99.99% in `jDR` (68K emulator), `comp` frozen.
+
+**Why the obvious fix (read WindowList and name the dialog) does NOT work here:** the model-rejection
+screen is a **ROM-level DSAlert drawn BEFORE the System boots**. At that point `WindowList` (0x9D6)
+reads `0xffffffff` and `CurApName` is junk — the WindowManager doesn't exist yet, so the Toolbox can
+**never** name this screen. Verified: probe emitted `win=0xffffffff kind=-8112` while the dialog was
+visibly on screen. (Contrast: *later* modal prompts — disk-repair, rebuild-desktop — DO populate
+WindowList and are nameable; the watchdog names those.)
+
+**The fix is a WATCHDOG keyed on the failure SHAPE, not the screen content** (the user's insight:
+"a few hundred ms of jit activity then nothing should be enough to trigger an alarm"). The shape is
+signal-independent: blocks spinning fast + no new compiles + idle never reached = dead-end.
+`ss_boot_stall_check` (`emul_op.cpp`), driven by the **host-side JIT heartbeat** (which keeps ticking
+through the wedge — the one carrier that survives it), raises `[ALARM]` at ~15s and re-states
+`[STALL]` every 30s. Scoped strictly **pre-idle** + self-disarms at `[BOOT] idle` + re-arms on compile
+progress → does **not** repeat the forbidden post-boot "same-PC = hang" mistake (session-5 retraction).
+`SS_BOOT_STALL_SECS` tunes it (default 15; 0 off). Full reference: `SheepShaver/docs/DIAGNOSTICS.md`.
+
+**Methodology that worked:** the advisor blocked the build until I grepped the EXISTING failed-run log
+— which decided whether *any* code was needed (it confirmed the gap AND that the heartbeat carrier was
+alive). Then it required emitting RAW readings (`win=`/`kind=`) so one boot proved the WindowList read
+was junk rather than assuming it. Don't build diagnostic tooling on an unchecked theory when the
+disproving log is already on disk. (See memory [[gui-outcomes-not-in-log]], now updated.)
+
+**Path B (SS_NW_MODEL) result:** injecting a NewWorld device-tree identity (`model="PowerMac3,1"` +
+`compatible`) on the 1.1 ROM is **insufficient** to boot 9.2 — the watchdog confirmed it still wedges
+at the model-rejection DSAlert. 9.2 needs the real NewWorld ROM environment (Path A: re-RE
+`patch_nanokernel_boot` for the parcels layout). The `compatible` injection is kept default-off as
+groundwork (needed alongside Path A, not sufficient alone).
+
 ## 2026-06-07 — AltiVec FORCE WORKS: 'ppcf' is UNREGISTERED (8.6 AND 9.0); we register it ourselves
 
 Big progress on the AltiVec de-risk (task #26), user-authorized live boots (isolated config, VNC, clean

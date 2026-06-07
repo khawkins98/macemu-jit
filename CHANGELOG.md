@@ -11,6 +11,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] FP indexed/update memory → zero-copy FP RA (P5b follow-up)
+
+- Converted the FP **indexed** loads/stores (`lf{s,d}x`/`lf{s,d}ux`/`stf{s,d}x`/`stf{s,d}ux`,
+  opcode-31 cases 535/567/599/631/663/695/727/759) and **D-form update** forms
+  (`lf{s,d}u`/`stf{s,d}u`, cases 49/51/53/55) from the FMOV bridge to direct zero-copy FP-RA access,
+  matching the already-converted non-update D-form. Removes a per-op FMOV/V0 round-trip when the FPR
+  is RA-resident and keeps FP values RA-resident across loads/stores in FP-heavy loops.
+- **Coverage gap closed:** these 12 ops were untested (only D-form `lfd/lfs/stfd/stfs` had vectors).
+  Added 12 differential vectors; verified non-vacuous (GPR result) + rA-writeback (REGDUMP). `make
+  test-jit` **315/315** (was 303). FC renders identically (pHash unchanged), guest-MIPS within noise
+  (FC's loop is register FP arith — the win accrues to array-heavy FP code). See OPTIMIZATION-PLAN §P5b.
+
 ### [SheepShaver] mfmsr JIT/interp divergence fix + AltiVec-detection finding (mfmsr[VEC] is NOT the gate)
 
 - **Fix (`cd6df179`):** the aarch64 JIT's `mfmsr` (case 83) returned `0`, while the

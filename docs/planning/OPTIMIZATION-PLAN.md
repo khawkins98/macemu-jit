@@ -1,6 +1,6 @@
 # SheepShaver ARM64 JIT Optimization Plan
 
-> **Status:** 🟡 Active · **Created:** 2026-06-03 · **Updated:** 2026-06-06
+> **Status:** 🟡 Active · **Created:** 2026-06-03 · **Updated:** 2026-06-07
 > **Why this doc exists:** SheepShaver JIT performance roadmap — done / open / deferred levers with measured baselines.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -588,11 +588,21 @@ fadds/fsubs/fmuls/fdivs/fmadds/fmsubs/fnmadds/fnmsubs/fres/fsqrts) + the **move/
 review's only gap: >8 live FPRs → evict + dirty-writeback + reload). Adversarial review of the FP
 RA: no correctness bugs, V16–V23 confirmed exclusively owned, all flush sites block-terminating.
 
-**Remaining follow-ups** (still coherent via the bridge): FP **memory** (lfd/lfs/lfdu/lfsu/stfd/stfs
-+ indexed), fsel, frsp, frsqrte to zero-copy; later cross-block FP pinning (callee-saved d8–d15 +
-prologue save — multi-session); a belt-and-suspenders `SS_JIT_VERIFY` boot (Speedometer Math + FC
-correctness already strong evidence). **Effort**: was High — MVP + single-precision both landed in
-one session via the staged/bridge approach.
+**Extended again (2026-06-07):** converted the **FP indexed + D-form update memory** ops to
+zero-copy — indexed `lf{s,d}x`/`lf{s,d}ux`/`stf{s,d}x`/`stf{s,d}ux` (opcode-31 cases
+535/567/599/631/663/695/727/759) and update `lf{s,d}u`/`stf{s,d}u` (cases 49/51/53/55). They used
+the FMOV bridge (fixed V0 + FMOV to/from the RA host reg); now they use `ra_fp_store`/`ra_fp_load`
+directly like the non-update D-form (48/50/52/54), removing one FMOV / V0 round-trip per op when the
+FPR is RA-resident and keeping FP values RA-resident across loads/stores in FP-heavy loops. **These
+12 ops were UNTESTED** (only D-form lfd/lfs/stfd/stfs had vectors) — added 12 differential vectors
+(`gen-fp-vectors.py`), verified non-vacuous (GPR result) + rA-writeback (REGDUMP). **test-jit
+315/315.** FC perf-neutral (its Mandelbrot loop is register FP arith, doesn't use these ops; renders
+identically, guest-MIPS within noise) — the win accrues to array-heavy FP workloads.
+
+**Remaining follow-ups** (still coherent via the bridge): `fsel`, `frsp`, `frsqrte` to zero-copy;
+later cross-block FP pinning (callee-saved d8–d15 + prologue save — multi-session); a
+belt-and-suspenders `SS_JIT_VERIFY` boot (Speedometer Math + FC correctness already strong evidence).
+**Effort**: was High — MVP + single-precision + FP-memory all landed via the staged/bridge approach.
 
 ### P5c: AltiVec ev_mixed Element-Order Fixes
 

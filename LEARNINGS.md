@@ -33,6 +33,13 @@ a vector — a whole family had none. When pivoting to "harden codegen," first a
 Also: an unmatched `vxo` falls through into the `switch(vao)` (low-6-bit VA-form) — every VX case must
 explicitly `return` (correct codegen or `return false` for clean per-op interp fallback), never fall through.
 
+**Caveat (correct *modulo* VSCR[SAT]):** the interp sets `vscr().set_sat(1)` on every saturation; the JIT
+does not model VSCR at all (`mfvscr`→0, `mtvscr` NOP), and the REGDUMP has no VSCR field, so the
+differential test is blind to this divergence. Pre-existing, family-wide JIT limitation (not introduced
+here) — the sum-across result words are correct; only the sticky SAT flag is unmodeled, consistent with
+`mfvscr`=0. Coverage scope: both +INT_MAX and −INT_MIN clamps tested for all five (the two wide ops use
+`SQXTN.2S`, a different clamp path than the per-word `SQADD`, so both directions are exercised separately).
+
 ## 2026-06-07 — AltiVec gestalt gate: the three obvious gates are ALL open; pivoted to codegen-correctness hardening
 
 Re-examined the AltiVec-detection gap (task #21) before the next deep push, and **falsified the three

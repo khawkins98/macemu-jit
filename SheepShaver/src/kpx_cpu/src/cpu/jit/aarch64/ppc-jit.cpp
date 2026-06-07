@@ -2553,8 +2553,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 659: /* mfsrin — same */
 		{	int hD = ra_store(rd); a64_movz(hD, 0, 0); return true; }
 
-		case 83: /* mfmsr rD — simplified: return 0 */
-		{	int hD = ra_store(rd); a64_movz(hD, 0, 0); return true; }
+		case 83: /* mfmsr rD — match interpreter (execute_mfmsr returns 0xf072).
+		         * Previously returned 0, diverging from the interpreter; that
+		         * divergence is a latent correctness bug independent of AltiVec. */
+		{	int hD = ra_store(rd); emit_load_imm32(hD, 0xf072); return true; }
 		case 310: /* eciwx rD,rA,rB — external control in word: NOP */
 			return true;
 		case 438: /* ecowx rS,rA,rB — external control out word: NOP */

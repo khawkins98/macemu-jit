@@ -470,6 +470,18 @@ fn rpc_read_memory(id: String, addr: u32, len: u32, state: State<AppState>) -> R
 }
 
 #[tauri::command]
+fn save_profile_session(session: String) -> Result<String, String> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let filename = format!("session-{}.sheepshaver-profile", ts);
+    let path = std::env::temp_dir().join(&filename);
+    std::fs::write(&path, &session).map_err(|e| format!("Save failed: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn rpc_ui_snapshot(id: String, state: State<AppState>) -> Result<String, String> {
     let mut running = state.running.lock().map_err(|e| e.to_string())?;
     ensure_rpc(&mut running, &id)?;
@@ -850,6 +862,7 @@ fn main() {
             rpc_dump_registers,
             rpc_read_memory,
             rpc_ui_snapshot,
+            save_profile_session,
             generate_bug_report,
             set_runtime_control,
             capture_vm_screenshot,

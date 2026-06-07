@@ -1758,7 +1758,24 @@ async function loadScreenshots() {
 // Inspector window — separate window with full-width panels
 let inspectorInterval: ReturnType<typeof setInterval> | null = null;
 let inspectorRecording = false;
-let inspectorRecordedEvents: { ts: number; kind: string; payload: string }[] = [];
+interface ProfileEvent {
+  ts: number;
+  kind: string;
+  payload: string;
+}
+interface ProfileSession {
+  vmId: string;
+  vmName: string;
+  startTime: number;
+  endTime: number;
+  events: ProfileEvent[];
+  statsSnapshots: { ts: number; stats: any }[];
+  guestSnapshots: { ts: number; state: any }[];
+}
+let inspectorRecordedEvents: ProfileEvent[] = [];
+let inspectorStatsSnapshots: { ts: number; stats: any }[] = [];
+let inspectorGuestSnapshots: { ts: number; state: any }[] = [];
+let inspectorRecordStartTime = 0;
 
 function renderInspectorWindow(vmId: string) {
   const app = document.getElementById("app")!;
@@ -1883,19 +1900,39 @@ function renderInspectorWindow(vmId: string) {
   });
 
   // Record button
-  document.getElementById("inspector-record-btn")?.addEventListener("click", () => {
+  document.getElementById("inspector-record-btn")?.addEventListener("click", async () => {
     inspectorRecording = !inspectorRecording;
     const btn = document.getElementById("inspector-record-btn")!;
     if (inspectorRecording) {
       inspectorRecordedEvents = [];
+      inspectorStatsSnapshots = [];
+      inspectorGuestSnapshots = [];
+      inspectorRecordStartTime = Date.now();
       btn.textContent = "⏹ Stop";
       btn.classList.add("btn-danger-hover");
-      showToast("Recording session events...", "info", 2000);
+      showToast("Recording session — events, stats, and guest state will be captured...", "info", 3000);
     } else {
       btn.textContent = "⏺ Record";
       btn.classList.remove("btn-danger-hover");
-      showToast(`Recorded ${inspectorRecordedEvents.length} events`, "success", 3000);
-      // TODO: save to .sheepshaver-profile file
+
+      const vmName = vms.find(v => v.id === vmId)?.name || "VM";
+      const session: ProfileSession = {
+        vmId,
+        vmName,
+        startTime: inspectorRecordStartTime,
+        endTime: Date.now(),
+        events: inspectorRecordedEvents,
+        statsSnapshots: inspectorStatsSnapshots,
+        guestSnapshots: inspectorGuestSnapshots,
+      };
+
+      // Save to file via Tauri
+      try {
+        const path = await invoke("save_profile_session", { session: JSON.stringify(session) }) as string;
+        showToast(`Session saved: ${path.split("/").pop()} (${inspectorRecordedEvents.length} events, ${inspectorStatsSnapshots.length} snapshots)`, "success", 8000);
+      } catch (err) {
+        showToast(`Failed to save session: ${err}`, "error");
+      }
     }
   });
 
@@ -2035,6 +2072,10 @@ function renderInspectorWindow(vmId: string) {
         const uiJson = await invoke("rpc_ui_snapshot", { id: vmId }) as string;
         if (uiJson) {
           const ui = JSON.parse(uiJson);
+          // Record guest state snapshot
+          if (inspectorRecording) {
+            inspectorGuestSnapshots.push({ ts: Date.now(), state: ui });
+          }
           const guestEl = document.getElementById("insp-guest-state");
           if (guestEl) {
             const windows = ui.windows || [];
@@ -2101,11 +2142,18 @@ function renderInspectorWindow(vmId: string) {
         logEl.scrollTop = logEl.scrollHeight;
       }
 
-      // Recording
-      if (inspectorRecording && data.signals.length > 0) {
-        const latest = data.signals[data.signals.length - 1];
-        if (!inspectorRecordedEvents.length || inspectorRecordedEvents[inspectorRecordedEvents.length - 1].payload !== latest.payload) {
-          inspectorRecordedEvents.push({ ts: Date.now(), kind: latest.kind, payload: latest.payload });
+      // Recording — capture events, stats snapshots, and guest state
+      if (inspectorRecording) {
+        // Capture new signal events
+        if (data.signals.length > 0) {
+          const latest = data.signals[data.signals.length - 1];
+          if (!inspectorRecordedEvents.length || inspectorRecordedEvents[inspectorRecordedEvents.length - 1].payload !== latest.payload) {
+            inspectorRecordedEvents.push({ ts: Date.now(), kind: latest.kind, payload: latest.payload });
+          }
+        }
+        // Capture stats snapshot
+        if (data.stats.blocks) {
+          inspectorStatsSnapshots.push({ ts: Date.now(), stats: { ...data.stats } });
         }
       }
     } catch { /* VM may not be running */ }

@@ -101,7 +101,13 @@ Kernels target specific optimizations: `carry-chain` (adde — 0b/0f), `rc1`
 these run ~30× slower per insn than integer ALU because the JIT has no FP
 register allocator yet; every FP op round-trips the FPRs through the regs struct),
 `compute` (mullw/divw/add recurrence — models the runtime-dominant Speedometer
-hot block `0x1ed7befc`).
+hot block `0x1ed7befc`), `shift` (rlwinm single-insn fast path), and the AltiVec
+trio `av-add`/`av-fma`/`av-perm` (`vadduwm`/`vmaddfp`/`vperm` → NEON
+`ADD.4S`/`FMLA.4S`/`TBL`). The AltiVec kernels read **a64/op ≈ 4–5** (vs 1.0 for
+register-resident scalar ops) because every guest AltiVec op currently spills its
+VRs to/from the regs struct (load 2–3 NEON q-regs, op, store 1) — the same
+round-trip the FP-RA removed for FPRs. They are how a future **VR register
+allocator** (the FP-RA analog) would be A/B'd; see `docs/planning/OPTIMIZATION-PLAN.md`.
 
 ### Maintenance (per `docs/TESTING.md`)
 - **Baselines are per-machine** (ns depends on the host CPU) — **do not commit

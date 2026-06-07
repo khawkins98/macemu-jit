@@ -28,13 +28,18 @@ Machine-independent and **zero host-noise** (committable; runs on a loaded lapto
 so it isolates *codegen quality* from host jitter. Lower = leaner. Record after every
 codegen change. (There is no interpreter column here — this measures JIT codegen.)
 
-| date | carry-chain | rc1 (`add.`) | alu | fp-add | fp-fma | compute | shift | notes |
-|------|---|---|---|---|---|---|---|---|
-| 2026-06-06 | 5.00 | 12.00 | 1.00 | 4.00 | 5.00 | 2.81 | 1.00 | post P3a + 0f-sweep + 0h. `shift` 2.00→1.00 (slwi/srwi 0h); `compute` 2.98→2.81 (divw 0f). |
+| date | carry-chain | rc1 (`add.`) | alu | fp-add | fp-fma | compute | shift | av-add | av-fma | av-perm | notes |
+|------|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-06-06 | 5.00 | 12.00 | 1.00 | 4.00 | 5.00 | 2.81 | 1.00 | — | — | — | post P3a + 0f-sweep + 0h. `shift` 2.00→1.00 (slwi/srwi 0h); `compute` 2.98→2.81 (divw 0f). |
+| 2026-06-07 | 5.00 | 12.00 | 1.00 | 4.00 | 5.00 | 2.81 | 1.00 | **4.00** | **5.00** | **5.00** | + AltiVec kernels (`vadduwm`/`vmaddfp`/`vperm` → NEON `ADD.4S`/`FMLA.4S`/`TBL`). ns/insn on the M5: 2.89 / 3.12 / 2.85 (~30× the integer `alu`, like the pre-RA FP kernels). |
 
 Standout: **`rc1`=12** — CR0 generation (~11 insns) on every `.`-form/compare is the
 broadest remaining lever (lazy-CR0 §0g, currently disabled). `alu`=1 and `shift`=1 are
-optimal; `carry-chain`=5 and the FP kernels are next-tier targets.
+optimal; `carry-chain`=5 and the FP kernels are next-tier targets. **AltiVec a64/op=4–5**:
+every guest vector op spills its VRs to/from the regs struct (load 2–3 NEON q-regs, op,
+store 1) — the exact round-trip the FP-RA removed for FPRs. A **VR register allocator**
+(the FP-RA analog) is the lever to drive these toward 1.0; logged in OPTIMIZATION-PLAN.
+This is the "from not running at all → running (unoptimized)" baseline for AltiVec.
 
 ### 2. Run-profile throughput (`guest-MIPS`, empirical) — `SS_JIT_PROFILE`
 

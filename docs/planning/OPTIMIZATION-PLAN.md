@@ -196,6 +196,28 @@ advertises a G4), so the remaining ops corrupt real AltiVec software today.
 
 ---
 
+### P-VRA. VR (vector) register allocator — the FP-RA analog for AltiVec (NOT STARTED; logged 2026-06-07)
+
+**Opportunity (measured, not acted on).** Now that real apps reach AltiVec (opt-in `altivec`
+pref; Fractal Carbon runs its vector kernel — ROADMAP §B5), the new `rom-harness` AltiVec
+microbench kernels (`av-add`/`av-fma`/`av-perm`) read **a64/op = 4–5** (ns/insn ~2.9–3.1 on the
+M5 ≈ 30× the integer `alu`). Cause: every guest AltiVec op currently does
+`{load 2–3 VRs from the regs struct → 1 NEON op → store 1 VR back}` — the SAME per-op spill the
+**FP register allocator (P5b)** removed for FPRs (which dropped `fp-add`/`fp-fma` from 4/5 → 1.0
+a64/op and gave Fractal Carbon's FP path +8% guest-MIPS). A **VR register allocator** — keep hot
+VRs resident in NEON q-regs across ops within a block, writeback on eviction/block-end — is the
+direct analog and should produce a comparable win on vector-bound code (DSP/codec/AltiVec apps).
+
+**Why it's parked, not done:** compatibility-first right now (the user's directive); and it should
+follow the P5b "RA-aware bridge" playbook (incremental, gate every step on `make test-jit` + a
+real-AltiVec run). **A/B harness already exists:** `cd SheepShaver/rom-harness && make bench`
+(av-* kernels) for the deterministic a64/op delta, plus the `[JIT-COMPILED-MIX]`/run-profile on
+Fractal Carbon for the end-to-end number. Baseline saved at `/tmp/altivec_bench_baseline.txt`
+(regenerate with `make bench BARGS=--save-baseline=…`). **Effort**: medium–large (mirror P5b).
+**Expected payoff**: high on vector-heavy workloads; zero on scalar (most of boot).
+
+---
+
 ## Open — Quick Wins (Priority 0)
 
 ### 0b. subfe/adde via ADCS — DONE (2026-06-03, correctness + perf)

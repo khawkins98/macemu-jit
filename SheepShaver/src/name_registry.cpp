@@ -91,7 +91,33 @@ void DoPatchNameRegistry(void)
 	if (!RegistryCStrEntryCreate(0, "Devices:device-tree", device_tree.addr())) {
 		u32.set_value(BusClockSpeed);
 		RegistryPropertyCreate(device_tree.addr(), "clock-frequency", u32.addr(), 4);
-		RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
+		// SS_NW_MODEL (experimental, default off): present a recognized New World machine identity
+		// (device-tree root `model` + `compatible`) so Mac OS 9.1/9.2 accepts the OLD 1.1 ROM's
+		// machine ("…will not work on this Macintosh model"). Probes whether 9.2 can boot on the
+		// working 1.1 ROM WITHOUT the parcels-ROM port (the cheap Path B). New World Macs all share
+		// gestaltMachineType 406; the real identity is these OF device-tree properties. Default off
+		// → model stays "Power Macintosh" (1.1 path byte-identical). See NEW-WORLD-ROM-SUPPORT-PLAN.md.
+		//
+		// FINDING (2026-06-07): INSUFFICIENT ALONE. With model="PowerMac3,1" + compatible set, the
+		// 9.2.1 installer ISO booted on the 1.1 ROM STILL shows "…will not work on this Macintosh
+		// model" (confirmed via the [ALARM] boot-stall watchdog: wedges pre-System, WindowManager
+		// never comes up). So 9.2 acceptance needs more than the device-tree identity — it needs the
+		// real New World ROM environment (Path A: re-RE patch_nanokernel_boot for the parcels layout).
+		// Kept default-off as groundwork: the `compatible` injection is still needed alongside Path A,
+		// just not sufficient by itself.
+		const char *nw_model = getenv("SS_NW_MODEL");
+		if (nw_model && *nw_model && *nw_model != '0') {
+			const char *model = (nw_model[0] == '1' && nw_model[1] == '\0') ? "PowerMac3,1" : nw_model;
+			RegistryPropertyCreateStr(device_tree.addr(), "model", model);
+			// `compatible`: NUL-separated list a G4 (PowerMac3,1) reports.
+			static const char compat[] = "PowerMac3,1\0MacRISC2\0MacRISC\0Power Macintosh";
+			SheepArray<sizeof(compat)> compat_buf;
+			memcpy(Mac2HostAddr(compat_buf.addr()), compat, sizeof(compat));
+			RegistryPropertyCreate(device_tree.addr(), "compatible", compat_buf.addr(), sizeof(compat));
+			fprintf(stderr, "[NW-MODEL] device-tree model='%s' + compatible set (experimental 9.x model-check probe)\n", model);
+		} else {
+			RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
+		}
 
 		// Create "AAPL,ROM"
 		SheepRegEntryID aapl_rom;

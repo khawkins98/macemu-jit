@@ -397,6 +397,28 @@ real build-out, roughly:
 This is a focused multi-iteration correctness effort (best started fresh, not at the tail of a long
 session). It IS on-target for "increase JIT/PPC correctness via the New World forcing-function."
 
+### PROGRESS (2026-06-08 overnight) — SPRG0+KDP probe advances the boot 27 → 128 PCs
+
+Implemented the `SS_NW_TRAMPOLINE` probe (env-gated, default off, 1.1 byte-identical; `init_emul_ppc`):
+seed `SPRG0 = KernelDataAddr`, zero the negative KDP scratch (`0x1000` below KernelDataAddr, within the
+NATMEM reservation), and set `[SPRG0-4] = KDP = KernelDataAddr`. Results, step by step (all via
+`SS_LOG_FIRST_BLOCKS` + lock-state dump, diagnostic config `SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1`):
+- **SPRG0 alone:** boot passes the block-12 spinlock (0x312700), 27 → 41 PCs, then derails to wild PCs
+  (`[SPRG0-4]`=0 → KDP=0 → garbage field reads).
+- **SPRG0 + backed KDP:** 27 → **128 distinct PCs, all clean in 0x50xxxxxx, no derail**; comp advances
+  128 → 146. The parcels nanokernel now executes real init code well past the old deadlock.
+- **New wedge:** a JIT wait loop at **`0x50322990` / `0x503251e4`** (comp frozen at 146, `iDR=0` so not
+  interpreter fallback). `SS_SYNTH_DEC=1` makes NO difference here → not a decrementer-timed wait.
+- **Two general correctness fixes harvested en route (committed, test-jit=350/100):** real SPRG0-3
+  registers (were dropped), and `fctiw` honoring dynamic FPSCR[RN] (was fixed FCVTAS).
+
+**NEXT:** characterize the `0x50322990`/`0x503251e4` wedge (trace-ring + disasm, as was done for
+0x3127xx) — another hardware-poll / spinlock / wait that SheepShaver's thin supervisor model doesn't
+satisfy. Then continue the forcing-function loop. The KDP positive-field aliasing (SheepShaver's
+1.1-tuned KernelData vs the parcels KDP layout) is the likely deeper issue behind this new wedge.
+Caveat (agent design): a *separate* parcels KDP region may eventually be needed vs reusing
+KernelDataAddr. Full design: `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
+
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 
 - **No prior art boots a parcels ROM / 9.1-9.2 anywhere [verified].** Upstream `cebix/macemu` has

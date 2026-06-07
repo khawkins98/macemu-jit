@@ -36,6 +36,13 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   path) + a one-shot lock-state dump at the parcels spinlock-acquire. Reusable for any boot bring-up.
 - Root cause of the parcels wedge traced to the SPRG/Trampoline supervisor-environment gap (above +
   plan doc). The 9.x boot is treated as a **forcing function for PPC/JIT correctness**, not an end.
+- **`SS_NW_TRAMPOLINE`** (env, default off, 1.1-safe): emulates the Trampoline-established supervisor
+  environment — seed `SPRG0=KernelDataAddr`, back+zero the negative KDP scratch, `[SPRG0-4]=KDP`. This
+  advances the parcels nanokernel **27 → 128 distinct PCs** past the block-12 spinlock deadlock (clean,
+  no derail) to a new wedge at `0x50322990`/`0x503251e4`. See `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
+- **`fctiw` honors dynamic FPSCR[RN]** (general fix, separate entry below in spirit): selects
+  FCVT{AS,ZS,PS,MS} by RN instead of fixed FCVTAS. Resolved+promoted the `fp_fctiw_dynround` harness
+  quarantine; test-jit now 350/350.
 
 ## 2026-06-07
 

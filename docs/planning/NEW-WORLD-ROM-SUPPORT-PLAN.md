@@ -1,6 +1,6 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** 🟡 Phase 2 in progress · **RE-SCOPED 2026-06-08** — the `:715` CPU-detect wall is SKIPPABLE on parcels (the ROM self-handles the faked 7400); `patch_nanokernel_boot` reduces to skip-1-block + RE-2-routines (`sr_load`, `jump68k`). Target for the ceiling-break = 9.2-class parcels ROM. See "GO/NO-GO RE-SCOPE" below. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
+> **Status:** 🟡 Phase 2/3 · **RUNTIME MILESTONE 2026-06-08** — the parcels (9.0.1) PPC **nanokernel BOOTS under our JIT** (diagnostic gate skips the un-ported 68k handoff). `:715` + `sr_load` skips runtime-validated. Remaining gate to a real 9.x boot: `jump68k` handoff redirect + 68k-side HLE (nvram/via) ports. See "RUNTIME MILESTONE" below. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
 > **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`
@@ -271,6 +271,29 @@ load-bearing handoff retarget (`jump68k`) + the lenient-resolved remainder. Afte
 functions (`patch_68k_emul`/`patch_nanokernel`/`patch_68k` — the 9.0.4 runtime attempt reached
 `patch_nanokernel`'s `nvram2_dat`) + Phase 3 + possible second wall. The headline wall shrank a lot;
 the path is now "finish jump68k → other functions → first boot attempt (validates the skips)."
+
+### ⭐⭐ RUNTIME MILESTONE (2026-06-08) — the parcels PPC nanokernel BOOTS under our JIT
+
+Forced PatchROM to complete via a diagnostic gate (`SS_ROM_SKIP_JUMP68K=1` + `SS_ROM_LENIENT=1`,
+default off, 1.1 byte-identical): leave `jump68k` un-redirected and make `patch_68k`'s absent 68k-side
+HLE (nvram/via — all absent on parcels) non-fatal at the call site, since none of it is reached before
+the handoff. Then **booted the 9.0.1 parcels ROM** (`./SheepShaver --config <9.0.1, no disk>`):
+
+- **PatchROM completes** and the **PPC nanokernel boots and runs** — heartbeat shows execution **100%
+  in `jNK`** (nanokernel region), `comp=27`, settling into a stable ~60Hz interrupt-idle loop at
+  `pc=0x503127a8/b8`. It idles because `jump68k` is un-redirected (no 68k OS to enter).
+- **This RUNTIME-VALIDATES the `:715` + `sr_load` skips** — the nanokernel ran 160s+ with no crash, so
+  those skips don't break PPC boot (the open worry on `sr_load`'s KernelData BAT fields is answered:
+  fine through nanokernel init at least).
+- **Watchdog finding:** the `[ALARM]` boot-stall watchdog initially missed this wedge (it runs at
+  ~0.1M/s, under the old `>1M/s` "spinning" gate, which was tuned for the ~150M/s DSAlert tight-loop).
+  Lowered the gate to `>0.01M/s` (pre-idle scoping + idle-disarm is the real false-positive guard);
+  `[ALARM]` now fires at 15.1s. Committed.
+
+**So the PPC side of the parcels port is PROVEN to work.** The remaining gate to a real 9.x boot is
+exactly: (1) `jump68k` — redirect the parcels PPC→68k handoff to SheepShaver's emulator (the genuine
+RE; boot-flow trace from the nanokernel idle/handoff at 0x503127xx), then (2) port the 68k-side HLE
+shims (nvram/via) that `patch_68k` currently can't find. With (1)+(2) the 68k OS should start.
 
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 

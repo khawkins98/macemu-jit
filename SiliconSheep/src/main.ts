@@ -195,8 +195,17 @@ function renderEmptyState(): string {
 }
 
 function renderErrorBanner(): string {
-  if (!errorBanner) return "";
-  return `<div class="error-banner">${escapeHtml(errorBanner)}</div>`;
+  let html = "";
+  if (errorBanner) {
+    html += `<div class="error-banner">${escapeHtml(errorBanner)}</div>`;
+  }
+  if (quarantineDetected) {
+    html += `<div class="error-banner" style="background: #f5a623; color: #000;">
+      ⚠ macOS Gatekeeper quarantine detected on SheepShaver binary. The emulator may not launch.
+      <button class="btn btn-sm" style="margin-left: 8px; background: #fff; color: #000; border: none; padding: 2px 10px; border-radius: 4px; cursor: pointer;" data-action="clear-quarantine">Clear Quarantine</button>
+    </div>`;
+  }
+  return html;
 }
 
 function renderLibrary(): string {
@@ -657,6 +666,22 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
           <option value="true" ${getPref("gfxaccel") !== "false" ? "selected" : ""}>Enabled (recommended)</option>
           <option value="false" ${getPref("gfxaccel") === "false" ? "selected" : ""}>Disabled</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label>Scaling Filter</label>
+        <select class="input" id="setting-scale_nearest">
+          <option value="false" ${getPref("scale_nearest") !== "true" ? "selected" : ""}>Smooth (bilinear)</option>
+          <option value="true" ${getPref("scale_nearest") === "true" ? "selected" : ""}>Sharp (nearest-neighbor)</option>
+        </select>
+        <p class="ss-text-muted">Sharp gives crisp retro pixels; smooth blends edges when the window is larger than the guest resolution.</p>
+      </div>
+      <div class="form-group">
+        <label>Integer Scaling</label>
+        <select class="input" id="setting-scale_integer">
+          <option value="false" ${getPref("scale_integer") !== "true" ? "selected" : ""}>Off (stretch to fit)</option>
+          <option value="true" ${getPref("scale_integer") === "true" ? "selected" : ""}>On (pixel-perfect, may letterbox)</option>
+        </select>
+        <p class="ss-text-muted">Scales only to exact multiples (2×, 3×, ...) for perfectly uniform pixels. May add black bars if the window size isn't an exact multiple.</p>
       </div>`;
     })(),
     storage: (() => {
@@ -754,6 +779,18 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
         </select>
       </div>
       <div class="form-group">
+        <label>Hotkey Modifier</label>
+        <select class="input" id="setting-hotkey">
+          <option value="1" ${(getPref("hotkey") || "1") === "1" ? "selected" : ""}>Ctrl</option>
+          <option value="2" ${getPref("hotkey") === "2" ? "selected" : ""}>Opt</option>
+          <option value="4" ${getPref("hotkey") === "4" ? "selected" : ""}>Cmd</option>
+          <option value="3" ${getPref("hotkey") === "3" ? "selected" : ""}>Ctrl+Opt</option>
+          <option value="5" ${getPref("hotkey") === "5" ? "selected" : ""}>Ctrl+Cmd</option>
+          <option value="6" ${getPref("hotkey") === "6" ? "selected" : ""}>Opt+Cmd</option>
+        </select>
+        <p class="ss-text-muted">The modifier key(s) used with F5 (release mouse), Return (fullscreen), and Esc (force quit). Opt+Cmd is a good Mac-native choice.</p>
+      </div>
+      <div class="form-group">
         <label>Use Raw Keycodes</label>
         <select class="input" id="setting-keycodes">
           <option value="false" ${getPref("keycodes") !== "true" ? "selected" : ""}>No (use keysyms)</option>
@@ -818,6 +855,14 @@ function renderSettingsSectionContent(vm: VmProfile, isRunning: boolean, section
               <option value="false" ${getPref("jit") === "false" ? "selected" : ""}>Disabled (interpreter)</option>
             </select>
             <p class="ss-text-muted">The AArch64 JIT compiles PowerPC code to native ARM64 for ~2x performance. Disable to fall back to the slower interpreter for debugging.</p>
+          </div>
+          <div class="form-group">
+            <label>AltiVec (Vector Unit) ${isRunning ? '<span class="hot-reload-badge restart">Requires restart</span>' : ""}</label>
+            <select class="input" id="setting-altivec" ${isRunning ? "disabled" : ""}>
+              <option value="false" ${getPref("altivec") !== "true" ? "selected" : ""}>Disabled (default)</option>
+              <option value="true" ${getPref("altivec") === "true" ? "selected" : ""}>Enabled</option>
+            </select>
+            <p class="ss-text-muted">Advertises AltiVec (G4 vector unit) to the guest OS so apps use their SIMD code paths. The JIT compiles AltiVec instructions to ARM64 NEON. Safe for single-app vector use; may cause issues with preemptive multitasking of vector code. Requires Mac OS 9 for most apps.</p>
           </div>
           <div class="form-group">
             <label>68K DR Emulator</label>
@@ -1074,7 +1119,10 @@ function bindEvents() {
         "setting-mousewheelmode": ["mousewheelmode", (v) => v],
         "setting-mousewheellines": ["mousewheellines", (v) => v],
         "setting-swap_opt_cmd": ["swap_opt_cmd", (v) => v],
+        "setting-hotkey": ["hotkey", (v) => v],
         "setting-keycodes": ["keycodes", (v) => v],
+        "setting-scale_nearest": ["scale_nearest", (v) => v],
+        "setting-scale_integer": ["scale_integer", (v) => v],
         "setting-nosound": ["nosound", (v) => v],
         "setting-ether": ["ether", (v) => v],
         "setting-vncserver": ["vncserver", (v) => v],
@@ -1086,6 +1134,7 @@ function bindEvents() {
         "setting-ignoreillegal": ["ignoreillegal", (v) => v],
         "setting-idlewait": ["idlewait", (v) => v],
         "setting-jit": ["jit", (v) => v],
+        "setting-altivec": ["altivec", (v) => v],
         "setting-jit68k": ["jit68k", (v) => v],
         "setting-noclipconversion": ["noclipconversion", (v) => v],
         "setting-hardcursor": ["hardcursor", (v) => v],
@@ -1290,6 +1339,17 @@ async function handleAction(e: Event) {
 
     case "show-help":
       showToast("Resources: infinitemac.org · macintoshgarden.org · emaculation.com · 68kmla.org", "info", 10000);
+      break;
+
+    case "clear-quarantine":
+      try {
+        const msg = await invoke("clear_quarantine") as string;
+        quarantineDetected = false;
+        showToast(msg, "success");
+        render();
+      } catch (err) {
+        showToast(`Failed: ${err}`, "error");
+      }
       break;
 
     case "import-prefs": {
@@ -1521,6 +1581,7 @@ async function handleAction(e: Event) {
           runningVmIds.add(id);
           vmLaunchTimestamps.set(id, Date.now());
           showToast("VM started. Click inside the classic desktop to capture the mouse. Ctrl-F5 to release.", "info", 8000);
+          showFullscreenOverlay();
           render();
         } catch (err) {
           showToast(`Failed to launch: ${err}`, "error");
@@ -1669,17 +1730,9 @@ async function handleAction(e: Event) {
     case "view-logs":
       if (selectedVmId) {
         try {
-          const logs = (await invoke("list_vm_logs", { id: selectedVmId })) as string[];
-          if (logs.length === 0) {
-            showToast("No run logs yet — start the VM first", "info");
-          } else {
-            const latest = logs[0];
-            const content = (await invoke("read_vm_log", { id: selectedVmId, logName: latest })) as string;
-            const lines = content.split("\n").slice(-50).join("\n");
-            alert(`Last 50 lines of ${latest}:\n\n${lines}`);
-          }
+          await invoke("open_vm_logs_folder", { id: selectedVmId });
         } catch (err) {
-          showToast(`Failed to read logs: ${err}`, "error");
+          showToast(`Failed to open logs folder: ${err}`, "error");
         }
       }
       break;
@@ -1713,6 +1766,7 @@ async function handleAction(e: Event) {
 
 // Error banner state
 let errorBanner: string | null = null;
+let quarantineDetected = false;
 
 // Toast notifications
 let toasts: { id: number; message: string; type: "info" | "success" | "error" }[] = [];
@@ -1738,6 +1792,40 @@ function renderToasts() {
   container.innerHTML = toasts
     .map((t) => `<div class="toast toast-${t.type}">${escapeHtml(t.message)}</div>`)
     .join("");
+}
+
+function showFullscreenOverlay() {
+  // Build modifier string from the hotkey pref (bitmask: 1=Ctrl, 2=Opt, 4=Cmd)
+  const hotkey = parseInt(getPref("hotkey") || "1") || 1;
+  const mods: string[] = [];
+  if (hotkey & 1) mods.push("Ctrl");
+  if (hotkey & 2) mods.push("Opt");
+  if (hotkey & 4) mods.push("Cmd");
+  const grabKey = mods.join("+") + "+F5";
+  const fullscreenKey = mods.join("+") + "+Return";
+  const kbdStyle = "background:#555; padding:1px 6px; border-radius:3px;";
+
+  let overlay = document.getElementById("fullscreen-overlay");
+  if (overlay) overlay.remove();
+  overlay = document.createElement("div");
+  overlay.id = "fullscreen-overlay";
+  overlay.innerHTML = `
+    <div style="position:fixed; top:0; left:0; right:0; bottom:0; z-index:9999;
+                background: rgba(0,0,0,0.7); display:flex; align-items:center;
+                justify-content:center; pointer-events:none; transition: opacity 1s;">
+      <div style="text-align:center; color:#fff; font-size:16px; font-family: -apple-system, sans-serif;">
+        <div style="font-size:32px; margin-bottom:12px;">🖥</div>
+        <div style="font-weight:600; margin-bottom:6px;">VM is starting</div>
+        <div style="color:#ccc; font-size:13px;">Press <kbd style="${kbdStyle}">${escapeHtml(grabKey)}</kbd> to release mouse</div>
+        <div style="color:#999; font-size:12px; margin-top:4px;">Press <kbd style="${kbdStyle}">${escapeHtml(fullscreenKey)}</kbd> to toggle fullscreen</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => {
+    const inner = overlay?.firstElementChild as HTMLElement;
+    if (inner) inner.style.opacity = "0";
+  }, 3000);
+  setTimeout(() => overlay?.remove(), 4000);
 }
 
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -1792,6 +1880,7 @@ function renderInspectorWindow(vmId: string) {
           <button class="inspector-toolbar__tab" data-panel="memory">Memory</button>
           <button class="inspector-toolbar__tab" data-panel="hotblocks">Hot Blocks</button>
           <button class="inspector-toolbar__tab" data-panel="analysis">Analysis</button>
+          <button class="inspector-toolbar__tab" data-panel="compare">Compare</button>
           <button class="inspector-toolbar__tab" data-panel="debug">Debug</button>
         </div>
         <div style="flex:1"></div>
@@ -1888,6 +1977,7 @@ function renderInspectorWindow(vmId: string) {
             <div id="insp-timing" style="margin-top: 8px;">
               <p class="ss-text-muted">Click "Refresh" after a profiled run.</p>
             </div>
+            <div id="insp-flame" style="margin-top: 16px;"></div>
           </div>
           <div class="inspector-section">
             <h3 class="inspector-heading">Interpreter Fallbacks</h3>
@@ -1910,6 +2000,21 @@ function renderInspectorWindow(vmId: string) {
             <p class="ss-text-muted" style="margin-bottom: 8px;">Execution density by 64K address region — ROM vs RAM vs DR emulator.</p>
             <button class="btn btn-secondary btn-sm" id="insp-refresh-heatmap">↻ Refresh</button>
             <div id="insp-heatmap" style="margin-top: 8px;"><p class="ss-text-muted">Click "Refresh" after a profiled run.</p></div>
+          </div>
+        </div>
+        <div class="inspector-panel" id="panel-compare" style="display:none">
+          <div class="inspector-section">
+            <h3 class="inspector-heading">Session Comparison</h3>
+            <p class="ss-text-muted" style="margin-bottom: 8px;">Load two .sheepshaver-profile files to compare before/after a change.</p>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <button class="btn btn-secondary btn-sm" id="insp-compare-a">Load Baseline (A)</button>
+              <span id="insp-compare-a-label" class="ss-text-muted" style="line-height: 28px;">—</span>
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <button class="btn btn-secondary btn-sm" id="insp-compare-b">Load Changed (B)</button>
+              <span id="insp-compare-b-label" class="ss-text-muted" style="line-height: 28px;">—</span>
+            </div>
+            <div id="insp-compare-result"></div>
           </div>
         </div>
         <div class="inspector-panel" id="panel-debug" style="display:none">
@@ -2244,6 +2349,112 @@ function renderInspectorWindow(vmId: string) {
     }
   });
 
+  // Session comparison
+  let compareA: ProfileSession | null = null;
+  let compareB: ProfileSession | null = null;
+
+  const loadSessionFile = async (label: string): Promise<ProfileSession | null> => {
+    const path = await pickFile(`Select ${label} .sheepshaver-profile`, [
+      { name: "Profile Sessions", extensions: ["sheepshaver-profile", "json"] }
+    ]);
+    if (!path) return null;
+    try {
+      const content = await invoke("read_file_contents", { path }) as string;
+      return JSON.parse(content) as ProfileSession;
+    } catch (err) {
+      showToast(`Failed to load: ${err}`, "error");
+      return null;
+    }
+  };
+
+  const renderComparison = () => {
+    const el = document.getElementById("insp-compare-result");
+    if (!el || !compareA || !compareB) return;
+
+    const durA = ((compareA.endTime - compareA.startTime) / 1000).toFixed(1);
+    const durB = ((compareB.endTime - compareB.startTime) / 1000).toFixed(1);
+
+    // Compare average stats
+    const avgStat = (session: ProfileSession, key: string): string => {
+      const vals = session.statsSnapshots.map(s => (s.stats as any)[key] || "").filter(Boolean);
+      return vals.length > 0 ? vals[vals.length - 1] : "—";
+    };
+
+    const statKeys = ["blocks", "rate", "compiled", "j2i", "cpu", "rss"];
+    const rows = statKeys.map(key => {
+      const a = avgStat(compareA!, key);
+      const b = avgStat(compareB!, key);
+      return `<tr style="border-top: 1px solid var(--ss-border);">
+        <td style="padding: 2px 8px; font-weight: 600;">${key}</td>
+        <td style="padding: 2px 8px; text-align: center;">${escapeHtml(a)}</td>
+        <td style="padding: 2px 8px; text-align: center;">${escapeHtml(b)}</td>
+      </tr>`;
+    }).join("");
+
+    el.innerHTML = `
+      <table style="width:100%; font-size: 11px; border-collapse: collapse; margin-bottom: 16px;">
+        <tr style="color: var(--ss-text-muted);">
+          <th style="text-align:left; padding: 2px 8px;">Metric</th>
+          <th style="text-align:center;">A (baseline)</th>
+          <th style="text-align:center;">B (changed)</th>
+        </tr>
+        <tr style="border-top: 1px solid var(--ss-border);">
+          <td style="padding: 2px 8px; font-weight: 600;">Duration</td>
+          <td style="padding: 2px 8px; text-align: center;">${durA}s</td>
+          <td style="padding: 2px 8px; text-align: center;">${durB}s</td>
+        </tr>
+        <tr style="border-top: 1px solid var(--ss-border);">
+          <td style="padding: 2px 8px; font-weight: 600;">Events</td>
+          <td style="padding: 2px 8px; text-align: center;">${compareA.events.length}</td>
+          <td style="padding: 2px 8px; text-align: center;">${compareB.events.length}</td>
+        </tr>
+        <tr style="border-top: 1px solid var(--ss-border);">
+          <td style="padding: 2px 8px; font-weight: 600;">Snapshots</td>
+          <td style="padding: 2px 8px; text-align: center;">${compareA.statsSnapshots.length}</td>
+          <td style="padding: 2px 8px; text-align: center;">${compareB.statsSnapshots.length}</td>
+        </tr>
+        ${rows}
+      </table>
+      <h4 style="font-size: 12px; margin-bottom: 8px;">Rate Over Time</h4>
+      <div style="display: flex; gap: 16px;">
+        <div style="flex:1;">
+          <div class="ss-text-muted" style="font-size: 10px; margin-bottom: 4px;">A (baseline)</div>
+          <div class="sparkline-chart" style="height: 30px;">
+            ${compareA.statsSnapshots.map(s => {
+              const r = parseFloat(s.stats.rate) || 0;
+              const h = Math.max(1, Math.round((r / 2) * 30));
+              return `<div class="sparkline-bar" style="height:${h}px;width:4px;" title="${r.toFixed(1)}M/s"></div>`;
+            }).join("")}
+          </div>
+        </div>
+        <div style="flex:1;">
+          <div class="ss-text-muted" style="font-size: 10px; margin-bottom: 4px;">B (changed)</div>
+          <div class="sparkline-chart" style="height: 30px;">
+            ${compareB.statsSnapshots.map(s => {
+              const r = parseFloat(s.stats.rate) || 0;
+              const h = Math.max(1, Math.round((r / 2) * 30));
+              return `<div class="sparkline-bar" style="height:${h}px;width:4px;background:var(--ss-success);" title="${r.toFixed(1)}M/s"></div>`;
+            }).join("")}
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  document.getElementById("insp-compare-a")?.addEventListener("click", async () => {
+    compareA = await loadSessionFile("Baseline (A)");
+    const label = document.getElementById("insp-compare-a-label");
+    if (label) label.textContent = compareA ? `${compareA.vmName} (${((compareA.endTime - compareA.startTime)/1000).toFixed(0)}s)` : "—";
+    if (compareA && compareB) renderComparison();
+  });
+
+  document.getElementById("insp-compare-b")?.addEventListener("click", async () => {
+    compareB = await loadSessionFile("Changed (B)");
+    const label = document.getElementById("insp-compare-b-label");
+    if (label) label.textContent = compareB ? `${compareB.vmName} (${((compareB.endTime - compareB.startTime)/1000).toFixed(0)}s)` : "—";
+    if (compareA && compareB) renderComparison();
+  });
+
   // Instruction mix
   document.getElementById("insp-refresh-opcmix")?.addEventListener("click", async () => {
     const result = await rpcCall(() => invoke("rpc_get_opcode_mix", { id: vmId }) as Promise<string>, "Opcode mix");
@@ -2389,6 +2600,42 @@ function renderInspectorWindow(vmId: string) {
           }
         });
       });
+
+      // Flame chart visualization
+      const flameEl = document.getElementById("insp-flame");
+      if (flameEl && blocks.length > 0) {
+        const chartW = 600;
+        const rowH = 18;
+        const labelW = 80;
+        const barArea = chartW - labelW - 4;
+        const maxPct = Math.max(...blocks.map((b: any) => b.pct || 0));
+        const rows = blocks.slice(0, 40); // top 40 hottest blocks
+        const chartH = rows.length * rowH + 30;
+
+        const bars = rows.map((b: any, i: number) => {
+          const w = Math.max(2, Math.round((b.pct / maxPct) * barArea));
+          const y = i * rowH;
+          const timeMs = ((b.timeNs || 0) / 1e6).toFixed(1);
+          const hue = Math.max(0, 60 - (b.pct / maxPct) * 60); // red=hot, yellow=warm
+          return `<g>
+            <text x="0" y="${y + 13}" fill="var(--ss-text-muted)" font-size="9" font-family="'SF Mono',Menlo,monospace">${escapeHtml(b.pc)}</text>
+            <rect x="${labelW}" y="${y + 2}" width="${w}" height="${rowH - 4}" rx="2"
+                  fill="hsl(${hue}, 85%, 50%)" opacity="0.85">
+              <title>${escapeHtml(b.pc)}: ${timeMs}ms (${b.pct?.toFixed(1)}%), ${b.count?.toLocaleString()} calls, avg ${b.avgNs?.toFixed(0)}ns</title>
+            </rect>
+            ${w > 50 ? `<text x="${labelW + 4}" y="${y + 13}" fill="#fff" font-size="8" font-family="'SF Mono',Menlo,monospace">${timeMs}ms</text>` : ""}
+          </g>`;
+        }).join("");
+
+        flameEl.innerHTML = `
+          <h4 style="font-size: 12px; margin-bottom: 8px;">Flame Chart — Top ${rows.length} Blocks by Time</h4>
+          <div style="overflow-x: auto;">
+            <svg width="${chartW}" height="${chartH}" xmlns="http://www.w3.org/2000/svg">
+              ${bars}
+            </svg>
+          </div>
+        `;
+      }
     } catch {
       el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
     }
@@ -2862,6 +3109,8 @@ async function init() {
     const status = (await invoke("check_emulator_status")) as { found: boolean; path: string };
     if (!status.found) {
       errorBanner = "SheepShaver binary not found. Build it first: cd SheepShaver && make build-ss";
+    } else {
+      quarantineDetected = await invoke("check_quarantine") as boolean;
     }
   } catch {
     // Not fatal — may be running in browser preview

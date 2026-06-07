@@ -187,9 +187,11 @@ Pure launcher/wrapper work. SheepShaver binary is a sidecar child process; Tauri
 
 - [ ] **Auto-restart on pref change**: Write prefs, SIGTERM child, relaunch. Eliminates the
   manual quit/relaunch cycle for non-hot-reloadable settings.
-- [ ] **Fullscreen escape overlay**: Hover-reveal bar at top edge.
+- [x] **Fullscreen escape overlay**: 3-second fade overlay on VM launch showing mouse-release
+  (Ctrl-F5) and fullscreen-exit (Esc) shortcuts.
 - [x] **Dark mode**: CSS `prefers-color-scheme`.
-- [ ] **Gatekeeper mitigation**: `xattr -cr` button.
+- [x] **Gatekeeper mitigation**: startup quarantine check + amber warning banner with one-click
+  "Clear Quarantine" button (`xattr -cr`). Banner disappears after clearing.
 - [x] **Disk backup ("snapshots")**: Available only when VM is stopped. Copies `.dsk` with
   timestamp suffix. Restore = swap file back. Labelled honestly as "Disk Backup", not
   "snapshot" (no saved CPU/RAM state). Uses APFS `clonefile` when possible (instant).
@@ -711,20 +713,20 @@ occurred, what was slow. This is the JIT equivalent of a flame chart.
 **Tier P2 — Per-block profiling (needs B1, the execution-weighted profiler):**
 - [x] **Hot block table** — sorted by execution count. Shows PPC address, instruction count,
   native code size, hit count. Source: B1 profiler data via C2.0 RPC.
-- [ ] **Heat map** — visual representation of ROM/RAM regions by execution density.
-  Color-coded: red = hot, blue = cold. Click a region to see its blocks.
-- [ ] **Instruction mix** — breakdown of which PPC opcodes are executing most. Pie chart or
-  ranked list. Identifies optimization targets.
+- [x] **Heat map** — visual representation of ROM/RAM regions by execution density.
+  Bar chart with labeled regions (ROM/RAM/DR), execution counts, and percentage bars.
+- [x] **Instruction mix** — breakdown of which PPC opcodes are executing most. Ranked list
+  with execution counts, percentages, and bars. Identifies optimization targets.
 
 **Tier P3 — Flame chart (needs block-level timing):**
 - [x] **Block-level timing** — measure wall-clock time per JIT block execution. Needs
   `mach_absolute_time()` instrumentation in the dispatch loop (very low overhead with the
   rdtsc approach, but still a cost — guarded by recording mode only).
-- [ ] **Flame chart** — Chrome DevTools-style visualization. Each row = a JIT block, width =
-  time spent. Stack depth shows call chains (bl/blr). Interactive: hover for detail, click
-  to see disassembly.
-- [ ] **Comparison** — record two sessions (before/after a change), overlay the flame charts
-  to see what got faster/slower.
+- [x] **Flame chart** — SVG visualization below Block Timing table. Each row = a JIT block,
+  width = time spent, color-coded red→yellow by hotness. Hover for detail (time, count, avg).
+  Top 40 blocks rendered.
+- [x] **Comparison** — load two .sheepshaver-profile files side by side. Shows duration,
+  event count, snapshot count, per-metric diff, and dual sparkline rate-over-time charts.
 
 ### Data paths
 

@@ -50,12 +50,26 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
   `1<<gestaltPowerPCHasVectorInstructions`), yielding a self-consistent wrong "FC ignores gestalt"
   conclusion until a research agent checked Apple's `Gestalt.h`. Lesson: a bit-number constant is `1<<N`.
 
+### [SiliconSheep] UX polish — Gatekeeper quarantine button + fullscreen escape overlay
+
+- **Gatekeeper mitigation**: on startup, checks SheepShaver binary for `com.apple.quarantine`
+  xattr. Shows amber warning banner with one-click "Clear Quarantine" button (`xattr -cr`).
+- **Fullscreen escape overlay**: 3-second fading HUD on VM launch showing Ctrl-F5 (release
+  mouse) and Esc (exit fullscreen) shortcuts.
+
 ### [SheepShaver] B1 execution profiler + fallback trace + P3 block timing
 
 - **B1 profiler**: per-block execution counter (`SS_JIT_PROFILE=1`). Hot Blocks panel.
 - **Fallback trace**: per-PC interpreter fallback counts with opcode ID. Fallbacks panel.
-- **P3 block timing**: wall-clock per-block via `mach_absolute_time()`. Block Timing panel.
-- All via C2.0 RPC (methods 18-20). Zero overhead when profiler is off.
+- **P3 block timing**: wall-clock per-block via `mach_absolute_time()`. Block Timing panel
+  with flame chart SVG visualization (top 40 blocks, red→yellow heat scale).
+- **Instruction mix**: per-opcode execution breakdown via `RPC_METHOD_GET_OPCODE_MIX` (21).
+  Ranked table with execution counts, percentages, and bars.
+- **Region heat map**: execution density by 64K address region via `RPC_METHOD_GET_HEATMAP`
+  (22). Bar chart with ROM/RAM/DR labels.
+- **Session comparison**: load two `.sheepshaver-profile` files for side-by-side diff.
+  Duration, event count, per-metric table, and dual sparkline rate-over-time charts.
+- All via C2.0 RPC (methods 18-22). Zero overhead when profiler is off.
 
 ### [docs] SiliconSheep Inspector — Tier 2 machine state + P1 session recording
 

@@ -553,7 +553,7 @@ fn generate_bug_report(id: String, ui_screenshot_b64: Option<String>, state: Sta
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let report_dir = std::env::temp_dir().join(format!("siliconsheep-report-{}", ts));
+    let report_dir = vm_dir.join(format!("bug-report-{}", ts));
     std::fs::create_dir_all(&report_dir).map_err(|e| e.to_string())?;
 
     // 1. VM profile (sanitized — remove absolute paths for privacy)
@@ -613,7 +613,7 @@ fn generate_bug_report(id: String, ui_screenshot_b64: Option<String>, state: Sta
     std::fs::write(report_dir.join("environment.txt"), &env_info).ok();
 
     // 8. Create zip
-    let zip_path = std::env::temp_dir().join(format!("siliconsheep-report-{}.zip", ts));
+    let zip_path = vm_dir.join(format!("bug-report-{}.zip", ts));
     let zip_file = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(zip_file);
     let options = zip::write::SimpleFileOptions::default();
@@ -859,6 +859,47 @@ struct EmulatorStatus {
 }
 
 #[tauri::command]
+fn clear_quarantine() -> Result<String, String> {
+    let emu = find_emulator_binary()
+        .ok_or("SheepShaver binary not found")?;
+    let output = std::process::Command::new("xattr")
+        .args(["-cr", &emu])
+        .output()
+        .map_err(|e| format!("Failed to run xattr: {}", e))?;
+    if output.status.success() {
+        Ok(format!("Cleared quarantine on {}", emu))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("xattr failed: {}", stderr))
+    }
+}
+
+#[tauri::command]
+fn check_quarantine() -> Result<bool, String> {
+    let emu = match find_emulator_binary() {
+        Some(p) => p,
+        None => return Ok(false),
+    };
+    let output = std::process::Command::new("xattr")
+        .arg(&emu)
+        .output()
+        .map_err(|e| format!("xattr check failed: {}", e))?;
+    let attrs = String::from_utf8_lossy(&output.stdout);
+    Ok(attrs.contains("com.apple.quarantine"))
+}
+
+#[tauri::command]
+fn open_vm_logs_folder(id: String) -> Result<(), String> {
+    let logs_dir = vm::vm_dir_for(&id).join("logs");
+    std::fs::create_dir_all(&logs_dir).ok();
+    std::process::Command::new("open")
+        .arg(&logs_dir)
+        .spawn()
+        .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn reveal_vm_in_finder(id: String) -> Result<(), String> {
     let vm_dir = vm::vm_dir_for(&id);
     if !vm_dir.exists() {
@@ -922,8 +963,11 @@ fn main() {
             capture_vm_screenshot,
             list_vm_logs,
             read_vm_log,
+            open_vm_logs_folder,
             reveal_vm_in_finder,
             backup_vm_disk,
+            clear_quarantine,
+            check_quarantine,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SiliconSheep");

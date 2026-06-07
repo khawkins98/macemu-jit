@@ -5,10 +5,19 @@
 `fctiw`, and the still-open pack/pixel/sum families. The reusable sweep tool is
 `SheepShaver/tools/jit-diff-sweep.py`.)*
 
-**Status:** 27 codegen bugs found + fixed this session (26 AltiVec + 1 FP), each oracle-validated
-against the **real emulator** interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`); the pack/pixel/
-sum families + the `fctiw`/`fctid` non-default-RN gap remain (designs below). Found via the
-test-jit/`SS_TEST_HEX` hunt, ROADMAP A1 "AltiVec/FP operand coverage".
+**Status:** 27 codegen bugs found + fixed 2026-06-06 (26 AltiVec + 1 FP); **2026-06-07 closed the
+entire ev_mixed multiply/pack family** — all 7 packs (saturating `vpk{sh,uh,sw,uw}{ss,us}` +
+modulo `vpkuwum`) and all even/odd multiplies (byte + halfword `vmul{o,e}{u,s}h`). Each
+oracle-validated against the **real emulator** interpreter (`SS_TEST_HEX … SS_TEST_JIT=0` vs `=1`).
+**Remaining open** are *new derivations*, not pattern-extensions: **pixel** `vpkpx`/`vupk{h,l}px`
+(1-5-5-5 bit-field expand) + **sum-across** `vsum*` (horizontal reduce + saturate), plus the
+`fctiw`/`fctid` non-default-RN gap. The reusable ev_mixed normalize rules are in LEARNINGS
+(2026-06-07) — use them for the remaining families.
+
+> **Gate-coverage note (2026-06-07):** the committed regression vectors are **one operand set per
+> op** (saturation/signedness-crossing). For deterministic permute+narrow+widen ops that is strong;
+> a 2026-06-07 adversarial subagent additionally swept **27 operand sets** across the 6 saturating
+> packs and found zero divergence. A future session expanding coverage knows the gate's depth here.
 
 > **✅ ALL FIXED 2026-06-06** (`ppc-jit.cpp` case 4/68/132 rotates, 260/324/388 left, 516/580/644
 > logical-right, 772/836/900 arith-right). The whole 12-op family:

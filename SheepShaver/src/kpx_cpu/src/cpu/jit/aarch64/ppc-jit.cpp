@@ -1038,16 +1038,16 @@ static void emit_load_ea_base(int ra_num) {
  *           the variable shift/rotate, saturating add/sub, and signed-average
  *           families (2026-06-06 sweep — 26 ops). Quarantine lane now empty.
  *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops;
- *           the saturating packs vpk{sh,uh}{ss,us}/vpk{sw,uw}{ss,us} (emit_vpk_h2b /
- *           emit_vpk_w2h, 2026-06-07 — 6 ops, 6 committed vectors with saturation-crossing
- *           operands; the earlier "UQXTN" 0x2E212800 was actually SQXTUN, now fixed).
- *   STILL BROKEN / remaining (all ev_mixed + 2-source; ROADMAP A2, full worklist in
- *           docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md):
- *           - vpkuwum (case 78) ignores vA (modulo word pack);
- *           - pixel vpkpx/vupkhpx/vupklpx + sum-across vsumsws/vsum2sws/vsum4sbs;
- *           - HALFWORD multiplies vmul{o,e}{u,s}h (72/328/584/840);
- *           - no committed test vectors yet for the *signed* (vmulosb/vmulesb) and
- *             halfword multiplies — emitted prospectively.
+ *           ALL packs — saturating vpk{sh,uh}{ss,us}/vpk{sw,uw}{ss,us} (emit_vpk_h2b/
+ *           emit_vpk_w2h) + modulo vpkuwum (case 78, emit_vpk_w2h+XTN); ALL even/odd
+ *           multiplies — byte vmul{o,e}{u,s}b (emit_vmul_byte) + halfword vmul{o,e}{u,s}h
+ *           (72/328/584/840, emit_vmul_hword). 2026-06-07: 11 ops, all with committed
+ *           saturation/signedness-crossing vectors. (The earlier "UQXTN" 0x2E212800 was
+ *           actually SQXTUN, and the unsigned halfword-mult 0x0E60A000 was not UMULL — fixed.)
+ *   STILL BROKEN / remaining (all ev_mixed + new derivations, NOT pattern-extensions of the
+ *           above; ROADMAP A2, full worklist in docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md):
+ *           - pixel vpkpx/vupkhpx/vupklpx (1-5-5-5 bit-field expand, not a narrow);
+ *           - sum-across vsumsws/vsum2sws/vsum4sbs (horizontal reduce + saturate).
  *
  * FIX APPROACH — (B) per-op ev_mixed-aware codegen is the CHOSEN + SHIPPED one
  * (the splat remap, emit_vmrg, emit_vmul_byte all follow it). **(A) REJECTED — do
@@ -3788,10 +3788,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		 * BYTE variants (8/264/520/776) use emit_vmul_byte (ev_mixed even/odd select +
 		 * widening + REV32.8H output). FIXED + tested: vmuloub/vmuleub. vmulosb/vmulesb
 		 * use the same helper (SMULL) but lack a signed test vector — prospective.
-		 * HALFWORD variants (72/328/584/840) are STILL BROKEN: they neither widen-select
-		 * correctly nor apply the ev_mixed halfword-element selection; a correct fix needs
-		 * the hw->word analogue (UZP on .8H + [SU]MULL.4S; word_element is identity so no
-		 * output rev). Untested/unvectored — ROADMAP A2. Left as-is (no worse than before). */
+		 * HALFWORD variants (72/328/584/840) FIXED 2026-06-07 via emit_vmul_hword (the hw->word
+		 * analogue: REV32.8H normalize + UZP on .8H + [SU]MULL.4S; word output needs no rev).
+		 * All 4 tested with signedness-crossing vectors (av_vmul{o,e}{u,s}h). */
 		case 8:   emit_vmul_byte(va, vb, vd, true,  0x2E20C000); return true; /* vmuloub: odd  unsigned byte, UMULL.8H */
 		case 520: emit_vmul_byte(va, vb, vd, false, 0x2E20C000); return true; /* vmuleub: even unsigned byte, UMULL.8H */
 		case 264: emit_vmul_byte(va, vb, vd, true,  0x0E20C000); return true; /* vmulosb: odd  signed byte, SMULL.8H (prospective: no signed test vector) */

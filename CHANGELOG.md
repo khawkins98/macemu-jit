@@ -11,6 +11,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] AltiVec halfword multiplies + vpkuwum fixed (ev_mixed multiply/pack family complete)
+
+- `vmul{o,e}{u,s}h` (even/odd halfword multiplies, 72/328/584/840): were broken (no ev_mixed
+  even/odd select; unsigned encoding `0x0E60A000` isn't UMULL). Fixed via `emit_vmul_hword` — the
+  halfword analog of the working `emit_vmul_byte`: REV32.8H normalize → UZP1/2.8H even/odd select →
+  `[SU]MULL.4S` widen (16×16→32) → word output. 4 vectors with high-bit halfwords (signed≠unsigned).
+- `vpkuwum` (word→halfword modulo pack, case 78): ignored vA; routed through `emit_vpk_w2h` with
+  truncating `XTN`/`XTN2`. 1 vector.
+- With these, the entire **ev_mixed multiply/pack family is complete** (7 packs + 4 byte mults + 4
+  halfword mults). `make test-jit` **329/329**. Remaining open AltiVec are *new derivations* (not
+  pattern-extensions): pixel `vpkpx`/`vupk{h,l}px` (1-5-5-5 bit-field) + sum-across.
+
 ### [SheepShaver] AltiVec saturating packs fixed — all 6 (vpk{sh,uh,sw,uw}{ss,us})
 
 - The six saturating pack ops were broken (single-source narrow ignoring vB, no ev_mixed

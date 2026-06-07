@@ -248,6 +248,41 @@ written.
 > the first `OP_IDLE_TIME` (reuse the `[BOOT]` idle marker). Pattern: mirror `g_compiled_mix`
 > (`ppc-jit.cpp`) / the `SS_LOG_PPCF` env gate — zero cost when off, dump on clean exit.
 
+## MMU feasibility — RECONCILED verdict (2026-06-07, generative + adversarial agents)
+
+Two opposed agents revisited "can we *really* not emulate the MMU?" Full memos:
+[`sheepshaver-research/MMU-WITHOUT-GUTTING-FLATMEM.md`](sheepshaver-research/MMU-WITHOUT-GUTTING-FLATMEM.md)
+(generative) and [`MMU-DEFERRAL-REDTEAM.md`](MMU-DEFERRAL-REDTEAM.md) (adversarial). Reconciled:
+
+- **CAN we emulate the MMU without gutting the flat model? Conditionally YES.** The viable design is
+  **shadow-arena / "Dynamic BAT"** (Dolphin runs this on Apple Silicon): rebuild the host NATMEM arena
+  mapping at the *rare* guest map-change (`mtspr` BAT/SDR1/SR), while the per-access codegen stays
+  bit-identical (`LDR/STR [RMEMBASE, UXTW(ea)]`, zero translation cost on the hot path). This is NOT the
+  per-access **softmmu** the original verdict feared (that remains the anti-pattern). The c4 `vm_remap`
+  failure does **not** disqualify it — that was an *execute*-path blocker; a shadow arena is **data-only
+  (RW)** and under EMULATED_PPC the JIT never branches into guest RAM.
+- **The single hinge = host 16 KB vs PPC 4 KB page granularity** (verified `getconf PAGESIZE`=16384).
+  Shadow-arena works only if Mac OS 9.x maps memory at COARSE (BAT/≥16 KB) granularity; if it does
+  fine 4 KB runtime paging in a hot path, you're forced into per-access softmmu (catastrophic). Both
+  agents land here. Current evidence (skipped BAT/SDR init, zero supervisor ops) *suggests* coarse, but
+  that's **inferred**.
+- **SHOULD we build it now? NO — "never, unless a specific trigger appears."** Neither agent found ANY
+  primary evidence that wanted 9.1/9.2 software needs non-identity translation in a hot path; the
+  "no MMU ⇒ no 9.1" line is folklore ("asserted everywhere, bisected nowhere"); QEMU/DingusPPC "proofs"
+  are confounds (they also differ on the ROM-patch axis). Hypervisor.framework is a confirmed dead end
+  (host-ISA only — can't host a software PPC guest). The trigger that would flip this: a post-ROM-
+  acceptance **9.2.2 boot that bisects to a translation-dependent DSI/ISI in a hot path** — untestable
+  until a NewWorld ROM loads, which is *why* ROM-first ordering is unconditionally correct.
+- **⚠️ Correction to the result below:** do NOT cite the `SS_STUB_TRACE` zero as positive proof the MMU
+  is unneeded — it is zero *partly by construction* (ROM-patching strips supervisor ops pre-runtime).
+  It proves "no runtime supervisor hot path on 9.0.4 as-patched," not "9.x will never need translation."
+
+**Cheap decisive next experiment (both agents converged on it; runs on TODAY's 9.0.4, no NewWorld ROM):**
+run `SS_STUB_TRACE=1` with the guest's **Virtual Memory ENABLED** (Memory control panel → restart) — the
+one runtime-translation trigger that exists on 9.0.4. **Zero** stub hits with VM on ⇒ coarse mapping ⇒
+shadow-arena stays 16 KB-safe and viable if ever needed. **Non-zero** ⇒ fine paging exists ⇒ the 16 KB
+hinge bites and softmmu risk is real. Either way it converts the central *inferred* assumption into data.
+
 ## Stub-pressure trace — RESULT (2026-06-07): zero runtime supervisor pressure on 9.0.4
 
 Implemented `SS_STUB_TRACE` (env-gated runtime counters in `ppc-execute.cpp`

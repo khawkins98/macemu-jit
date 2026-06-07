@@ -171,6 +171,17 @@ def _lw4(vT, words):
     for k,w in enumerate(words): out+=[lis(3,(w>>16)&0xFFFF), ori(3,w&0xFFFF), stw(3,OFF+k*4,1)]
     return out+[li(3,OFF), lvx(vT,1,3)]
 p("av_vpkpx", _lw4(1,[0xFFAABBCC,0x12345678,0x80FF00FF,0x00010203])+_lw4(3,[0xDEADBEEF,0xCAFEBABE,0x7FFFFFFF,0x01020304])+[vx(2,1,3,782)]+grab(), "vpkpx: pack 4+4 words -> 1-5-5-5 pixels")
+# vupkhpx/vupklpx FIXED 2026-06-07 (ppc-jit.cpp emit_vupkpx): expand 4 1-5-5-5 pixel halfwords
+# (high/low half of vB) -> 4 words: sign-bit->0xff000000 alpha + 5-5-5 field expand. 8 distinct
+# pixels mixing sign-bit set/clear so the alpha synthesis + half-select are non-vacuous. vupkhpx
+# takes halfwords 0-3, vupklpx takes 4-7 (so the two ops give different results). vD=v2, vB=v3.
+def _lh8(vT, hws):
+    out=[]
+    for k in range(0,8,2): out+=[lis(3,hws[k]&0xFFFF), ori(3,hws[k+1]&0xFFFF), stw(3,OFF+k*2,1)]
+    return out+[li(3,OFF), lvx(vT,1,3)]
+_PX8=[0x8421,0x7FFF,0x0000,0xFFFF, 0x83E0,0x041F,0xFC00,0x1234]
+p("av_vupkhpx", _lh8(3,_PX8)+[vx(2,0,3,846)]+grab(), "vupkhpx: unpack high 4 pixels -> words (sign-bit alpha + 5-5-5)")
+p("av_vupklpx", _lh8(3,_PX8)+[vx(2,0,3,974)]+grab(), "vupklpx: unpack low 4 pixels -> words")
 # --- variable byte shifts: FIXED 2026-06-06 (ppc-jit.cpp case 260/516/772). Were
 # emitting unmasked, signed, rounding NEON shifts; vsrb shifted the wrong direction.
 # data=0x80..0x8F (high bit -> logical vs arith fill), amounts=0x00..0x0F (>=8 -> mask mod 8). ---

@@ -1181,6 +1181,33 @@ static void emit_vpkpx(int va, int vb, int vd)
 	emit_store_vr(2, vd);
 }
 
+/* AltiVec vupkhpx/vupklpx — unpack 4 1-5-5-5 pixel halfwords (high or low half of vB) to 4 words.
+ * Per halfword h, the interpreter (execute_vector_unpack_pixel) builds the word as
+ *   ((h&0x8000)?0xff000000:0) | ((h&0x7c00)<<6) | ((h&0x03e0)<<3) | (h&0x001f)
+ * NEON: REV32.8H normalize vB to natural .8H, UXTL (low/high half via `low`) the 4 selected
+ * halfwords to .4S, then extract+place the 3 colour fields with AND-mask + SHL and synthesize the
+ * sign-bit alpha by `SSHR((h&0x8000)<<16, 7)` (0x8000 -> bit31 -> arithmetic-shift fills
+ * 0xff000000; clear -> 0). Word output needs no store normalize (raw .4S = arch word).
+ * `low`=false -> vupkhpx (arch halfwords 0-3, UXTL low lanes); true -> vupklpx (4-7, UXTL2).
+ * All emit32 words capstone-verified; scratch v0-v7 (caller-saved). */
+static void emit_vupkpx(int vb, int vd, bool low)
+{
+	emit_load_vr(0, vb);
+	emit32(0x6E600800);                 /* REV32.8H v0,v0 -> natural halfword order */
+	emit32(low ? 0x6F10A400 : 0x2F10A400); /* UXTL2/UXTL v0.4s, v0.8h/4h -> 4 zero-ext halfwords */
+	/* masks: v4=0x8000, v5=0x1f, v6=0x7c00, v7=0x3e0 */
+	emit32(0x4F042404);                 /* MOVI v4.4s, #0x80, LSL #8  -> 0x8000 */
+	emit32(0x4F0007E5);                 /* MOVI v5.4s, #0x1f */
+	emit32(0x4F032786);                 /* MOVI v6.4s, #0x7c, LSL #8  -> 0x7c00 */
+	emit32(0x4F002467); emit32(0x4F071407); /* MOVI v7.4s,#3,LSL#8 ; ORR v7.4s,#0xe0 -> 0x3e0 */
+	emit32(0x4E261C01); emit32(0x4F265421);   /* AND v1,v0,v6 ; SHL v1.4s,#6  (R field) */
+	emit32(0x4E271C02); emit32(0x4F235442);   /* AND v2,v0,v7 ; SHL v2.4s,#3  (G field) */
+	emit32(0x4E251C03);                       /* AND v3,v0,v5                 (B field) */
+	emit32(0x4E241C00); emit32(0x4F305400); emit32(0x4F390400); /* AND v0,v0,v4 ; SHL #16 ; SSHR #7 (alpha) */
+	emit32(0x4EA11C00); emit32(0x4EA21C00); emit32(0x4EA31C00); /* ORR v0,v0,v1 ; v0|=v2 ; v0|=v3 */
+	emit_store_vr(0, vd);
+}
+
 /* AltiVec even/odd BYTE multiply (vmul{o,e}{u,s}b) -- ev_mixed-aware widening.
  * Two bugs the old codegen had: it emitted a non-widening MUL.8B (must widen 8x8->16),
  * and it ignored ev_mixed even/odd element selection. Fix, on REV32.16B-normalized
@@ -3800,8 +3827,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 332: emit_vmrg(va, vb, vd, 0x4E407800); return true; /* vmrglh ZIP2.8H  (ev_mixed-normalized) */
 		case 396: emit_load_vr(0,va); emit_load_vr(1,vb); emit32(0x4E807800|(1<<16)|(0<<5)|0); emit_store_vr(0,vd); return true; /* vmrglw ZIP2.4S (word_element identity: no rev) */
 
-		case 846: { emit_load_vr(0,vb); emit32(0x4E21C800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vcfsx SCVTF.4S */
-		case 910: { emit_load_vr(0,vb); emit32(0x6E21C800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vcfux UCVTF.4S */
+		/* NOTE (2026-06-07): the convert ops here were at WRONG XOs. vcfsx is 842 (not 846, which is
+		 * vupkhpx — the 846 entry was miscompiling vupkhpx as SCVTF, removed; 846 now dispatches
+		 * vupkhpx above) and vcfux is 778 (not 910, which isn't a real op — removed). Both vcfsx/vcfux
+		 * now fall to the interpreter; the plain [SU]CVTF.4S used here ignored their UIMM scale factor
+		 * anyway, so it was never correct. Proper scaled-convert at the right XOs is future work (A2). */
 		case 970: { emit_load_vr(0,vb); emit32(0x4EA1B800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vctsxs FCVTZS.4S */
 		case 906: { emit_load_vr(0,vb); emit32(0x6EA1B800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vctuxs FCVTZU.4S */
 		case 354: { emit_load_vr(0,vb); emit32(0x4E21D800|(0<<5)|0); emit_store_vr(0,vd); return true; } /* vexptefp FRECPE (approx) */
@@ -3864,10 +3894,11 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 1540: emit_load_imm32(RTMP0,0); emit32(0x4E010C00|(RTMP0<<5)|0); emit_store_vr(0,vd); return true; /* mfvscr - return 0 */
 		case 782: /* vpkpx — pack 4+4 words to 8 1-5-5-5 pixels (ev_mixed-aware, 2026-06-07) */
 			emit_vpkpx(va, vb, vd); return true;
-		/* vupkhpx=846 / vupklpx=974 (unpack pixel): the prior codegen was mislabeled (974 was
-		 * tagged "vupkhpx") and used a plain widen, which is NOT the 1-5-5-5 expand the interp
-		 * does. Fall back to the interpreter until the per-op expand is implemented (next pass).
-		 * The bogus case 1038 (not a real pixel XO) is removed -> also interp. */
+		case 846: /* vupkhpx — unpack high 4 pixels (1-5-5-5 expand, 2026-06-07) */
+			emit_vupkpx(vb, vd, false); return true;
+		case 974: /* vupklpx — unpack low 4 pixels (1-5-5-5 expand, 2026-06-07) */
+			emit_vupkpx(vb, vd, true); return true;
+		/* (the bogus case 1038 — not a real pixel XO — was removed; falls to interp.) */
 		case 1928: /* vsum4ubs */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
 			emit32(0x6E202800 | (0 << 5) | 0);

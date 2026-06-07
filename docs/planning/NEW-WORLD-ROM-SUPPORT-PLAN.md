@@ -198,6 +198,38 @@ Work:
 > ("support both old + new world ROMs").** A reference-research agent is checking for prior art (adapt vs
 > from-scratch) before committing to the full grind.
 
+### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
+
+- **No prior art boots a parcels ROM / 9.1-9.2 anywhere [verified].** Upstream `cebix/macemu` has
+  `decode_parcels` + `ROMTYPE_NEWWORLD` but its patch layer carries the **identical `lp[6]!=0x2c0c0001`
+  assumption and no version branching** — it stops at the 1.1 LZSS ROM too. All forks/Emaculation: ceiling
+  is **9.0.4**; zero reports of 9.1/9.2 on SheepShaver. So "no prior art" is a fact, and our
+  `g_rom_904_lenient`/`SS_ROM_LENIENT` lenient path is this fork's own work.
+- **⭐ Single best lead — [`elliotnunn/NanoKernel`](https://github.com/elliotnunn/NanoKernel) [verified].**
+  A complete, **buildable, version-branched** reverse-engineered PPC-assembly source of the Mac OS
+  NanoKernel **through v2.28 (the 9.x-era kernel)** — i.e. the *exact* code our `patch_nanokernel_boot`
+  targets (PVR read, SR/BAT/SDR init, per-CPU data tables, decrementer). **Method:** cross-reference its
+  routines against `rom-inspect --dump` of the parcels ROM to relocate each `find_rom_data` site. Turns
+  Wall-1 from blind disassembly into documented-adaptation (it reduces the RE; it doesn't supply the
+  per-ROM byte-offset relocation).
+- **Why the "absent" hardware-init patches vanished [verified, 68kMLA "Picking apart the NewWorld ROM"]:**
+  9.1+ **offloads hardware-specific init from the 4 MB ROM into the Trampoline ELF bootloader** (sets up
+  the OF device tree + nanokernel interrupts). So some absent patches (nvram/via/cpu_speed) may be
+  **genuinely unnecessary** for SheepShaver — verify per-patch rather than porting them.
+- **The "will not work on this Macintosh model" check (the 9.2.1-on-1.1 wall) is OF-property-based, not
+  gestalt [verified + open].** All New World Macs share `gestaltMachineType` 406; the real model identity
+  is the **Open Firmware device-tree root `model`/`compatible` properties** the New World ROM synthesizes.
+  Mac OS 9 Lives extended 9.2.x to unsupported G4s by **patching the ROM file's model logic (not a gestalt
+  byte)** — leaning "needs the New World ROM environment." **OPEN cheap experiment:** does a targeted
+  **NameRegistry `compatible`-property injection** (SheepShaver builds the NameRegistry) satisfy 9.2's
+  check *without* the full parcels ROM port? Untested — a potential shortcut worth a separate probe.
+- **MMU "second wall" stays folklore [per the red-team memos]** — unproven below where claimed; do not let
+  it headline. ROM-patch parity (Wall 1) is the proven first gate. DingusPPC = the Wall-3 reference if it
+  ever turns real.
+
+**Verdict: documented-adaptation, multi-week, no guarantee — but tractable with elliotnunn/NanoKernel.**
+Full survey: the 2026-06-07 reference-research report (in session history).
+
 **Infrastructure landed (safe, 1.1 boot verified byte-identical):**
 - ROM-version discrimination by checksum (`g_rom_904_lenient`, auto-on ONLY for the 9.0.4 G4
   ROM cksum `0xb8d0b672`; 1.1 `0xfd86d120` path untouched; opt-out `SS_ROM_NO_904`).

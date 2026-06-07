@@ -1284,6 +1284,17 @@ void init_emul_ppc(void)
 	ppc_cpu = new sheepshaver_cpu();
 	ppc_cpu->set_register(powerpc_registers::GPR(3), any_register((uint32)ROMBase + 0x30d000));
 	ppc_cpu->set_register(powerpc_registers::GPR(4), any_register(KernelDataAddr + 0x1000));
+	// SS_NW_TRAMPOLINE (New World parcels probe, default off): the parcels nanokernel expects the
+	// Trampoline bootloader to have set SPRG0 = per-CPU/KDP base (it does `mfsprg r1,0` BEFORE ever
+	// setting it). SheepShaver runs no Trampoline, so SPRG0=0 -> garbage KDP -> the first spinlock
+	// (ROM 0x312700, boot block 12) reads a garbage lock word and deadlocks. Seed SPRG0 with the
+	// KernelData base as a first probe; watch the next read via SS_LOG_FIRST_BLOCKS. 1.1 sets its own
+	// SPRG0 in Init, so this initial value is harmless there. See NEW-WORLD-ROM-SUPPORT-PLAN.md.
+	if (getenv("SS_NW_TRAMPOLINE")) {
+		ppc_cpu->sprg_reg(0) = KernelDataAddr;
+		fprintf(stderr, "[NW-TRAMP] SPRG0 = KernelDataAddr = %08x (parcels Trampoline probe)\n",
+		        (uint32)KernelDataAddr);
+	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 
 #if ENABLE_MON

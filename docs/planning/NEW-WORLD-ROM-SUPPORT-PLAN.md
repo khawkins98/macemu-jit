@@ -3,16 +3,29 @@
 > **Status:** 🟡 Phase 0 done (2026-06-07) — Phase 1 next · **Created:** 2026-06-03 · **Updated:** 2026-06-07
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
-> **Phase 0 RESULT (2026-06-07):** Ran the env-gated `find_rom_data` tracer (`SS_ROM_PATCH_TRACE=1`,
-> landed in `rom_patches.cpp:98`) against `2001-12-19 - Mac OS ROM 9.0.1.rom` (CHRP-**parcels**,
-> decodes + type-detects NewWorld). **First failure = the very first `find_rom_data` in
-> `patch_nanokernel_boot`:** `sr_init_dat` (`35 4a ff fc 7d 86 50 2e`) not found in `[0x3101b0,0x3105b0)`
-> — though it *does* exist at `0x3106f8` in the decoded image (and `pvr_read_dat` is within its range).
-> Per the decision gate below ("fails very early in `patch_nanokernel_boot` → likely incomplete
-> decode"), and because the ROM is **parcels-format** (where `decode_parcels` extracts only the `'rom '`
-> parcel), **the indicated next step is Phase 1 (decode completeness), the tractable branch** — not the
-> deep Phase 2 RE. (Triggered while testing the AltiVec-detection hypothesis: this NewWorld ROM carries
-> `'ppcf'` (2× decoded) which the 1998 LZSS `1.1` ROM lacks (0× decoded) — see LEARNINGS 2026-06-07.)
+> **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`
+> tracer (`SS_ROM_PATCH_TRACE=1`, `rom_patches.cpp:98`) against `2001-12-19 - Mac OS ROM 9.0.1.rom`
+> (CHRP-**parcels**, decodes + type-detects NewWorld). First failure = the very first `find_rom_data`
+> in `patch_nanokernel_boot` (`sr_init_dat`, not in `[0x3101b0,0x3105b0)` but present at `0x3106f8`).
+> The "early failure → Phase 1" gate guess was then **refuted by deeper analysis** (don't trust the
+> gate; measure):
+> - **Parcel enumeration** (extend below): the `'rom '` parcel decodes to a **complete, valid 4 MB
+>   image** (nanokernel "NewWorld v1.0" present at 0x30d064). The other 27 parcels are OpenFirmware
+>   device-tree `node`/`prop`/`psum` entries (+ 2 `node`/"Code" worth a glance), NOT Mac OS ROM image.
+>   So **`decode_parcels` is NOT dropping the Mac OS image → Phase 1 (incomplete decode) is RULED OUT.**
+> - **Full pattern sizing** (`tools/rom-patch-sizing.py` over `rom-inspect --dump`, control = the
+>   working `1.1` image): of 83 literal-range patches — **27 in-range, 31 relocated, 25 absent
+>   (17 applicable-absent** after excluding other-`ROMType` patterns the `1.1` boot also skips). Absent
+>   = the byte sequence was *rewritten* between the 1998 and 2001 ROMs → real RE to re-locate. This is
+>   squarely **Phase 2 (version pattern-drift, "days to weeks, no guarantee")**, not a quick fix. Naive
+>   range-widening is a dead end (patches also write hardcoded/absolute offsets).
+>
+> (Triggered while testing the AltiVec-detection hypothesis: this NewWorld ROM carries `'ppcf'`
+> (2× decoded) which the 1998 LZSS `1.1` ROM lacks (0× decoded) — see LEARNINGS 2026-06-07.)
+> **Strategic alternative surfaced:** rather than the Phase-2 port of *this* ROM, source a G4-era ROM
+> whose layout is closer to `1.1`'s (so most patterns match) AND carries `'ppcf'`; `rom-patch-sizing.py`
+> checks any candidate in seconds. Whether such a ROM exists is unknown (G4 'ppcf' arrived with newer,
+> drifted layouts) — but it's a cheap check before committing to Phase 2.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 ---

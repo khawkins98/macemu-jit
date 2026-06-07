@@ -14,9 +14,15 @@ standalone harness over the shared `src/include/rom_decode.hpp`) + an env-gated 
   "New World parcels-ROM support — break the 9.0.4 ceiling"). I effectively completed its **Phase 0**:
   the 9.0.1 ROM (CHRP-**parcels**) decodes + type-detects as NewWorld, but `PatchROM()` fails at the
   **very first** `find_rom_data` (`patch_nanokernel_boot` `sr_init_dat`, range `[0x3101b0,0x3105b0)`;
-  the pattern exists at `0x3106f8`). Per the plan's decision gate + the parcels format (`decode_parcels`
-  extracts only the `'rom '` parcel), this points to **Phase 1 (incomplete decode) — the *tractable*
-  branch**, not deep pattern-RE. Still a multi-session, exploratory effort: NOT done tonight; report-back.
+  the pattern exists at `0x3106f8`). The plan's "early failure → Phase 1" gate guess was then **refuted
+  by deeper analysis** — it's **Phase 2 (deep RE), and Phase 1 is RULED OUT**: (a) parcel enumeration
+  shows the `'rom '` parcel decodes to a *complete, valid* image (nanokernel present; the other 27
+  parcels are OpenFirmware device-tree nodes, not Mac OS code) → `decode_parcels` isn't dropping the
+  image; (b) full pattern sizing (`tools/rom-patch-sizing.py` via `rom-inspect --dump`, control=1.1):
+  of 83 patches, **27 in-range / 31 relocated / 25 absent (17 applicable-absent)** — absent = byte
+  sequence *rewritten* between the 1998 and 2001 ROMs, needs RE. So #1 (for *this* ROM) is the deep,
+  multi-session "days-to-weeks, no guarantee" branch. NOT done tonight; report-back. Lesson: **don't
+  trust the plan's heuristic decision gate — measure** (the gate said Phase 1; the data says Phase 2).
 - **TERMINOLOGY FIX (important):** the current working ROM `1998-07-21 - Mac OS ROM 1.1.rom` is **NOT
   "OldWorld"** (CLAUDE.md's label is loose). `rom_detect_type` classes it **`ROMTYPE_NEWWORLD`**
   (nanokernel ID "NewWorld v1.0.p."); it's a 1998 CHRP-**LZSS** NewWorld ROM. The real axis for AltiVec

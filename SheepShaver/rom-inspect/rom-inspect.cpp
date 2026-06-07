@@ -6,7 +6,9 @@
  *  detection code with the emulator via rom_decode.hpp, so its verdict matches
  *  what the real PatchROM() type-detection would conclude.
  *
- *  Usage:  rom-inspect <rom-file>
+ *  Usage:  rom-inspect <rom-file> [--dump <decoded-out>]
+ *          --dump writes the decoded 4MB image to a file (for offline analysis,
+ *          e.g. tools/rom-patch-sizing.py which checks PatchROM byte-patterns).
  *  Exit:   0 if PatchROM would accept the ROM, 1 if it would reject it,
  *          2 on usage/IO error.
  *
@@ -33,11 +35,12 @@ static void print_printable(const uint8_t *p, int n)
 
 int main(int argc, char **argv)
 {
-	if (argc != 2) {
-		fprintf(stderr, "usage: %s <rom-file>\n", argv[0]);
+	if (argc != 2 && !(argc == 4 && strcmp(argv[2], "--dump") == 0)) {
+		fprintf(stderr, "usage: %s <rom-file> [--dump <decoded-out>]\n", argv[0]);
 		return 2;
 	}
 	const char *path = argv[1];
+	const char *dump_path = (argc == 4) ? argv[3] : NULL;
 
 	// Read the whole file (NOT capped at 4MB — main_unix.cpp caps its read at
 	// ROM_SIZE, which would truncate a CHRP file > 4MB; reading in full here is
@@ -76,6 +79,15 @@ int main(int argc, char **argv)
 
 	printf("Format:      %s\n", rom_format_name(fmt));
 	printf("Decode:      ok (%d bytes decoded image)\n", ROM_DECODE_SIZE);
+
+	// Optional: write the decoded image for offline analysis (e.g. patch-pattern sizing).
+	if (dump_path) {
+		FILE *o = fopen(dump_path, "wb");
+		if (!o) { fprintf(stderr, "error: cannot write %s\n", dump_path); free(decoded); return 2; }
+		fwrite(decoded, 1, ROM_DECODE_SIZE, o);
+		fclose(o);
+		printf("Dumped:      decoded image -> %s\n", dump_path);
+	}
 
 	const uint8_t *id = decoded + ROM_NANOKERNEL_ID_OFFSET;
 	printf("Nanokernel ID @0x%x: \"", ROM_NANOKERNEL_ID_OFFSET);

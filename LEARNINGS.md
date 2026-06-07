@@ -2331,3 +2331,47 @@ gate. This approach also descends from the spcflags-timing theory that produced 
 reverted, guest-memory-corrupting fix (see the session-5 retraction above) — extra
 reason not to revive it. If interrupt-poll *frequency* ever becomes a perf concern,
 optimize `emit_entry_spcflags_poll`, don't resurrect a per-opcode gate.
+
+## 2026-06-07 — AltiVec is dormant, not missing; `mfmsr[VEC]=1` is NOT the detection gate
+
+Two findings that should stop a future session re-treading this ground.
+
+**1. The aarch64 AltiVec NEON codegen already exists and is mature.** `ppc-jit.cpp`
+emits real NEON for the AltiVec families (arith/logical/compare, shifts/rotates,
+saturating, averages, merges, splat, byte-multiply; 54 differential vectors in
+`jit-test/`; 27 codegen bugs already found+fixed — see
+`docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`). It is **dormant** only because the
+guest never *issues* AltiVec: Mac OS runs everything scalar. So "0 AltiVec blocks in
+the Fractal Carbon profile" (task #16) is a **detection** gap, not a codegen gap. Open
+codegen families that must be closed before broad enablement is *safe*: pack / pixel /
+sum, and `fctiw`/`fctid` non-default rounding.
+
+**2. `mfmsr` returning MSR[VEC]=1 does NOT enable AltiVec — falsified empirically.**
+Hypothesis (task #21): the OS might *read* `mfmsr[VEC]` (no `mtmsr` write needed, so the
+undecoded-`mtmsr` crash is irrelevant) to gate AltiVec. Tested by making both interp
+(`ppc-execute.cpp` execute_mfmsr) and JIT (`ppc-jit.cpp` case 83) return
+`0xf072 | 0x02000000 = 0x0200f072`, rebuilding, booting Fractal Carbon via the e2e
+workload harness with `SS_JIT_PROFILE`. Result: **still 0 AltiVec blocks** (hot mix
+unchanged: 24 integer / 11 load-store / 4 branch / 1 FP, 1104 guest-MIPS). The app
+launched and rendered fine (no illegal-instruction trap — confirms the interpreter
+also handles whatever it issues), but issued **zero** vector instructions. VEC math was
+correct (VEC = MSR bit 6 = `0x02000000`); the research's earlier `0x0002f072` was a
+*different* bit and is moot. Change reverted.
+
+**The real gate is gestalt `'ppcf'` (`0x70706366`) bit 4
+(`gestaltPowerPCHasVectorInstructions`), computed inside the ROM/NanoKernel.** There is
+**no** SheepShaver hook for it: a grep for `0x70706366`/`ppcf`/`gestaltPowerPC*` across
+`SheepShaver/src` is empty. The InitGestalt patch (`rom_patches.cpp:1699`) is a fragile
+ROM-version-specific binary patch that writes only CPU-type byte `$1d(a2)`, page size
+`$1e(a2)`, and RAM size — it does **not** touch the processor-features word. So enabling
+detection means finding and patching the ROM's vector-feature computation (a ROM-spelunk),
+not a one-line config change.
+
+**Kept from this excursion (committed independently):** the JIT `mfmsr` now returns
+`0xf072` to match the interpreter (it previously returned 0 — a latent JIT/interp
+divergence for any guest reading MSR). test-jit 303/303.
+
+**Ordering decision (codegen-first):** close pack/pixel/sum + `fctiw` rounding via the
+`SS_TEST_HEX` differential harness (needs no guest detection at all) *before* attempting
+gestalt enablement, so that whenever the `'ppcf'` site is found, flipping it is a pure
+win and not silent corruption for apps that hit the open families. See ROADMAP B5.

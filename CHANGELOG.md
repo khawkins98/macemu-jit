@@ -11,6 +11,23 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] mfmsr JIT/interp divergence fix + AltiVec-detection finding (mfmsr[VEC] is NOT the gate)
+
+- **Fix (`cd6df179`):** the aarch64 JIT's `mfmsr` (case 83) returned `0`, while the
+  interpreter's `execute_mfmsr` returns `0xf072` — a latent JIT/interp divergence for any
+  guest that reads MSR and branches on it. JIT now returns `0xf072`. `make test-jit` 303/303.
+- **Finding (falsified hypothesis, task #21):** advertising MSR[VEC]=1 via `mfmsr`
+  (`0x0200f072`) does **not** enable AltiVec. Booted Fractal Carbon with the change →
+  profile still shows **0 AltiVec blocks** (hot mix unchanged: 24 integer / 11 load-store /
+  4 branch / 1 FP, ~1105 guest-MIPS). The real gate is gestalt `'ppcf'` (`0x70706366`) bit 4,
+  computed inside the ROM/NanoKernel with no SheepShaver hook (`rom_patches.cpp:1699`
+  InitGestalt patch writes only CPU-type/pagesize/RAM). Experiment reverted; finding banked.
+- **Reframing:** the aarch64 AltiVec NEON codegen is **mature and dormant**, not missing
+  (54 differential vectors, 27 bugs fixed; open: pack/pixel/sum + `fctiw` rounding). AltiVec
+  enablement is a *detection* problem, not a codegen one. Codegen-first ordering adopted: close
+  the open families via the `SS_TEST_HEX` differential harness before attempting gestalt
+  enablement. See LEARNINGS 2026-06-07, ROADMAP B5, tasks #22/#23.
+
 ### [shared] C2.0 Bidirectional UDS RPC — sub-16ms launcher↔emulator IPC
 
 - Emulator becomes an RPC server on `rpc_unix.cpp` UDS framework (`/tmp/sheepshaver-<pid>`).

@@ -548,13 +548,25 @@ Inspector" data layer (Track C). **Detail:** `OPTIMIZATION-PLAN.md` §P0/§P0b.
 - Remaining: constant folding (P5), instruction scheduling (P6), byte-swap opt (P7), **cross-block
   register pinning** (r1/SP, r2/RTOC — P8). **Detail:** `OPTIMIZATION-PLAN.md` §P5–P9.
 
-## B5. 🔴 AltiVec is DORMANT for real guest software (2026-06-07)
+## B5. 🔴 AltiVec is DORMANT for real guest software — it's a *detection* gap (2026-06-07)
 
-The AltiVec JIT codegen (extensively hardened) is **only exercised by the test harness** — no real
-app uses it, because the guest can't *enable* AltiVec: MSR isn't modeled (`mfmsr`→`0xf072`, VEC bit
-clear) despite PVR=G4. **Fix (model MSR[VEC] + AltiVec-enable path) would unlock real vector
-workloads** (Fractal Carbon, Power Fractal, Photoshop AltiVecCore, SoundJam). Multi-part. **Detail:**
-LEARNINGS 2026-06-07; `OPTIMIZATION-PLAN.md` §P0 (the e2e-bench profile finding).
+The AltiVec JIT codegen (extensively hardened — 54 differential vectors, 27 bugs fixed) is **only
+exercised by the test harness**: no real app issues AltiVec because the guest never *detects* it.
+
+- ❌ **`mfmsr[VEC]` is NOT the gate — falsified 2026-06-07 (task #21).** Advertising MSR[VEC]=1
+  (`mfmsr`→`0x0200f072`) and booting Fractal Carbon left the profile at **0 AltiVec blocks**.
+  Reverted. (Kept the JIT `mfmsr`→`0xf072` divergence fix, `cd6df179`.)
+- 🎯 **The real gate is gestalt `'ppcf'` (`0x70706366`) bit 4**, computed inside the ROM/NanoKernel
+  with **no SheepShaver hook** (`rom_patches.cpp:1699` InitGestalt patch writes only
+  CPU-type/pagesize/RAM). Enabling it = find + patch the ROM's processor-features computation
+  (a ROM-spelunk — **deferred**, task #23).
+- ✅ **Codegen-first ordering (do this before detection):** close the open AltiVec families
+  (pack/pixel/sum + `fctiw`/`fctid` non-default rounding) via the `SS_TEST_HEX` differential
+  harness — needs **no** detection at all — so flipping `'ppcf'` later is a pure win, not silent
+  corruption for apps that hit those ops (task #22).
+
+Real workloads waiting on this: Fractal Carbon, Power Fractal, Photoshop AltiVecCore, SoundJam.
+**Detail:** LEARNINGS 2026-06-07; `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`; `OPTIMIZATION-PLAN.md` §P0.
 
 ## B4. 🟡 Strategic / from-research levers
 

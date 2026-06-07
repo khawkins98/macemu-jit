@@ -319,8 +319,41 @@ when the nanokernel reaches it, the `rfi` enters the wrong target → fault → 
 deadlock. So skipping `jump68k` does NOT cleanly idle; it faults — which *strengthens* "`jump68k` is
 the real blocker." (Caveat: the fault could also be a JIT codegen issue on a nanokernel instruction;
 `SS_JIT_VERIFY` would discriminate, but the un-redirected handoff is the leading hypothesis.)
-**Next:** implement `jump68k` for real (locate the parcels boot handoff caller + apply the
-EmulatorData/opcode-table/init redirect) — that is now the single highest-value step, not the DEC.
+
+### ROOT-CAUSE drilldown (2026-06-08) — SPRG0/Trampoline, and a general SPRG correctness fix
+
+`SS_LOG_FIRST_BLOCKS` (new diag) captured the full 27-block boot path: the nanokernel deadlocks
+**almost immediately** (block 12) at the first spinlock-acquire `0x50312700` — NO earlier fault.
+`SS_JIT_VERIFY` was clean (no codegen divergence). A one-shot lock-state dump showed the lock address
+is computed from a **garbage KDP**: `r1=0xfcffffff`, `r22=0` (yet `r31=0x68ffdcc0` = the real
+KernelData region). The subroutine `0x3263e0` does `mfspr r1, SPRG0; lwz r1,-4(r1)` — i.e. the parcels
+nanokernel keeps its per-CPU/KDP pointer in **SPRG0**. SheepShaver was **dropping mtspr SPRG and
+returning 0 for mfspr SPRG** → garbage pointer → deadlock.
+
+- **Fixed (general correctness, committed):** real SPRG0-3 registers (mfspr/mtspr + storage). Applies
+  to ANY OS; was a latent bug just never exercised by the 1.1 ROM. **test-jit=100.**
+- **Did NOT fix the deadlock by itself:** SPRG0 is never *written* before the read. On real hardware
+  the **Trampoline ELF bootloader** sets SPRG0 = per-CPU/KDP pointer before entering the nanokernel;
+  SheepShaver jumps straight to the nanokernel, so SPRG0 stays 0. The next parcels step would be to
+  **initialize SPRG0** (mimic the Trampoline) — but that is **parcels-environment-specific**, not a
+  general fix (the 1.1 path uses `XLM_KERNEL_DATA`, not SPRG0).
+
+### ⛔ STOP-RULE (set 2026-06-08, after a lateral strategy review)
+
+The 9.1/9.2 boot is a **poor user-value bet** (AltiVec already works on 1.1; 9.0.4 already boots; no
+prior art anywhere; a likely unbounded "second wall" = nanokernel MP/exception/timing fidelity vs
+SheepShaver's stubs) but an **excellent correctness fuzzer + learning quest** (it already surfaced the
+real SPRG bug). So the policy is **"treat the bugs as the product, the boot as the bonus":**
+**continue parcels work ONLY while each wall yields a *generally-useful* emulator fix.** STOP and mark
+the quest deferred the moment the remaining work is parcels-only environment plumbing / `find_rom_data`
+pattern-relocation grind (Trampoline/SPRG0 init, jump68k handoff RE, 68k HLE shims) with no spillover.
+By that rule we are **at the stop line now** — the SPRG correctness win is banked; the next steps
+(SPRG0 init → jump68k → HLE → second wall) are parcels-specific with diminishing general value.
+Re-evaluate against the higher-EV backlog (OPTIMIZATION-PLAN, CopyBits perf, e2e, Silicon Sheep)
+before resuming.
+
+**Next (if/when resumed):** initialize SPRG0 to the per-CPU/KDP pointer at nanokernel entry (Trampoline
+emulation), re-boot, expect the deadlock to clear and advance to the `jump68k` handoff.
 
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 

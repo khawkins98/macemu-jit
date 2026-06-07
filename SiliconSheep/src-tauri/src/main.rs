@@ -470,6 +470,11 @@ fn rpc_read_memory(id: String, addr: u32, len: u32, state: State<AppState>) -> R
 }
 
 #[tauri::command]
+fn read_file_contents(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {}", e))
+}
+
+#[tauri::command]
 fn save_profile_session(session: String) -> Result<String, String> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -862,6 +867,7 @@ fn main() {
             rpc_dump_registers,
             rpc_read_memory,
             rpc_ui_snapshot,
+            read_file_contents,
             save_profile_session,
             generate_bug_report,
             set_runtime_control,

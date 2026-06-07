@@ -1794,6 +1794,7 @@ function renderInspectorWindow(vmId: string) {
         </div>
         <div style="flex:1"></div>
         <span id="inspector-rpc-status" class="ss-text-muted" style="font-size: 10px;"></span>
+        <button class="btn btn-secondary btn-sm" id="inspector-load-session">📂 Load</button>
         <button class="btn btn-secondary btn-sm" id="inspector-record-btn">⏺ Record</button>
       </div>
       <div class="inspector-panels">
@@ -1811,8 +1812,17 @@ function renderInspectorWindow(vmId: string) {
         </div>
         <div class="inspector-panel" id="panel-timeline" style="display:none">
           <div class="inspector-section">
+            <h3 class="inspector-heading">Session Timeline</h3>
+            <div id="insp-session-info" class="ss-text-muted" style="margin-bottom: 8px;"></div>
+            <div id="insp-sparkline" class="inspector-sparkline"></div>
+          </div>
+          <div class="inspector-section">
             <h3 class="inspector-heading">Events</h3>
             <div id="insp-signals" class="inspector-signals"><p class="ss-text-muted">No events yet.</p></div>
+          </div>
+          <div class="inspector-section" id="insp-session-detail" style="display:none;">
+            <h3 class="inspector-heading">Session Stats Over Time</h3>
+            <div id="insp-session-stats" class="inspector-log"></div>
           </div>
         </div>
         <div class="inspector-panel" id="panel-log" style="display:none">
@@ -2024,6 +2034,100 @@ function renderInspectorWindow(vmId: string) {
       el.innerHTML = `<pre class="inspector-log-pre">${escapeHtml(result)}</pre>`;
     }
   });
+
+  // Load session file
+  document.getElementById("inspector-load-session")?.addEventListener("click", async () => {
+    const path = await pickFile("Select .sheepshaver-profile", [
+      { name: "Profile Sessions", extensions: ["sheepshaver-profile", "json"] }
+    ]);
+    if (!path) return;
+    try {
+      const content = await invoke("read_vm_log", { id: vmId, logName: path }) as string;
+      // read_vm_log reads from the VM's log dir — we need a general file read. Use the path directly.
+      const response = await fetch(""); // can't fetch local files in Tauri — use a command
+    } catch { /* ignore */ }
+
+    // Alternative: read via Rust
+    try {
+      const content = await invoke("read_file_contents", { path }) as string;
+      const session = JSON.parse(content) as ProfileSession;
+      renderLoadedSession(session);
+    } catch (err) {
+      showToast(`Failed to load session: ${err}`, "error");
+    }
+  });
+
+  function renderLoadedSession(session: ProfileSession) {
+    // Session info
+    const infoEl = document.getElementById("insp-session-info");
+    if (infoEl) {
+      const duration = ((session.endTime - session.startTime) / 1000).toFixed(1);
+      infoEl.innerHTML = `<strong>${escapeHtml(session.vmName)}</strong> · ${duration}s · ${session.events.length} events · ${session.statsSnapshots.length} stats snapshots`;
+    }
+
+    // Sparkline — simple text-based chart of block execution rate over time
+    const sparkEl = document.getElementById("insp-sparkline");
+    if (sparkEl && session.statsSnapshots.length > 1) {
+      const rates = session.statsSnapshots.map(s => {
+        const r = s.stats.rate || "0";
+        return parseFloat(r) || 0;
+      });
+      const max = Math.max(...rates, 0.1);
+      const barHeight = 40;
+      const barWidth = Math.max(2, Math.floor(400 / rates.length));
+      const bars = rates.map(r => {
+        const h = Math.max(1, Math.round((r / max) * barHeight));
+        return `<div class="sparkline-bar" style="height:${h}px;width:${barWidth}px;" title="${r.toFixed(1)}M/s"></div>`;
+      }).join("");
+      sparkEl.innerHTML = `
+        <div class="sparkline-chart" style="height:${barHeight}px;">${bars}</div>
+        <div class="ss-text-muted" style="font-size: 9px;">Block execution rate over time (peak: ${max.toFixed(1)}M/s)</div>
+      `;
+    }
+
+    // Events timeline
+    const signalsEl = document.getElementById("insp-signals");
+    if (signalsEl && session.events.length > 0) {
+      const startTs = session.startTime;
+      signalsEl.innerHTML = session.events.map(e => {
+        const elapsed = ((e.ts - startTs) / 1000).toFixed(1);
+        return `<div class="inspector-signal">
+          <span class="inspector-signal__time">${elapsed}s</span>
+          <span class="inspector-signal__tag">${escapeHtml(e.kind)}</span>
+          <span class="ss-text-muted">${escapeHtml(e.payload.substring(0, 100))}</span>
+        </div>`;
+      }).join("");
+    }
+
+    // Stats table
+    const detailEl = document.getElementById("insp-session-detail");
+    const statsEl = document.getElementById("insp-session-stats");
+    if (detailEl && statsEl && session.statsSnapshots.length > 0) {
+      detailEl.style.display = "";
+      const startTs = session.startTime;
+      statsEl.innerHTML = `<table style="width:100%; font-size: 10px; font-family: 'SF Mono', Menlo, monospace; border-collapse: collapse;">
+        <tr style="color: var(--ss-text-muted);"><th style="text-align:left; padding: 2px 4px;">Time</th><th>Blocks</th><th>Rate</th><th>Compiled</th><th>j2i</th><th>CPU</th><th>RSS</th></tr>
+        ${session.statsSnapshots.map(s => {
+          const elapsed = ((s.ts - startTs) / 1000).toFixed(1);
+          return `<tr style="border-top: 1px solid var(--ss-border);">
+            <td style="padding: 2px 4px;">${elapsed}s</td>
+            <td style="text-align:center;">${escapeHtml(s.stats.blocks || "—")}</td>
+            <td style="text-align:center;">${escapeHtml(s.stats.rate || "—")}</td>
+            <td style="text-align:center;">${escapeHtml(s.stats.compiled || "—")}</td>
+            <td style="text-align:center;">${escapeHtml(s.stats.j2i || "—")}</td>
+            <td style="text-align:center;">${escapeHtml(s.stats.cpu || "—")}</td>
+            <td style="text-align:center;">${escapeHtml(s.stats.rss || "—")}</td>
+          </tr>`;
+        }).join("")}
+      </table>`;
+    }
+
+    // Switch to Timeline tab
+    document.querySelectorAll(".inspector-toolbar__tab").forEach(t => t.classList.remove("inspector-toolbar__tab--active"));
+    document.querySelector('[data-panel="timeline"]')?.classList.add("inspector-toolbar__tab--active");
+    document.querySelectorAll(".inspector-panel").forEach(p => (p as HTMLElement).style.display = "none");
+    document.getElementById("panel-timeline")!.style.display = "";
+  }
 
   // Memory viewer
   const readMemory = async () => {

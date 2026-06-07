@@ -11,6 +11,27 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [shared] C2.0 Bidirectional UDS RPC — sub-16ms launcher↔emulator IPC
+
+- Emulator becomes an RPC server on `rpc_unix.cpp` UDS framework (`/tmp/sheepshaver-<pid>`).
+  Non-blocking poll at 60 Hz. New methods: INPUT_LOCKOUT, FRAMESKIP, GET_STATS, READ_MEMORY.
+  `rpc_listen_socket_nb()` for non-blocking accept. SiliconSheep RPC client (`rpc_client.rs`)
+  with lazy connect and fallback to file polling. Same pattern as QEMU QMP.
+
+### [docs] SiliconSheep Inspector + Profiler + HIG behavioral reference
+
+- Inspector as separate window (4 panels: Overview/Timeline/Log/Debug + session recording).
+  Profiler plan: P1 session recording, P2 per-block (B1), P3 flame chart.
+- Classic Mac OS HIG behavioral patterns reference. Snow evaluation revised (S1 crosswalk).
+
+### [docs] SiliconSheep — full Tier 1 feature set + major UX restructure
+
+- Master-detail layout, immediate-apply settings (Mac OS 9 HIG), multi-VM support (C5),
+  Platinum styling, pixel art icons (slimes.ca), 4 consolidated tabs, disk resize, clipboard
+  status, OS target presets, description + dates, bug report bundle, VNC screenshots, guest
+  OS version detection, SavePrefs comment preservation, 19 Rust tests. See
+  `docs/planning/DESKTOP_INTEGRATION_PLAN.md` for full feature list.
+
 ### [e2e][docs] E2E toolkit review — `drive.py` refactor, agent API, discoverable doc map
 
 Tidy-up + coherence pass on the E2E harness before handing it to parallel work, adversarially reviewed

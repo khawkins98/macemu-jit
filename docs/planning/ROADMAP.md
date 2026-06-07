@@ -604,8 +604,10 @@ recorded 2026-06-04, 1.88× over interp; MacBench 5.0 + app-launch timings still
 
 # Track C — Desktop integration ("SiliconSheep") — the Parallels-like experience
 
-🟡 **Active — scaffolded (2026-06-05).** Tauri v2 project at `SiliconSheep/` compiles (Rust
-backend + Vite frontend). Framework pivoted from Cocoa/ObjC to Tauri for cross-platform door
+🟡 **Active — Tier 1 complete, C2.0 RPC landed, Inspector shipped (2026-06-07).** Full Parallels-
+like VM manager: master-detail layout, immediate-apply settings, multi-VM, Platinum styling,
+pixel art icons, Inspector window (4 panels), bug report bundle, 19 tests. C2.0 bidirectional
+UDS RPC gives sub-16ms launcher↔emulator IPC. Framework pivoted from Cocoa/ObjC to Tauri for cross-platform door
 and CLI-only build (no Xcode.app). Competitive teardown, host-guest channel audit, UX flows,
 and Tauri architecture all researched; findings synthesized into the plan.
 
@@ -640,7 +642,7 @@ and Tauri architecture all researched; findings synthesized into the plan.
   impact. Gated only on the P0 window-management bugs (unsaved-changes confirmation, orphaned
   settings window on delete).
 
-- **C6. 🔜 Bidirectional UDS RPC (C2.0).** Flip the emulator from RPC client to server on
+- **C6. ✅ Bidirectional UDS RPC (C2.0).** Flip the emulator from RPC client to server on
   the existing `rpc_unix.cpp` framework. Non-blocking poll in the 60 Hz video refresh gives
   sub-16ms command latency. New method IDs: SET_PREF, INPUT_LOCKOUT, FRAMESKIP, MOUSE_GRAB,
   GET_STATE, READ_MEMORY, DUMP_REGISTERS, INSERT_DISK. SiliconSheep connects as a UDS client.

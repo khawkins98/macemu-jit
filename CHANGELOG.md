@@ -11,6 +11,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [e2e][docs] E2E toolkit review — `drive.py` refactor, agent API, discoverable doc map
+
+Tidy-up + coherence pass on the E2E harness before handing it to parallel work, adversarially reviewed
+(`docs/planning/E2E-TOOLKIT-REVIEW-AND-MCP-PROPOSAL.md`). The review flipped the plan: the first job was a
+**refactor**, not docs. Shipped:
+- **`sse2e/drive.py`** (`f97310bd`) — extracted the boot/drive/gate primitives + the dedup'd `quit_app` /
+  `clean_shutdown` / `reactor_shutdown` (was verbatim-duplicated across `_quit_to_finder`/`_quit_workload`,
+  the verdict ×3, the reactor teardown ×4); `scenario.py` 753→609 ln. Behaviour-preserving: 122 offline +
+  `make e2e` smoke + `make e2e-workload` all PASS (render 18.29s, Δ +0.00s vs pre-refactor).
+- **`SheepShaver/e2e/AGENT-API.md`** + the e2e README "toolkit at a glance" map (3 gates, 2 sensors + the
+  Carbon-vs-dialog decision line, entry-point table, the two-history note) (`16fd110c`). The MCP-server idea
+  is parked: introspection is a launch-time contract (`SS_UI_DUMP_DIR`) so an attaching server can't use it,
+  and the existing `sse2e` Python API already *is* the agent surface.
+- **Tracked doc map in the root `README.md`** (`18c14a16`) — the comprehensive index had lived only in the
+  gitignored `CLAUDE.md`, so a fresh clone/agent had no map to `docs/`, ROADMAP, the e2e harness, or
+  AGENT-API; now it's in the tracked README (16 links verified). Audit fixes in passing: README test count
+  79→122; unused `field` import.
+
 ### [SheepShaver] FP register allocator (P5b) — Speedometer Math +16%, the top throughput lever
 
 The JIT had no FP register cache, so every FP op round-tripped the guest FPRs through the

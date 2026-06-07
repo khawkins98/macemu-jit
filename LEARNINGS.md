@@ -160,9 +160,21 @@ User staged the frontier assets (`Downloads/New_World_Mac_Roms/New World ROM/` =
   Identifying CopyBits's real PPC block needs a live memory dump at the trap addr + a **graphics workload**
   (Finder activity blits ~0 — confirmed). The pinball app is the workload, but installing the `.hqx`
   (BinHex → guest install) is fiddly host-side. Tooling in place; identification + workload are the remaining steps.
+- **⭐ Graphics workload run + the CopyBits go/no-go ANSWERED with data.** Decoded the user's pinball
+  `.hqx` with `unar` (→ PPC PEF app, forks intact), mounted it host-side via `extfs` (guest "Unix"
+  volume), launched it via VNC — **3D Ultra Pinball renders its table** (screenshot). Then the JIT
+  **heartbeat** region breakdown during gameplay settled the CopyBits-HLE question without even needing
+  the per-block profile: **~97% of executed-block growth during gameplay is in the DR region** (the ROM's
+  68K emulator) — jDR +2055M vs jRAM +51M over 20s — whereas boot is RAM/PPC-dominated. The PPC game's
+  *rendering* (QuickDraw/CopyBits) is 68K code via Mixed Mode → DR emulator → PPC JIT, the exact "worst
+  layer" the compatibility memo flagged. **So CopyBits/DR-HLE is GO, data-backed.** (The finer CopyBits-
+  vs-other-QuickDraw split needs a per-block profile, blocked by: the profiler only dumps on clean
+  shutdown and a fullscreen game resists automated quit → next step is a dump-profile-on-host-signal hook.)
 - **Method that worked all session:** env-gated, default-off probes (zero risk to normal boots), boot from a
   disk COPY, clean shutdown via SIGUSR1. A crashing approach (the earlier CopyBits come-from stub) only ever
-  affected its own enabled run.
+  affected its own enabled run. **And: `unar` decodes classic-Mac BinHex `.hqx` preserving resource forks +
+  type/creator as native xattrs; `extfs <hostdir>` mounts a host folder into the guest — the no-disk-install
+  way to get an app/workload in front of the JIT.**
 
 ## 2026-06-07 — Extended the XO audit to SCALAR FP (live, not dormant) — found mtfsf/mtfsfi body swap
 

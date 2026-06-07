@@ -121,7 +121,26 @@ without saves) and "could not init sound" (we boot `nosound` — OK'd, expected)
 workload is reachable today on the booting 9.0 disk — no NewWorld ROM needed.** Decoded game kept at
 `/Users/Shared/macemu/pinball_ext` for re-use.
 
-**⚠️ Profile-capture gap (the remaining blocker for the CopyBits number):** the JIT profile only dumps on
+#### ⭐ GO/NO-GO ANSWERED (2026-06-07) — graphics workloads are ~97% 68K-DR-emulator-bound (data)
+
+Even without the per-block profile, the JIT **heartbeat** region breakdown during ~20s of pinball
+*gameplay* is decisive (`/tmp/pinboot2.log`, jXX = cumulative blocks executed per region):
+
+| phase | jDR (ROM 68K DR-emulator) | jRAM (PPC app + System) | jNK (nanokernel) |
+|---|---|---|---|
+| boot (10s) | 185M | **1065M** (RAM-dominated) | 22M |
+| gameplay Δ (40s→60s) | **+2055M** (1072M→3127M) | +51M | +10M |
+
+**~97% of executed-block growth during gameplay is in the DR region** — the ROM's 68K emulator. Pinball
+is a *PowerPC* PEF app, but its **rendering (QuickDraw/CopyBits) is 68K code** reached PPC-app → Mixed
+Mode → 68K QuickDraw → **DR emulator → PPC JIT** — the exact "worst layer in the stack" this memo named
+as the #1 lever. So the **CopyBits/DR-HLE go/no-go is GO, now backed by real workload data**: graphics-
+heavy software spends almost all its time in the 68K-QuickDraw-via-DR path that native blit/HLE would
+offload. (The boot phase is RAM/PPC-bound; the workload *flips* to DR-bound — confirming this is a
+graphics-specific hot path, not general overhead.) The exact CopyBits-vs-other-QuickDraw split within the
+DR region still needs the per-PC profile (gap below), but the macro investment decision is answered.
+
+**⚠️ Profile-capture gap (for the finer CopyBits-vs-other split):** the JIT profile only dumps on
 **clean shutdown** (`ppc_jit_aarch64_exit` → `jit_profile_dump`), but the **fullscreen game resists
 automated quit** (Esc / Cmd-Q / the SIGUSR1 Power-key shutdown all fail to return to Finder while it grabs
 the screen), so a force-kill yields no profile. **Fix (small, generic, next step):** add a

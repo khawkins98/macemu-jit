@@ -17,6 +17,33 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-08 — New World parcels boot as a JIT-correctness forcing-function: SPRG bug + supervisor-env wall
+
+**Strategy (maintainer-confirmed):** the goal is **PPC/JIT correctness**, not 9.2 per se. SheepShaver
+models only a thin slice of the PPC supervisor stack; the New World ROM / 9.2 boot is the *forcing
+function* that drags those gaps into the light. Treat the **bugs as the product, the boot as the
+driver, the environment plumbing as the test harness**. Keep advancing the boot while it surfaces
+general fixes. (Full policy + the over-conservative "stop now" it replaced: NEW-WORLD-ROM-SUPPORT-PLAN.)
+
+**First real harvest — SPRG0-3 were dropped (general bug).** `mfspr`/`mtspr` for SPRG0-3 (272-275) were
+silently dropped (writes ignored, reads→0). Wrong for any OS; just never exercised until the parcels
+nanokernel kept its per-CPU/KDP pointer in SPRG0. Fixed (real `sprg[4]`); `test-jit=100`. Method that
+found it: `SS_LOG_FIRST_BLOCKS=N` (first-N block-entry PCs = the boot path) + a one-shot lock-state
+dump + `SS_JIT_VERIFY` (clean → not codegen). The deadlock was a spinlock whose lock addr came from a
+garbage KDP (`r1=0xfcffffff`).
+
+**The wall behind it (next target) — Trampoline/per-CPU supervisor environment.** Implementing SPRG
+did NOT clear the deadlock: the parcels nanokernel expects a **Trampoline-established** per-CPU block —
+`SPRG0`→per-CPU area (reg-save space below it), `[SPRG0-4]`→KDP, KDP placed vs a *real* SDR1/HTAB.
+SheepShaver builds none of it (fixed `KernelDataAddr` + faked SDR1=`0xdead001f`). This is the
+supervisor/MMU-fidelity "second wall" (xref MMU-NANOKERNEL-MP-PLAN). Concrete next steps in the plan.
+
+**Two process footguns (don't relearn):** (1) changing `ppc-registers.hpp` needs ALL PPC TUs
+recompiled — the Makefile doesn't track that header dep → stale `.o` = silent struct-offset mismatch =
+`test-jit=0` (looks catastrophic, isn't; `rm obj/ppc-*.o obj/sheepshaver_glue.o obj/ppc-jit.o`).
+(2) The JIT **hardcodes** byte offsets into `powerpc_registers` (e.g. `PPCR_RESERVE_VALID=1060`), so
+new struct fields MUST be appended LAST. See memory [[stale_build_struct_offsets]], [[newworld_parcels_port]].
+
 ## 2026-06-07 — Early-boot dead-ends were invisible in the log → pre-idle boot-stall watchdog ([ALARM])
 
 **Symptom the user kept hitting:** boot a ROM/OS that fails early (the NewWorld "This startup disk

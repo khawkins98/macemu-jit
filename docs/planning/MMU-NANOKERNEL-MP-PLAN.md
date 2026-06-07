@@ -236,6 +236,33 @@ Two probes, neither requiring the full work, both runnable on today's 9.0.4:
 Both are hours, not weeks, and either can kill or justify the whole area before a line of A/B/C is
 written.
 
+> **⚠️ aarch64 implementation correction (2026-06-07).** The stub-pressure trace above describes the
+> *x86/PPC-host* model where guest privileged ops fault to the host **`sigill_handler`**
+> (`main_unix.cpp:2398`, which fakes mfmsr/mtsr/tlbie/mfspr/mtspr). **On our aarch64 JIT that handler is
+> NOT the stub site** — a guest PPC privileged op is not a host-illegal instruction, so it never
+> SIGILLs. The real fake sites on aarch64 are: (1) the **JIT** `mfspr`/`mtspr` cases
+> (`ppc-jit.cpp` case 339 / case 467) + `mfmsr` (case 83 → `0xf072`); (2) the **interpreter**
+> `execute_mfspr`/`execute_mtspr` (`ppc-execute.cpp:1185/1211`, fake `SDR1=0xdead001f` etc.) +
+> `execute_illegal`; and `sc` falls back to interp (`ppc-jit.cpp:3693`). So the env-gated counters go
+> THERE (keyed by SPR number / primop+xo), with a boot-vs-steady split via a `g_boot_done` flag set at
+> the first `OP_IDLE_TIME` (reuse the `[BOOT]` idle marker). Pattern: mirror `g_compiled_mix`
+> (`ppc-jit.cpp`) / the `SS_LOG_PPCF` env gate — zero cost when off, dump on clean exit.
+
+## Decision (2026-06-07): "both — cheap probe + EV work" (user)
+
+Per `COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md`, the chosen Phase-3 plan is **(a)** run the cheap probes
+to keep the frontier mapped, while **(b)** making the CopyBits/idle/video EV levers the headline. Concrete
+next-actions, both measurement-first (no blind implementation):
+1. **Stub-pressure trace** (frontier map; runs on today's 9.0.4) — instrument the aarch64 stub sites above,
+   boot 9.0.4 + run an app, read the boot-vs-steady counts. Decides if the MMU/nanokernel "second wall"
+   is real *before* any NewWorld-ROM investment. ← do first (cheapest, decisive).
+2. **CopyBits call/rect histogram** (EV go/no-go for the headline blitter) — needs a `_CopyBits` trap
+   (0xA8EC) intercept via the NativeOp/EMUL_OP mechanism that counts calls + logs rect/byte sizes (the
+   probe is the first increment of the eventual HLE). Run on boot + an app + a game. Gate the blitter
+   build on the result (CROSS-EMULATOR-IDEATION #1).
+3. (Frontier, opportunistic) the existing NewWorld 9.0.4 PatchROM work (D3 Phase 2) stays the lower-EV
+   exploratory track; pair any further attempt with the stub-pressure trace.
+
 ---
 
 ## References

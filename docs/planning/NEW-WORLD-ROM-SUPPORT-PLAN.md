@@ -412,12 +412,21 @@ NATMEM reservation), and set `[SPRG0-4] = KDP = KernelDataAddr`. Results, step b
 - **Two general correctness fixes harvested en route (committed, test-jit=350/100):** real SPRG0-3
   registers (were dropped), and `fctiw` honoring dynamic FPSCR[RN] (was fixed FCVTAS).
 
-**NEXT:** characterize the `0x50322990`/`0x503251e4` wedge (trace-ring + disasm, as was done for
-0x3127xx) — another hardware-poll / spinlock / wait that SheepShaver's thin supervisor model doesn't
-satisfy. Then continue the forcing-function loop. The KDP positive-field aliasing (SheepShaver's
-1.1-tuned KernelData vs the parcels KDP layout) is the likely deeper issue behind this new wedge.
-Caveat (agent design): a *separate* parcels KDP region may eventually be needed vs reusing
-KernelDataAddr. Full design: `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
+**The new wedge IS the MMU/HTAB wall (characterized 2026-06-08, disasm of the decoded ROM):**
+`0x322990` is a **memory-zeroing loop** (`stwu r14(=0),4(r15); cmpw r15,r16; ble 0x322990`) and
+`0x3251e4` a table-scan. The nanokernel is clearing/initializing its **page table / page-descriptor
+region**, whose base/size it derives from SDR1/HTAB — which SheepShaver fakes (SDR1=`0xdead001f`, HTAB
+ptr `0xdead0000`, and our `sr_init` patch feeds `lis r13,0xdead` / page-table size `0x100000`). So it
+zeroes a **fake, non-RAM region** via NATMEM page-faults (slow ~136 blk/s, cpu busy) and stalls;
+`SS_SYNTH_DEC` doesn't help (not timed). This is the genuine **supervisor/MMU page-table fidelity
+"second wall"** — the agent's predicted deeper layer, now reached concretely.
+
+**NEXT (the big one):** give the nanokernel a *consistent* SDR1 ↔ HTAB ↔ KDP relationship — i.e. a
+real (or realistically-sized, RAM-backed) page-table region instead of the `0xdead0000` fake, so its
+zero/init loop targets backed RAM of a sane size and its later HTAB derefs work. This is the MMU work
+in `MMU-NANOKERNEL-MP-PLAN.md` (shadow-arena / dynamic-BAT options) — a major multi-session effort,
+best started fresh. It is squarely the "thin PPC supervisor stack" gap the forcing-function exists to
+expose. Full register/KDP design: `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
 
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 

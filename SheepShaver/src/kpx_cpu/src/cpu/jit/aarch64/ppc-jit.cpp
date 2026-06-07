@@ -3784,7 +3784,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		 * (odd-lane deinterleave; vA -> result high half). Same ev_mixed normalize as
 		 * emit_vmrg. (vpkuwum/case 78 has the same ignore-vA bug — see ROADMAP A2.) */
 		case 14: emit_vmrg(va, vb, vd, 0x4E005800); return true; /* vpkuhum UZP2.16B (ev_mixed-normalized) */
-		case 78: emit_load_vr(0,vb); emit32(0x0E612800|(0<<5)|0); emit_store_vr(0,vd); return true; /* vpkuwum UZP1.4S — BROKEN: ignores vA (ROADMAP A2) */
+		case 78: emit_vpk_w2h(va, vb, vd, 0x0E612800, 0x4E612800); return true; /* vpkuwum word->halfword modulo: XTN.4H/XTN2.8H (non-saturating narrow) */
 		/* HALFWORD->byte saturating packs — ev_mixed-aware via emit_vpk_h2b (2026-06-07).
 		 * XOs per the decode table: 398=vpkshss (signed->signed, SQXTN), 270=vpkshus
 		 * (signed->unsigned, SQXTUN), 142=vpkuhus (unsigned->unsigned, UQXTN). */

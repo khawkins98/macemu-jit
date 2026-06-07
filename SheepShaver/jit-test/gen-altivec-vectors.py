@@ -145,6 +145,12 @@ def packwop(xo): return load_bytes(1,_PKW_A)+load_bytes(3,_PKW_B)+[vx(2,1,3,xo)]
 p("av_vpkswss", packwop(462), "vpkswss: word->halfword signed source, signed-saturate (SQXTN.4H)")
 p("av_vpkswus", packwop(334), "vpkswus: word->halfword signed source, unsigned-saturate (SQXTUN.4H)")
 p("av_vpkuwus", packwop(206), "vpkuwus: word->halfword unsigned source, unsigned-saturate (UQXTN.4H)")
+# vpkuwum: word->halfword MODULO (truncate low 16 bits, no saturation) — XTN.4H/XTN2.8H via
+# emit_vpk_w2h. Operands have NONZERO high halfwords + distinct low halfwords, so a saturate/
+# ignore-vA/lane bug diverges. vA={1111AAAA,2222BBBB,3333CCCC,4444DDDD}, vB={5555EEEE,66660001,77770002,88880003}.
+_PKM_A=[0x11,0x11,0xAA,0xAA, 0x22,0x22,0xBB,0xBB, 0x33,0x33,0xCC,0xCC, 0x44,0x44,0xDD,0xDD]
+_PKM_B=[0x55,0x55,0xEE,0xEE, 0x66,0x66,0x00,0x01, 0x77,0x77,0x00,0x02, 0x88,0x88,0x00,0x03]
+p("av_vpkuwum", load_bytes(1,_PKM_A)+load_bytes(3,_PKM_B)+[vx(2,1,3,78)]+grab(), "vpkuwum: word->halfword modulo (low 16 bits, XTN)")
 # --- variable byte shifts: FIXED 2026-06-06 (ppc-jit.cpp case 260/516/772). Were
 # emitting unmasked, signed, rounding NEON shifts; vsrb shifted the wrong direction.
 # data=0x80..0x8F (high bit -> logical vs arith fill), amounts=0x00..0x0F (>=8 -> mask mod 8). ---

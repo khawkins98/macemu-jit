@@ -3916,34 +3916,56 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 974: /* vupklpx — unpack low 4 pixels (1-5-5-5 expand, 2026-06-07) */
 			emit_vupkpx(vb, vd, true); return true;
 		/* (the bogus case 1038 — not a real pixel XO — was removed; falls to interp.) */
-		case 1928: /* vsum4ubs */
+		/* Sum-across (horizontal reduce + saturate). XO->op map was SCRAMBLED here
+		 * (1928 was labeled vsum4ubs but is vsumsws; 1672/1800 swapped vsum4sbs/
+		 * vsum2sws; 1544/vsum4ubs was MISSING; 1932 was a non-existent XO). And every
+		 * variant did the +vB with a plain ADD.4S that WRAPS instead of saturating.
+		 * Both classes of bug confirmed by the av_vsum* differential vectors (the
+		 * interpreter accumulates in int64 and clamps -- true ground truth). Authoritative
+		 * XOs from ppc-decode.cpp: vsum4ubs=1544 vsum4sbs=1800 vsum4shs=1608
+		 * vsum2sws=1672 vsumsws=1928. Fixed 2026-06-07 (all five gated by make test-jit). */
+		case 1544: /* vsum4ubs: per word, sum 4 unsigned bytes + vB word, UNSIGNED saturate */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
-			emit32(0x6E202800 | (0 << 5) | 0);
-			emit32(0x6E602800 | (0 << 5) | 0);
-			emit32(0x4EA08400 | (1 << 16) | (0 << 5) | 0);
+			emit32(0x6E202800 | (0 << 5) | 0);          /* UADDLP v0.8H, v0.16B */
+			emit32(0x6E602800 | (0 << 5) | 0);          /* UADDLP v0.4S, v0.8H (word = sum of its 4 bytes, <=1020) */
+			emit32(0x6EA00C00 | (1 << 16) | (0 << 5) | 0); /* UQADD v0.4S, v0.4S, v1.4S (saturating +vB) */
 			emit_store_vr(0, vd); return true;
-		case 1672: /* vsum4sbs */
+		case 1800: /* vsum4sbs: per word, sum 4 signed bytes + vB word, SIGNED saturate */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
-			emit32(0x4E202800 | (0 << 5) | 0);
-			emit32(0x4E602800 | (0 << 5) | 0);
-			emit32(0x4EA08400 | (1 << 16) | (0 << 5) | 0);
+			emit32(0x4E202800 | (0 << 5) | 0);          /* SADDLP v0.8H, v0.16B */
+			emit32(0x4E602800 | (0 << 5) | 0);          /* SADDLP v0.4S, v0.8H */
+			emit32(0x4EA00C00 | (1 << 16) | (0 << 5) | 0); /* SQADD v0.4S, v0.4S, v1.4S */
 			emit_store_vr(0, vd); return true;
-		case 1608: /* vsum4shs */
+		case 1608: /* vsum4shs: per word, sum 2 signed halfwords + vB word, SIGNED saturate */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
-			emit32(0x4E602800 | (0 << 5) | 0);
-			emit32(0x4EA08400 | (1 << 16) | (0 << 5) | 0);
+			emit32(0x4E602800 | (0 << 5) | 0);          /* SADDLP v0.4S, v0.8H (word = sum of its 2 halfwords) */
+			emit32(0x4EA00C00 | (1 << 16) | (0 << 5) | 0); /* SQADD v0.4S, v0.4S, v1.4S */
 			emit_store_vr(0, vd); return true;
-		case 1800: /* vsum2sws */
+		case 1672: /* vsum2sws: each doubleword, sum 2 words + vB odd word, SIGNED saturate
+		            * -> vD odd word, vD even word = 0. 2-word sums can exceed int32, so
+		            * accumulate in 64-bit (SADDLP.2D) then narrow-saturate (SQXTN.2S). */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
-			emit32(0x4EA02800 | (0 << 5) | 0);
-			emit32(0x0EA12800 | (0 << 5) | 0);
-			emit32(0x4EA08400 | (1 << 16) | (0 << 5) | 0);
+			emit32(0x4EA02800 | (0 << 5) | 0);          /* SADDLP v0.2D, v0.4S: d0=w0+w1, d1=w2+w3 (64-bit) */
+			emit32(0x4E0C2C00 | (1 << 5) | RTMP0);      /* SMOV RTMP0, v1.S[1] (sext vB.w1) */
+			emit32(0x9E670000 | (RTMP0 << 5) | 2);      /* FMOV d2, RTMP0 -> v2.d0 */
+			emit32(0x4E1C2C00 | (1 << 5) | RTMP0);      /* SMOV RTMP0, v1.S[3] (sext vB.w3) */
+			emit32(0x4E181C00 | (RTMP0 << 5) | 2);      /* INS v2.D[1], RTMP0 -> v2.d1 */
+			emit32(0x4EE08400 | (2 << 16) | (0 << 5) | 0); /* ADD v0.2D, v0.2D, v2.2D (no overflow) */
+			emit32(0x0EA14800 | (0 << 5) | 0);          /* SQXTN v0.2S, v0.2D: s0=sat(d0), s1=sat(d1) */
+			emit32(0x4F000400 | 2);                     /* MOVI v2.4S, #0 */
+			emit32(0x4E803800 | (0 << 16) | (2 << 5) | 0); /* ZIP1 v0.4S, v2.4S, v0.4S -> [0,sat0,0,sat1] */
 			emit_store_vr(0, vd); return true;
-		case 1932: /* vsumsws — sum all words */
+		case 1928: /* vsumsws: sum all 4 words of vA + vB.w3, SIGNED saturate -> vD.w3,
+		            * other words = 0. 4-word sum can exceed int32, so 64-bit accumulate. */
 			emit_load_vr(0, va); emit_load_vr(1, vb);
-			emit32(0x4EB1B800 | (0 << 5) | 0);
-			emit32(0x4EA08400 | (1 << 16) | (0 << 5) | 0);
-			emit_store_vr(0, vd); return true;
+			emit32(0x4EB03800 | (0 << 5) | 0);          /* SADDLV d0, v0.4S: 64-bit signed sum of 4 words */
+			emit32(0x4E1C2C00 | (1 << 5) | RTMP0);      /* SMOV RTMP0, v1.S[3] (sext vB.w3) */
+			emit32(0x9E670000 | (RTMP0 << 5) | 1);      /* FMOV d1, RTMP0 */
+			emit32(0x5EE08400 | (1 << 16) | (0 << 5) | 0); /* ADD d0, d0, d1 (scalar 64-bit) */
+			emit32(0x0EA14800 | (0 << 5) | 0);          /* SQXTN v0.2S, v0.2D: s0=sat int32 */
+			emit32(0x4F000400 | 2);                     /* MOVI v2.4S, #0 */
+			emit32(0x6E1C0400 | (0 << 5) | 2);          /* INS v2.S[3], v0.S[0] -> [0,0,0,sat] */
+			emit_store_vr(2, vd); return true;
 		case 1356: /* vslo — shift left by octet (approx: pass through) */
 			emit_load_vr(0, va); emit_store_vr(0, vd); return true;
 		case 1420: /* vsro — shift right by octet (approx) */

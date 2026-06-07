@@ -3,6 +3,66 @@
 Running log of non-obvious things learned while working on this fork.
 Newest entries at the top of each section. Review at the start of each session.
 
+## 2026-06-07 — AltiVec sum-across JIT bug: XO map was SCRAMBLED + no saturation (5 ops, caught by ground-truth diff)
+
+Hardening the dormant AltiVec codegen (task #22) immediately paid off: the **sum-across family was
+badly broken** in `ppc-jit.cpp`, and it had **zero test coverage** so nothing caught it. Two stacked bugs:
+1. **XO→operation map was SCRAMBLED.** Authoritative XOs (from `ppc-decode.cpp`): `vsum4ubs=1544
+   vsum4sbs=1800 vsum4shs=1608 vsum2sws=1672 vsumsws=1928`. The JIT had `1928` labeled `vsum4ubs`
+   (1928 is really `vsumsws`), `1672`/`1800` swapping `vsum4sbs`/`vsum2sws`, **`vsum4ubs`/1544 had no
+   case at all**, and a dead `case 1932` (not a real XO). So real guest `vsumsws`/`vsum2sws`/`vsum4sbs`
+   each got a *different op's* codegen; only `vsum4shs` had the right op (and `vsum4ubs/1544` happened
+   to fall back to the interp, so it was accidentally correct).
+2. **No saturation.** Every variant did the `+vB` / final reduce with a plain `ADD.4S`/`ADDV` that
+   **wraps** at the int32/uint32 boundary; PPC saturates. The interpreter accumulates in **int64**
+   (`v4si_sat_operand`, `sat_type=int64`) and clamps — so it's **true ground truth**, independent of
+   the JIT, which is why a differential test is valid here (not the "both sides share a bug" trap).
+
+**How it was caught (the method that worked):** wrote 5 boundary vectors in `gen-altivec-vectors.py`
+whose operands drive each lane's sum *past* the saturation boundary, ran `make test-jit` → all 5 diverged.
+The interp's `vsum4ubs`-vector result `[0,0,0,0xFFFFFFFC]` (= signed sum of four `-1` words = `-4`) was
+the tell that XO 1928 is `vsumsws`, not `vsum4ubs` — i.e. *read the oracle's output, don't assume the label.*
+
+**Fix:** correct XOs + proper saturating codegen. Simple per-word ops use `UQADD`/`SQADD.4S` (one-instr
+swap from `ADD.4S`). The wide ops need 64-bit accumulation: `vsum2sws` → `SADDLP.2D` + build vB-odd-words
+`.2D` + `ADD.2D` + `SQXTN.2S` + `ZIP1`-with-zero (odd-word placement); `vsumsws` → `SADDLV` (64-bit) +
+scalar `ADD d` + `SQXTN.2S` + `INS .S[3]`. All NEON encodings verified offline with `as -arch arm64` +
+`otool -tvj` before coding (cheap and decisive — do this for any hand-encoded NEON). Result: `make
+test-jit` 337/337 score=100. **Lesson:** the "validated by test-jit" claim only holds for ops that HAVE
+a vector — a whole family had none. When pivoting to "harden codegen," first audit *coverage*, then trust.
+Also: an unmatched `vxo` falls through into the `switch(vao)` (low-6-bit VA-form) — every VX case must
+explicitly `return` (correct codegen or `return false` for clean per-op interp fallback), never fall through.
+
+## 2026-06-07 — AltiVec gestalt gate: the three obvious gates are ALL open; pivoted to codegen-correctness hardening
+
+Re-examined the AltiVec-detection gap (task #21) before the next deep push, and **falsified the three
+cheapest theories at once** — all three obvious gates are already open, yet `'ppcf'` still clears the
+vector bit (`gestaltPowerPCHasVectorInstructions`, bit 6):
+- **PVR** is `0x000c0000` (7400, *with AltiVec*) — `main_unix.cpp:453` (EMULATED_PPC default), and the
+  remap switch at :630 forces any newer G4/G5 back to 7400. So the guest sees a G4. Not the gate.
+- **MSR[VEC]** *reads SET* (the mfmsr probe returned `0x0200f072`; `&0x02000000` = set). And the
+  mtmsr-WRITE-enable theory was already falsified (boot probe). Not the gate.
+- **The interpreter fully implements AltiVec** — `vadduwm`/`vperm` etc. are wired in `ppc-decode.cpp`
+  and `execute_vector_*` in `ppc-execute.cpp`. So a boot-time *execution* probe wouldn't fault. Not the gate.
+
+So the bit is cleared by the System's own `'ppcf'` selector computation, which task #23 already showed is
+**not pure-PVR**. **The discriminating handoff question for the next user-in-loop session** (don't write
+this up as "needs deep RE" — it isn't scoped): *is the vector bit computed in the ROM image (→ statically
+patchable with the existing `find_rom_data` infra — a cheap win) or in the System file loaded to RAM
+(→ boot-time RAM patch or a `_Gestalt`-trap intercept, neither of which exists today)?* Hypothesis worth
+testing first (advisor): classic Mac OS often gates `gestaltPowerPCHasVectorInstructions` on whether the
+OS/nanokernel promises **VR context save/restore on switch**, NOT on hardware capability — if the ROM
+routine checks a nanokernel vector-context flag, *that flag* is the patchable site. SheepShaver has the
+EMUL_OP routine-replacement machinery (XPRAM/NVRAM/SONY/DISK/CDROM/ADBOP in `rom_patches.cpp`) but **no
+`_Gestalt` trap intercept** today.
+
+**Why this is the consolidate signal, and the pivot:** every injection point needs a boot to verify, i.e.
+the user in the loop — AND the marginal value of an e2e gestalt-force over the existing differential
+harness is low, because the AltiVec codegen is *already validated by `make test-jit`* (interp-vs-JIT diff
+against the mature upstream interpreter). So I pivoted to **hardening that codegen** (task #22, sum-across
++ fctid) instead — fully autonomous, no boot needed, directly de-risks the codegen for the moment
+detection unlocks. See the sum-across saturation entry below.
+
 ## 2026-06-07 — D3 Phase 2 started: 9.0.4 G4 ROM multi-version patching infra (1.1 boot verified safe)
 
 Began the actual 9.0.4-ROM port (the AltiVec unlock). Built the **multi-ROM-version patching

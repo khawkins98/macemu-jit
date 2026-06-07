@@ -35,6 +35,22 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **RPC status indicator** — Inspector toolbar shows connection state. Friendly errors
   instead of raw "No such file" messages.
 
+### [SheepShaver] AltiVec sum-across family fixed — scrambled XO map + missing saturation (5 ops)
+
+- The horizontal-reduce-and-saturate ops (`vsum4ubs`/`vsum4sbs`/`vsum4shs`/`vsum2sws`/`vsumsws`)
+  were doubly broken in `ppc-jit.cpp` and had **zero test coverage**:
+  - **Scrambled XO→op map**: real guest `vsumsws` (XO 1928), `vsum2sws` (1672), `vsum4sbs` (1800)
+    each got a *different* op's codegen; `vsum4ubs` (1544) had no case (fell back to interp);
+    a dead `case 1932` matched no real op. Authoritative XOs are in `ppc-decode.cpp`.
+  - **No saturation**: every variant added `vB` / reduced with a plain `ADD.4S`/`ADDV` that wraps
+    at the int32/uint32 boundary instead of clamping.
+- **Fix**: correct XOs + saturating codegen — `UQADD`/`SQADD.4S` for the per-word ops; 64-bit
+  accumulation (`SADDLP.2D`/`SADDLV` → `SQXTN.2S`) for `vsum2sws`/`vsumsws` (2-/4-word sums can
+  exceed int32). All NEON encodings verified offline (`as -arch arm64` + `otool`).
+- **Caught + gated** by 5 new boundary vectors in `gen-altivec-vectors.py`; the interpreter
+  (int64 accumulation, `v4si_sat_operand`) is independent ground truth. `make test-jit` 337/337,
+  score=100. Detail in LEARNINGS.md (2026-06-07).
+
 ### [SheepShaver] AltiVec 1-5-5-5 pixel family fixed (vpkpx/vupkhpx/vupklpx) + convert-op XO bugs (`ff8e9504`, `e8e30c2e`)
 
 - `vpkpx` (pack, 782): new `emit_vpkpx` builds each 1-5-5-5 pixel from a word via USHR.4S + AND-mask

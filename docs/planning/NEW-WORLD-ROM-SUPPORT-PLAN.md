@@ -241,6 +241,37 @@ branch-guard**, which materially improves the odds. **Next concrete step:** add 
 skip-guard at `:715`, run `SS_ROM_LENIENT=1 SS_ROM_PATCH_TRACE=1` on 9.0.1, and confirm PatchROM
 advances to the `sr_load`/`jump68k` RE work (or the next function).
 
+### patch_nanokernel_boot wall-map (2026-06-08) — iterative skip+trace on 9.0.1, execution order
+
+Built the parcels skip-guards and ran `SS_ROM_LENIENT=1 SS_ROM_PATCH_TRACE=1` on 9.0.1 after each,
+mapping the real (execution-order) walls. **Two walls collapsed, the third is the hard one:**
+
+| # | wall | verdict | status |
+|---|------|---------|--------|
+| 1 | `:715` CPU-detect / per-CPU-data | **SKIP** — redundant: mfpvr already returns faked 7400, ROM's own 0x310a1c chain has a `cmpwi r12,0xc` (7400) handler | ✅ committed, validated (provably redundant) |
+| — | sprg3_mq, msr, sprg3, pvr_read2(×2), pvr_read4, sdr1_read, pgtb_clear, desc_create, sr_load2, pm_check | relocated → existing lenient whole-image fallback resolves | ✅ pass (⚠ some lenient hits may be false-positive matches — verify semantically before trusting at boot) |
+| — | pvr_read3 | absent but **optional** (`!=0` then patch) | ✅ tolerated |
+| 2 | `sr_load` (SR/BAT-load) | **SKIP** — `mtsrin`/`mt{i,d}bat*` are JIT no-ops; routine runs harmlessly under flat addressing | ✅ committed (⚠ RUNTIME-UNVALIDATED: nanokernel may read the KernelData BAT fields it saves) |
+| 3 | **`jump68k`** (`7d9243a6` = mtsprg2;mtsrr0;mtsrr1;rfi) | **CANNOT SKIP** — the PPC→68k boot handoff; must be retargeted to SheepShaver's emulator entry | ⛔ **current frontier** — needs real RE + boot validation |
+
+**`jump68k` RE state.** 1.1 mechanism (`rom_patches.cpp` ~1006): locate the "enter 68k emulator" routine
+(`mtsprg2;mtsrr0;mtsrr1;rfi`), find its boot **caller**'s `bl`, and replace that `bl` with a 5-insn
+redirect (`lwz r3,EmulatorData; lwz r4,opcode-table; lwz r0,init; mtctr; bctr`) into SheepShaver's own
+68k emulator. On parcels the routine signature + the 1.1 `jump68k_caller` byte-pattern are both
+absent/false-matching. SRR0/SRR1-write sites located in 9.0.1 (adjacent `mtsrr0`+`mtsrr1`+`rfi`):
+**0x310034, 0x3126dc, 0x3149bc, 0x3165b4, 0x3177c4** (+ more). `0x3126dc` is the clearest
+emulated-code dispatch (loads entry from KernelData 0x648/0x5a4 → rfi), but the nanokernel rfi's into
+emulated code from many sites (IRQ return, syscall); isolating the **boot first-entry** + its caller,
+then applying the redirect, requires tracing the boot flow and **a real boot to validate** (the tracer
+only proves patching completes, not runtime correctness). This is where the genuine multi-session RE
+sits — and it's boot-gated, so it pairs with the runtime-unvalidated `:715`/`sr_load` skips above.
+
+**Net revised picture:** `patch_nanokernel_boot` is *not* a wholesale re-RE — it's ~2 skips (done) + 1
+load-bearing handoff retarget (`jump68k`) + the lenient-resolved remainder. After it: 3 more patch
+functions (`patch_68k_emul`/`patch_nanokernel`/`patch_68k` — the 9.0.4 runtime attempt reached
+`patch_nanokernel`'s `nvram2_dat`) + Phase 3 + possible second wall. The headline wall shrank a lot;
+the path is now "finish jump68k → other functions → first boot attempt (validates the skips)."
+
 ### Prior-art survey (2026-06-07) — no port exists, but it's documented-adaptation not virgin RE
 
 - **No prior art boots a parcels ROM / 9.1-9.2 anywhere [verified].** Upstream `cebix/macemu` has

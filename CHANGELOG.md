@@ -11,6 +11,20 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-07
 
+### [SheepShaver] AltiVec saturating packs fixed — all 6 (vpk{sh,uh,sw,uw}{ss,us})
+
+- The six saturating pack ops were broken (single-source narrow ignoring vB, no ev_mixed
+  normalize, and a mislabeled `0x2E212800` "UQXTN" that is actually SQXTUN → unsigned packs
+  clamped negatives-as-signed to 0). Fixed via two ev_mixed-aware helpers: `emit_vpk_h2b`
+  (halfword→byte: REV32+REV16 normalize → `[SU]QXTN`/`QXTN2` → REV32 back) and `emit_vpk_w2h`
+  (word→halfword: no input normalize — raw `.4S` already holds correct word values — →
+  narrow → REV32+REV16 halfword-output normalize).
+- Derived empirically against the interpreter REGDUMP with **saturation-crossing operands**
+  (negatives + over-range) so the three signednesses are distinct (non-saturating operands make
+  SQXTUN/UQXTN identical — the false-PASS trap the earlier reverted attempt hit). 6 committed
+  differential vectors. `make test-jit` **324/324**. Remaining open AltiVec: pixel + sum-across
+  families. See `docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md`.
+
 ### [SheepShaver] fsel/frsp/frsqrte/fsqrt → zero-copy FP RA (P5b follow-up, completes FP-RA op conversion)
 
 - Converted the last bridge-using FP ops to direct FP-RA access: `frsp`/`fsel` (differentially

@@ -131,7 +131,20 @@ decode table, NEON disassembled with capstone). Outcome:
 - Note: sweep XOs 910/354/418/1038/1356/1420/1932 are **not real AltiVec opcodes** (the matching
   JIT `case` labels are dead code at the wrong XO) — test artifacts, not bugs.
 
-## Pack-saturate fix design (2026-06-06, derived — ready for a focused pass)
+> **✅ ALL 6 SATURATING PACKS FIXED 2026-06-07** (`ppc-jit.cpp` `emit_vpk_h2b` cases
+> 398/270/142 halfword→byte, `emit_vpk_w2h` cases 462/334/206 word→halfword). Derived
+> empirically against the interpreter REGDUMP per the methodology below, with **saturation-
+> crossing operands** (negatives + over-range) so the three signednesses are DISTINCT — the
+> non-saturating-operand false-PASS trap (point 1 in the attempt log) is closed. 6 committed
+> vectors (`av_vpksh{ss,us}`, `av_vpkuhus`, `av_vpksw{ss,us}`, `av_vpkuwus`), `make test-jit`
+> 324/324. Key findings: (a) the pre-fix "UQXTN" `0x2E212800` was actually **SQXTUN** (opcode
+> 10010 not 10100) → unsigned packs clamped negatives-as-signed to 0; (b) halfword→byte needs
+> REV32+REV16 input normalize (.8H values) + REV32 byte-output normalize; (c) word→halfword
+> needs **NO** input normalize (raw .4S already holds correct word values — NEON LE read cancels
+> ev_mixed) + REV32+REV16 halfword-output normalize; (d) REV16/REV32 commute. Pixel + sum-across
+> remain.
+
+## Pack-saturate fix design (2026-06-06, derived — ✅ SHIPPED 2026-06-07, see above)
 
 Canonical XOs (decode table, authoritative): `vpkshss=398` (signed→signed sat),
 `vpkshus=270` (signed→unsigned sat), `vpkswss=462`, `vpkswus=334`, `vpkuhus=142`

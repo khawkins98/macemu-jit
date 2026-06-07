@@ -1037,12 +1037,14 @@ static void emit_load_ea_base(int ra_num) {
  *           cases 8/520/264/776: REV32 -> UZP1/2 -> [SU]MULL.8H -> REV32.8H);
  *           the variable shift/rotate, saturating add/sub, and signed-average
  *           families (2026-06-06 sweep — 26 ops). Quarantine lane now empty.
- *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops.
+ *   OK:     vspltw, vsldoi, and the element-symmetric arith/logical/compare ops;
+ *           the saturating packs vpk{sh,uh}{ss,us}/vpk{sw,uw}{ss,us} (emit_vpk_h2b /
+ *           emit_vpk_w2h, 2026-06-07 — 6 ops, 6 committed vectors with saturation-crossing
+ *           operands; the earlier "UQXTN" 0x2E212800 was actually SQXTUN, now fixed).
  *   STILL BROKEN / remaining (all ev_mixed + 2-source; ROADMAP A2, full worklist in
  *           docs/planning/ALTIVEC-SHIFT-ROTATE-BUGS.md):
  *           - vpkuwum (case 78) ignores vA (modulo word pack);
- *           - saturating packs vpk{sh,sw,uh,uw}{ss,us} + pixel vpkpx/vupkhpx/vupklpx
- *             + sum-across vsumsws/vsum2sws/vsum4sbs;
+ *           - pixel vpkpx/vupkhpx/vupklpx + sum-across vsumsws/vsum2sws/vsum4sbs;
  *           - HALFWORD multiplies vmul{o,e}{u,s}h (72/328/584/840);
  *           - no committed test vectors yet for the *signed* (vmulosb/vmulesb) and
  *             halfword multiplies — emitted prospectively.

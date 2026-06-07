@@ -343,6 +343,12 @@ struct jit_prof_slot { uint64_t count; uint32_t pc; uint8_t mix; uint16_t n_insn
 static struct jit_prof_slot jit_prof_slots[JIT_PROF_SLOTS];
 static int  jit_prof_n = 0;
 static bool jit_profile_enabled = false;
+/* Global compile-time op-class histogram (every op compiled, summed across all blocks).
+ * The JIT only compiles blocks that execute, so g_compiled_mix[MIX_ALTIVEC] > 0 is a
+ * DEFINITIVE "the guest's executed code contains AltiVec" — unlike the top-40 hot-block
+ * dominant-class view, which can hide AltiVec ops inside FP/INT-dominated blocks. Used by
+ * the AltiVec-detection experiment (task #26). Zero runtime cost when profiling is off. */
+static uint64_t g_compiled_mix[6] = {0,0,0,0,0,0};
 static struct timespec jit_prof_t0;   /* session start (set in init when profiling on) */
 /* SS_JIT_PROFILE_DISASM: per-block PPC instruction words, captured at COMPILE time
  * (where `op` is the real fetched word). Exit-time reads of guest RAM are unreliable —
@@ -4886,6 +4892,13 @@ static void jit_profile_dump(void)
 		        (double)total_a64 / (double)total_guest,
 		        total / elapsed / 1e6);
 	}
+	/* Global compiled-op mix (every op compiled, summed across ALL blocks — not just top-N).
+	 * g_compiled_mix[MIX_ALTIVEC] > 0 ⇒ the guest's executed code DID contain AltiVec. */
+	fprintf(out, "[JIT-COMPILED-MIX] total ops compiled by class: AltiVec=%llu FP=%llu int=%llu "
+	        "load/store=%llu branch=%llu other=%llu\n",
+	        (unsigned long long)g_compiled_mix[MIX_ALTIVEC], (unsigned long long)g_compiled_mix[MIX_FP],
+	        (unsigned long long)g_compiled_mix[MIX_INT], (unsigned long long)g_compiled_mix[MIX_LOADSTORE],
+	        (unsigned long long)g_compiled_mix[MIX_BRANCH], (unsigned long long)g_compiled_mix[MIX_OTHER]);
 	fprintf(out, "  %-10s %14s %6s  %-11s %5s  region\n", "pc", "exec", "pct", "mix", "insns");
 	for (int a = 0; a < topN; a++) {
 		struct jit_prof_slot *s = &jit_prof_slots[order[a]];
@@ -5324,7 +5337,7 @@ bool ppc_jit_aarch64_compile(
 			}
 		}
 
-		if (jit_profile_enabled) mix_cnt[jit_mix_classify(op)]++;  /* P0 mix tally */
+		if (jit_profile_enabled) { int _mc = jit_mix_classify(op); mix_cnt[_mc]++; g_compiled_mix[_mc]++; }  /* P0 mix tally (per-block + global) */
 		if (prof_idx >= 0 && i < JIT_PROF_WORDS) jit_prof_words[prof_idx][i] = op;  /* disasm capture */
 
 		if (op == 0x4E800020) { /* blr — block terminator */

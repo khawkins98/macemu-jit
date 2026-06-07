@@ -248,6 +248,38 @@ written.
 > the first `OP_IDLE_TIME` (reuse the `[BOOT]` idle marker). Pattern: mirror `g_compiled_mix`
 > (`ppc-jit.cpp`) / the `SS_LOG_PPCF` env gate — zero cost when off, dump on clean exit.
 
+## Stub-pressure trace — RESULT (2026-06-07): zero runtime supervisor pressure on 9.0.4
+
+Implemented `SS_STUB_TRACE` (env-gated runtime counters in `ppc-execute.cpp`
+`execute_mfspr`/`execute_mtspr`/`execute_illegal`, boot-vs-steady split at first idle, dump on
+clean shutdown). Ran a full **Mac OS 9.0.4 boot + 25 s idle**:
+
+```
+[STUB-TRACE] supervisor-stub pressure (boot | steady)
+  mfspr faked reads:                       (none)
+  mtspr dropped writes (BAT/SDR1/SPRG):    (none)
+  illegal primop-31 (mtmsr/mtsr/tlbie/rfi):(none)
+  TOTAL: boot=0  steady=0  => boot-time only (2nd wall SHALLOW)
+```
+
+**Reading:** the guest executes **zero** runtime supervisor ops we fake — neither at boot nor steady.
+SheepShaver's nanokernel **ROM-patches** (skip SR/BAT/SDR init, replace `rfi`, EMUL_OP the supervisor
+routines — `patch_nanokernel*`) handle the privileged layer **at patch time**, so nothing reaches the
+runtime fake handlers. The runtime supervisor surface on 9.0.4 is **empty**, not merely small.
+
+**Honest limitation (don't over-read):** the probe measures *runtime hits*, but the supervisor ops are
+removed by ROM-patching *before* execution — so `0` is partly *by construction*. It proves there's no
+runtime MMU/supervisor hot path to worry about on 9.0.4 (real translation/exception machinery would only
+matter if something *executed* and faulted — nothing does). It does **not** measure how much ROM-patch
+*coverage* a NewWorld 9.1/9.2 ROM would need — that's the `NEW-WORLD-ROM-SUPPORT-PLAN.md` domain, and is
+unmeasurable until a parcels ROM loads.
+
+**Net for the verdict:** reinforces "ROM-first, MMU-deferred." The hard part of broader-OS support is
+**ROM-patch parity** (getting the supervisor layer patched out for the new ROM), not standing up a real
+runtime MMU — there is no runtime supervisor pressure to replace. The MMU "second wall" has **no runtime
+footprint on the OS we can run today**; re-confirm on 9.1/9.2 once a NewWorld ROM boots. (Probe:
+`SS_STUB_TRACE=1`; commit `127d54d8`.)
+
 ## Decision (2026-06-07): "both — cheap probe + EV work" (user)
 
 Per `COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md`, the chosen Phase-3 plan is **(a)** run the cheap probes

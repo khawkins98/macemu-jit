@@ -133,6 +133,43 @@ doing V=P with **zero** added hot-path cost. Validate that reframe cheaply befor
 
 ---
 
+## 2.5 Strategic fork — two paths to "run 9.2", and why we're (mostly) on Path A
+
+There are **two legitimate routes**, and the new agent should understand both before committing effort.
+
+**Path A — port the NewWorld parcels ROM (the current path, §1–2).** Load the 9.x "Mac OS ROM", emulate
+the Trampoline hand-off (SPRG0/KDP/SDR1/HTAB), boot its real nanokernel. This drags the *real NewWorld
+supervisor boot* into the light → it is the **richer correctness fuzzer** (exercises low-level PPC code
+nothing else does; already harvested the SPRG + fctiw bugs). Cost: the MMU/page-table wall (§3).
+
+**Path B — "do we even need a ROM file?" Synthesize the environment on the working 1.1 ROM.** SheepShaver
+already boots Mac OS up to **9.0.4 fully** on the OldWorld **1.1 ROM**, and the **9.2.1 OS already runs
+on the 1.1 ROM** up to the *"won't work on this Macintosh model"* check. So instead of porting a NewWorld
+ROM, boot the **9.2 OS itself** on our proven 1.1 environment and **fake whatever 9.2 additionally
+demands.** Tempting because it reuses a working supervisor; the OS still stresses the JIT with newer
+code.
+- **Why it's not free (measured):** the `SS_NW_MODEL` probe (in `name_registry.cpp`) injected the
+  NewWorld device-tree `model`/`compatible` to pass that check on the 1.1 ROM — and **9.2.1 still
+  rejected the model.** So 9.2 wants *more* than identity-faking. And the 1.1 vs 9.x nanokernels differ
+  **88.8%** in the boot core, so you can't graft 9.x's nanokernel onto 1.1 — Path B means "make the 9.2
+  *OS* happy on the *1.1* nanokernel," not reusing 9.x's.
+- **The unknown that decides Path B:** the **delta between what 9.0.4 accepts and what 9.2 demands** on
+  the 1.1 ROM. We know the model check is one item (and a device-tree fake wasn't enough); there are
+  likely more (a gestalt/version gate, a NewWorld-only API/structure the OS reads, etc.).
+- **Cheap Path-B experiment (do this before committing to either path if Path B tempts you):** boot the
+  **9.2.1 ISO on the 1.1 ROM** (a normal boot, needs the ISO + a scratch disk + a GUI session — ask the
+  maintainer), get past/around the model check (extend `SS_NW_MODEL`, or find the actual check), and
+  **characterize where 9.2 dies next.** That single data point tells you whether Path B is a short hop
+  or its own rabbit hole. Compare against the known-good 9.0.4-on-1.1 boot to isolate the 9.2 delta.
+
+**Recommendation / why Path A for now:** the project's stated goal is **correctness hardening**, for
+which Path A is the better fuzzer (it runs *new* supervisor code; Path B re-runs the supervisor we've
+already validated). Path A is also further along (27→128 PCs). **But Path B is a genuinely cheaper route
+to the *capability* of running 9.2, and the two converge** (both end up running the 9.2 OS, which is
+fresh JIT stimulus either way). Don't treat this as settled — if Path A's MMU wall proves unbounded
+*and* the Path-B 9.2-delta experiment shows a short list, switching (or running both) is rational. Keep
+the forcing-function discipline: pick the path that keeps surfacing fixable general bugs.
+
 ## 3. MMU on Apple Silicon — approaches & ideas
 
 ### 3.1 The reframe that defuses "MMU is slow & complex": it's a *pointer* bug, not a *translation* bug

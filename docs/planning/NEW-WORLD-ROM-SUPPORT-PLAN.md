@@ -535,6 +535,36 @@ not from the idle loop. This means synthesizing the environment requires either:
 Sources: `elliotnunn/powermac-rom` (`NKPublic.a`, `NKOpaque.a`, `NKInit.s`, `NKScheduler.s`);
 ROM disassembly at `0x50326880` (check_work), `0x5032756c` (Thud), `0x503126b4` (dispatch).
 
+### ⭐ SS_NW_SYNTH_ENTRY experiment (2026-06-08) — nanokernel BYPASSED, 68k emulator ENTERED
+
+**Result: the synthesis approach WORKS.** `SS_NW_SYNTH_ENTRY=1` skips the entire nanokernel
+and enters the DR Emulator directly. The 68k decode loop at ROM+0x366080 fetches and
+dispatches opcodes from the reset vector; several 68k instructions execute before crashing
+at low-memory address 0x4000 (uninitialized system vectors).
+
+**What was built:**
+- ROM patch (in PatchROM, while ROM is writable): `mfspr r1,SPRG0; b 0x46f900`
+  replaces the nanokernel entry at ROM+0x310000
+- KDP field seeding: `+0x65c` (ECB), `+0x5f0` (decode loop), `+0x648` (dispatch table),
+  `-0x964` (UserModeMSR), plus r24 (68k PC) and r29 (dispatch table base)
+- Found and fixed: ROM write-protection — the ROM goes read-only after PatchROM returns,
+  so the entry patch must live in rom_patches.cpp, not sheepshaver_glue.cpp
+
+**What works:** entry → DR Emulator → decode loop → 68k opcode fetch → handler dispatch.
+**What crashes:** 68k code reaches uninitialized low memory (patch_68k() incomplete for
+parcels — its byte-pattern searches fail on the 2001-era ROM layout).
+
+**Next frontier (if resumed):** the 0x4000 crash is the same wall `patch_68k()` already
+documents: the parcels ROM's 68k-side HLE shims (nvram/via/drivers/time) have different
+byte patterns. Porting those shims IS the Phase 2 work from the original plan. The
+synthesis entry removes the nanokernel as a blocker — the remaining work is 68k-side.
+
+Repro:
+```bash
+SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1 SS_NW_TRAMPOLINE=1 SS_NW_SYNTH_ENTRY=1 \
+  SS_SYNTH_DEC=1 SS_JIT_NO_CHAIN=1 ./SheepShaver --config /tmp/trace901.prefs
+```
+
 ### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
 
 Drilling past the SPRG register fix exposed the actual gap, and it's a *general* supervisor-fidelity

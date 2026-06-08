@@ -1434,20 +1434,16 @@ void init_emul_ppc(void)
 		        "entry=%08x, [-0x900](wq)=1\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
 
-		/* P9 (SS_NW_SYNTH_ENTRY — CHOSEN PATH for NewWorld/parcels ROM support):
-		 * Skip the nanokernel entirely and enter the DR Emulator directly.
-		 * Seeds the KDP fields that the DR Emulator entry routine
-		 * (ROM+0x36f900, mirrored at ROM+0x46f900) reads at startup.
-		 * The ROM entry patch (mfspr r1,SPRG0; b 0x46f900) is applied in
-		 * PatchROM (rom_patches.cpp) while the ROM is still writable.
-		 * See NEW-WORLD-ROM-SUPPORT-PLAN.md "ARCHITECTURE DECISION" for rationale.
-		 * If this path hits a wall, Path A (full nanokernel boot via SS_NW_TRAMPOLINE
-		 * without SS_NW_SYNTH_ENTRY) remains available as a fallback. */
+		// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.
+		// Skips the nanokernel and enters DR Emulator directly. Dead end
+		// at Mixed-Mode (0xFFC0 F-line needs nanokernel). Kept for
+		// diagnostics. KDP field seeding and exception vectors below may
+		// transfer to Path A; the ROM patch at 0x310000 is Path-B-only.
 		if (getenv("SS_NW_SYNTH_ENTRY")) {
-			const uint32 ecb = kdp + 0x1000;  // EmulatorData
+			const uint32 ecb = kdp + 0x1000;
 			const uint32 reset_68k = (uint32)ROMBase + 0x2a;
 
-			// KDP fields still needed for interrupt handling later
+			// KDP fields — likely needed by Path A too (DR Emulator reads these)
 			WriteMacInt32(kdp + 0x65c, ecb);
 			WriteMacInt32(kdp + 0x660, 0);
 			WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);
@@ -1455,25 +1451,12 @@ void init_emul_ppc(void)
 			WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x480000);
 			WriteMacInt32(kdp - 0x964, 0x0000d032);
 
-			// 68k exception vectors — the cold-start dispatch at ROM+0x36e964
-			// reads guest[0] as initial SP and guest[4] as reset PC.
-			WriteMacInt32(0, 0);          // 68k SP (overwritten by 68k code)
-			WriteMacInt32(4, reset_68k);  // 68k reset PC (PPC guest addr)
-
-			// Fill vectors 2-63 (0x08-0xFC) with a ROM RTE (0x4E73) address.
-			// The 68k init sets VBR=0, so vectors live at absolute addresses.
-			// Without this, any unhandled trap (F-line at data, A-line from
-			// garbage) cascades to address 0 and sweeps through zero-filled
-			// memory as ORI.B #0,D0 — making debugging nearly impossible.
-			const uint32 rte_addr = (uint32)ROMBase + 0x3196; // known RTE in ROM
+			// 68k vectors — likely needed by Path A too (defensive stubs)
+			WriteMacInt32(0, 0);
+			WriteMacInt32(4, reset_68k);
+			const uint32 rte_addr = (uint32)ROMBase + 0x3196;
 			for (int vec = 2; vec < 64; vec++)
 				WriteMacInt32(vec * 4, rte_addr);
-
-			// Registers r31/r30/r29 are set by the ROM patch at 0x310000
-			// (addi r31,r1,0x1000 / lis r30,0x5036 / lis r29,0x5048).
-			// The cold-start dispatch block zeroes r8-r26, sets CR2, and
-			// calls bl 0x5036db94 to initialize ECB fields — so NO manual
-			// register/CR seeding is needed here.
 
 			fprintf(stderr, "[NW-SYNTH] KDP=%08x ECB=%08x 68k-reset=%08x\n",
 			        kdp, ecb, reset_68k);

@@ -17,7 +17,29 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-08 (latest) — DR Emulator internals decoded + r24 corruption investigation
+## 2026-06-08 (latest) — Path B (SS_NW_SYNTH_ENTRY) is a dead end; Path A is the forward path
+
+**Path B** (skip nanokernel, enter DR Emulator directly) hits a fundamental wall at the first
+Mixed-Mode transition. The parcels ROM's 68k init dispatches PPC modules via `_MixedModeMagic`
+(F-line 0xFFC0), which requires the **nanokernel's F-line handler** to inspect the routine
+descriptor and mode-switch to PPC. Without a nanokernel, 0xFFC0 traps to VBR+0x2C → RTE →
+re-executes 0xFFC0 → infinite loop. Implementing a synthetic Mixed-Mode Manager would be
+open-ended (recurs on every native transition throughout boot/runtime) with no prior art.
+
+**Path A** (jump68k redirect in the nanokernel) is the forward path: direct prior art at
+`rom_patches.cpp` ~1006 (`lwz r3,EmulatorData; lwz r4,opcode-tbl; mtctr; bctr`), bounded
+scope (one patch site), and the nanokernel already boots under our JIT (proven via
+`SS_ROM_SKIP_JUMP68K=1` — 160s+ stable idle, 0% crash). Candidate redirect sites in the
+parcels ROM: 0x3126dc (clearest SRR0/SRR1 setup before rfi).
+
+**What transfers from Path B to Path A:** KDP field seeding (ECB, decode loop, dtable,
+UserModeMSR), exception vector stubs, run_diags fallback, all DR Emulator knowledge. The
+cold-start dispatch ROM patch at 0x310000 is Path-B-only. Code is annotated for eventual
+removal.
+
+---
+
+## 2026-06-08 — DR Emulator internals decoded + r24 corruption investigation
 
 **DR Emulator decode loop (from decompressed 9.0.1 parcels ROM disassembly).**
 Handler address formula: `handler = 0x50480000 + opcode * 8`, computed by

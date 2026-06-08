@@ -673,18 +673,12 @@ bool PatchROM(void)
 	*lp = htonl(0);
 #endif
 
-	// SS_NW_SYNTH_ENTRY (CHOSEN PATH for NewWorld/parcels ROM support):
-	// Skip the nanokernel entirely, jump straight to the DR Emulator.
-	// This is Path B — see NEW-WORLD-ROM-SUPPORT-PLAN.md "ARCHITECTURE DECISION".
-	// Must happen BEFORE the mirror copy (ROM is still writable here; it goes
-	// read-only after PatchROM returns). KDP field seeding is in init_emul_ppc().
+	// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.
+	// Skips the nanokernel and enters the DR Emulator directly. Hits a
+	// dead end at the first Mixed-Mode transition (0xFFC0 F-line requires
+	// nanokernel). Kept as a diagnostic/research tool; Path A (jump68k
+	// redirect via the nanokernel) is the forward path.
 	if (getenv("SS_NW_SYNTH_ENTRY") && getenv("SS_NW_TRAMPOLINE")) {
-		// Enter the DR Emulator's cold-start dispatch (ROM+0x36e964) which
-		// initializes all registers, CR2, and ECB fields — then dispatches
-		// from the 68k reset vector at guest address 4.
-		// Previous approach jumped to the warm interrupt handler (0x46f900)
-		// which assumed an already-running DR context; many registers
-		// (r31/r30/r23/r28/CR2) were uninitialized → crash.
 		uint32 *lp = (uint32 *)(ROMBaseHost + 0x310000);
 		lp[0] = htonl(0x7C3042A6);  // mfspr r1, SPRG0       (r1 = KDP)
 		lp[1] = htonl(0x3BE11000);  // addi r31, r1, 0x1000  (r31 = ECB)

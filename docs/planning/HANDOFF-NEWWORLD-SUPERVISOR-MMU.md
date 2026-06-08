@@ -98,21 +98,91 @@ doing V=P with **zero** added hot-path cost. Validate that reframe cheaply befor
 
 ## 3. MMU on Apple Silicon — approaches & ideas
 
-> **NOTE TO SELF (the agent writing this doc):** fold in the lateral/ADHD brainstorm here when it
-> returns — concrete schemes ranked by effort/payoff, the 16 KB-page interaction, the perf cost model,
-> and a recommended first experiment. Until then, the canonical options live in
-> `MMU-NANOKERNEL-MP-PLAN.md` (shadow-arena / Dynamic-BAT verdict).
+### 3.1 The reframe that defuses "MMU is slow & complex": it's a *pointer* bug, not a *translation* bug
 
-**[PLACEHOLDER — to be filled from the lateral brainstorm.]**
+The current stall is **not** a translation problem. The nanokernel is zeroing/building a page table
+whose base+size it derives from the **fake `SDR1`** (`0xdead001f` → HTAB at `0xdead0000`), which is
+inside the NATMEM reservation but **not RAM-backed** → every store faults (slow `vm_fault` per host
+page) and it stalls. **Nothing here needs the JIT to translate a single load/store.** It needs the HTAB
+to **live in real RAM at a sane address.**
 
-Key constraints the brainstorm must respect (repeat for the implementer):
-- **Hot-path perf:** the JIT today does one `add` per guest memory op (V=P). Any scheme must keep that
-  near-free for the common case; a per-access hash-walk/software-TLB is unacceptable on the hot path.
-- **Page size:** PPC 4 KB vs Apple Silicon native **16 KB** — anything relying on host `mprotect`/`mmap`
-  granularity must cope (host page = 16 KB).
-- **W^X / MAP_JIT** for any code remapping.
-- **Hypervisor.framework is almost certainly NOT applicable** (it virtualizes ARM guests, not PPC) —
-  don't chase it.
+**The nanokernel needs self-consistent *bookkeeping*, not a functional MMU.** Classic Mac OS is morally
+identity-mapped (one shared address space, no per-app isolation) — a "real" MMU here would mostly build
+identity maps anyway. So if we let the guest build/zero/hash/walk its HTAB in **RAM-backed memory** and
+**store** SR/BAT/SDR1 so reads are coherent (exactly what we just did for SPRG), then **every page-table
+entry it makes maps V→V (identity)**, the JIT keeps doing `LDR [RMEMBASE, UXTW(ea)]` (V=P), and **never
+reads the table** — because under V=P the answer the table would give *is* the address already used. The
+guest keeps a coherent model of an MMU in a corner of RAM that we ignore. **Hot-path cost: exactly zero
+added instructions. No `mprotect`. No 16 KB-page interaction.** That last sentence is the answer to
+"slow and complex": the cheap rungs touch none of it.
+
+**The one failure boundary:** the instant the nanokernel builds a **non-identity PTE that a hot-path
+access depends on** (V≠P, and it expects translation to honor it), identity is a lie. The whole plan is
+organized around *measuring whether that boundary is ever crossed* rather than assuming it.
+
+### 3.2 The discriminator, and the lazy rung-ladder
+
+> **D — Does the New World nanokernel build only identity (V→V) PTEs, or ever a non-identity mapping a
+> hot-path access then depends on?** This is the only question that decides how far you must climb. The
+> cheap rungs are **self-validating**: build rung 1; if it boots on, D was "identity-only" and you're
+> done; if it stalls on a translation dependency, you've *measured* D = "non-identity" and earned the
+> right to climb. Climb only as far as it stalls. **Do not promise a rung; do not pre-build rung 4/5.**
+
+| Rung | Scheme | Effort | Hot-path cost | 16 KB issue | Build iff |
+|---|---|---|---|---|---|
+| 0 | V=P stub (today) | — | 0 | none | (Old World / 9.0.4) |
+| **1** | **Real-RAM HTAB + sane SDR1** | **hours–1d** | **0** | **none** | New World builds a table but maps identity ← **START HERE** |
+| 2 | Honor SR/BAT/SDR1 as stored state (like SPRG) | low-med | 0 | none | nanokernel reads back what it wrote |
+| 3 | Selective: pre-seed identity HTAB / HLE the build routine / fake the post-condition | med (RE the routine) | 0 | none | the build/zero loop itself is the cost, or it expects an OF-pre-built table |
+| 4 | **Shadow-arena / Dynamic-BAT** (already fully designed — `MMU-WITHOUT-GUTTING-FLATMEM.md`) | high | 0 (cost at rare map-change) | **safe only if maps ≥16 KB-aligned** | a *coarse* non-identity map appears |
+| 5 | Software TLB / inline probe (QEMU softmmu) | high | **~6–8 insns + branch per mem op** | — | *fine* 4 KB non-identity paging in a hot path — the nightmare; last resort |
+
+**Dead ends (don't chase):** **Hypervisor.framework** virtualizes the host ARM64 ISA only; our PPC CPU
+is software-emulated and never runs on a hardware vCPU, so HV has no guest address space to give —
+the address-space primitives you'd actually want (`mach_vm_remap`, shared-mem mirroring) are Mach VM,
+which rung 4 already uses. **Lazy SIGSEGV per-4KB-page commit** is painful precisely because the host
+page is 16 KB (one fault commits 16 KB → can't protect at PPC 4 KB granularity; false permission
+sharing across 4 guest pages) + W^X/reentrancy hazards — only viable as rung 4's miss handler, not a
+primary scheme.
+
+### 3.3 Recommended path + the cheap, decisive first experiment
+
+**Recommended:** climb lazily from rung 1; let each stall *measure* the next requirement; **stop** the
+moment a boot stops depending on a missing rung. Rungs 1–3 add zero hot-path instructions, touch zero
+host-MMU granularity, and reuse mechanisms already in the tree — "slow and complex" only starts at
+rung 4 and only if **data** forces it.
+
+**Lateral key — "honor-the-write beats fake-the-read":** the `0xdead` fake exists only because
+`mtspr SDR1` is currently **dropped**. If the nanokernel *computes* its own HTAB base (likely, since
+SheepShaver has no Open Firmware to pre-build one), then simply **storing `mtspr SDR1`** (stop dropping
+one write) makes the table land in real RAM with no magic constants. Try that *first*.
+
+**First experiment (hours, decisive):**
+1. Either **stop dropping `mtspr SDR1`** (store it), or make `mfspr SDR1` return `HTABORG|HTABMASK`
+   pointing at an HTABMASK-aligned, **RAM-backed** block reserved high in guest RAM (start small — a
+   small HTABMASK shrinks the nanokernel's zero-loop, since it sizes the loop from the mask).
+   Stub sites: `ppc-execute.cpp` `execute_mfspr`/`execute_mtspr` (SDR1 cases), and `ppc-jit.cpp`
+   mfspr/mtspr (cases 339/467 fall back to interp for SDR1 — so the interp change may suffice).
+2. Boot the New World 9.0.1 ROM (diagnostic config, §4); watch via heartbeat whether it advances past
+   the ~128-block `0x322990` zero-loop stall.
+3. **Measure D:** `SS_JIT_WATCH_ADDR` on the HTAB region — does it only *write* PTEs (build) or also
+   *read/walk*? For each PTE written, check **RPN == VPN** (identity) vs not. **All identity → D =
+   identity-only → rungs 1–3 finish the job.** Any non-identity PTE a later access depends on → D =
+   non-identity → rung 4 is now justified *by data*, not folklore.
+4. Outcomes: (a) clears + all-identity → ship rung 1/2, done; (b) clears + non-identity → schedule
+   rung 4 with a concrete trigger; (c) doesn't clear → SDR1 wasn't the blocker; suspect an
+   OF-pre-built-table expectation → try rung 3a (pre-seed an identity HTAB before boot).
+
+**Belt-and-suspenders ideas:** pre-seed the reserved HTAB with identity PTEs so a walk always confirms
+V=P; advertise the **smallest legal HTABMASK** to keep the table (and its zero-loop) tiny; park the
+HTAB in a reserved high-RAM hole the OS heap won't reuse, so non-identity experiments stay clean. The
+fake-SDR1 stall is itself a **precise sensor** of where New World first touches its page table —
+instrument it (watchpoint) before fixing it; it's the cheapest probe of "what does New World actually
+do with the MMU," which the prior docs flagged as unmeasurable without a booting ROM. You now have one.
+
+**Heavier fallbacks (only if D forces them):** `MMU-WITHOUT-GUTTING-FLATMEM.md` (rung 4 shadow-arena,
+fully designed), `MMU-DEFERRAL-REDTEAM.md` (the 16 KB-vs-4 KB hinge + softmmu cost case + HV dead-end),
+`MMU-NANOKERNEL-MP-PLAN.md` (canonical verdict). Don't re-derive these — they stand.
 
 ---
 

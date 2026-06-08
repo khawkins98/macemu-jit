@@ -27,6 +27,11 @@
 > checks any candidate in seconds. Whether such a ROM exists is unknown (G4 'ppcf' arrived with newer,
 > drifted layouts) — but it's a cheap check before committing to Phase 2.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+>
+> **▶ FRESH-AGENT HANDOFF for the current frontier (supervisor/MMU fidelity):**
+> [`HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`](HANDOFF-NEWWORLD-SUPERVISOR-MMU.md) — mission/why (defends the
+> correctness-via-forcing-function rationale), current state, the MMU rung-ladder + cheap first
+> experiment, and the how-to-work loop. **Start there if you're picking this up.**
 
 ---
 

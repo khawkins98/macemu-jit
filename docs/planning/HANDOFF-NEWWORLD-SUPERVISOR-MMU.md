@@ -116,6 +116,63 @@ printf 'rom /Users/Shared/macemu/2001-12-19 - Mac OS ROM 9.0.1.rom\nramsize 2684
 ```
 (no `disk`/`cdrom` — the diagnostic boot wedges in the nanokernel long before it would need OS media).
 
+## 1.6 Conceptual model — OldWorld vs NewWorld, and the source-verified correction that reshapes the fix
+
+*(From a research agent that read elliotnunn's reverse-engineered nanokernel `Init.s` directly + Mac
+history sources. Confidence: **[SRC]** = read from RE'd nanokernel source; **[FACT]** = cited;
+**[INFER]** = reasoned.)*
+
+**The boot chains.** *OldWorld* (what "Mac OS ROM 1.1" emulates): a ~4 MB Toolbox ROM on the logic board
+does **everything** — hardware init, MMU/page-table setup, nanokernel, 68k emulator, Toolbox. *NewWorld*:
+the on-board ROM is just ~1 MB **Open Firmware**; the "ROM" is a **disk file** ("Mac OS ROM", a
+compressed **CHRP/parcels `tbxi` container**). Chain: **OF** (power-on HW init, builds the device tree)
+→ loads the tbxi → the **Trampoline** (an ELF inside it) decompresses/relocates the ROM image into RAM,
+finishes Northbridge/Southbridge init, wires interrupts, copies/modifies the device tree, and builds
+**`NK*Info` descriptor structs** → jumps to the **nanokernel** (then OF's memory is overwritten — OF is
+gone) → 68k emulator → Mac OS. The **nanokernel↔68k-emulator split is identical in both worlds.** [FACT]
+
+**⭐ THE CORRECTION (most important thing in this doc for the fix).** On entry the NewWorld nanokernel
+receives, in r3–r9, **only descriptor structs** — incl. `NKSystemInfo` with the physical-memory **bank
+map** (`Bank0Start`/`PhysicalMemorySize`) — **NOT a finished page table.** It then, in `Init.s` cold-init,
+**does the MMU setup ITSELF** [SRC]:
+- zeros all 16 **segment registers** + clears **BATs** (it tears down translation, doesn't inherit it);
+- **sizes & allocates its own HTAB** from RAM and **writes `SDR1` itself** (`mtspr sdr1`);
+- places the **KDP at HTAB−0x2000** and **writes `SPRG0` itself** (`mtsprg 0`).
+
+So the Trampoline does **not** hand over SDR1/HTAB/SPRG0 — the nanokernel builds them. **Why our boot
+still wedged:** SheepShaver's flat-V=P **supervisor-MMU stub drops `mtspr SDR1`/SR/BAT and returns a
+fake SDR1 (`0xdead0000`)** — it **silently defeats the nanokernel's own setup.** The nanokernel computes
+real values; SheepShaver eats the writes; later reads return the fake. Our `SS_NW_TRAMPOLINE` SPRG0-seed
+"worked" only by papering over that far enough to expose the next swallowed write (the HTAB/page-table
+init). **[INFER, reconciles §1 ground truth with the source.]**
+
+⇒ **The walls are two coupled problems:** (1) the Trampoline-built **environment is absent**
+(`NKSystemInfo` bank map, decompressed image, interrupt wiring, device tree — SheepShaver jumps straight
+in with none), and (2) the **MMU stub eats the nanokernel's own SDR1/SPRG0/segment writes.** This means
+the likely correct fix is **"let the nanokernel's own init run" — stop dropping its supervisor writes
+and give it a real, RAM-backed HTAB** (exactly the MMU §3 "rung 1 / honor-the-write" path), rather than
+faking Trampoline post-conditions. Note: SheepShaver *also* `patch_nanokernel_boot`-intercepts parts of
+cold-init to substitute flat fakes (that's how 1.1 works), so the real choice is **(a) honor the
+NewWorld nanokernel's real MMU setup** vs **(b) intercept it more completely** like we do for 1.1.
+
+**THE FIRST QUESTION TO RESOLVE (do this before building):** **does SheepShaver actually run the
+NewWorld nanokernel's cold-init, or does our patching jump past it?** Trace the entry PC against the
+cold-init signature (the `mtsr 0..15` block, then `mtspr sdr1` / `mtsprg 0`).
+- **Runs cold-init** → fix = *let it run*: supply a valid `NKSystemInfo` bank map and **stop eating its
+  SDR1/SPRG0/segment writes** (honor-the-write). Our SPRG0 seed becomes redundant with what it writes —
+  consistent with "seeding it merely advanced to the next step."
+- **Jumps past cold-init** → fix = *fake the post-conditions wholesale* (pre-built SDR1/HTAB, SPRG0/KDP,
+  segments).
+
+**Maintainer's "comprehensive vs left-to-the-System" framing — verdict:** right that NewWorld moved the
+ROM to a disk file and offloaded init off the on-board ROM, **but** (1) it offloaded to **firmware (OF +
+Trampoline)**, *not* "the System" (Mac OS software) — easy to conflate, and the distinction matters; and
+(2) the **page table is NOT among the offloaded items** — the nanokernel still builds it. "For our needs
+that's fine" is correct: **we never need to emulate Open Firmware** (OF overwrites itself before the OS
+runs; its lasting value is the device tree, which SheepShaver already fakes via NameRegistry). The
+minimal hand-off to fake is: a sane **`NKSystemInfo` bank map** + a **non-hostile supervisor MMU** (honor
+or consistently fake SDR1/HTAB/SPRG0/segments) + the **device-tree** identity we already provide.
+
 ## 2. Your task
 
 Give the New World nanokernel a **consistent SDR1 ↔ HTAB ↔ KDP** environment so its page-table init
@@ -169,6 +226,26 @@ to the *capability* of running 9.2, and the two converge** (both end up running 
 fresh JIT stimulus either way). Don't treat this as settled — if Path A's MMU wall proves unbounded
 *and* the Path-B 9.2-delta experiment shows a short list, switching (or running both) is rational. Keep
 the forcing-function discipline: pick the path that keeps surfacing fixable general bugs.
+
+## 2.6 Path C — "a completely synthetic ROM?" (what's achievable, what isn't)
+
+A natural question: skip ROM files entirely and have SheepShaver **synthesize** the ROM. Verdict: a
+*fully* synthetic ROM is **not feasible**, but the reasoning clarifies the project. The ROM = (1)
+nanokernel (supervisor), (2) 68k emulator, (3) **the Toolbox / Mac OS itself** (the bulk — QuickDraw,
+Memory/File/Resource Managers, …), (4) boot structures. We already replace/patch 1, 2, 4. But **layer 3
+*is* Mac OS** — Apple's copyrighted code, an entire OS; it cannot be synthesized from nothing (even
+elliotnunn's `newworld-rom` only *assembles* a ROM from the real Power Mac ROM + real PEF binaries).
+
+**What IS synthesizable is the supervisor/firmware layer — which is exactly where all our walls are.**
+So Path C, in its achievable form, is "**synthesize the supervisor environment, keep a real ROM only for
+the Toolbox**" — i.e. Path A taken to its end: instead of *patching* the real nanokernel's MMU/boot
+setup, *replace* it with our own synthetic init while still loading the real Toolbox. A **synthetic
+nanokernel is genuinely possible** (elliotnunn's `NanoKernel`/`powermac-rom` are buildable), but it's
+**more work than patching the real one** (you're re-implementing a kernel) and **does not remove the
+Toolbox dependency**. So "fully synthetic" collapses to "synthesize the environment, borrow the
+Toolbox" — which is what the supervisor work in §1.6/§3 already is. **Conclusion: we always need a real
+ROM for the Toolbox; we are effectively synthesizing the firmware/supervisor layer regardless.** Don't
+chase a no-ROM-file design; do treat "synthesize the supervisor environment" as the legitimate core.
 
 ## 3. MMU on Apple Silicon — approaches & ideas
 
@@ -328,6 +405,45 @@ co-worker's files (SiliconSheep/*) unless asked.
 | `docs/ARCHITECTURE.md` | DIRECT_ADDRESSING / NATMEM, W^X, the JIT structure. |
 | `elliotnunn/NanoKernel` (clone to /tmp) | The buildable, version-branched RE'd source of the exact nanokernel — the Rosetta stone for every wall. (`Init.s` = HTAB/KDP setup; `Exceptions.s`; `PPCInfoRecordsPriv.s` = KDP struct.) |
 | Code: `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` `init_emul_ppc` (boot register/SPRG/KDP setup); `src/Unix/main_unix.cpp` (`KERNEL_DATA_BASE`=0x68ffe000, memory map); `src/kpx_cpu/src/cpu/ppc/ppc-execute.cpp` (interp mfspr/mtspr — ground truth); `ppc-registers.hpp` (the regs struct). |
+
+### 5.1 Prior-art bibliography — adapt documented layouts, don't RE blind
+
+*(From a sourced literature survey. Authority: **OFFICIAL** = Apple/IEEE primary; **RE** = buildable/
+byte-accurate reverse engineering; **lore** = forum/wiki, orientation only.)* **Read these first:**
+
+- **Apple TN1167 "The Mac ROM Enters a New World"** [OFFICIAL] — the canonical NewWorld map: the
+  disk-based "Mac OS ROM" file, the `tbxi` bootinfo, the OF device tree in the Name Registry, the
+  `model`/`compatible` machine-ID, Toolbox-loaded-to-RAM. *(Correction: the New World doc is **TN1167**,
+  not "TN1061/Fundamentals of the New World"; TN1060/61/62 are the Open Firmware series — TN1062
+  "Device Tree" is the authoritative device-tree reference.)*
+- **`elliotnunn/tbxi`** [RE] (PyPI `tbxi`) — THE tool to dump/rebuild the parcels container; `tbxi dump`
+  your actual 9.x ROM to see the nesting (`<CHRP-BOOT>` → Parcels → 4 MB MacROM → 3 MB 68k ROM). Also
+  the de-facto parcels-format documentation. Use it on the real asset before anything else.
+- **`elliotnunn/NanoKernel`** + **`elliotnunn/powermac-rom`** [RE, highest authority for the kernel] —
+  buildable byte-accurate nanokernel source. `powermac-rom` (René Vega's "Multitasking" kernel) is the
+  **closest RE to the 9.x kernel our NewWorld ROM actually runs** — prefer it for 9.x. This is the spec
+  for KDP/SPRG/MMU/exception behaviour; **there is no published table** — the source IS the doc.
+- **`elliotnunn/OldKern` → `KDP.h`** [RE] — the *only* explicit field-by-field **KDP layout** found
+  (a 0x1000 page: GPR save area, segment maps, BAT table, vector tables, MMU pointers at 0x5c8–0x684,
+  dispatcher table, panic save area, InfoRecords at 0xcc0+). ⚠ It's the **old-style** kernel — use it as
+  the *shape/idiom*, verify 9.x deltas against `powermac-rom`/`NanoKernel` v2.x.
+- **`elliotnunn/wedge`** (bootloader↔NanoKernel shim) [RE] — **the artifact most likely to encode the
+  Trampoline→nanokernel hand-off contract.** Read it alongside the nanokernel's entry code to answer the
+  §1.6 open question (what state the loader must leave: SPRG0/SDR1/KDP/`NKSystemInfo`).
+- **`cebix/macemu` SheepShaver source** [RE, working impl] — how an emulator *fakes* KernelData/
+  EmulatorData and *which* fields actually matter at runtime (grep `XLM_KERNEL_DATA`, `KernelData`,
+  the interrupt routines). Pair with elliotnunn source to recover the contract.
+- Background prose: **Amit Singh, *Mac OS X Internals* Ch.4** (OF/device-tree/boot mental model);
+  **Inside Macintosh: *PowerPC System Software*** (nanokernel role + Mixed Mode Manager — the
+  `[MIXEDMODE]` reference); **68kMLA "Picking apart the NewWorld ROM"** + **e-maculation "QEMU + the
+  Nanokernel"** (Trampoline *behaviour*: device-tree copy, interrupt setup, bridge init).
+
+**Documented GAPs (RE is unavoidable — expect to read source, not docs):** the **exact 9.x KDP byte
+layout**, **9.x SPRG conventions**, the **CPU-detect/per-CPU/L2-L3 tables inside the ROM** (vendor G3/G4
+upgrade material is marketing-grade only — no technote documents the patch surface; the real RE leads
+are the MacOS9Lives ROM-patching threads + tbxi disassembly), and the **Trampoline's SPRG0/SDR1/KDP
+post-conditions** (no public source states them — recover via `wedge` + nanokernel entry + reversing the
+Trampoline PEF extracted by `tbxi`). These gaps are *why* we lean on elliotnunn + our own boot probes.
 
 **One-line orientation for your first hour:** read §0 and §1 here → read the NEW-WORLD plan's "PROGRESS"
 + "next target" sections → run the diagnostic boot and reproduce the `0x322990` page-table-init wall →

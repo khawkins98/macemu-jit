@@ -2049,6 +2049,37 @@ void powerpc_cpu::execute(uint32 entry)
 							memcpy(&jit_verify_pre_state, regs_ptr(), sizeof(powerpc_registers));
 							jit_verify_n_insns = ppc_jit_aarch64_lookup_n_insns(jit_block_start_pc);
 						}
+						if (__builtin_expect(s_probe_count > 0, false)) {
+							uint32_t bpc = (uint32_t)jit_block_start_pc;
+							for (int pi = 0; pi < s_probe_count; pi++) {
+								if (s_probes[pi].pc == bpc) {
+									s_probes[pi].visits++;
+									if (probe_should_log(s_probes[pi].visits)) {
+										probe_entry *pe = &s_probes[pi];
+										fprintf(stderr, "[PROBE 0x%08x visit=%llu]", bpc, (unsigned long long)pe->visits);
+										if (pe->dump_all) {
+											fprintf(stderr, "\n");
+											for (int ri = 0; ri < 32; ri++) {
+												fprintf(stderr, "  r%-2d = 0x%08x", ri, (uint32_t)gpr(ri));
+												if ((ri & 3) == 3) fprintf(stderr, "\n");
+											}
+											fprintf(stderr, "  CR=0x%08x LR=0x%08x CTR=0x%08x\n",
+											        (uint32_t)cr().get(), (uint32_t)lr(), (uint32_t)ctr());
+										}
+										for (int fi = 0; fi < pe->n_fields; fi++) {
+											if (pe->fields[fi].type == PROBE_GPR)
+												fprintf(stderr, " r%u=0x%08x", pe->fields[fi].value, (uint32_t)gpr(pe->fields[fi].value));
+											else {
+												uint32_t val = vm_read_memory_4(pe->fields[fi].value);
+												fprintf(stderr, " [0x%08x]=0x%08x", pe->fields[fi].value, val);
+											}
+										}
+										fprintf(stderr, "\n");
+									}
+									fflush(stderr);
+								}
+							}
+						}
 						fn((void*)regs_ptr());
 						goto pdi_jit_post;
 					}

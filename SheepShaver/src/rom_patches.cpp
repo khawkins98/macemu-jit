@@ -710,9 +710,41 @@ static bool patch_nanokernel_boot(void)
 	*lp = htonl(0x48000000 | ((base - loc - 8) & 0x3fffffc));	// b		ROMBase+0x3101b0
 	lp = (uint32 *)(ROMBaseHost + base);
 	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);		// lwz	r1,(pointer to Kernel Data)
-	*lp++ = htonl(0x3da0dead);		// lis	r13,0xdead	(start of kernel memory)
-	*lp++ = htonl(0x3dc00010);		// lis	r14,0x0010	(size of page table)
-	*lp = htonl(0x3de00010);		// lis	r15,0x0010	(size of kernel memory)
+	if (getenv("SS_NW_TRAMPOLINE")) {
+		// NW parcels: seed r13/r14/r15 with REAL kernel memory layout so Init.s computes
+		// valid KernelMemoryBase/End. Without this, r13=0xDEAD0000 propagates to KDP+0x638
+		// and the free-list priming loop walks garbage addresses forever.
+		//
+		// Layout (matches Init.s expectations — HTAB at top, KDP below):
+		//   [kmem_base..kmem_base+pgdesc_size) — page descriptor free list (grows upward)
+		//   [sub_kdp_base..shmem_base)         — sub-KDP pool (32KB)
+		//   [shmem_base..kdp+0x2000)           — KDP/shmem (8KB+)
+		//   [htab_base..htab_end)              — HTAB (64KB, at KDP+0x2000)
+		//
+		// Init.s flow: HTAB_base = r13+r15-r14, KDP = (HTAB&~0xFFFF)-0x2000
+		const uint32 kdp = KernelDataAddr;
+		const uint32 sub_kdp_size = 0x8000;
+		const uint32 shmem_base = kdp & ~0x3FFF;
+		const uint32 sub_kdp_base = shmem_base - sub_kdp_size;
+		const uint32 htab_size = 0x10000;
+		const uint32 htab_base = kdp + 0x2000;
+		const uint32 ram_size_bytes = RAMSize;
+		const uint32 page_count = ram_size_bytes / 4096;
+		const uint32 pgdesc_size = (page_count * 4 + 0xFFF) & ~0xFFF;
+		const uint32 kmem_base = (sub_kdp_base - pgdesc_size) & ~0xFFFF;
+		const uint32 kmem_end  = htab_base + htab_size;
+		const uint32 kmem_total = kmem_end - kmem_base;
+		// r13 = KernelMemoryBase
+		*lp++ = htonl(0x3da00000 | (kmem_base >> 16));        // lis r13,kmem_base_hi
+		// r14 = HTAB size (Init.s: HTAB_base = r13+r15-r14; also SDR1 HTABMASK)
+		*lp++ = htonl(0x3dc00000 | (htab_size >> 16));        // lis r14,htab_size_hi
+		// r15 = total kernel memory size (Init.s: KernelMemoryEnd = r13+r15)
+		*lp = htonl(0x3de00000 | (kmem_total >> 16));         // lis r15,kmem_total_hi
+	} else {
+		*lp++ = htonl(0x3da0dead);		// lis	r13,0xdead	(start of kernel memory)
+		*lp++ = htonl(0x3dc00010);		// lis	r14,0x0010	(size of page table)
+		*lp = htonl(0x3de00010);		// lis	r15,0x0010	(size of kernel memory)
+	}
 
 	// Don't read PVR
 	static const uint8 pvr_read_dat[] = {0x7d, 0x9f, 0x42, 0xa6};
@@ -959,12 +991,22 @@ static bool patch_nanokernel_boot(void)
 		*lp = htonl(POWERPC_NOP);
 	}
 
-	// Don't create RAM descriptor table
+	// Don't create RAM descriptor table — NOPs `stwu r31,4(r29)` at ~0x503121D4 (decompressed).
+	// This instruction is the page-descriptor store in the free-list priming loop.
+	// OldWorld: NOP is correct (flat addressing, no MMU page tables needed).
+	// NewWorld (SS_NW_TRAMPOLINE): must NOT be NOPped — the nanokernel's Reset.s bank scan
+	// needs this stwu to populate the page descriptor array. Without it, r22=0xFFFFFFFC
+	// (no pages found) and the mapping loop runs ~524K iterations doing nothing useful.
+	// Byte pattern: {stwu r31,4(r29), addi r31,r31,0x1000, b -0x24}
 	static const uint8 desc_create_dat[] = {0x97, 0xfd, 0x00, 0x04, 0x3b, 0xff, 0x10, 0x00, 0x4b, 0xff, 0xff, 0xdc};
 	if ((base = find_rom_data(0x310000, 0x320000, desc_create_dat, sizeof(desc_create_dat))) == 0) return false;
-	D(bug("desc_create %08lx\n", base))
-	lp = (uint32 *)(ROMBaseHost + base);
-	*lp = htonl(POWERPC_NOP);
+	if (g_rom_904_lenient) {
+		fprintf(stderr, "[ROMPATCH] parcels: desc_create SKIP — real stwu will build page descriptor free list\n");
+	} else {
+		D(bug("desc_create %08lx\n", base))
+		lp = (uint32 *)(ROMBaseHost + base);
+		*lp = htonl(POWERPC_NOP);
+	}
 
 	// Don't load SRs and BATs.
 	// PARCELS: the SR/BAT-load routine was restructured (its 1.1 signature `7c0004ac 839d0000
@@ -2393,6 +2435,19 @@ static bool patch_68k(void)
 		}
 	}
 	
+	// SS_DUMP_ROM: dump full decompressed ROM image for offline disassembly
+	const char *dump_path = getenv("SS_DUMP_ROM");
+	if (dump_path && *dump_path) {
+		FILE *f = fopen(dump_path, "wb");
+		if (f) {
+			fwrite(ROMBaseHost, 1, ROM_SIZE, f);
+			fclose(f);
+			fprintf(stderr, "[ROM-DUMP] wrote %u bytes to %s\n", (unsigned)ROM_SIZE, dump_path);
+		} else {
+			fprintf(stderr, "[ROM-DUMP] failed to open %s for writing: %s\n", dump_path, strerror(errno));
+		}
+	}
+
 	return true;
 }
 

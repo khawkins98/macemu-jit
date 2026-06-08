@@ -1316,31 +1316,102 @@ void init_emul_ppc(void)
 			        sub_kdp_base, shmem_base, sub_kdp_size / 1024);
 		}
 
-		/* P4: SDR1 / HTAB backing. The nanokernel reads SDR1 (SPR 25) to locate the HTAB
-		 * and zeroes it during init. On real HW the Trampoline bootloader sets SDR1; we
-		 * enter the nanokernel directly, so SDR1 is uninitialized. Without this, mfspr SDR1
-		 * returned a sentinel (0xdead001f) → HTAB zeroing targeted unmapped 0xDEAD0000 →
-		 * ~500K SEGVs → effectively permanent stall. Allocate 64KB (minimum PPC HTAB) and
-		 * point SDR1 at it. The base must be 64KB-aligned (HTABORG is bits 0-15 of SDR1). */
+		/* P4+P5: Kernel memory layout matching Init.s expectations.
+		 *
+		 * Init.s (the NanoKernel's boot code) computes the memory layout from r13/r14/r15
+		 * (which rom_patches.cpp seeds via lis instructions at 0x310008). It expects:
+		 *   HTAB_base = r13 + r15 - r14   (HTAB at TOP of kernel memory)
+		 *   KDP       = (HTAB_base & ~0xFFFF) - 0x2000
+		 *   KernelMemoryBase = r13         (bottom of allocation)
+		 *   KernelMemoryEnd  = r13 + r15   (top = end of HTAB)
+		 *
+		 * The free-list priming loop (Reset.s, at ~0x503121B4 in decompressed ROM) builds
+		 * page descriptors growing UPWARD via `stwu r31, 4(r29)`, starting at
+		 * KernelMemoryBase - 4. For 256MB RAM / 4KB pages = 65536 entries × 4 bytes = 256KB.
+		 * (NB: the ROM patch `desc_create` NOPs this stwu for OldWorld; for NW, the
+		 * g_rom_904_lenient path skips that NOP so the real instruction executes.)
+		 *
+		 * Memory layout (ascending addresses):
+		 *   68FB0000  [kmem_base]      — KernelMemoryBase (r13)
+		 *             |                  page descriptors grow UPWARD (256KB)
+		 *   68FF0000  |                  (end of descriptor region)
+		 *   68FF4000  [sub_kdp_base]   — sub-KDP pool + IRP (32KB, zeroed)
+		 *   68FFC000  [shmem_base]     — KDP shmem alignment boundary
+		 *   68FFE000  [kdp]            — Kernel Data Page (8KB)
+		 *   69000000  [htab_base]      — HTAB (64KB, at KDP+0x2000)
+		 *   69010000  [kmem_end]       — KernelMemoryEnd (r13+r15)
+		 *
+		 * Init.s will recompute KDP from HTAB placement. For it to land on our
+		 * KernelDataAddr (0x68FFE000), HTAB must be at KDP+0x2000 = 0x69000000. */
 		const uint32 htab_size = 0x10000;  // 64KB minimum HTAB
-		const uint32 htab_base = (sub_kdp_base - htab_size) & ~(htab_size - 1);  // 64KB-aligned
+		const uint32 htab_base = kdp + 0x2000;  // Init.s: KDP = (HTAB & ~0xFFFF) - 0x2000
 		if (vm_acquire_fixed(Mac2HostAddr(htab_base), htab_size) < 0) {
 			fprintf(stderr, "[NW-TRAMP] WARNING: failed to map HTAB region [%08x..%08x): %s\n",
 			        htab_base, htab_base + htab_size, strerror(errno));
 		} else {
 			memset(Mac2HostAddr(htab_base), 0, htab_size);
-			uint32 sdr1_val = htab_base;  // HTABMASK=0 → 64KB HTAB
 			ppc_cpu->gpr(0) = 0;
-			ppc_cpu->sdr1_reg() = sdr1_val;
+			ppc_cpu->sdr1_reg() = htab_base;  // HTABMASK=0 → 64KB
 			fprintf(stderr, "[NW-TRAMP] HTAB mapped [%08x..%08x) (%u KB), SDR1=%08x\n",
-			        htab_base, htab_base + htab_size, htab_size / 1024, sdr1_val);
+			        htab_base, htab_base + htab_size, htab_size / 1024, htab_base);
 		}
+
+		/* Page descriptor region: the ROM's free-list builder (stwu r31,4(r29))
+		 * writes page descriptors UPWARD starting at KernelMemoryBase.
+		 * For 256MB RAM / 4KB pages = 65536 entries × 4 bytes = 256KB.
+		 * KernelMemoryBase must be low enough that the descriptors don't overwrite
+		 * the sub-KDP pool, IRP, or KDP. Place it so descriptors end before the
+		 * sub-KDP pool (0x68FF4000), leaving a safety gap. */
+		const uint32 ram_size_bytes = RAMSize;
+		const uint32 page_count = ram_size_bytes / 4096;
+		const uint32 pgdesc_size = (page_count * 4 + 0xFFF) & ~0xFFF;
+		const uint32 kmem_end  = htab_base + htab_size;
+		// KernelMemoryBase: must be 64KB-aligned (lis-compatible) and leave room for
+		// pgdesc_size bytes of descriptors ABOVE it before hitting sub_kdp_base.
+		const uint32 kmem_base = (sub_kdp_base - pgdesc_size) & ~0xFFFF;
+		if (vm_acquire_fixed(Mac2HostAddr(kmem_base), sub_kdp_base - kmem_base) < 0) {
+			fprintf(stderr, "[NW-TRAMP] WARNING: failed to map page-descriptor region [%08x..%08x): %s\n",
+			        kmem_base, sub_kdp_base, strerror(errno));
+		} else {
+			memset(Mac2HostAddr(kmem_base), 0, sub_kdp_base - kmem_base);
+			fprintf(stderr, "[NW-TRAMP] page-descriptor region [%08x..%08x) (%u KB) for %u pages\n",
+			        kmem_base, sub_kdp_base, (sub_kdp_base - kmem_base) / 1024, page_count);
+		}
+		fprintf(stderr, "[NW-TRAMP] KernelMemoryBase=%08x, KernelMemoryEnd=%08x (total=%08x)\n",
+		        kmem_base, kmem_end, kmem_end - kmem_base);
+
+		/* P6: NKSystemInfo — GPR(5) points to firmware info block so Init.s
+		 * copies it into KDP.SysInfo (KDP+0xC00 region).
+		 * Place at sub_kdp_base (already mapped+zeroed, safe from descriptor writes). */
+		const uint32 sysinfo_addr = sub_kdp_base;
+		memset(Mac2HostAddr(sysinfo_addr), 0, 0x120);
+		WriteMacInt32(sysinfo_addr + 0x000, ram_size_bytes);  // PhysicalMemorySize
+		WriteMacInt32(sysinfo_addr + 0x030, RAMBase);         // Bank0Start
+		WriteMacInt32(sysinfo_addr + 0x034, ram_size_bytes);  // Bank0Size
+		ppc_cpu->gpr(5) = sysinfo_addr;
+		fprintf(stderr, "[NW-TRAMP] NKSystemInfo@%08x: PhysMem=%08x Bank0=[%08x..+%08x)\n",
+		        sysinfo_addr, ram_size_bytes, (uint32)RAMBase, ram_size_bytes);
+
+		/* P7: IRP (Info Record Page) — the skipped cold-init (0x5031008C) normally
+		 * sets [KDP-0x20] = KDP - 0xA000. The free-list bank scan (Reset.s) reads
+		 * bank entries from IRP+0xDF0..IRP+0xEBC (26 eight-byte {start,size} pairs)
+		 * via: r30 = [KDP-0x20]; r19 = r30 + 0xDE8; then iterates lwzu/lwz at r19.
+		 * Without this pointer, r30=0 and the scan reads guest low memory (all zeros),
+		 * producing r22=0xFFFFFFFC (no pages found) and an ~infinite mapping loop. */
+		const uint32 irp_base = kdp - 0xA000;  // = 0x68FF4000 (inside sub-KDP pool)
+		WriteMacInt32(irp_base + 0xDF0, RAMBase);         // Bank0Start
+		WriteMacInt32(irp_base + 0xDF4, ram_size_bytes);  // Bank0Size
+		// Banks 1-25 already zero (sub-KDP pool was zeroed above)
+		fprintf(stderr, "[NW-TRAMP] IRP=%08x, bank0@%08x=[%08x..+%08x)\n",
+		        irp_base, irp_base + 0xDF0, (uint32)RAMBase, ram_size_bytes);
 
 		ppc_cpu->sprg_reg(0) = kdp;
 		memset(Mac2HostAddr(kdp - 0x1000), 0, 0x1000);
 		WriteMacInt32(kdp - 4, kdp);
-		fprintf(stderr, "[NW-TRAMP] SPRG0=%08x, [SPRG0-4]=KDP=%08x, zeroed [-0x1000,0) (parcels probe)\n",
-		        (uint32)kdp, (uint32)kdp);
+		WriteMacInt32(kdp - 0x20, irp_base);  // [KDP-0x20] = IRP base
+		fprintf(stderr, "[NW-TRAMP] SPRG0=%08x, [SPRG0-4]=KDP=%08x, [KDP-0x20]=IRP=%08x\n",
+		        (uint32)kdp, (uint32)kdp, irp_base);
+
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

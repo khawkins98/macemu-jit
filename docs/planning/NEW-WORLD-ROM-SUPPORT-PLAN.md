@@ -1,6 +1,6 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** 🟡 Phase 2 — `patch_68k` HLE porting · **DECISION (2026-06-08): Path B chosen — skip the nanokernel entirely** via `SS_NW_SYNTH_ENTRY`. The DR Emulator enters and the 68k decode loop works. Remaining gate to a real 9.x boot = 68k-side HLE shim porting (`patch_68k` byte patterns). See "ARCHITECTURE DECISION" below. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
+> **Status:** 🟡 Phase 2 — 68k init debugging · **Path B (SS_NW_SYNTH_ENTRY) partially working:** DR Emulator cold-start dispatch enters the 68k decode loop (~950K blocks/s, no crash), but 68k PC (r24) goes non-deterministic within the first few hundred instructions — a control-transfer 68k handler (JMP/JSR/RTS/BRA.L) dereferences a guest-memory pointer containing a physical address (0xE000xxxx) that doesn't exist in SheepShaver's flat address model. **ROOT CAUSE FOUND (2026-06-08):** the crash is NOT a JIT/register/MMU bug — it's the expected consequence of missing `patch_68k()` HLE shims. The parcels ROM's 68k init at 0xAD7C is a machine-init module dispatch (new code, not present in 1.1), which jumps to a data header at 0x502FD140 (F-line trap) → uninitialized exception vector → cascading exceptions to address 0. The fix IS the Phase 2 `patch_68k()` HLE porting work. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
 > **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`
@@ -594,7 +594,140 @@ we can't easily synthesize (e.g., interrupt dispatch, memory protection, task sc
 Path A's infrastructure is still there. The env vars are additive; switching back = drop
 `SS_NW_SYNTH_ENTRY`, keep `SS_NW_TRAMPOLINE`.
 
-**Next step: port the `patch_68k()` HLE shims for the parcels ROM layout.**
+#### SIGSEGV at 0x4000 — root-caused and fixed (2026-06-08)
+
+The initial SS_NW_SYNTH_ENTRY entered the DR Emulator via the *warm interrupt handler*
+(ROM+0x36f900/0x46f900), which assumes the DR Emulator is already running. Key registers
+(r31=ECB, r30=ROM_base_mask, r23=range_check, r28, CR2.SO) were never initialized:
+- r31 unset → SR handler at 0x36c520 did `lwz r7, 0x818(r31)` → garbage CTR → guest 0x0000
+  → unmapped 0x4000 → SIGSEGV.
+- CR2.SO unset → `bgelr cr2` / `bnsl cr2` in decode loop and handlers had wrong dispatch.
+
+**Fix:** Redirect the ROM patch from the warm handler to the **cold-start dispatch block**
+(ROM+0x36e964) — the same entry the ROM's own nanokernel uses for first-time DR Emulator
+init. This block zeroes r8-r26, sets r23/r25/r26/r28=0, calls `bl 0x36db94` (initializes
+~150 ECB fields), sets `crset cr2un` (CR2.SO=1) + `mtcrf 0x7f/0x80` (clears rest of CR),
+loads 68k vectors from guest addresses 0/4, and dispatches via `mtctr r29; bctr`.
+
+ROM patch now writes 5 instructions at 0x310000:
+```
+mfspr r1, SPRG0       # r1 = KDP
+addi  r31, r1, 0x1000 # r31 = ECB
+lis   r30, 0x5036     # r30 = ROM base mask
+lis   r29, 0x5048     # r29 = dispatch table
+b     0x36e964        # cold-start dispatch
+```
+P9 block writes 68k reset vectors: `guest[0]=0` (SP), `guest[4]=ROMBase+0x2A` (PC).
+
+**Result:** 950K+ DR blocks/s, no crash, DR Emulator enters the 68k decode loop. However,
+**case B confirmed**: r24 (68k PC) is non-deterministic across runs (0xe000280c or 0x28b20008),
+indicating the 68k init code reads from uninitialized guest memory and branches through the
+garbage value. r1 (68k SP) is also trashed (0x24 or 0x28 — in the exception vector table).
+ECB function pointers at +0x800/+0x804/+0x87c are VALID and STABLE across runs (all point to
+ROM addresses 0x5036xxxx), ruling out bad ECB init as the cause. The uninitialized read occurs
+somewhere in the 68k init path: ROM+0x2A → JMP ROM+0xB6 → ROM+0xAA10 (MOVEA.W #$2600,A7; LEA;
+search loop; MOVEC A0,VBR; ...). jRAM=0 throughout (no RAM JIT = no forward progress).
+
+**Next step: find the exact uninitialized read** in the 68k init path, then determine whether
+it's a missing trampoline init field (fixable) or requires rebuilding nanokernel state that
+Path B was designed to skip (strategic rethink needed). Only after fixing this foundation bug
+can `patch_68k()` HLE shim porting begin.
+
+#### Case B investigation: r24 corruption root-cause analysis (2026-06-08)
+
+**DR Emulator internals decoded (from ROM disassembly):**
+- Handler address formula: `handler = 0x50480000 + opcode * 8` (via `rlwimi r29,r27,3,0xD,0x1C`,
+  MB=13 ME=28, mask `0x0007FFF8`). Verified against known handlers.
+- 5 decode-loop variants cataloged: standard (0x366080), JMP continuation (0x367C64),
+  BRA.L continuation (0x367CA4), Bcc taken (0x367F60), Bcc not-taken (0x367F40).
+- CR1.GT = interrupt-pending flag. Set via `crand cr1gt, cr1un, cr6eq` (requires CR1.UN
+  set first). `bgtctr cr1` dispatches to interrupt handler loaded from ECB+0xA00.
+- ROM mirror: ROM[0x300000..0x400000] copied to [0x400000..0x500000] at runtime;
+  PC-relative branches resolve to +0x100000 offset addresses in the mirror.
+
+**Hypothesis 1 — `bgtctr cr1` dispatching to PPC address 0: DISPROVEN.**
+Placed SS_PROBE_PC at guest address 0x00000000 — **never fired** (0 visits). Additionally,
+no instruction in the early 68k init path sets CR1.GT: the cold-start dispatch clears all
+CR1 bits via `mtcrf 0x7f,r0(=0)`, and the only CR1.GT setter (`crand cr1gt,cr1un,cr6eq`
+at 0x5036D928) requires CR1.UN to be set first — nothing sets CR1.UN after the cold-start
+clear. So `bgtctr cr1` never fires during early init.
+
+**Corruption window localized via probes (2026-06-08):**
+- Probe at MOVEA.W handler (0x5049F3E0): r24=0x5000AA12 (correct: 0xAA10 + 2 from decode
+  advance) — **first BRA.L works correctly**.
+- Probe at DR Emulator decode loop (0x50481000, logged at powers-of-10 visits): r24
+  progresses normally through early 68k addresses (0x28B20008 → 0x28B29C44 at visit 100K),
+  then eventually reaches 0xE000280C (wild). r1 stuck at 0x28 (in exception vector table).
+- **Window:** r24 valid at ~0x5000AD8A (decode loop visit ~10), corrupted at 0xE000280C.
+
+**Hypothesis 2 — memory-sourced wild jump via missing MMU/SR/BAT translation: LEADING.**
+The ROMPATCH log confirms: `sr_load (SR/BAT-load) absent — SKIP neutralization (SR/BAT are
+JIT no-ops; RUNTIME-UNVALIDATED)`. The 68k init code at ROM+0xAB68 does
+`cmpi.l #$486e666f, ([$68ffefd0], $70)` — memory-indirect addressing that accesses the KDP
+area. Other 68k code dereferences pointers from guest memory that may contain addresses in
+the 0xE0000000 range (the physical-address space on real hardware, not identity-mapped in
+SheepShaver's flat model). A control-transfer handler (JMP/JSR/RTS/BRA.L) following such a
+pointer would produce exactly the wild r24 pattern observed.
+
+**Next diagnostic (bounded, not yet run):** probe the control-transfer handler PCs to
+identify which specific handler produces the wild r24:
+
+| Handler | PPC address | 68k opcode |
+|---------|------------|------------|
+| RTS | 0x504A73A8 | `$4E75` |
+| RTE | 0x504A7398 | `$4E73` |
+| JMP (A0) | 0x504A7680 | `$4ED0` |
+| JMP (A1) | 0x504A7688 | `$4ED1` |
+| JSR (A0) | 0x504A7480 | `$4EC0` |
+| JSR (A1) | 0x504A7488 | `$4EC1` |
+| RTR | 0x504A73B8 | `$4E77` |
+
+This is a single emulator run with 7 probes — cheap and non-invasive. It would identify
+the exact 68k instruction class producing the wild branch, narrowing the fix from "somewhere
+in the 68k init" to a specific handler + the memory it dereferences.
+
+#### ✅ Case B ROOT CAUSE FOUND (2026-06-08) — NOT a JIT/register/MMU bug; it's the missing HLE shims
+
+**Full crash chain (probe-verified, 6 emulator runs):**
+
+1. 68k init at ROM+0xAD7C is a **machine-init module dispatch** (walks a table at ROM+0xE184).
+   This code is **new in the parcels ROM** — the 1.1 ROM has FPU detection code at the same
+   address. The entire init path was restructured between the 1998 and 2001 ROMs.
+2. The dispatch table entry[0] at 0xE184 points to ROM offset 0x2FD140 with proc-offset=0 —
+   so `jmp (a0, a2.l)` at 0xAD90 jumps to 0x502FD140.
+3. **0x502FD140 is a module data header, not code.** First word is 0xFFC0 (F-line trap).
+4. F-line exception vectors through `[VBR+0x2C] = [0x2C] = 0` (uninitialized vector table).
+5. Execution at address 0 decodes zeros as ORI.B #0,D0 (4 bytes each), sweeping through
+   low memory. At address 8, hits 0xAAD0 (A-line trap from guest[8] written by earlier init
+   code) → another exception to address 0.
+6. Recursive exceptions accumulate stack frames. Eventually r24 sweeps through garbage in
+   the stack → hits a displacement that sends r24 to 0xE000xxxx.
+
+**Why this happens:** on the 1.1 ROM, `patch_68k()` inserts HLE (EMUL_OP) shims that
+intercept 68k init before the module dispatch runs. Those shims also set up the exception
+vector table (A-line/F-line handlers). On the parcels ROM, the shims weren't applied
+(byte-pattern searches failed — 17 absent patterns per the shim inventory), so:
+(a) the raw init dispatcher runs and hits hardware-probing code that crashes in emulation, and
+(b) the exception vector table is uninitialized, so every trap cascades to address 0.
+
+**Verdict:** r24 corruption is **not a JIT codegen bug, not a missing register init, not an
+MMU/SR/BAT translation issue** (the earlier SR/BAT hypothesis was wrong). It is the **expected
+consequence** of running parcels ROM 68k code without the HLE shims that `patch_68k()`
+normally provides. The fix IS the `patch_68k()` Phase 2 HLE porting work.
+
+**Quick-win option (exception vector stubs):** initialize the 68k exception vector table
+at VBR (address 0) with safe stubs (RTE instructions or `EMUL_RETURN` trampolines) for at
+least vectors 10 (A-line, offset 0x28) and 11 (F-line, offset 0x2C). This won't fix the
+module dispatch (it'll still hit data), but it prevents the cascade-to-address-0 pattern
+that makes debugging harder. Cheap to implement (a few WriteMacInt32 calls in the trampoline),
+and it's arguably correct for any guest — 68k exception vectors should never be 0.
+
+**Next concrete step (Phase 2 proper):** the module-dispatch crash at 0xAD90 is the first
+place where missing HLE shims cause a visible failure. To advance past it, either:
+(a) Patch the dispatcher to skip (`nop` the JMP or redirect past the module table walk), or
+(b) Port the `run_diags` HLE shim (one of the 17 absent patterns; it intercepts early 68k
+    init before the module dispatch) to the parcels ROM layout.
+Option (a) is faster; option (b) is the proper fix that also enables later init stages.
 
 ✅ **The HLE shim inventory is complete** — see
 [`PATCH-68K-SHIM-INVENTORY.md`](PATCH-68K-SHIM-INVENTORY.md). It catalogs all 84

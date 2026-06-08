@@ -17,6 +17,66 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-08 (latest) — DR Emulator internals decoded + r24 corruption investigation
+
+**DR Emulator decode loop (from decompressed 9.0.1 parcels ROM disassembly).**
+Handler address formula: `handler = 0x50480000 + opcode * 8`, computed by
+`rlwimi r29, r27, 3, 0xD, 0x1C` (MB=13, ME=28, mask `0x0007FFF8`). Initial misread was MB=6 —
+produced wrong addresses like `0x500277D0`. Five decode-loop variants identified:
+(1) standard (0x366080: `lhau/rlwimi/mtlr/lhau/bgelr cr2`),
+(2) JMP continuation (0x367C64: adds `mtctr r23 + bgtctr cr1`),
+(3) BRA.L continuation (0x367CA4: `lwz+lhaux` for 32-bit displacement),
+(4) Bcc taken (0x367F60),
+(5) Bcc not-taken (0x367F40).
+
+**CR1.GT = interrupt-pending flag.** Set via `crand cr1gt, cr1un, cr6eq` at 0x5036D928 (requires
+CR1.UN set first). Cold-start clears all CR1 via `mtcrf 0x7f, r0(=0)`. Only FP Rc=1
+instructions set CR1 in PPC — integer Rc=1 sets CR0 (common misidentification; see methodology
+note below).
+
+**ROM mirror:** ROM[0x300000..0x400000] copied to [0x400000..0x500000] at runtime. PC-relative
+branches in mirrored code resolve to +0x100000 offset addresses.
+
+**ECB handler table:** 151 entries at ECB+0x800 to ECB+0xA5C, built from halfword lookups at
+ROM+0x3DC44, OR'd with r30=0x50360000.
+
+**r24 corruption — bgtctr cr1 hypothesis DISPROVEN.** Probe at PPC address 0 never fired
+(0 visits). No instruction sets CR1.GT in the early 68k init path — cold-start clears CR1,
+and the only setter (`crand cr1gt, cr1un, cr6eq`) requires CR1.UN which nothing sets after
+the clear. So `bgtctr cr1` never fires during early init. Wasted investigation time on this
+theory.
+
+**Corruption window localized.** r24 valid at ~0x5000AD8A (decode loop visit ~10), then goes
+wild to `0xE000280C`. r1 (68k SP) stuck at 0x28 (in exception vector table). First BRA.L
+works correctly — MOVEA.W handler probe confirmed r24=0x5000AA12 (0xAA10 + 2 from decode
+advance).
+
+**~~Prime suspect: SR/BAT/MMU translation~~ — DISPROVEN. Actual root cause: missing HLE shims.**
+The 9.0.1 parcels ROM has a **machine-init module dispatcher** at 0xAD7C (new code — the 1.1
+ROM has FPU detection at the same address). It walks a table at ROM+0xE184; entry[0] points
+to 0x502FD140, which is a **data header** (not code). First word 0xFFC0 = F-line trap →
+exception vectors through `[VBR+0x2C]=0` (uninitialized) → execution at address 0 → zeros
+decode as ORI.B → recursive A-line/F-line exceptions → r24 sweeps to 0xE000xxxx through
+garbage stack frames. This is NOT a JIT/register/MMU bug — it's the expected consequence of
+running parcels 68k init without `patch_68k()` HLE shims (which set up exception vectors +
+intercept init before the dispatcher runs). **Fix = Phase 2 HLE porting or exception-vector
+stubs.**
+
+**Investigation efficiency note:** the SR/BAT/MMU hypothesis cost several probe runs before
+being disproven. The actual diagnostic was **tracing the 68k instruction flow** (disassembly +
+per-handler probes at computed addresses `0x50480000 + opcode*8`), not register-state
+inspection. When the DR Emulator is involved, trace the 68k instruction stream, not the PPC
+registers.
+
+**⚠️ Methodology: integer Rc=1 sets CR0, NOT CR1.** Only floating-point Rc=1 sets CR1. An
+initial analysis script falsely flagged integer Rc=1 (e.g. `subf.`, `subfe.`) as "FP Rc=1
+(sets CR1)" — always verify the instruction class before reasoning about CR field effects.
+
+**⚠️ DR Emulator dispatches per-encoding, not per-instruction.** JMP with addressing mode
+`(An)` (opcode 0x4ED0) is a different handler than JMP with `(d8,An,Xn)` (opcode 0x4EF0).
+Probing "the JMP handler" means probing the specific encoding's handler. Missing this wasted
+a probe run that showed 0 hits for JMP/JSR/RTS/RTR despite the actual wild jump being a JMP.
+
 ## 2026-06-08 — New World parcels boot: MMU/page-table wall broken, three harvests
 
 **Sixth harvest — 32-bit address space wrap-around in mem_search (infinite loop).** In `ss_rpc_handle_mem_search`, clamping `end_addr` to `0xFFFFFFFC` to avoid overflow is insufficient if the loop iterator `addr` is a `uint32_t` and the check condition is `addr + 4 <= end_addr`. When `addr` reaches `0xFFFFFFFC`, `addr + 4` wraps around to `0` (which is `<= end_addr`), resetting the search back to the start and causing an infinite loop. **Fix:** Use `uint64_t` for the loop iterator `addr` to cleanly bypass 32-bit overflow limitations and terminate successfully.

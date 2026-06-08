@@ -1097,6 +1097,26 @@ static bool patch_nanokernel_boot(void)
 		if (g_rom_904_lenient && getenv("SS_ROM_SKIP_JUMP68K")) {
 			fprintf(stderr, "[ROMPATCH] parcels: jump68k NOT patched (DIAGNOSTIC) — boot will wedge "
 			        "at the PPC->68k handoff; watching via [ALARM]/[HB]\n");
+
+			// Parcels I/O poll patches: the nanokernel polls hardware registers
+			// (VIA/CUDA status at [r28+2], bit 2 = ready) that don't exist in
+			// emulation. NOP each beq-back so the poll falls through immediately.
+			// Pattern: lbz rN,2(r28); eieio; andi. rN,rN,4; beq $-0xC
+			{
+				static const uint32 io_poll_beq_offsets[] = {
+					0x326504, 0x3266f4, 0x326864, 0x326968, 0x326b60
+				};
+				int patched = 0;
+				for (unsigned i = 0; i < sizeof(io_poll_beq_offsets)/sizeof(io_poll_beq_offsets[0]); i++) {
+					uint32 *p = (uint32 *)(ROMBaseHost + io_poll_beq_offsets[i]);
+					if (ntohl(*p) == 0x4182fff4) {  // beq $-0xC
+						*p = htonl(0x60000000);     // nop
+						patched++;
+					}
+				}
+				fprintf(stderr, "[ROMPATCH] parcels: patched %d/5 I/O poll loops (VIA/CUDA ready-wait)\n", patched);
+			}
+
 			return true;
 		}
 		return false;

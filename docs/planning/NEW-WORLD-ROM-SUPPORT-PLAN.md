@@ -289,13 +289,34 @@ Parcels uses a completely different KDP layout for its dispatch fields; a new re
 must be designed from the parcels nanokernel's own field map (+0x648 opcode table,
 +0x5a0/0x5a4 context, -0x900 work queue).
 
-**Next step:** find where the nanokernel's boot path NORMALLY posts the first work item
-to [KDP-0x900]. This happens during the PPC→68k handoff that we're skipping. Two approaches:
-(a) disassemble the code paths that write to [KDP-0x900] (find `stw` targeting offset
--0x900 from r1/KDP); (b) check the OldWorld 1.1 ROM to see if the same work-queue
-mechanism exists there (SheepShaver's existing redirect bypasses it, so its structure
-may reveal how parcels does it). The redirect must either replace the work-queue poster
-or seed the queue directly + fill dispatch fields KDP+0x5a0/0x5a4.
+**Dispatch field seeding experiment (2026-06-08).** Seeded the 3 missing fields in the
+NW trampoline (`sheepshaver_glue.cpp`, gated by `SS_NW_TRAMPOLINE`):
+
+| Seed | Value | Rationale |
+|------|-------|-----------|
+| KDP+0x5a0 (context) | KDP (0x68FFE000) | cold init sets this from SPRG0, which = KDP |
+| KDP+0x5a4 (code base) | ROMBase + 0x46d218 | mirror region; +0x26e8 → emulator start at 0x46f900 |
+| [KDP-0x900] (work queue) | 1 | non-zero triggers dispatch |
+
+Also patched 5 VIA/CUDA I/O poll loops (`lbz rN,2(r28); eieio; andi. rN,rN,4; beq $-0xC`)
+that spin waiting for a device-ready bit that doesn't exist in emulation (NOP the beq).
+Requires `SS_SYNTH_DEC=1` (synthesized decrementer) to pass the nanokernel's timer checks.
+
+**Results:** The nanokernel advanced past the idle loop into the interrupt-handling event
+loop (VIA/CUDA init sequence). Block rate dropped from ~1500M/10s (tight idle) to ~240M/10s
+(real work). 629 blocks compiled (vs 614 idle). But jDR=0 — the DR Emulator is never
+entered. Root cause: the nanokernel has **multiple work queues** at different KDP offsets
+(-0x900, -0xaf0, -0xb30). The active interrupt handler checks `-0xaf0` and `-0xb30`, NOT
+`-0x900`. Our seed at `-0x900` is never consumed. Additionally, value `1` is not a valid
+task descriptor — it should be a pointer to a task control block (TCB).
+
+**Next step:** understand the TCB format and which work queue drives the DR Emulator
+dispatch. The dispatch routine at 0x503126b4 ends with `rfi` into `code_base + 0x26e8`
+= SheepShaver's patched emulator start at ROM+0x46f900 (`patch_68k_emul` writes this).
+The routing is correct; only the work-queue seeding is wrong. Two approaches:
+(a) RE the TCB format from the nanokernel's context-switch code;
+(b) bypass the work queue entirely — patch the nanokernel to call the dispatch routine
+directly after init completes (surgical redirect, avoids TCB complexity).
 
 **Net revised picture:** `patch_nanokernel_boot` is *not* a wholesale re-RE — it's ~2 skips (done) + 1
 load-bearing handoff retarget (`jump68k`) + the lenient-resolved remainder. After it: 3 more patch

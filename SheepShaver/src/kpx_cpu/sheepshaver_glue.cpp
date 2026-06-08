@@ -1412,6 +1412,28 @@ void init_emul_ppc(void)
 		fprintf(stderr, "[NW-TRAMP] SPRG0=%08x, [SPRG0-4]=KDP=%08x, [KDP-0x20]=IRP=%08x\n",
 		        (uint32)kdp, (uint32)kdp, irp_base);
 
+		/* P8: Dispatch fields for the 68k emulator handoff.
+		 * The parcels nanokernel's dispatch routine (0x503126b4) does:
+		 *   lwz r8, 0x5a0(r1)  → mtspr SPRG0  (context ptr)
+		 *   lwz r8, 0x5a4(r1)  → addi +0x26e8 → mtspr SRR0  (68k code base → entry)
+		 *   lwz r4, 0x648(r1)  (opcode table — already set by warm path)
+		 *   lwz r9, -0x964(r1) → mtspr SRR1   (target MSR — already set)
+		 *   rfi  → enters SheepShaver's DR Emulator at code_base + 0x26e8
+		 *
+		 * The cold-init path (0x50310040, never taken) sets +0x5a0/+0x5a4 and posts
+		 * the first work item to [KDP-0x900]. We seed them here instead.
+		 * code_base: patch_68k_emul() writes emulator start at ROM+0x36f900; the ROM
+		 * mirror (memcpy at end of PatchROM) copies it to ROM+0x46f900. The opcode
+		 * table (0x5046e8c0) is in the mirror, so code_base is too:
+		 * 0x5046f900 - 0x26e8 = 0x5046d218. */
+		const uint32 emul_code_base = (uint32)ROMBase + 0x46d218;
+		WriteMacInt32(kdp + 0x5a0, kdp);             // context ptr = KDP (same as SPRG0)
+		WriteMacInt32(kdp + 0x5a4, emul_code_base);  // 68k code base (mirror region)
+		WriteMacInt32(kdp - 0x900, 1);                // seed work queue (non-zero → dispatch)
+		fprintf(stderr, "[NW-TRAMP] dispatch: +0x5a0(ctx)=%08x, +0x5a4(code_base)=%08x, "
+		        "entry=%08x, [-0x900](wq)=1\n",
+		        kdp, emul_code_base, emul_code_base + 0x26e8);
+
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

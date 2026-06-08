@@ -1434,10 +1434,15 @@ void init_emul_ppc(void)
 		        "entry=%08x, [-0x900](wq)=1\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
 
-		/* P9 (SS_NW_SYNTH_ENTRY): seed KDP fields that the DR Emulator entry
-		 * routine (ROM+0x36f900, mirrored at ROM+0x46f900) reads at startup.
+		/* P9 (SS_NW_SYNTH_ENTRY — CHOSEN PATH for NewWorld/parcels ROM support):
+		 * Skip the nanokernel entirely and enter the DR Emulator directly.
+		 * Seeds the KDP fields that the DR Emulator entry routine
+		 * (ROM+0x36f900, mirrored at ROM+0x46f900) reads at startup.
 		 * The ROM entry patch (mfspr r1,SPRG0; b 0x46f900) is applied in
-		 * PatchROM (rom_patches.cpp) while the ROM is still writable. */
+		 * PatchROM (rom_patches.cpp) while the ROM is still writable.
+		 * See NEW-WORLD-ROM-SUPPORT-PLAN.md "ARCHITECTURE DECISION" for rationale.
+		 * If this path hits a wall, Path A (full nanokernel boot via SS_NW_TRAMPOLINE
+		 * without SS_NW_SYNTH_ENTRY) remains available as a fallback. */
 		if (getenv("SS_NW_SYNTH_ENTRY")) {
 			const uint32 ecb = kdp + 0x1000;  // EmulatorData
 			const uint32 decode_loop = (uint32)ROMBase + 0x366080;

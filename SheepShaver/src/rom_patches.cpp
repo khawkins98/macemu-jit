@@ -671,7 +671,9 @@ bool PatchROM(void)
 	*lp = htonl(0);
 #endif
 
-	// SS_NW_SYNTH_ENTRY: patch ROM entry to skip nanokernel, jump to DR Emulator.
+	// SS_NW_SYNTH_ENTRY (CHOSEN PATH for NewWorld/parcels ROM support):
+	// Skip the nanokernel entirely, jump straight to the DR Emulator.
+	// This is Path B — see NEW-WORLD-ROM-SUPPORT-PLAN.md "ARCHITECTURE DECISION".
 	// Must happen BEFORE the mirror copy (ROM is still writable here; it goes
 	// read-only after PatchROM returns). KDP field seeding is in init_emul_ppc().
 	if (getenv("SS_NW_SYNTH_ENTRY") && getenv("SS_NW_TRAMPOLINE")) {

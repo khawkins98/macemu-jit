@@ -1,6 +1,6 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** 🟡 Phase 2/3 · **RUNTIME MILESTONE 2026-06-08** — the parcels (9.0.1) PPC **nanokernel BOOTS under our JIT** (diagnostic gate skips the un-ported 68k handoff). `:715` + `sr_load` skips runtime-validated. Remaining gate to a real 9.x boot: `jump68k` handoff redirect + 68k-side HLE (nvram/via) ports. See "RUNTIME MILESTONE" below. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
+> **Status:** 🟡 Phase 2 — `patch_68k` HLE porting · **DECISION (2026-06-08): Path B chosen — skip the nanokernel entirely** via `SS_NW_SYNTH_ENTRY`. The DR Emulator enters and the 68k decode loop works. Remaining gate to a real 9.x boot = 68k-side HLE shim porting (`patch_68k` byte patterns). See "ARCHITECTURE DECISION" below. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
 > **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`
@@ -28,10 +28,11 @@
 > drifted layouts) — but it's a cheap check before committing to Phase 2.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 >
-> **▶ FRESH-AGENT HANDOFF for the current frontier (supervisor/MMU fidelity):**
-> [`HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`](HANDOFF-NEWWORLD-SUPERVISOR-MMU.md) — mission/why (defends the
-> correctness-via-forcing-function rationale), current state, the MMU rung-ladder + cheap first
-> experiment, and the how-to-work loop. **Start there if you're picking this up.**
+> **▶ FRESH-AGENT HANDOFF:** the frontier has shifted. Path B (`SS_NW_SYNTH_ENTRY`) skips the
+> nanokernel entirely — see "ARCHITECTURE DECISION" below. The current wall is **`patch_68k()` HLE
+> porting** (68k-side byte patterns differ between OldWorld 1.1 and parcels ROMs). The supervisor/MMU
+> handoff ([`HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`](HANDOFF-NEWWORLD-SUPERVISOR-MMU.md)) is Path A
+> context — still valid as fallback reference, but not the active frontier.
 
 ---
 
@@ -564,6 +565,57 @@ Repro:
 SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1 SS_NW_TRAMPOLINE=1 SS_NW_SYNTH_ENTRY=1 \
   SS_SYNTH_DEC=1 SS_JIT_NO_CHAIN=1 ./SheepShaver --config /tmp/trace901.prefs
 ```
+
+### 🏗️ ARCHITECTURE DECISION (2026-06-08) — Path B is the chosen approach
+
+**Decision: skip the nanokernel entirely (`SS_NW_SYNTH_ENTRY`) rather than continuing
+wall-by-wall nanokernel RE (Path A).**
+
+Two paths were explored and both are proven:
+
+| Path | Approach | Status | Reaches |
+|------|----------|--------|---------|
+| **A** (`SS_NW_TRAMPOLINE`) | Boot the real nanokernel, fix each wall | Proven (idle loop) | Nanokernel idle at 0x5032751C, 568 blocks |
+| **B** (`SS_NW_SYNTH_ENTRY`) | Skip nanokernel, synthesize post-init state, enter DR Emulator directly | **Chosen** | 68k decode loop runs, executes ROM reset vector |
+
+**Why Path B:**
+1. The nanokernel's remaining walls (HTAB management, interrupt routing, scheduler plumbing)
+   are NW-specific environment construction — low bug-density, diminishing general-fix yield.
+2. Path B is architecturally simpler: seed ~6 KDP fields + 2 GPRs, patch 2 ROM words, done.
+   No need to emulate the full Trampoline→nanokernel→scheduler→dispatch chain.
+3. Both paths converge on the same next wall: `patch_68k()` HLE shim porting. Path B gets
+   there with less machinery.
+4. Path A's work is NOT wasted — the general fixes it harvested (SPRG0-3, fctiw FPSCR[RN],
+   SDR1) are committed and benefit all guests. The nanokernel boot capability remains
+   available as a diagnostic tool.
+
+**Pivot clause:** if Path B hits a wall where the DR Emulator needs nanokernel-managed state
+we can't easily synthesize (e.g., interrupt dispatch, memory protection, task scheduling),
+Path A's infrastructure is still there. The env vars are additive; switching back = drop
+`SS_NW_SYNTH_ENTRY`, keep `SS_NW_TRAMPOLINE`.
+
+**Next step: build the HLE shim compatibility table for `patch_68k()`.**
+
+The HLE interception *logic* (the `M68K_EMUL_OP` handlers — fake NVRAM, fake VIA, fake video
+driver, etc.) doesn't change between ROMs. What changes is *where in the ROM* those byte
+patterns live. `patch_68k()` searches for specific byte sequences to find the interception
+points; the parcels ROM has the same functional 68k code at different addresses with different
+surrounding bytes.
+
+The work is a **mapping table**: for each shim, find the parcels-ROM equivalent of the 1.1
+pattern. Progress is measurable (N of M shims mapped), scope is bounded (the shim list is
+finite and known), and each unmapped shim is a known gap — not a mystery crash.
+
+| Shim concept | 1.1 pattern (known) | 9.0.1 pattern | Status |
+|-------------|---------------------|---------------|--------|
+| NVRAM access | `patch_68k` patterns | TBD | ☐ |
+| VIA timer | `patch_68k` patterns | TBD | ☐ |
+| Video driver | `patch_68k` patterns | TBD | ☐ |
+| Serial | `patch_68k` patterns | TBD | ☐ |
+| ... | ... | ... | ☐ |
+
+The full shim inventory comes from auditing `patch_68k()` in `rom_patches.cpp` (starts at
+~line 1363). Each `find_rom_data` call + `M68K_EMUL_OP` write = one row in the table.
 
 ### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
 

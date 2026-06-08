@@ -167,10 +167,16 @@ harness that can't catch mistakes just produces the next silent bug.
       (ARM64 encodings capstone-verified), matching the interpreter incl. RN=0 = ties-**away**
       (`op_frin`), *not* ARM nearest-even — confirming `FRINTI`+FPCR.RMode was the wrong tool. Resolved
       **and promoted** the `fp_fctiw_dynround` harness quarantine → `make test-jit` **350/350, score=100**.
-    - 🟡 **STILL OPEN — `fctid` (64-bit convert) non-default FPSCR[RN].** Same bug class fctiw had: fixed
-      `FCVTNS` (ties-even) but the interp's RN=0 is ties-away, and RN=1/2/3 diverge. **Fix: apply the
-      identical 4-way FPSCR[RN] dispatch to the `fctid` case** (mirror the committed fctiw change). Risk
-      low (Mac OS ABI default RN=0) but genuine; cheap now that fctiw's pattern is in the tree.
+    - ℹ️ **`fctid` rounding — NON-ISSUE (investigated 2026-06-08), reclassified.** The earlier "fctid
+      uses fixed FCVTNS, wrong RN" note was misfiled: the **interpreter does not implement `fctid`/
+      `fctidz`/`fcfid` at all** (decode table registers `fp_int_convert` only for X-form 63/14 + 63/15 =
+      `fctiw`/`fctiwz`). These are **64-bit ops, illegal on the emulated 32-bit 7400** — no ground truth,
+      no `test-jit` vector can validate a rounding "fix", and the op should not produce a result. So
+      there is nothing to round-correct. **The genuine (latent, low-priority) item is a JIT↔interp
+      *divergence*:** the JIT *does* emit `fctid`/`fctidz`/`fcfid` (cases 814/815/846) while the interp
+      treats them as illegal — only matters if guest code illegally executes a 64-bit convert on a 7400
+      (not observed). Cleanest fix if ever pursued: make those JIT cases **fall back to the interpreter**
+      (so both agree), not add rounding dispatch. Deferred — no evidence anything hits it.
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at

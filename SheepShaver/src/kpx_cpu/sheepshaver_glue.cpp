@@ -1445,30 +1445,41 @@ void init_emul_ppc(void)
 		 * without SS_NW_SYNTH_ENTRY) remains available as a fallback. */
 		if (getenv("SS_NW_SYNTH_ENTRY")) {
 			const uint32 ecb = kdp + 0x1000;  // EmulatorData
-			const uint32 decode_loop = (uint32)ROMBase + 0x366080;
-			const uint32 dtable = (uint32)ROMBase + 0x480000;
 			const uint32 reset_68k = (uint32)ROMBase + 0x2a;
 
+			// KDP fields still needed for interrupt handling later
 			WriteMacInt32(kdp + 0x65c, ecb);
 			WriteMacInt32(kdp + 0x660, 0);
-			WriteMacInt32(kdp + 0x5f0, decode_loop);
-			WriteMacInt32(kdp + 0x5f4, decode_loop);
-			WriteMacInt32(kdp + 0x648, dtable);
+			WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);
+			WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);
+			WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x480000);
 			WriteMacInt32(kdp - 0x964, 0x0000d032);
 
-			ppc_cpu->gpr(4) = dtable;
-			ppc_cpu->sprg_reg(3) = kdp + 0x420;
+			// 68k exception vectors — the cold-start dispatch at ROM+0x36e964
+			// reads guest[0] as initial SP and guest[4] as reset PC.
+			WriteMacInt32(0, 0);          // 68k SP (overwritten by 68k code)
+			WriteMacInt32(4, reset_68k);  // 68k reset PC (PPC guest addr)
 
-			// DR Emulator register convention: r24 = 68k PC (pre-decremented
-			// by 2 because lhau pre-increments), r29 = dispatch table base
-			ppc_cpu->gpr(24) = reset_68k - 2;  // 68k PC (first lhau adds 2)
-			ppc_cpu->gpr(29) = dtable;          // dispatch table base for rlwimi
+			// Fill vectors 2-63 (0x08-0xFC) with a ROM RTE (0x4E73) address.
+			// The 68k init sets VBR=0, so vectors live at absolute addresses.
+			// Without this, any unhandled trap (F-line at data, A-line from
+			// garbage) cascades to address 0 and sweeps through zero-filled
+			// memory as ORI.B #0,D0 — making debugging nearly impossible.
+			const uint32 rte_addr = (uint32)ROMBase + 0x3196; // known RTE in ROM
+			for (int vec = 2; vec < 64; vec++)
+				WriteMacInt32(vec * 4, rte_addr);
 
-			fprintf(stderr, "[NW-SYNTH] KDP: +0x65c(ECB)=%08x +0x5f0(decode)=%08x "
-			        "+0x648(dtable)=%08x -0x964(MSR)=%08x\n",
-			        ecb, decode_loop, dtable, 0xd032);
-			fprintf(stderr, "[NW-SYNTH] regs: r24(68kPC)=%08x r29(dtable)=%08x\n",
-			        reset_68k - 2, dtable);
+			// Registers r31/r30/r29 are set by the ROM patch at 0x310000
+			// (addi r31,r1,0x1000 / lis r30,0x5036 / lis r29,0x5048).
+			// The cold-start dispatch block zeroes r8-r26, sets CR2, and
+			// calls bl 0x5036db94 to initialize ECB fields — so NO manual
+			// register/CR seeding is needed here.
+
+			fprintf(stderr, "[NW-SYNTH] KDP=%08x ECB=%08x 68k-reset=%08x\n",
+			        kdp, ecb, reset_68k);
+			fprintf(stderr, "[NW-SYNTH] guest[0]=%08x guest[4]=%08x "
+			        "(cold-start dispatch at ROM+0x36e964)\n",
+			        ReadMacInt32(0), ReadMacInt32(4));
 		}
 
 	}

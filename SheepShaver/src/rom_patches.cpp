@@ -679,14 +679,25 @@ bool PatchROM(void)
 	// Must happen BEFORE the mirror copy (ROM is still writable here; it goes
 	// read-only after PatchROM returns). KDP field seeding is in init_emul_ppc().
 	if (getenv("SS_NW_SYNTH_ENTRY") && getenv("SS_NW_TRAMPOLINE")) {
+		// Enter the DR Emulator's cold-start dispatch (ROM+0x36e964) which
+		// initializes all registers, CR2, and ECB fields — then dispatches
+		// from the 68k reset vector at guest address 4.
+		// Previous approach jumped to the warm interrupt handler (0x46f900)
+		// which assumed an already-running DR context; many registers
+		// (r31/r30/r23/r28/CR2) were uninitialized → crash.
 		uint32 *lp = (uint32 *)(ROMBaseHost + 0x310000);
-		lp[0] = htonl(0x7C3042A6);  // mfspr r1, SPRG0
-		const uint32 target = 0x46f900;
-		int32_t offset = target - 0x310004;
-		lp[1] = htonl(0x48000000 | (offset & 0x03FFFFFC));  // b ROM+0x46f900
-		fprintf(stderr, "[NW-SYNTH] ROM+0x310000: mfspr r1,SPRG0; b 0x%x "
-		        "(verify: %08x %08x)\n",
-		        target, ntohl(lp[0]), ntohl(lp[1]));
+		lp[0] = htonl(0x7C3042A6);  // mfspr r1, SPRG0       (r1 = KDP)
+		lp[1] = htonl(0x3BE11000);  // addi r31, r1, 0x1000  (r31 = ECB)
+		lp[2] = htonl(0x3FC05036);  // lis r30, 0x5036        (r30 = ROM base mask)
+		lp[3] = htonl(0x3FA05048);  // lis r29, 0x5048        (r29 = dispatch table)
+		const uint32 target = 0x36e964;
+		int32_t offset = target - 0x310010;
+		lp[4] = htonl(0x48000000 | (offset & 0x03FFFFFC));  // b ROM+0x36e964
+		fprintf(stderr, "[NW-SYNTH] ROM+0x310000: cold-start dispatch "
+		        "(r31=ECB, r30=0x50360000, r29=0x50480000, b 0x%x)\n"
+		        "  verify: %08x %08x %08x %08x %08x\n",
+		        target, ntohl(lp[0]), ntohl(lp[1]), ntohl(lp[2]),
+		        ntohl(lp[3]), ntohl(lp[4]));
 	}
 
 	// Copy 68k emulator to 2MB boundary
@@ -1768,6 +1779,16 @@ static bool patch_68k(void)
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static const uint8 run_diags_dat[] = {0x60, 0xff, 0x00, 0x0c};
 		base = find_rom_data(0x110, 0x128, run_diags_dat, sizeof(run_diags_dat));
+		if (base == 0 && g_rom_904_lenient) {
+			// Parcels 9.0.x: BRA.L displacement differs (0x000A8C88 vs 0x000CA46E),
+			// but the moveq/move.l pair 8 bytes after the BRA.L is the same as OldWorld.
+			static const uint8 run_diags_alt[] = {0x74, 0x00, 0x2f, 0x0e};
+			base = find_rom_data(0xd0, 0xf0, run_diags_alt, sizeof(run_diags_alt));
+			if (base) {
+				base -= 8; // BRA.L is 8 bytes before the moveq pattern (movea.l between)
+				fprintf(stderr, "[ROMPATCH] parcels: run_diags via OldWorld-style pattern, BRA.L at %08lx\n", (unsigned long)base);
+			}
+		}
 		if (base == 0 && !g_rom_904_lenient) return false;
 		if (base) {
 		D(bug("run_diags %08lx\n", base));

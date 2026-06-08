@@ -414,6 +414,114 @@ discovery — for which this path is on-target, not a tunnel.)
 **Next (if/when resumed):** initialize SPRG0 to the per-CPU/KDP pointer at nanokernel entry (Trampoline
 emulation), re-boot, expect the deadlock to clear and advance to the `jump68k` handoff.
 
+### ⭐⭐⭐ STRATEGIC REASSESSMENT (2026-06-08) — wall-by-wall RE past its peak; pivot to synthesize-post-init
+
+**Finding: QEMU boots Mac OS 9.2.x today without RE-ing the nanokernel at all.** It uses
+OpenBIOS (a full Open Firmware implementation). The nanokernel runs unmodified on emulated
+hardware — QEMU emulates the machine the nanokernel expects (real RAM-backed HTAB, real
+device registers, real SPRG setup via the Trampoline). Every NW wall we've hit is a place
+where SheepShaver's HLE model doesn't match what the nanokernel was compiled against. QEMU
+sidesteps all of them by emulating the hardware.
+
+**Honest assessment of the wall-by-wall approach:**
+
+| Wall | Fix | General? | Notes |
+|------|-----|----------|-------|
+| SPRG0 banking | banked SPRG0-3 in interpreter | ✅ yes | real correctness gap |
+| SS_PROBE_PC fast-dispatch | probes in JIT fast path | ✅ yes | tooling fix |
+| Sub-KDP pool mapping | vm_acquire 32KB below KDP | ❌ NW-only | environment construction |
+| IRP/page-descriptor seeding | WriteMacInt32 seeds | ❌ NW-only | environment construction |
+| I/O poll patches (×5) | NOP VIA/CUDA ready-wait | ❌ NW-only | device emulation gap |
+| Dispatch field seeding | KDP+0x5a0/+0x5a4/−0x900 | ❌ NW-only | environment construction |
+
+The forcing-function yielded real wins at the first two walls, then shifted to NW-specific
+environment plumbing. The nanokernel's supervisor init is a **low-bug-density region** — the
+project's own analysis (Track A1) identifies AltiVec/FP codegen as the high-density surface.
+
+**Revised strategy — synthesize post-nanokernel state (recommended):**
+
+Rather than continuing to advance the boot one wall at a time through the nanokernel's init
+sequence, extend `SS_NW_TRAMPOLINE` to synthesize the **complete post-init KDP state** and
+jump directly to the DR Emulator dispatch. Rationale:
+
+1. `SS_NW_TRAMPOLINE` is already seeding environment state (SPRG0, KDP, IRP, page
+   descriptors, dispatch fields). This is the thin end of the wedge — take it to its
+   logical conclusion.
+2. The nanokernel init that runs between reset and the DR Emulator handoff is
+   **initialization code, not OS code** — its output is a KDP layout and a CPU state,
+   both of which could be synthesized from the `elliotnunn/NanoKernel` disassembly source
+   without executing the actual init.
+3. This is closer to the QEMU approach (emulate the post-firmware environment) without
+   requiring full-machine emulation. It avoids the HTAB wall entirely — we don't need
+   the nanokernel's page-table init to run if we synthesize its output directly.
+4. The dispatch routine at 0x503126b4 ends with `rfi` into `patch_68k_emul`'s code at
+   ROM+0x46f900 — SheepShaver's existing DR Emulator entry. The routing is confirmed
+   correct; only the pre-dispatch state needs to be complete.
+
+**Concrete next steps for synthesize-post-init:**
+
+1. Map the complete KDP field layout from the `elliotnunn/NanoKernel` source + our own
+   disassembly (the dispatch reads +0x5a0, +0x5a4, +0x648, -0x964, +0x634; the interrupt
+   handler reads -0xaf0, -0xb30; there may be more).
+2. Determine the correct task control block (TCB) format for the work queues — the
+   `elliotnunn/NanoKernel` headers or MOL source may document this.
+3. Build a complete trampoline that synthesizes all required KDP fields, constructs a
+   valid initial TCB, and posts it to the correct work queue.
+4. Test: does the nanokernel dispatch to the DR Emulator with correct state?
+
+**What to work on instead / in parallel:**
+
+- **CopyBits HLE / idle-skip** (COMPATIBILITY-PAYOFF ranks these above NW frontier)
+- **AltiVec sum-across family** (the actual high-bug-density surface, Track A2)
+- **Carry-inducing test vectors** (documented testing gap)
+- **Golden-result oracle** (external PPC reference catching shared interp+JIT bugs)
+
+**The NW work is NOT abandoned** — it's redirected from "advance the boot one wall at a
+time" to "synthesize the post-init state and skip to the DR Emulator dispatch." The
+wall-by-wall characterization we've done is the foundation for that synthesis.
+
+### PSA/EWA/KDP research findings (2026-06-08) — "three work queues" premise DISPROVEN
+
+**Critical correction:** the three negative-offset fields at KDP-0x900, -0xaf0, and -0xb30
+are **not three work queues**. They are fields in the v2 NanoKernel's **PSA (Primary System
+Area)** — lock words and debugger buffers. Proven by two byte-exact matches against our
+own probe data:
+
+- `KDP-0x964 = PSA.UserModeMSR`: probe found `0x0000d032` (valid supervisor MSR with
+  IR|DR|EE|ME|RI). A work-queue interpretation can't explain this; the PSA struct predicts it.
+- `KDP-0xb50 = PSA.SchLock`: matches the `addi r8,r1,-0xb50; bl 0x312700` acquire
+  from SPRG0-KDP-DESIGN.md. A lock word, not a queue.
+
+**The "NewWorld v1.0" string at 0x30d064 is the ROM/bootinfo format version**, not the
+nanokernel version. The negative-offset PSA addressing proves this is a **v2 PSA-based
+(multitasking) kernel**. `elliotnunn/powermac-rom` (v2.28) is our structural map.
+
+**Corrected offset identities:**
+
+| Our label | PSA field | v2 name | Actual role |
+|-----------|-----------|---------|-------------|
+| `[KDP-0x900]` | `PSA.NoIdeaR23` | unknown | Possibly RTAS-related; unknown even in source |
+| `[KDP-0xaf0]` | `PSA.DbugLock` | Debugger lock | Lock for kernel debugger (spinlock struct) |
+| `[KDP-0xb30]` | `PSA.ThudLock` | Interactive debugger lock | Lock for "Thud" crash handler |
+
+**Real task scheduling** goes through ReadyQueues at negative offsets:
+- `-0x9f0` = `CriticalReadyQ` (priority 0)
+- `-0x9d0` = `LatencyProtectReadyQ` (priority 1)
+- `-0x9b0` = `NominalReadyQ` (priority 2) ← blue task is enqueued here
+- `-0x990` = `IdleReadyQ` (priority 3)
+
+**Task struct** (1KB, signature 'TASK', from `NKOpaque.a`): ContextBlockPtr at +0x88
+(redirected to `KDP.PA_ECB` for the blue task), embedded ContextBlock at +0x100.
+The blue task is created by `NKInit.s` ~1203 with `kFlagBlue`, `SchRdyTaskNow`
+enqueues it on `NominalReadyQ`, scheduler selects it, `rfi` enters DR Emulator.
+
+**Open contradiction:** the v2 source's `SchIdleTask` does NOT poll `[KDP-0x900]`,
+but we *observed* the running 9.0.1 ROM polling that address in its idle loop
+(`0x5032751C`). This may be a v2.0→v2.28 delta or an SMP signaling slot. The idle
+loop needs disassembly before we can determine the correct dispatch trigger.
+
+Sources: `elliotnunn/powermac-rom` (`NKPublic.a`, `NKOpaque.a`, `NKInit.s`, `NKScheduler.s`).
+
 ### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
 
 Drilling past the SPRG register fix exposed the actual gap, and it's a *general* supervisor-fidelity

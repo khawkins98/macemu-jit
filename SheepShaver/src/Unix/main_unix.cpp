@@ -1021,6 +1021,7 @@ static int ss_rpc_handle_mem_search(rpc_connection_t *conn) {
 	if (wrote < 0 || p + wrote >= buf_end) goto finish;
 	p += wrote;
 
+	if (end_addr > 0xFFFFFFFC) end_addr = 0xFFFFFFFC;
 	for (uint32_t addr = start; addr + 4 <= end_addr; addr += 4) {
 		if (!ss_rpc_is_mapped(addr, 4)) continue;
 		uint32_t word = ReadMacInt32(addr);

@@ -1565,7 +1565,7 @@ void powerpc_cpu::execute(uint32 entry)
 									jit_verify_n_insns = jblk.n_insns; /* freshly compiled */
 							}
 						// SS_PROBE_PC: dump registers/memory at specified block-entry PCs.
-						// Parsed once; single integer compare per block when active.
+						// Parsed once; up to PROBE_MAX compares per block when active.
 						{
 							if (__builtin_expect(s_probe_count < 0, false)) {
 								s_probe_count = parse_probes(getenv("SS_PROBE_PC"));
@@ -1596,6 +1596,7 @@ void powerpc_cpu::execute(uint32 entry)
 														        pe->fields[fi].value,
 														        (uint32_t)gpr(pe->fields[fi].value));
 													} else {
+														// No bounds check: unmapped address will SIGSEGV (developer tool)
 														uint32_t val = vm_read_memory_4(pe->fields[fi].value);
 														fprintf(stderr, " [0x%08x]=0x%08x",
 														        pe->fields[fi].value, val);

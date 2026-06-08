@@ -1434,6 +1434,38 @@ void init_emul_ppc(void)
 		        "entry=%08x, [-0x900](wq)=1\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
 
+		/* P9 (SS_NW_SYNTH_ENTRY): seed KDP fields that the DR Emulator entry
+		 * routine (ROM+0x36f900, mirrored at ROM+0x46f900) reads at startup.
+		 * The ROM entry patch (mfspr r1,SPRG0; b 0x46f900) is applied in
+		 * PatchROM (rom_patches.cpp) while the ROM is still writable. */
+		if (getenv("SS_NW_SYNTH_ENTRY")) {
+			const uint32 ecb = kdp + 0x1000;  // EmulatorData
+			const uint32 decode_loop = (uint32)ROMBase + 0x366080;
+			const uint32 dtable = (uint32)ROMBase + 0x480000;
+			const uint32 reset_68k = (uint32)ROMBase + 0x2a;
+
+			WriteMacInt32(kdp + 0x65c, ecb);
+			WriteMacInt32(kdp + 0x660, 0);
+			WriteMacInt32(kdp + 0x5f0, decode_loop);
+			WriteMacInt32(kdp + 0x5f4, decode_loop);
+			WriteMacInt32(kdp + 0x648, dtable);
+			WriteMacInt32(kdp - 0x964, 0x0000d032);
+
+			ppc_cpu->gpr(4) = dtable;
+			ppc_cpu->sprg_reg(3) = kdp + 0x420;
+
+			// DR Emulator register convention: r24 = 68k PC (pre-decremented
+			// by 2 because lhau pre-increments), r29 = dispatch table base
+			ppc_cpu->gpr(24) = reset_68k - 2;  // 68k PC (first lhau adds 2)
+			ppc_cpu->gpr(29) = dtable;          // dispatch table base for rlwimi
+
+			fprintf(stderr, "[NW-SYNTH] KDP: +0x65c(ECB)=%08x +0x5f0(decode)=%08x "
+			        "+0x648(dtable)=%08x -0x964(MSR)=%08x\n",
+			        ecb, decode_loop, dtable, 0xd032);
+			fprintf(stderr, "[NW-SYNTH] regs: r24(68kPC)=%08x r29(dtable)=%08x\n",
+			        reset_68k - 2, dtable);
+		}
+
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

@@ -671,6 +671,20 @@ bool PatchROM(void)
 	*lp = htonl(0);
 #endif
 
+	// SS_NW_SYNTH_ENTRY: patch ROM entry to skip nanokernel, jump to DR Emulator.
+	// Must happen BEFORE the mirror copy (ROM is still writable here; it goes
+	// read-only after PatchROM returns). KDP field seeding is in init_emul_ppc().
+	if (getenv("SS_NW_SYNTH_ENTRY") && getenv("SS_NW_TRAMPOLINE")) {
+		uint32 *lp = (uint32 *)(ROMBaseHost + 0x310000);
+		lp[0] = htonl(0x7C3042A6);  // mfspr r1, SPRG0
+		const uint32 target = 0x46f900;
+		int32_t offset = target - 0x310004;
+		lp[1] = htonl(0x48000000 | (offset & 0x03FFFFFC));  // b ROM+0x46f900
+		fprintf(stderr, "[NW-SYNTH] ROM+0x310000: mfspr r1,SPRG0; b 0x%x "
+		        "(verify: %08x %08x)\n",
+		        target, ntohl(lp[0]), ntohl(lp[1]));
+	}
+
 	// Copy 68k emulator to 2MB boundary
 	memcpy(ROMBaseHost + ROM_SIZE, ROMBaseHost + (ROM_SIZE - 0x100000), 0x100000);
 

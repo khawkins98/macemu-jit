@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-07 (added project arc / phase framing)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-08 (D3 reframed to active correctness-via-forcing-function; fctiw fixed; New World handoff)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -29,7 +29,7 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 |-------|--------|-------|
 | **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
 | **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: New World ROM → 9.1/9.2, fuller device/OS modeling). Correctness first, measured against the Phase-2 benchmarks. **Current primary thrust.** | 🔜 next |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: New World ROM → 9.1/9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — active in **D3** (New World nanokernel boots 27→128 PCs; SPRG + fctiw fixes harvested; at the MMU wall). | 🟡 active |
 | **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
@@ -162,14 +162,15 @@ harness that can't catch mistakes just produces the next silent bug.
     `FCVTAS Wd` (`fctiw`, round-half-away = `frin` = default RN) / `FCVTZS Wd` (`fctiwz`) + NaN→`0x80000000`
     fixup; 5 vectors, **`make test-jit` 302/302**. `fsqrt`/`fres`/`frsqrte` un-sweepable (interp lacks
     them / estimates). **27 codegen bugs fixed total this session.**
-    - 🟡 **OPEN (adversarial-review finding, filed) — `fctiw`/`fctid` non-default FPSCR[RN].** `fctiw`
-      hardcodes `FCVTAS` (ties-away), correct only for RN=0 (the practical default); RN=1/2/3 diverge
-      (review confirmed via `mtfsfi`). `fctid` is *also* wrong at RN=0 (uses fixed `FCVTNS`=ties-even,
-      but the interp's RN=0 is ties-**away**). **Fix:** runtime 4-way dispatch on FPSCR[RN] →
-      `FCVTAS`(0)/`FCVTZS`(1)/`FCVTPS`(2)/`FCVTMS`(3) (note PPC RN=0 is away, *not* ARM nearest-even,
-      so `FRINTI`+FPCR.RMode won't work — the `emit_sync_fpscr_rounding` map sends RN=0→ARM-even).
-      Validate all 4 modes vs interp. **Practical risk low** (Mac OS ABI default RN=0; compilers don't
-      emit RN changes) but genuine (the RN-sync machinery exists because RN *does* change at runtime).
+    - ✅ **FIXED 2026-06-08 (`fctiw`) — non-default FPSCR[RN] now honored.** Implemented exactly the
+      filed fix: a runtime 4-way dispatch on FPSCR[RN] → `FCVTAS`(0)/`FCVTZS`(1)/`FCVTPS`(2)/`FCVTMS`(3)
+      (ARM64 encodings capstone-verified), matching the interpreter incl. RN=0 = ties-**away**
+      (`op_frin`), *not* ARM nearest-even — confirming `FRINTI`+FPCR.RMode was the wrong tool. Resolved
+      **and promoted** the `fp_fctiw_dynround` harness quarantine → `make test-jit` **350/350, score=100**.
+    - 🟡 **STILL OPEN — `fctid` (64-bit convert) non-default FPSCR[RN].** Same bug class fctiw had: fixed
+      `FCVTNS` (ties-even) but the interp's RN=0 is ties-away, and RN=1/2/3 diverge. **Fix: apply the
+      identical 4-way FPSCR[RN] dispatch to the `fctid` case** (mirror the committed fctiw change). Risk
+      low (Mac OS ABI default RN=0) but genuine; cheap now that fctiw's pattern is in the tree.
 - 🟡 **rom-harness — span-gate ✅ done; recover coverage + triage survivors next** *(2026-06-06)*.
   The standalone differential rom-harness now completes broad sweeps (skip-not-abort fix,
   `c1a10c0a`). Its failures were dominated by a **block-model mismatch** (scanner ends a block at
@@ -799,27 +800,34 @@ modernization (`650d3a82`), `linux/sched.h` guard (`6787dce8`), etherhelpertool 
 rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 **Detail:** `docs/UPSTREAM-LINEAGE-SYNC.md` §6 / §6.1.
 
-## D3. ⏸ Break the Mac OS 9.0.4 ceiling — newer guest OS compatibility (exploratory)
+## D3. 🟡 Break the Mac OS 9.0.4 ceiling — New World ROM as a JIT-correctness forcing-function (ACTIVE)
 
-SheepShaver tops out at ~9.0.4. Getting to 9.1/9.2.2 is **two walls in sequence**, both
-deferred/exploratory:
-- **First wall — New World "parcels" ROM support.** The newer ROMs 9.1+/9.2.x need are
-  parcels-format, which `PatchROM()` rejects. A cheap, decisive Phase-0 diagnostic is ready to run.
-  **Detail:** `docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md`.
-- **Second wall (maybe) — supervisor-level fidelity.** 9.2.x may also depend on machinery SS
-  deliberately stubs: the **MMU** (faked V=P), the **nanokernel** exception/interrupt model
-  (bypassed; host-signal timer instead of a real decrementer), and **preemptive MP tasks**
-  (absent). **Feasibility settled 2026-06-07 (2 opposed agents):** the MMU *is* implementable
-  without gutting the flat model — **shadow-arena / "Dynamic BAT"** (Dolphin-proven; cost on the rare
-  map-change, not per-access) — but it's **deferred "never-unless-proven"**: no evidence any wanted 9.x
-  software needs non-identity translation, untestable until a New World ROM boots. Hinge = host 16 KB vs
-  PPC 4 KB page. The `SS_STUB_TRACE` probe (shipped) measured **zero runtime supervisor pressure on 9.0.4**.
-  **Detail:** `docs/planning/MMU-NANOKERNEL-MP-PLAN.md` (canonical, with the headline verdict + dossier);
-  evidence memos `MMU-WITHOUT-GUTTING-FLATMEM.md` (design) + `MMU-DEFERRAL-REDTEAM.md` (red-team).
+> **Reframed 2026-06-08 (maintainer):** this is no longer "exploratory, deferred." The goal is
+> **hardening PPC/JIT correctness**; the New World ROM / 9.2 boot is the **forcing function** that drags
+> SheepShaver's thin supervisor-stack into the light. The boot is the oracle; the **bugs we fix are the
+> product** — already yielding general fixes (SPRG, fctiw). **▶ FRESH-AGENT HANDOFF:**
+> `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` (mission/why + state + MMU rung-ladder + setup).
 
-Run the New World Phase 0 before committing — the first wall (ROM) is the gate; the MMU "second wall" has
-no runtime footprint on the OS we run today and a ready design if it ever surfaces. Large, exploratory,
-deferred vs. the EV compatibility levers.
+**Progress (2026-06-08):** the first wall (parcels-ROM `PatchROM`) is **largely cleared** — the `:715`
+CPU-detect block is skippable, lenient patching + SPRG/KDP Trampoline shim let the **parcels (9.0.1)
+nanokernel BOOT under the JIT, advancing 27 → 128 PCs** (env-gated diagnostic). Cross-ROM confirmed: the
+9.x family (9.0.1/9.1.1/9.6.1/9.8.1/10.2.1) shares one nanokernel (0.04% diff) → one fix covers them;
+9.0.4-G4 is a separate lineage. **General correctness harvested:** real **SPRG0-3 registers** (were
+dropped), **`fctiw` dynamic FPSCR[RN]** (test-jit 350/350). Source-verified key finding: the New World
+nanokernel **builds its own HTAB/SDR1/SPRG0** — SheepShaver's MMU stub silently *eats* those writes; the
+fix is "honor the writes / let cold-init run", not "fake Trampoline post-conditions".
+
+**Now at the second wall — supervisor/MMU fidelity (the page-table init, ROM `0x322990`).** This is the
+"thin PPC stack" gap the forcing-function was meant to surface. MMU is implementable without gutting the
+flat model — the handoff §3 gives a **lazy rung-ladder** (rung 1 "honor-the-write / real-RAM HTAB", zero
+hot-path cost → rung 5 softmmu only if data forces it) + a decisive first experiment that *measures*
+whether a real MMU is ever needed (PPC 4 KB vs host 16 KB is the hinge for the heavy rungs). Canonical
+options: `MMU-NANOKERNEL-MP-PLAN.md`; design memos `MMU-WITHOUT-GUTTING-FLATMEM.md` +
+`MMU-DEFERRAL-REDTEAM.md`; RE design `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
+
+Strategic forks (handoff §2.5/§2.6): ROM-port (current) vs synthetic-environment-on-1.1 vs "synthetic
+ROM" (not feasible — the Toolbox *is* Mac OS). Discipline: advance while each wall yields a *general*
+fix; never regress the 1.1 path (`make test-jit`=100 gate).
 
 ## D4. 🟡 DingusPPC comparative investigation (exploratory)
 

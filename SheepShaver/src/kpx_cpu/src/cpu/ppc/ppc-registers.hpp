@@ -222,6 +222,8 @@ struct powerpc_registers
 		SPR_VRSAVE	= 256,
 		SPR_SPRG0	= 272,
 		SPR_SPRG3	= 275,
+		SPR_IBAT0U	= 528,
+		SPR_DBAT3L	= 543,
 	};
 
 	static inline int GPR(int r) { return GPR_BASE + r; }
@@ -259,6 +261,9 @@ struct powerpc_registers
 								// field by name — so its exact offset is irrelevant to codegen.
 	uint32 sdr1;				// SDR1 (SPR 25) — HTAB base/mask. Previously returned a sentinel
 								// (0xdead001f); the nanokernel reads SDR1 to locate and zero the HTAB.
+	uint32 bat[16];				// BAT registers (SPR 528-543): IBAT0U/L..IBAT3U/L, DBAT0U/L..DBAT3U/L.
+								// Previously dropped; the nanokernel sets up BATs to map logical→physical
+								// address ranges, then uses those logical addresses for page tables/free lists.
 };
 
 #endif /* PPC_REGISTERS_H */

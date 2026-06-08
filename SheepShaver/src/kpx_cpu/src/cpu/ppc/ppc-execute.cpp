@@ -54,7 +54,7 @@
  *	Stub-pressure trace (SS_STUB_TRACE) — the MMU/nanokernel "second wall" probe.
  *
  *	SheepShaver runs the guest as a flat-addressed CPU by FAKING/DROPPING the privileged
- *	supervisor ops (mfspr-other→0, mtspr BAT/DEC→dropped; SDR1+SPRG are now real registers,
+ *	supervisor ops (mfspr-other→0, mtspr DEC→dropped; SDR1+SPRG+BAT are now real registers,
  *	mtmsr/mtsr/tlbie/rfi→illegal-ignored). On the aarch64 JIT these all route through the
  *	INTERPRETER (the JIT only inlines LR/CTR/XER and `return false`s the rest), so counting
  *	here is runtime-accurate. We bucket boot vs steady-state (flipped at the first guest idle
@@ -1306,6 +1306,9 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 		 * pointer here and reads it back; dropping them (returning 0) caused a spinlock deadlock. */
 		d = regs().sprg[spr - powerpc_registers::SPR_SPRG0];
 		break;
+	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
+		d = regs().bat[spr - powerpc_registers::SPR_IBAT0U];
+		break;
 	case 22: {	/* DEC (decrementer) — SheepShaver has no real one (host-signal timer instead) */
 		/* SS_SYNTH_DEC: synthesize a free-running down-counter at the timebase rate so guest TIMED
 		 * spin-waits make progress (delta of two DEC reads advances). Default returns 0 like any
@@ -1357,7 +1360,10 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);
 #else
-	default:  /* SheepShaver drops all other SPR writes (BAT/SDR1/DEC...) — stub */
+	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
+		regs().bat[spr - powerpc_registers::SPR_IBAT0U] = s;
+		break;
+	default:  /* SheepShaver drops all other SPR writes (DEC, etc.) — stub */
 		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
 		break;
 #endif

@@ -112,7 +112,9 @@ enum {
   RPC_METHOD_GET_FALLBACKS  = 19,  // () → reply with B1 fallback trace JSON
   RPC_METHOD_GET_TIMING     = 20,  // () → reply with P3 per-block timing JSON
   RPC_METHOD_GET_OPCODE_MIX = 21,  // () → reply with instruction mix JSON
-  RPC_METHOD_GET_HEATMAP    = 22,  // () → reply with region heat map JSON  // () → reply with register dump string
+  RPC_METHOD_GET_HEATMAP    = 22,  // () → reply with region heat map JSON
+  RPC_METHOD_MEM_SEARCH     = 23,  // (uint32 value, uint32 start, uint32 end) → reply with JSON {matches,count,truncated}
+  RPC_METHOD_MEM_READ_JSON  = 24,  // (uint32 addr, uint32 count) → reply with JSON {addr,hex}
 };
 
 // C2.0: server-side connection for receiving launcher commands

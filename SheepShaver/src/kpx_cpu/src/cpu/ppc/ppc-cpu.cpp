@@ -74,6 +74,85 @@ static double jit_ticks_to_ns(uint64_t ticks) {
 	return (double)ticks * jit_timebase.numer / jit_timebase.denom;
 }
 
+// SS_PROBE_PC: dump registers/memory at specified guest PCs without recompilation.
+// Format: SS_PROBE_PC=0xADDR[:field1,field2,...][;0xADDR2[:fields]]
+// Fields: rN (GPR), [0xADDR] (guest mem 4-byte read), or omit for full dump.
+// Logarithmic sampling: visit 1, 10, 100, 1000, 10000, 100000, ...
+enum probe_field_type { PROBE_GPR, PROBE_MEM };
+struct probe_field { probe_field_type type; uint32_t value; /* reg# or guest addr */ };
+struct probe_entry {
+	uint32_t pc;
+	bool dump_all;
+	int n_fields;
+	probe_field fields[16];
+	uint64_t visits;
+};
+#define PROBE_MAX 8
+static probe_entry s_probes[PROBE_MAX];
+static int s_probe_count = -1; // -1 = not yet parsed
+
+static bool probe_should_log(uint64_t v) {
+	// Log at powers of 10: 1, 10, 100, 1000, ...
+	if (v == 0) return false;
+	uint64_t p = 1;
+	while (p <= v) {
+		if (v == p) return true;
+		p *= 10;
+	}
+	return false;
+}
+
+static int parse_probes(const char *env) {
+	if (!env || !*env) return 0;
+	char *buf = strdup(env);
+	int count = 0;
+	// Split on ';' for multiple probes
+	char *saveptr1 = NULL;
+	char *tok = strtok_r(buf, ";", &saveptr1);
+	while (tok && count < PROBE_MAX) {
+		probe_entry *p = &s_probes[count];
+		p->visits = 0;
+		p->n_fields = 0;
+		p->dump_all = true;
+		// Split on ':' — first part is PC, optional second part is field list
+		char *colon = strchr(tok, ':');
+		if (colon) {
+			*colon = '\0';
+			p->pc = (uint32_t)strtoul(tok, NULL, 16);
+			p->dump_all = false;
+			// Parse comma-separated fields
+			char *saveptr2 = NULL;
+			char *field = strtok_r(colon + 1, ",", &saveptr2);
+			while (field && p->n_fields < 16) {
+				// Skip leading whitespace
+				while (*field == ' ') field++;
+				if (field[0] == 'r' && field[1] >= '0' && field[1] <= '9') {
+					// GPR: r0..r31
+					p->fields[p->n_fields].type = PROBE_GPR;
+					p->fields[p->n_fields].value = (uint32_t)atoi(field + 1);
+					if (p->fields[p->n_fields].value <= 31)
+						p->n_fields++;
+				} else if (field[0] == '[') {
+					// Memory: [0xADDR]
+					char *addr_start = field + 1;
+					char *bracket = strchr(addr_start, ']');
+					if (bracket) *bracket = '\0';
+					p->fields[p->n_fields].type = PROBE_MEM;
+					p->fields[p->n_fields].value = (uint32_t)strtoul(addr_start, NULL, 16);
+					p->n_fields++;
+				}
+				field = strtok_r(NULL, ",", &saveptr2);
+			}
+		} else {
+			p->pc = (uint32_t)strtoul(tok, NULL, 16);
+		}
+		count++;
+		tok = strtok_r(NULL, ";", &saveptr1);
+	}
+	free(buf);
+	return count;
+}
+
 // Instruction mix: aggregate execution counts by primary opcode
 extern "C" void jit_profile_opcode_mix_json(char *buf, int bufsz) {
 	if (!jit_profile_enabled || jit_profile_counts.empty()) {
@@ -1485,6 +1564,51 @@ void powerpc_cpu::execute(uint32 entry)
 								if (jit_verify_n_insns == 0)
 									jit_verify_n_insns = jblk.n_insns; /* freshly compiled */
 							}
+						// SS_PROBE_PC: dump registers/memory at specified block-entry PCs.
+						// Parsed once; single integer compare per block when active.
+						{
+							if (__builtin_expect(s_probe_count < 0, false)) {
+								s_probe_count = parse_probes(getenv("SS_PROBE_PC"));
+								if (s_probe_count > 0)
+									fprintf(stderr, "[PROBE] Parsed %d probe(s) from SS_PROBE_PC\n", s_probe_count);
+							}
+							if (__builtin_expect(s_probe_count > 0, false)) {
+								uint32_t bpc = (uint32_t)jit_block_start_pc;
+								for (int pi = 0; pi < s_probe_count; pi++) {
+									if (s_probes[pi].pc == bpc) {
+										s_probes[pi].visits++;
+										if (probe_should_log(s_probes[pi].visits)) {
+											probe_entry *pe = &s_probes[pi];
+											fprintf(stderr, "[PROBE 0x%08x visit=%llu]",
+											        bpc, (unsigned long long)pe->visits);
+											if (pe->dump_all) {
+												fprintf(stderr, "\n");
+												for (int ri = 0; ri < 32; ri++) {
+													fprintf(stderr, "  r%-2d = 0x%08x", ri, (uint32_t)gpr(ri));
+													if ((ri & 3) == 3) fprintf(stderr, "\n");
+												}
+												fprintf(stderr, "  CR  = 0x%08x  LR  = 0x%08x  CTR = 0x%08x\n",
+												        cr().get(), (uint32_t)lr(), (uint32_t)ctr());
+											} else {
+												for (int fi = 0; fi < pe->n_fields; fi++) {
+													if (pe->fields[fi].type == PROBE_GPR) {
+														fprintf(stderr, " r%d=0x%08x",
+														        pe->fields[fi].value,
+														        (uint32_t)gpr(pe->fields[fi].value));
+													} else {
+														uint32_t val = vm_read_memory_4(pe->fields[fi].value);
+														fprintf(stderr, " [0x%08x]=0x%08x",
+														        pe->fields[fi].value, val);
+													}
+												}
+												fprintf(stderr, "\n");
+											}
+											fflush(stderr);
+										}
+									}
+								}
+							}
+						}
 						// B1 profiler: count block executions + timing (guarded, ~0 cost when off)
 						if (__builtin_expect(jit_profile_enabled, false)) {
 							jit_profile_counts[jit_block_start_pc]++;
@@ -1744,20 +1868,8 @@ void powerpc_cpu::execute(uint32 entry)
 								        (unsigned long long)jit_block_count, (uint32_t)jit_block_start_pc);
 								if (jit_block_count == (uint64_t)fb) fflush(stderr);
 							}
-							/* One-shot: at the first spinlock-acquire (parcels 0x50312700), dump the
-							 * lock address + value + KDP so we can see if the lock word is uninitialized
-							 * garbage. Gated by SS_LOG_FIRST_BLOCKS (same diagnostic switch). */
-							if (fb > 0 && (uint32_t)jit_block_start_pc == 0x50312700) {
-								static bool once = false;
-								if (!once) {
-									once = true;
-									uint32 r8 = gpr(8), r1g = gpr(1);
-									fprintf(stderr, "[LOCK] acquire pc=50312700 r8(lock)=%08x [r8]=%08x "
-									        "r1(KDP)=%08x r31=%08x r22=%08x\n",
-									        r8, vm_read_memory_4(r8), r1g, gpr(31), gpr(22));
-									fflush(stderr);
-								}
-							}
+							/* Ad-hoc diagnostic probes replaced by SS_PROBE_PC env var
+							 * (parsed at JIT init, checked pre-dispatch). See CLAUDE.md. */
 						}
 						/* Region profiling: classify by block ENTRY pc (jit_block_start_pc),
 						 * since the exit pc may be in a different region. */

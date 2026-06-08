@@ -971,6 +971,121 @@ static int ss_rpc_handle_heatmap(rpc_connection_t *conn) {
 	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
 }
 
+// Returns true if [addr, addr+len) is within a known mapped guest region.
+// Checks RAM, ROM, and both kernel-data pages. Used by mem_search and mem_read_json
+// to avoid segfaults on unmapped addresses (Mac2HostAddr is an offset — no guard).
+static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
+	if (len == 0) return false;
+	uint32_t end = addr + len;
+	if (end < addr) return false;  // overflow
+	// RAM
+	if (addr >= RAMBase && end <= RAMBase + RAMSize) return true;
+	// ROM
+	if (addr >= ROMBase && end <= ROMEnd) return true;
+	// Kernel Data (primary)
+	if (addr >= KERNEL_DATA_BASE && end <= KERNEL_DATA_BASE + KERNEL_AREA_SIZE) return true;
+	// Kernel Data (alternate)
+	if (addr >= KERNEL_DATA2_BASE && end <= KERNEL_DATA2_BASE + KERNEL_AREA_SIZE) return true;
+	return false;
+}
+
+// mem_search: search guest memory for a 4-byte big-endian value.
+// Request args: (uint32 value, uint32 start, uint32 end)
+//   start=0 and end=0 → default to [RAMBase, RAMBase+RAMSize)
+// Reply: JSON string {"matches":["0x..."],"count":N,"truncated":bool}
+static int ss_rpc_handle_mem_search(rpc_connection_t *conn) {
+	uint32_t value, start, end_addr;
+	if (rpc_method_get_args(conn, RPC_TYPE_UINT32, &value,
+	                        RPC_TYPE_UINT32, &start,
+	                        RPC_TYPE_UINT32, &end_addr,
+	                        RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+
+	// defaults
+	if (start == 0 && end_addr == 0) {
+		start    = RAMBase;
+		end_addr = RAMBase + RAMSize;
+	}
+
+	// align start up to 4-byte boundary
+	start = (start + 3) & ~(uint32_t)3;
+
+	const int MAX_MATCHES = 1000;
+	static char buf[24576];  // ~24KB: 1000 matches × ~14 chars + overhead
+	int count = 0;
+	bool truncated = false;
+
+	char *p = buf;
+	char *buf_end = buf + sizeof(buf) - 2;  // leave room for final "}
+	int wrote = snprintf(p, buf_end - p, "{\"matches\":[");
+	if (wrote < 0 || p + wrote >= buf_end) goto finish;
+	p += wrote;
+
+	for (uint32_t addr = start; addr + 4 <= end_addr; addr += 4) {
+		if (!ss_rpc_is_mapped(addr, 4)) continue;
+		uint32_t word = ReadMacInt32(addr);
+		if (word == value) {
+			if (count >= MAX_MATCHES) {
+				truncated = true;
+				break;
+			}
+			wrote = snprintf(p, buf_end - p, "%s\"0x%08x\"",
+			                 count > 0 ? "," : "", (unsigned)addr);
+			if (wrote < 0 || p + wrote >= buf_end) { truncated = true; break; }
+			p += wrote;
+			count++;
+		}
+	}
+
+finish:
+	snprintf(p, buf + sizeof(buf) - p, "],\"count\":%d,\"truncated\":%s}",
+	         count, truncated ? "true" : "false");
+
+	fprintf(stderr, "[RPC] mem_search: found %d matches for 0x%08x in [0x%08x..0x%08x)\n",
+	        count, (unsigned)value, (unsigned)start, (unsigned)end_addr);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+// mem_read_json: read count bytes from guest address, return as hex words.
+// Request args: (uint32 addr, uint32 count)
+//   count=0 → default 64; capped at 4096
+// Reply: JSON string {"addr":"0x...","hex":"word0 word1 ..."}
+static int ss_rpc_handle_mem_read_json(rpc_connection_t *conn) {
+	uint32_t addr, count;
+	if (rpc_method_get_args(conn, RPC_TYPE_UINT32, &addr,
+	                        RPC_TYPE_UINT32, &count,
+	                        RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+
+	if (count == 0) count = 64;
+	if (count > 4096) count = 4096;
+
+	// round down to 4-byte boundary, round up count to multiple of 4
+	addr  = addr & ~(uint32_t)3;
+	count = (count + 3) & ~(uint32_t)3;
+
+	// buf: "{"addr":"0x12345678","hex":"" + up to 1024 words × 9 chars + "\"}"
+	static char buf[12288];  // ~12KB: 1024 words × 9 + small overhead
+	char *p = buf;
+	char *buf_end = buf + sizeof(buf) - 4;
+
+	int wrote = snprintf(p, buf_end - p, "{\"addr\":\"0x%08x\",\"hex\":\"", (unsigned)addr);
+	if (wrote >= 0) p += wrote;
+
+	bool first = true;
+	for (uint32_t off = 0; off < count; off += 4) {
+		uint32_t a = addr + off;
+		uint32_t word = ss_rpc_is_mapped(a, 4) ? ReadMacInt32(a) : 0xDEADC0DEu;
+		wrote = snprintf(p, buf_end - p, "%s%08x", first ? "" : " ", (unsigned)word);
+		if (wrote < 0 || p + wrote >= buf_end) break;
+		p += wrote;
+		first = false;
+	}
+
+	snprintf(p, buf + sizeof(buf) - p, "\"}");
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
 static rpc_method_descriptor_t ss_rpc_methods[] = {
 	{ RPC_METHOD_INPUT_LOCKOUT,  ss_rpc_handle_input_lockout },
 	{ RPC_METHOD_FRAMESKIP,      ss_rpc_handle_frameskip },
@@ -983,6 +1098,8 @@ static rpc_method_descriptor_t ss_rpc_methods[] = {
 	{ RPC_METHOD_GET_TIMING,     ss_rpc_handle_get_timing },
 	{ RPC_METHOD_GET_OPCODE_MIX, ss_rpc_handle_opcode_mix },
 	{ RPC_METHOD_GET_HEATMAP,    ss_rpc_handle_heatmap },
+	{ RPC_METHOD_MEM_SEARCH,     ss_rpc_handle_mem_search },
+	{ RPC_METHOD_MEM_READ_JSON,  ss_rpc_handle_mem_read_json },
 };
 
 static void ss_rpc_init_server(void) {

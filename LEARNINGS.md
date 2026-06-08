@@ -17,7 +17,42 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-08 — New World parcels boot: SPRG bug, sub-KDP memory gap, and workflow footguns
+## 2026-06-08 — New World parcels boot: MMU/page-table wall broken, three harvests
+
+**Third harvest — [KDP-0x20] IRP pointer never set (memory-layout gap).** The nanokernel's free-list
+bank scan reads bank entries from an Info Record Page (IRP) base stored at `[KDP-0x20]`. The skipped
+cold-init normally sets this to `KDP - 0xA000`. Without it, `[KDP-0x20]=0` → bank scan reads guest low
+memory (all zeros) → no pages found → `r22=0xFFFFFFFC` → effectively infinite mapping loop.
+**Fix:** seed `[KDP-0x20]` in the trampoline + write bank entries at `IRP+0xDF0/DF4`.
+
+**Fourth harvest — `desc_create` ROM patch kills the free-list store.** SheepShaver patches
+`stwu r31, 4(r29)` (the instruction that stores page descriptors into the free list) to NOP — correct
+for OldWorld flat-addressing, but kills the NW nanokernel's page management. **Fix:** skip this NOP
+under `g_rom_904_lenient` (env-gated `SS_NW_TRAMPOLINE` path only).
+
+**Fifth harvest — page descriptors grow UPWARD from KernelMemoryBase.** The free-list builder writes
+descriptors via `stwu r31, 4(r29)` starting at `KernelMemoryBase - 4`, growing upward. For 256MB RAM
+= 65536 pages × 4 bytes = 256KB. If KernelMemoryBase is too close to KDP (original gap was 56KB), the
+descriptors overwrite the sub-KDP pool, IRP (bank entries), KDP itself, and HTAB. **Fix:** lower
+KernelMemoryBase to `sub_kdp_base - pgdesc_size` (256KB below the sub-KDP pool), giving room for all
+descriptors.
+
+**⚠️ NewWorld CHRP ROMs are decompressed — the ROM file bytes don't match guest memory.** The `.rom`
+file is CHRP-compressed. SheepShaver's `rsrc_patches.cpp` decompresses it into the 5MB ROM area
+(`0x50000000-0x50500000`). Disassembling the raw `.rom` file yields COMPLETELY WRONG code — the
+offsets don't map and the instructions are different. **Always dump the decompressed ROM from guest
+memory** (now productized: `SS_DUMP_ROM=/path ./SheepShaver` writes the post-patch image at startup) and disassemble that.
+An Opus 4.6 subagent that disassembled the compressed file produced an entirely fabricated analysis
+(the addresses and register fields were plausible but the instructions were wrong). This wasted a
+full investigation cycle before the error was caught.
+
+**Result:** nanokernel now reaches its idle loop (568 compiled blocks, 153M blocks/s, `[KDP-0x900]`
+poll). The entire Init.s → Reset.s → bank-scan → page-descriptor → mapping flow completes. The next
+wall is the PPC→68k handoff (`jump68k`), which is a fundamentally different class of problem. Three
+general-correctness fixes from this work: BAT register storage, IRP/page-descriptor layout, and the
+`desc_create` patch skip.
+
+## 2026-06-08 (earlier) — New World parcels boot: SPRG bug, sub-KDP memory gap, and workflow footguns
 
 **Strategy (maintainer-confirmed):** the goal is **PPC/JIT correctness**, not 9.2 per se. SheepShaver
 models only a thin slice of the PPC supervisor stack; the New World ROM / 9.2 boot is the *forcing

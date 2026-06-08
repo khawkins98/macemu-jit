@@ -137,6 +137,23 @@ A register allocator caches PPC GPRs in ARM64 callee-saved registers
 | `SS_JIT_DIAG_LOG=/path` | Override diagnostic log path |
 | `SS_JIT_PROFILE=/path` | Write an execution profile on clean shutdown (hot blocks + `[JIT-COMPILED-MIX]` per-class op counts incl. `AltiVec=N`) |
 | `SS_FORCE_ALTIVEC=1`/`=0` | Dev override for the `altivec` pref (force AltiVec advertisement on/off regardless of prefs) |
+| `SS_DUMP_ROM=/path` | Dump the full decompressed ROM image to the given file at startup (after patching), for offline disassembly. Useful for NewWorld CHRP ROMs where the .rom file is compressed and does not match guest memory. |
+| `SS_PROBE_PC=0xADDR[:fields][;…]` | No-recompile register/memory dump at block-entry PCs. Fields: `rN` (GPR), `[0xADDR]` (guest mem read), or omit for full dump. Logarithmic sampling. Up to 8 PCs, 16 fields each. See CLAUDE.md "PC Probes" for examples. |
+
+### RPC Guest Memory Inspection
+
+A running SheepShaver exposes a C2.0 RPC server at `/tmp/sheepshaver-<pid>` (see `rpc.h`).
+Two methods allow live guest memory inspection without lldb:
+
+| Method (id) | Args | Reply |
+|---|---|---|
+| `mem_search` (23) | `(uint32 value, uint32 start, uint32 end)` — start/end=0 defaults to full RAM | `{"matches":["0x..."],"count":N,"truncated":bool}` (max 1000 hits) |
+| `mem_read_json` (24) | `(uint32 addr, uint32 count)` — count=0 defaults to 64, capped at 4096 | `{"addr":"0x...","hex":"word0 word1 ..."}` (4-byte aligned, big-endian) |
+
+Both methods check address bounds (RAM, ROM, kernel data pages) before reading.
+Unmapped addresses in `mem_read_json` return `0xDEADC0DE`. These are consumed
+programmatically over the Unix socket (SiliconSheep Inspector, custom scripts);
+there is no standalone CLI wrapper.
 
 ### Benchmarking
 

@@ -66,7 +66,8 @@ under our JIT — far further than ever before. The journey + the proven path:
 | First spinlock deadlock (block 12, `0x312700`) | Root cause: nanokernel reads its per-CPU/KDP pointer from **SPRG0**, which we were dropping. Fixed SPRG registers + **`SS_NW_TRAMPOLINE`** probe seeds `SPRG0=KernelDataAddr`, backs+zeros the negative KDP scratch, sets `[SPRG0-4]=KDP`. Boot advances **27 → 128 distinct PCs**, clean, no derail. | ✅ committed (probe env-gated) |
 | Sub-KDP pool region unmapped (`0x68FF7000` below KERNEL_AREA) | Root cause: `KERNEL_AREA_SIZE=0x2000` (8 KB) → shmem covers only `[0x68FFC000,0x69000000)`. Pool init's stores to `0x68FF5000–0x68FF7000` fault → `ignoresegv` silently skips them → pool data never written → allocator reads garbage → infinite zeroing loop at `0x50322990`. Fix: `vm_acquire_fixed` 32 KB below shmem base (env-gated). **VERIFIED** via SIGSEGV-handler instrumentation with probe present during both before/after runs (10 faults → 0). Boot advances 128 → 265 unique PCs; pool-init + zeroing-loop + allocator + HTAB/page-table init all complete. | ✅ committed + verified (env-gated) |
 | SDR1/HTAB zeroing stall at `0x50311ff4` | **Three-part fix:** (a) real SDR1 register (`ppc-registers.hpp`+`ppc-execute.cpp`: `mfspr`/`mtspr SDR1` read/write); (b) trampoline allocates 64 KB HTAB at `0x68FE0000`, seeds `SDR1=0x68FE0000`; (c) ROM patcher skips `sdr1_read`+`pgtb_clear` patches for parcels (gated on `g_rom_904_lenient`) so the real `mfspr SDR1` + real zeroing loop execute against mapped memory. HTAB zeroing now completes in milliseconds. **General correctness fix** (SDR1 was silently wrong for all guests). | ✅ committed |
-| **CURRENT WALL: stuck at `0x50312250`** | After HTAB zeroing, nanokernel advances through a small data-structure zeroing loop at `0x503109bc` (r9=0x1ff8, 2047 iterations, completes cleanly), then settles at `0x50312250` — a new tight loop. comp=420, HOT-PC=`0x50312250`, r9=`9700244f`, r10=`5046e8c0`. Not yet disassembled. Likely the next stage of nanokernel initialization hitting an unsatisfied dependency (descriptor table, memory mapping, or decrementer). | ☐ todo |
+| Page descriptor free-list empty (`0x50312250`) | **Three-part fix:** (a) Seed `[KDP-0x20]` = IRP base (`KDP - 0xA000 = 0x68FF4000`), with bank entries at `IRP+0xDF0/DF4`. (b) Skip `desc_create` ROM patch for NW path (it NOP'd the `stwu r31,4(r29)` that stores page descriptors). (c) Lower `KernelMemoryBase` to `sub_kdp_base - pgdesc_size` (256KB for descriptors growing UPWARD). **General fix**: `desc_create` skip gated on `g_rom_904_lenient`. Free list now correctly populated: r22=0x3FFFC (65536 pages), 568 blocks, 153M blocks/s. | ✅ verified |
+| **CURRENT WALL: nanokernel idle loop at `0x5032751C`** | Nanokernel completed all init and reached its idle loop: `lwz r1,0(0); addi r1,r1,1; stw r1,0(0); bl check_work; cmpwi r8,-1; bne done; b loop`. The `check_work` function at `0x50326880` reads `[KDP-0x900]`; if zero, returns -1 (no work). This is the **PPC→68k handoff wall** — the nanokernel is waiting for an interrupt or KCall that never comes because `jump68k` is diagnostically skipped. **Fundamentally different class of problem** from the MMU/page-table walls above. | ☐ todo |
 
 **SDR1/HTAB wall (RESOLVED).** With the sub-KDP fix verified, the nanokernel hit the SDR1/HTAB
 wall at `0x50311ff4`: `mfspr SDR1` returned the `0xdead001f` sentinel → 524K faulting stores.
@@ -80,13 +81,34 @@ wall at `0x50311ff4`: `mfspr SDR1` returned the `0xdead001f` sentinel → 524K f
    parcels** (gated on `g_rom_904_lenient`). The real instructions execute against mapped memory.
    HTAB zeroing completes in milliseconds.
 
-**The current wall (`0x50312250`).** After HTAB zeroing, the nanokernel passes through a small
-data-structure init loop at `0x503109bc` (`addic. r9,r9,-4; stwx r0,r10,r9; bne` — zeroes guest
-addresses `0x0–0x1ff8`, 2047 iterations, completes cleanly). Boot then reaches **420 unique compiled
-blocks** and settles at `0x50312250` — a new tight loop that runs indefinitely. Heartbeat:
-`r9=9700244f, r10=5046e8c0, cr=24e00088`. Not yet disassembled; likely the next nanokernel init
-stage hitting an unsatisfied dependency (descriptor table creation, decrementer, or another
-memory-mapping requirement).
+**Page-table/free-list wall (RESOLVED).** After HTAB zeroing, the nanokernel's bank scan and
+free-list builder (at `~0x503121A4` in the decompressed ROM) stalled with `r22=0xFFFFFFFC` (no pages
+found). Root cause was **three problems stacked**:
+
+1. **`[KDP-0x20]` (the IRP base pointer) was never set.** The skipped cold-init normally writes
+   `[KDP-0x20] = KDP - 0xA000`. Without it, the bank scan reads from guest low memory (all zeros),
+   finds no banks, and produces the "no pages" signature.
+2. **The `desc_create` ROM patch NOPs the `stwu r31,4(r29)`.** This is the instruction that stores
+   page descriptors into the free list. Correct for OldWorld (flat addressing, no MMU); kills the
+   NW nanokernel's page management.
+3. **Page descriptors overflow upward into KDP.** The free-list grows UPWARD from KernelMemoryBase
+   (via `stwu`). With only 56KB between KernelMemoryBase and KDP, 256KB of descriptors overwrite
+   the sub-KDP pool, IRP, KDP itself, and HTAB. Fixed by lowering KernelMemoryBase.
+
+**⚠️ Key methodology finding: the raw .rom file is CHRP-compressed.** SheepShaver decompresses it
+into the 5MB ROM area. The file bytes DO NOT match guest memory. Always dump the decompressed ROM
+from the emulator (via `fwrite(Mac2HostAddr(rom_base), ...)`) and disassemble that. An agent that
+analyzed the compressed file produced an entirely fabricated disassembly — plausible addresses and
+register names, but wrong instructions. This wasted a full investigation cycle.
+
+**The current wall (nanokernel idle loop at `0x5032751C`).** After all init completes (568 unique
+compiled blocks, 153M blocks/s), the nanokernel enters its idle loop: increments a counter at guest
+address 0, calls a "check for work" function at `0x50326880` which reads `[KDP-0x900]`, and if
+zero (no pending work), returns -1 and loops. This is the **PPC→68k handoff wall** — the nanokernel
+has finished its own init and is waiting for an external event (interrupt, KCall) that never comes
+because the `jump68k` patch is diagnostically skipped. This is a fundamentally different class of
+problem: not a missing memory region or register, but the **transition from supervisor PPC code to
+the 68k OS layer**.
 
 ---
 

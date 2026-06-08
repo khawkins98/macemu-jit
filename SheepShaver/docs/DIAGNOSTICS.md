@@ -157,6 +157,8 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_EMULOP_COUNTS=1` | Per-`EMUL_OP` execution counters to stderr every ~5s (`sheepshaver_glue.cpp`). |
 | `SS_EMULOP_TRACE=1` | Log SCSI `EMUL_OP` return values to `/tmp/emulop_trace.log` (`sheepshaver_glue.cpp`). |
 | `SS_UI_DUMP_DIR=<dir>` | **Feature gate (not a JIT diagnostic)** — enables on-demand guest UI introspection. When set, the idle hook services `ss_ui.req` and writes a Backend-A window-list JSON snapshot (`ss_ui.A.json`) + nonce-stamped `ss_ui.done`. Zero cost when unset. See `SheepShaver/docs/UI-INTROSPECTION.md` for the full reference. |
+| `SS_DUMP_ROM=/path` | Dump the full decompressed ROM image at startup (after patching). Essential for NewWorld CHRP ROMs where the `.rom` file is compressed. See CLAUDE.md "Disassembling the Decompressed ROM" for the capstone workflow. |
+| `SS_PROBE_PC=0xADDR[:fields][;…]` | No-recompile register/memory dump at block-entry PCs (`ppc-cpu.cpp`). Fields: `rN` (GPR), `[0xADDR]` (guest mem 4-byte read), or omit for full dump. Logarithmic sampling (visit 1, 10, 100, ...). Up to 8 PCs, 16 fields. See CLAUDE.md "PC Probes" for format and examples. |
 
 ### Dump the trace ring from a running (or hung) process
 

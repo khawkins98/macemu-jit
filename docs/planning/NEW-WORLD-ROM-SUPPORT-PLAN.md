@@ -426,6 +426,16 @@ zeroes a **fake, non-RAM region** via NATMEM page-faults (slow ~136 blk/s, cpu b
 `SS_SYNTH_DEC` doesn't help (not timed). This is the genuine **supervisor/MMU page-table fidelity
 "second wall"** — the agent's predicted deeper layer, now reached concretely.
 
+**CROSS-ROM CONFIRMED (2026-06-08) — one patch set covers the 9.x family.** Booted a *second* parcels
+ROM (`Mac OS ROM 9.1.1`, cksum `ecef6af1`) through the identical diagnostic path: same `:715` skip
+(0x310a1c→0x311350), same skips, same SPRG0/KDP shim, same 128 PCs, **same wedge at 0x50322990**. A
+byte-diff of the decoded nanokernel region (0x300000–0x340000) of 9.0.1 vs 9.1.1 = **93 bytes (0.04%)**;
+the 34% whole-image diff is all in the *other* parcels (device tree/drivers). ⇒ **the 9.x "Mac OS ROM"
+family (9.0.1/9.1.1/9.6.1/9.8.1/10.2.1) shares one nanokernel → one supervisor-environment fix covers
+them all.** Pin **9.0.1** as the reference ROM. The **9.0.4-G4** extract is a different lineage (sizing
+49/14/12 vs the family's 27/31/17) — handle separately. Exact assets/setup: see the handoff doc
+(`HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` §1.5).
+
 **NEXT (the big one):** give the nanokernel a *consistent* SDR1 ↔ HTAB ↔ KDP relationship — i.e. a
 real (or realistically-sized, RAM-backed) page-table region instead of the `0xdead0000` fake, so its
 zero/init loop targets backed RAM of a sane size and its later HTAB derefs work. This is the MMU work

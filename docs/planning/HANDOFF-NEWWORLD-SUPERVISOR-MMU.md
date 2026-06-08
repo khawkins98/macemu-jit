@@ -79,6 +79,43 @@ concretely.
 
 ---
 
+## 1.5 Which ROM to use — the cross-ROM finding (you do NOT patch each one differently)
+
+A real worry was "do we have to patch every New World ROM separately?" **Measured answer: no, not within
+the 9.x family.** Two different "Mac OS ROM" files — **9.0.1** (cksum `ec86128e`) and **9.1.1**
+(`ecef6af1`) — were booted through the identical diagnostic path and behaved **identically**: same
+`:715` CPU-detect at `0x310a1c`→`0x311350`, same `sr_load`/`jump68k`/`mdec`/`suspend` skips, same SPRG0/
+KDP shim, same 128 PCs, and the **same page-table wedge at `0x50322990`**. A byte-diff of the decoded
+nanokernel region (`0x300000–0x340000`) shows **only 93 differing bytes (0.04%)** — the nanokernel is
+effectively the same across the family; the 34% whole-image difference is all in the *other* parcels
+(device tree, drivers, hardware support), which don't affect the boot-critical supervisor path.
+
+**Implication:** one supervisor-environment fix should cover the whole **9.x parcels family
+(9.0.1 / 9.1.1 / 9.6.1 / 9.8.1 / 10.2.1)**. The **outlier is `9.0.4-G4`** (`MacOS-ROM-9.0.4-G4-extracted.rom`),
+a *separately-extracted, different-lineage* ROM with a different patch profile (sizing 49/14/12 vs the
+family's 27/31/17 — see NEW-WORLD plan "ROM target strategy"). Don't assume 9.0.4 behaves like the family.
+
+**Pinned reference ROM for this work: `Mac OS ROM 9.0.1`** (it's the one all the diagnosis/offsets above
+were calibrated on). Develop against 9.0.1; once it boots, re-run 9.1.1 (and the rest of the family) to
+confirm — expect them to "just work" given the 0.04% nanokernel diff.
+
+### Exact setup (assets + how to reproduce)
+
+| Asset | Path | Notes |
+|---|---|---|
+| **Reference ROM (use this)** | `/Users/Shared/macemu/2001-12-19 - Mac OS ROM 9.0.1.rom` | also in `~/Downloads/New_World_Mac_Roms/New World ROM/`. CHRP/parcels, decodes to a 4 MB image. |
+| Family ROMs (confirm-after) | `~/Downloads/New_World_Mac_Roms/New World ROM/` | 9.1.1, 9.6.1, 9.8.1, 10.2.1 — same nanokernel. |
+| 9.0.4-G4 outlier | `/Users/Shared/macemu/MacOS-ROM-9.0.4-G4-extracted.rom` | different lineage; separate analysis if pursued (it's the AltiVec-era G4 ROM). |
+| Working baseline ROM (must keep booting) | `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom` | Old World LZSS; the `make e2e`/normal config. Never regress this. |
+| OS media for an eventual *full* boot | `~/Downloads/Apple Mac OS 9.2.1/macos_921_ppc.iso` | only needed once the ROM boots past the nanokernel into the 68k OS; the diagnostic boot needs NO disk. |
+| Decoded image (offline disasm) | make it: `SheepShaver/rom-inspect/rom-inspect "<rom>" --dump /tmp/rom901.bin` | capstone PPC big-endian. |
+
+**Diagnostic prefs** (`/tmp/trace901.prefs` — recreate it; `/tmp` is ephemeral):
+```
+printf 'rom /Users/Shared/macemu/2001-12-19 - Mac OS ROM 9.0.1.rom\nramsize 268435456\nnogui true\n' > /tmp/trace901.prefs
+```
+(no `disk`/`cdrom` — the diagnostic boot wedges in the nanokernel long before it would need OS media).
+
 ## 2. Your task
 
 Give the New World nanokernel a **consistent SDR1 ↔ HTAB ↔ KDP** environment so its page-table init

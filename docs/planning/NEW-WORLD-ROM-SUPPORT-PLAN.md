@@ -257,19 +257,45 @@ mapping the real (execution-order) walls. **Two walls collapsed, the third is th
 | — | sprg3_mq, msr, sprg3, pvr_read2(×2), pvr_read4, sdr1_read, pgtb_clear, desc_create, sr_load2, pm_check | relocated → existing lenient whole-image fallback resolves | ✅ pass (⚠ some lenient hits may be false-positive matches — verify semantically before trusting at boot) |
 | — | pvr_read3 | absent but **optional** (`!=0` then patch) | ✅ tolerated |
 | 2 | `sr_load` (SR/BAT-load) | **SKIP** — `mtsrin`/`mt{i,d}bat*` are JIT no-ops; routine runs harmlessly under flat addressing | ✅ committed (⚠ RUNTIME-UNVALIDATED: nanokernel may read the KernelData BAT fields it saves) |
-| 3 | **`jump68k`** (`7d9243a6` = mtsprg2;mtsrr0;mtsrr1;rfi) | **CANNOT SKIP** — the PPC→68k boot handoff; must be retargeted to SheepShaver's emulator entry | ⛔ **current frontier** — needs real RE + boot validation |
+| 3 | **`jump68k`** (`7d9243a6` = mtsprg2;mtsrr0;mtsrr1;rfi) | **CANNOT SKIP** — the PPC→68k boot handoff; must be retargeted to SheepShaver's emulator entry | 🟡 **probe-characterized** — dispatch fields mapped, architecture understood |
 
-**`jump68k` RE state.** 1.1 mechanism (`rom_patches.cpp` ~1006): locate the "enter 68k emulator" routine
-(`mtsprg2;mtsrr0;mtsrr1;rfi`), find its boot **caller**'s `bl`, and replace that `bl` with a 5-insn
-redirect (`lwz r3,EmulatorData; lwz r4,opcode-table; lwz r0,init; mtctr; bctr`) into SheepShaver's own
-68k emulator. On parcels the routine signature + the 1.1 `jump68k_caller` byte-pattern are both
-absent/false-matching. SRR0/SRR1-write sites located in 9.0.1 (adjacent `mtsrr0`+`mtsrr1`+`rfi`):
-**0x310034, 0x3126dc, 0x3149bc, 0x3165b4, 0x3177c4** (+ more). `0x3126dc` is the clearest
-emulated-code dispatch (loads entry from KernelData 0x648/0x5a4 → rfi), but the nanokernel rfi's into
-emulated code from many sites (IRQ return, syscall); isolating the **boot first-entry** + its caller,
-then applying the redirect, requires tracing the boot flow and **a real boot to validate** (the tracer
-only proves patching completes, not runtime correctness). This is where the genuine multi-session RE
-sits — and it's boot-gated, so it pairs with the runtime-unvalidated `:715`/`sr_load` skips above.
+**`jump68k` probe results (2026-06-08).** SS_PROBE_PC at the idle loop (0x5032751c) and
+check_work (0x50326880) reveals the nanokernel's steady-state:
+
+| KDP field | guest addr | value | meaning |
+|-----------|-----------|-------|---------|
+| +0x5a0 (context ptr→SPRG0) | 0x68ffe5a0 | **0x00000000** | 68k context never initialized |
+| +0x5a4 (68k code base) | 0x68ffe5a4 | **0x00000000** | 68k code base never set |
+| +0x648 (opcode table) | 0x68ffe648 | **0x5046e8c0** | points into ROM area (past 4MB ROM; built by nanokernel init) |
+| -0x964 (target MSR) | 0x68ffd69c | **0x0000d032** | IR\|DR\|EE\|ME\|RI = supervisor, MMU on, interrupts |
+| -0x900 (work queue head) | 0x68ffd700 | **0x00000000** | empty — no work posted |
+
+0x503126b4 (dispatch routine) is **never reached** — the idle loop polls [KDP-0x900]=0
+forever. The work queue is empty because the PPC→68k handoff was skipped (diagnostic
+`SS_ROM_SKIP_JUMP68K=1`), so no code ever posts the initial boot work item.
+
+**Architecture (parcels vs OldWorld).** OldWorld has a direct `bl jump68k` caller that
+SheepShaver replaces with a 5-insn redirect to its emulator init. Parcels has a
+fundamentally different work-queue-driven architecture: the nanokernel idles polling
+[KDP-0x900], and dispatch (0x503126b4) switches context via KDP+0x5a0/0x5a4 + rfi. The
+OldWorld `mtsprg2;mtsrr0;mtsrr1;rfi` signature is completely absent from parcels.
+
+**Discriminator check (2026-06-08).** The OldWorld redirect reads KDP+0x1184 (emulator init
+routine) and +0x119c (opcode table). Searched the entire parcels nanokernel (0x50310000–
+0x50330000) for any `stw`/`lwz` referencing those offsets — **zero hits**. Runtime probe
+confirms: [KDP+0x1184]=0x73bf0000, [KDP+0x119c]=0x73d70000 (uninitialized garbage, not
+valid guest pointers). **Verdict: the OldWorld 5-insn redirect is NOT copy-pasteable.**
+Parcels uses a completely different KDP layout for its dispatch fields; a new redirect
+must be designed from the parcels nanokernel's own field map (+0x648 opcode table,
++0x5a0/0x5a4 context, -0x900 work queue).
+
+**Next step:** find where the nanokernel's boot path NORMALLY posts the first work item
+to [KDP-0x900]. This happens during the PPC→68k handoff that we're skipping. Two approaches:
+(a) disassemble the code paths that write to [KDP-0x900] (find `stw` targeting offset
+-0x900 from r1/KDP); (b) check the OldWorld 1.1 ROM to see if the same work-queue
+mechanism exists there (SheepShaver's existing redirect bypasses it, so its structure
+may reveal how parcels does it). The redirect must either replace the work-queue poster
+or seed the queue directly + fill dispatch fields KDP+0x5a0/0x5a4.
 
 **Net revised picture:** `patch_nanokernel_boot` is *not* a wholesale re-RE — it's ~2 skips (done) + 1
 load-bearing handoff retarget (`jump68k`) + the lenient-resolved remainder. After it: 3 more patch

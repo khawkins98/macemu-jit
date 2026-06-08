@@ -1,11 +1,11 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-08 (D3: sub-KDP pool fix, past zeroing-loop wall, at allocator/init loop; DX workflow items logged)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-08 (Aligned with 5 Strategic Pillars: jump68k, CopyBits HLE, B2 Interpreter, AltiVec Safety, Unified Verification)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
 The single place to **arrange and track outstanding work** so context survives across
-pickups (when we focus on one task we don't lose the others). When you pick up or finish a
+pickups (when we focus on one task we don't lose the others). See also: [Tactical Fix Plan](TACTICAL-FIX-PLAN.md). When you pick up or finish a
 task, update its **Status** line. This is the **map**, not the territory — deep analysis,
 design, and per-item detail live in the linked docs. Keep entries to a few lines + a pointer.
 

@@ -337,6 +337,31 @@ fully designed), `MMU-DEFERRAL-REDTEAM.md` (the 16 KB-vs-4 KB hinge + softmmu co
 
 ---
 
+### 3.4 Cross-emulator prior art — what to borrow, and the key caveat
+
+Other PPC emulators solved adjacent problems, but mind *which* problem each actually solves:
+- **Dolphin (GameCube/Wii, Gekko/Broadway PPC → ARM64/x86 JIT) — most transferable for our fast path +
+  Apple-Silicon specifics.** Its **"fastmem"** is our model (direct V=P into one big host mapping; a
+  SIGSEGV handler decodes + **backpatches** the faulting access to a slow path). It ships on Apple
+  Silicon → battle-tested against our two hinges, **16 KB pages + W^X/MAP_JIT**. Also lift: block
+  linking/dispatch, **idle-loop detection** (cf. our boot-stall watchdog), Gekko **FP rounding** craft
+  (cf. fctiw). ⚠ Uses **BATs, not a hashed page table** — its "Dynamic BAT" remap-on-change IS our
+  rung-4, but it never boots a kernel that builds an HTAB, so it doesn't crack the current wall.
+- **RPCS3 (PS3 Cell PPU = 64-bit PowerPC → LLVM JIT) — the 64-bit-PPC reference** (full fctid/fcfid/64-bit
+  semantics → relevant to the G5 gap; strong VMX/AltiVec cross-check) and the **HLE-the-OS** mindset
+  (fakes the OS rather than booting the kernel → maps to our Path B / synthesize-the-environment / HLE
+  options). ⚠ Because it HLEs the OS, it never builds a real page table — little for the HTAB wall.
+- **⭐ Closest analogs for OUR exact problem (boot a real Mac OS kernel that builds its own hashed page
+  table): PearPC and QEMU.** **PearPC** implemented a *real* PPC MMU (segments + BATs + hashed page
+  table) and booted Mac OS X / Darwin — the reference for "honor SDR1/HTAB for real" (rung 1→4).
+  **QEMU `qemu-system-ppc`** implements the full PPC MMU + OpenBIOS, and **elliotnunn already runs THIS
+  nanokernel under QEMU** (see §5.1 e-maculation/QEMU thread) — so QEMU is both a reference and a live
+  oracle: observe the nanokernel's real SDR1/HTAB behaviour there and diff against ours.
+
+Through-line: borrow **Dolphin** for the fast-path + Apple-Silicon craft, **RPCS3** for the HLE mindset
+(Path B), and **PearPC/QEMU** for the actual HTAB/SDR1 wall. Provenance: all GPL-compatible — read for
+technique; cite any adapted approach (CONTRIBUTING / backport hygiene).
+
 ## 4. How to work (the loop, the gates, the footguns, repro commands)
 
 **The forcing-function loop** (this is the proven method that got us 27→128 PCs):

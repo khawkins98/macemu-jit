@@ -594,28 +594,17 @@ we can't easily synthesize (e.g., interrupt dispatch, memory protection, task sc
 Path A's infrastructure is still there. The env vars are additive; switching back = drop
 `SS_NW_SYNTH_ENTRY`, keep `SS_NW_TRAMPOLINE`.
 
-**Next step: build the HLE shim compatibility table for `patch_68k()`.**
+**Next step: port the `patch_68k()` HLE shims for the parcels ROM layout.**
 
-The HLE interception *logic* (the `M68K_EMUL_OP` handlers — fake NVRAM, fake VIA, fake video
-driver, etc.) doesn't change between ROMs. What changes is *where in the ROM* those byte
-patterns live. `patch_68k()` searches for specific byte sequences to find the interception
-points; the parcels ROM has the same functional 68k code at different addresses with different
-surrounding bytes.
+✅ **The HLE shim inventory is complete** — see
+[`PATCH-68K-SHIM-INVENTORY.md`](PATCH-68K-SHIM-INVENTORY.md). It catalogs all 84
+`find_rom_data` patterns in `patch_68k()` with concept, EMUL_OP, search range, and 9.0.1
+status (28 in-range, 31 relocated, 25 absent). The "Applicable-Absent Detail" section lists
+the 17 patterns (7 hard-abort) that need real RE or confirmation as unnecessary.
 
-The work is a **mapping table**: for each shim, find the parcels-ROM equivalent of the 1.1
-pattern. Progress is measurable (N of M shims mapped), scope is bounded (the shim list is
-finite and known), and each unmapped shim is a known gap — not a mystery crash.
-
-| Shim concept | 1.1 pattern (known) | 9.0.1 pattern | Status |
-|-------------|---------------------|---------------|--------|
-| NVRAM access | `patch_68k` patterns | TBD | ☐ |
-| VIA timer | `patch_68k` patterns | TBD | ☐ |
-| Video driver | `patch_68k` patterns | TBD | ☐ |
-| Serial | `patch_68k` patterns | TBD | ☐ |
-| ... | ... | ... | ☐ |
-
-The full shim inventory comes from auditing `patch_68k()` in `rom_patches.cpp` (starts at
-~line 1363). Each `find_rom_data` call + `M68K_EMUL_OP` write = one row in the table.
+Use `SS_ROM_LENIENT=1 SS_ROM_PATCH_TRACE=1` to map pattern hits for any new ROM version,
+then cross-reference the inventory table. See `SheepShaver/docs/DIAGNOSTICS.md` ("ROM
+patching diagnostics") for the full log format.
 
 ### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
 

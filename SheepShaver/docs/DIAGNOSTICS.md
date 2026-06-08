@@ -95,6 +95,40 @@ shows the **same** "Unsupported ROM type" alert for *any* `PatchROM()` failure
 decodes and type-detects as NewWorld, yet the emulator rejects it downstream. So
 "type-detection OK" means "not rejected for format/type," not "guaranteed to boot."
 
+## ROM patching diagnostics (`[ROMPATCH]`)
+
+Two env vars control ROM-patch logging at startup (`rom_patches.cpp`). Both are permanent
+ROM-porting infrastructure -- use them when bringing up a new ROM version.
+
+**`SS_ROM_LENIENT=1`** — force lenient patch mode for any NewWorld ROM. When a
+`find_rom_data` pattern is absent, the patch function logs and continues instead of
+aborting. Only effective on `ROMTYPE_NEWWORLD` (the check is
+`getenv("SS_ROM_LENIENT") && ROMType == ROMTYPE_NEWWORLD`). Auto-enabled by checksum
+for the 9.0.4 G4 ROM; opt out of auto-detection with `SS_ROM_NO_904=1`.
+
+**`SS_ROM_PATCH_TRACE=1`** — log every `find_rom_data` call (hit, relocated, or miss).
+Independent of lenient mode; useful on any ROM to see where patterns land.
+
+### Log line formats
+
+| Line | Gate | Meaning |
+|------|------|---------|
+| `[ROMPATCH] find_rom_data [...] -> HIT @offset` | `SS_ROM_PATCH_TRACE` | Pattern found in declared range |
+| `[ROMPATCH] find_rom_data [...] -> RELOCATED @offset (904 whole-image fallback)` | `SS_ROM_PATCH_TRACE` + lenient | Pattern absent in declared range, found elsewhere via whole-image scan |
+| `[ROMPATCH] find_rom_data [...] -> MISS (absent even whole-image)` | `SS_ROM_PATCH_TRACE` + lenient | Pattern not present anywhere |
+| `[ROMPATCH] find_rom_data [...] -> MISS (abort point)` | `SS_ROM_PATCH_TRACE`, no lenient | Pattern not found -- `PatchROM` will abort |
+| `[ROMPATCH] SKIP <name> (absent in parcels)` | lenient mode (always, no trace needed) | Patch site skipped; the named shim is not applied |
+| `[ROMPATCH] parcels: <detail>` | lenient mode | Structural skip/info for nanokernel-boot patches |
+
+### Workflow: mapping a new ROM
+
+1. Run with both env vars: `SS_ROM_LENIENT=1 SS_ROM_PATCH_TRACE=1 ./SheepShaver --config <new-rom.prefs> 2>/tmp/rompatch.log`
+2. Grep the log for `MISS` and `SKIP` lines -- these are the patches that need porting.
+3. Cross-reference each name against the shim inventory
+   (`docs/planning/PATCH-68K-SHIM-INVENTORY.md`) to find its concept, EMUL_OP, and search range.
+4. For `RELOCATED` hits, verify the patch's offset arithmetic is still correct at the new
+   site (the pattern matched, but surrounding code may have shifted).
+
 ## Other live diagnostics (pre-existing, ppc-cpu.cpp)
 
 | Output | Trigger | Notes |
@@ -159,6 +193,9 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_UI_DUMP_DIR=<dir>` | **Feature gate (not a JIT diagnostic)** — enables on-demand guest UI introspection. When set, the idle hook services `ss_ui.req` and writes a Backend-A window-list JSON snapshot (`ss_ui.A.json`) + nonce-stamped `ss_ui.done`. Zero cost when unset. See `SheepShaver/docs/UI-INTROSPECTION.md` for the full reference. |
 | `SS_DUMP_ROM=/path` | Dump the full decompressed ROM image at startup (after patching). Essential for NewWorld CHRP ROMs where the `.rom` file is compressed. See CLAUDE.md "Disassembling the Decompressed ROM" for the capstone workflow. |
 | `SS_PROBE_PC=0xADDR[:fields][;…]` | No-recompile register/memory dump at block-entry PCs (`ppc-cpu.cpp`). Fields: `rN` (GPR), `[0xADDR]` (guest mem 4-byte read), or omit for full dump. Logarithmic sampling (visit 1, 10, 100, ...). Up to 8 PCs, 16 fields. See CLAUDE.md "PC Probes" for format and examples. |
+| `SS_ROM_LENIENT=1` | Force lenient ROM-patch mode for any NewWorld ROM (`rom_patches.cpp`). Pattern misses log `[ROMPATCH] SKIP` and continue instead of aborting. Permanent ROM-porting tool. See the "ROM patching diagnostics" section above. |
+| `SS_ROM_PATCH_TRACE=1` | Log every `find_rom_data` pattern search as `[ROMPATCH] ... -> HIT/RELOCATED/MISS` (`rom_patches.cpp`). Independent of lenient mode. See the "ROM patching diagnostics" section above. |
+| `SS_ROM_NO_904=1` | Opt out of checksum-based auto-lenient for the 9.0.4 G4 ROM. Does not affect `SS_ROM_LENIENT=1`. |
 
 ### Dump the trace ring from a running (or hung) process
 

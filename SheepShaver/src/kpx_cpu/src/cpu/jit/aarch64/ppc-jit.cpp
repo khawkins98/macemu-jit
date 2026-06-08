@@ -4514,21 +4514,27 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* ARM FMSUB = Ra-Rn*Rm = frB-frA*frC (PPC fnmsub; ARM/PPC names are crossed) */
 			return true; }
 
-		/* 64-bit FP conversions (G5/PPC970 only) — ⚠ SUSPECT / likely-dead on this target.
-		 * These (fctid/fctidz/fcfid) are 64-bit-only PPC instructions. SheepShaver emulates a 32-bit
-		 * 7400 (PVR 0x000c), where they are ILLEGAL, and the INTERPRETER does NOT implement them at all
-		 * (ppc-decode.cpp registers fp_int_convert only for fctiw 63/14 + fctiwz 63/15). So:
-		 *   - they have NO interpreter ground truth and NO test-jit vector — unvalidated;
-		 *   - if a guest ever executes one, the JIT (which fakes a result here) and the interp (which
-		 *     treats it as illegal) DIVERGE silently.
-		 * They should never run on a 32-bit guest. The one-shot JIT_LOG below makes it LOUD if one is
-		 * ever compiled, so the cause is obvious rather than a silent divergence. (Architecturally the
-		 * cleaner fix would be to `return false` and let the interp own them — but there's no evidence
-		 * anything hits this, so it's left as-is + flagged. See ROADMAP D3 fctid note.) */
+		/* 64-bit FP conversions (fctid/fctidz/fcfid) — G5/PPC970 instructions; ⚠ SUSPECT / INCOMPLETE.
+		 * These are 64-bit-only PPC ops. Why they exist here, and why they're suspect (verified 2026-06-08):
+		 *   - PVR is configurable and a G5 CAN be selected by name (main_unix.cpp cpu_specs[] lists
+		 *     PPC970 / 970FX / 970MP), so a guest that detects a G5 could legitimately emit these — which
+		 *     is presumably why the JIT carries them. BUT the DEFAULT is a 32-bit 7400 (PVR 0x000c), where
+		 *     they are ILLEGAL.
+		 *   - There is NO real 64-bit execution mode: `gpr_hi[]` (the upper-32 G5 GPR halves) is
+		 *     declared-but-unused and MSR[SF]/64-bit semantics aren't modeled — the machine runs 32-bit
+		 *     regardless of the PVR you set. So these converts are a PARTIAL/vestigial fragment of G5
+		 *     support, not a working 64-bit path.
+		 *   - The INTERPRETER doesn't implement them at all (ppc-decode.cpp registers fp_int_convert only
+		 *     for fctiw 63/14 + fctiwz 63/15). So there's no interp ground truth, no test-jit vector, and
+		 *     if one ever executes the JIT (fakes a 64-bit result) and the interp (illegal) DIVERGE.
+		 * Bottom line: they shouldn't run under any currently-supported config. The one-shot JIT_LOG makes
+		 * it LOUD if one is compiled. Proper fix (deferred — no evidence anything hits this): either finish
+		 * real 64-bit/G5 execution (gpr_hi + MSR[SF] + interp converts), or `return false` so the interp
+		 * owns them (illegal) and JIT/interp agree. See ROADMAP D3 fctid note. */
 		case 814: /* fctid frD,frB — FP to 64-bit integer (round per FPSCR) */
 			{ static bool warned = false; if (!warned) { warned = true;
 			  JIT_LOG("WARN: fctid (64-bit FP->int, op=%08x) compiled — interp does NOT implement it; "
-			          "illegal on the emulated 32-bit 7400. JIT result will DIVERGE; should not occur.", op); } }
+			          "no real 64-bit mode (G5 selectable but not truly emulated). JIT/interp DIVERGE; should not occur.", op); } }
 			emit_load_fpr(0, frb);
 			emit32(0x9E700000 | (0 << 5) | RTMP0); /* FCVTNS Xd, Dn (round to nearest) */
 			/* Store as 64-bit integer in FPR slot (PPC stores int result in FPR) */
@@ -4539,7 +4545,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 815: /* fctidz frD,frB — FP to 64-bit integer (round toward zero) */
 			{ static bool warned = false; if (!warned) { warned = true;
 			  JIT_LOG("WARN: fctidz (64-bit FP->int, op=%08x) compiled — interp does NOT implement it; "
-			          "illegal on the emulated 32-bit 7400. JIT result will DIVERGE; should not occur.", op); } }
+			          "no real 64-bit mode (G5 selectable but not truly emulated). JIT/interp DIVERGE; should not occur.", op); } }
 			emit_load_fpr(0, frb);
 			emit32(0x9E780000 | (0 << 5) | RTMP0); /* FCVTZS Xd, Dn */
 			emit32(0x9E670000 | (RTMP0 << 5) | 0); /* FMOV Dd, Xn */
@@ -4549,7 +4555,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 846: /* fcfid frD,frB — 64-bit integer to FP */
 			{ static bool warned = false; if (!warned) { warned = true;
 			  JIT_LOG("WARN: fcfid (64-bit int->FP, op=%08x) compiled — interp does NOT implement it; "
-			          "illegal on the emulated 32-bit 7400. JIT result will DIVERGE; should not occur.", op); } }
+			          "no real 64-bit mode (G5 selectable but not truly emulated). JIT/interp DIVERGE; should not occur.", op); } }
 			emit_load_fpr(0, frb);
 			emit32(0x9E660000 | (0 << 5) | RTMP0); /* FMOV Xn, Dd */
 			emit32(0x9E620000 | (RTMP0 << 5) | 0); /* SCVTF Dd, Xn */

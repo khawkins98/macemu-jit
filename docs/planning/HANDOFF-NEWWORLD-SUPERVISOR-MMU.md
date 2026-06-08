@@ -64,18 +64,29 @@ under our JIT — far further than ever before. The journey + the proven path:
 | `sr_load` (SR/BAT-load) patch absent | SR/BAT are JIT no-ops → **skip** | ✅ committed |
 | `jump68k` (PPC→68k handoff) + 68k-side HLE absent | **Diagnostically skipped** (`SS_ROM_SKIP_JUMP68K`) so PatchROM completes and the PPC side can be exercised. NOT a real port. | 🟡 diagnostic |
 | First spinlock deadlock (block 12, `0x312700`) | Root cause: nanokernel reads its per-CPU/KDP pointer from **SPRG0**, which we were dropping. Fixed SPRG registers + **`SS_NW_TRAMPOLINE`** probe seeds `SPRG0=KernelDataAddr`, backs+zeros the negative KDP scratch, sets `[SPRG0-4]=KDP`. Boot advances **27 → 128 distinct PCs**, clean, no derail. | ✅ committed (probe env-gated) |
-| **CURRENT WALL: page-table / MMU init** (`0x322990` zero-loop, `0x3251e4` scan) | **Open — this handoff.** | ☐ todo |
+| Sub-KDP pool region unmapped (`0x68FF7000` below KERNEL_AREA) | Root cause: `KERNEL_AREA_SIZE=0x2000` (8 KB) → shmem covers only `[0x68FFC000,0x69000000)`. Pool init's stores to `0x68FF5000–0x68FF7000` fault → `ignoresegv` silently skips them → pool data never written → allocator reads garbage → infinite zeroing loop at `0x50322990`. Fix: `vm_acquire_fixed` 32 KB below shmem base (env-gated). **VERIFIED** via SIGSEGV-handler instrumentation with probe present during both before/after runs (10 faults → 0). Boot advances 128 → 265 unique PCs; pool-init + zeroing-loop + allocator + HTAB/page-table init all complete. | ✅ committed + verified (env-gated) |
+| SDR1/HTAB zeroing stall at `0x50311ff4` | **Three-part fix:** (a) real SDR1 register (`ppc-registers.hpp`+`ppc-execute.cpp`: `mfspr`/`mtspr SDR1` read/write); (b) trampoline allocates 64 KB HTAB at `0x68FE0000`, seeds `SDR1=0x68FE0000`; (c) ROM patcher skips `sdr1_read`+`pgtb_clear` patches for parcels (gated on `g_rom_904_lenient`) so the real `mfspr SDR1` + real zeroing loop execute against mapped memory. HTAB zeroing now completes in milliseconds. **General correctness fix** (SDR1 was silently wrong for all guests). | ✅ committed |
+| **CURRENT WALL: stuck at `0x50312250`** | After HTAB zeroing, nanokernel advances through a small data-structure zeroing loop at `0x503109bc` (r9=0x1ff8, 2047 iterations, completes cleanly), then settles at `0x50312250` — a new tight loop. comp=420, HOT-PC=`0x50312250`, r9=`9700244f`, r10=`5046e8c0`. Not yet disassembled. Likely the next stage of nanokernel initialization hitting an unsatisfied dependency (descriptor table, memory mapping, or decrementer). | ☐ todo |
 
-**The current wall, precisely.** With the above shims, the nanokernel reaches its **page-table
-initialization**: a memory-zeroing loop at ROM `0x50322990` (`stwu r14(=0),4(r15); cmpw r15,r16;
-ble`) clearing the page-table / page-descriptor region, whose base+size it derives from **SDR1 / the
-HTAB**. But SheepShaver **fakes SDR1** (`mfspr SDR1`→`0xdead001f`, so HTAB at `0xdead0000`) and our
-`sr_init` patch feeds `lis r13,0xdead` + a `0x100000` page-table size. So the nanokernel zeroes a
-**fake, non-RAM region** (`0xdead0000…`), which maps into the NATMEM reservation and is slow / wrong,
-and it stalls (comp frozen at 146, ~136 blk/s, cpu busy, `iDR=0` so not interpreter fallback;
-`SS_SYNTH_DEC` makes no difference → not a timing wait). **This is the genuine supervisor/MMU
-page-table fidelity gap** — the "second wall" predicted in `MMU-NANOKERNEL-MP-PLAN.md`, now reached
-concretely.
+**SDR1/HTAB wall (RESOLVED).** With the sub-KDP fix verified, the nanokernel hit the SDR1/HTAB
+wall at `0x50311ff4`: `mfspr SDR1` returned the `0xdead001f` sentinel → 524K faulting stores.
+**Fixed** with a three-part approach:
+1. **Real SDR1 register** (`ppc-registers.hpp`, `ppc-execute.cpp`): `mfspr`/`mtspr SPR 25` now read/write
+   a real register instead of returning a sentinel. General correctness fix for all guests.
+2. **Trampoline HTAB allocation** (`sheepshaver_glue.cpp`): `vm_acquire_fixed` 64 KB at `0x68FE0000`
+   (below sub-KDP pool), memset zero, seed `SDR1=0x68FE0000`. All env-gated.
+3. **ROM-patch skip** (`rom_patches.cpp`): the `sdr1_read` and `pgtb_clear` patches (which replaced
+   `mfspr SDR1` with a `lis r8,0xdead` sentinel and NOP'd the zeroing `stwx`) are now **skipped for
+   parcels** (gated on `g_rom_904_lenient`). The real instructions execute against mapped memory.
+   HTAB zeroing completes in milliseconds.
+
+**The current wall (`0x50312250`).** After HTAB zeroing, the nanokernel passes through a small
+data-structure init loop at `0x503109bc` (`addic. r9,r9,-4; stwx r0,r10,r9; bne` — zeroes guest
+addresses `0x0–0x1ff8`, 2047 iterations, completes cleanly). Boot then reaches **420 unique compiled
+blocks** and settles at `0x50312250` — a new tight loop that runs indefinitely. Heartbeat:
+`r9=9700244f, r10=5046e8c0, cr=24e00088`. Not yet disassembled; likely the next nanokernel init
+stage hitting an unsatisfied dependency (descriptor table creation, decrementer, or another
+memory-mapping requirement).
 
 ---
 

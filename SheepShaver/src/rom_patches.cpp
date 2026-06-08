@@ -929,24 +929,35 @@ static bool patch_nanokernel_boot(void)
 		*lp = htonl(0x81200000 + XLM_PVR);	// lzw  r9,(theoritical PVR)
 	}
 
-	// Don't read SDR1
+	// Don't read SDR1 — replace mfspr with a sentinel.
+	// PARCELS: skip — the trampoline pre-maps a real HTAB and initialises SDR1, so the
+	// nanokernel's own mfspr SDR1 + zeroing loop should execute against real memory.
 	static const uint8 sdr1_read_dat[] = {0x7d, 0x19, 0x02, 0xa6, 0x55, 0x16, 0x81, 0xde};
 	if ((base = find_rom_data(0x310000, 0x320000, sdr1_read_dat, sizeof(sdr1_read_dat))) == 0) return false;
-	D(bug("sdr1_read %08lx\n", base));
-	lp = (uint32 *)(ROMBaseHost + base);
-	*lp++ = htonl(0x3d00dead);		// lis	r8,0xdead		(pointer to page table)
-	*lp++ = htonl(0x3ec0001f);		// lis	r22,0x001f	(size of page table)
-	*lp = htonl(POWERPC_NOP);
+	if (g_rom_904_lenient) {
+		fprintf(stderr, "[ROMPATCH] parcels: sdr1_read SKIP — real mfspr SDR1 will execute\n");
+	} else {
+		D(bug("sdr1_read %08lx\n", base));
+		lp = (uint32 *)(ROMBaseHost + base);
+		*lp++ = htonl(0x3d00dead);		// lis	r8,0xdead		(pointer to page table)
+		*lp++ = htonl(0x3ec0001f);		// lis	r22,0x001f	(size of page table)
+		*lp = htonl(POWERPC_NOP);
+	}
 
 	// Don't clear page table, don't invalidate TLB
+	// PARCELS: skip — let the real zeroing loop write to the mapped HTAB.
 	static const uint8 pgtb_clear_dat[] = {0x36, 0xd6, 0xff, 0xfc, 0x7e, 0xe8, 0xb1, 0x2e, 0x41, 0x81, 0xff, 0xf8};
 	if ((base = find_rom_data(0x310000, 0x320000, pgtb_clear_dat, sizeof(pgtb_clear_dat))) == 0) return false;
-	D(bug("pgtb_clear %08lx\n", base + 4));
-	lp = (uint32 *)(ROMBaseHost + base + 4);
-	*lp = htonl(POWERPC_NOP);
-	D(bug("tblie %08lx\n", base + 12));
-	lp = (uint32 *)(ROMBaseHost + base + 12);
-	*lp = htonl(POWERPC_NOP);
+	if (g_rom_904_lenient) {
+		fprintf(stderr, "[ROMPATCH] parcels: pgtb_clear SKIP — real zeroing loop will execute\n");
+	} else {
+		D(bug("pgtb_clear %08lx\n", base + 4));
+		lp = (uint32 *)(ROMBaseHost + base + 4);
+		*lp = htonl(POWERPC_NOP);
+		D(bug("tblie %08lx\n", base + 12));
+		lp = (uint32 *)(ROMBaseHost + base + 12);
+		*lp = htonl(POWERPC_NOP);
+	}
 
 	// Don't create RAM descriptor table
 	static const uint8 desc_create_dat[] = {0x97, 0xfd, 0x00, 0x04, 0x3b, 0xff, 0x10, 0x00, 0x4b, 0xff, 0xff, 0xdc};

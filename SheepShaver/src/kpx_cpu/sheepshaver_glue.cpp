@@ -28,6 +28,7 @@
 #include "macos_util.h"
 #include "block-alloc.hpp"
 #include "sigsegv.h"
+#include "vm_alloc.h"
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 #include "cpu/jit/aarch64/ppc-jit.h"
 #endif
@@ -911,6 +912,7 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 #endif
 
 	const uintptr addr = (uintptr)sigsegv_get_fault_address(sip);
+
 #if HAVE_SIGSEGV_SKIP_INSTRUCTION
 	// Ignore writes to ROM
 	if ((addr - (uintptr)ROMBaseHost) < ROM_SIZE)
@@ -1291,17 +1293,54 @@ void init_emul_ppc(void)
 	// KernelData base as a first probe; watch the next read via SS_LOG_FIRST_BLOCKS. 1.1 sets its own
 	// SPRG0 in Init, so this initial value is harmless there. See NEW-WORLD-ROM-SUPPORT-PLAN.md.
 	if (getenv("SS_NW_TRAMPOLINE")) {
-		/* P1: SPRG0 = per-CPU block base. P2: the nanokernel does `lwz r1,-4(r1)` to get the KDP, and
-		 * indexes it at NEGATIVE offsets (lock word at [KDP-0xb50]); SheepShaver's KernelData is a
-		 * standalone 0x2000 region with nothing mapped below it. Back the negative KDP scratch (zero
-		 * 0x1000 below KernelDataAddr — within the NATMEM reservation, so writable) and point
-		 * [SPRG0-4] at the real KDP (= KernelDataAddr, so positive fields hit SheepShaver's setup).
+		/* P1: SPRG0 = per-CPU block base.
+		 * P2: the nanokernel indexes KDP at NEGATIVE offsets (lock word at [KDP-0xb50]).
+		 * P3 (new): the nanokernel's pool/heap allocator initializes a free-list at KDP-0x7000
+		 * (0x68FF7000). KERNEL_AREA_SIZE is only 0x2000 — the shmem mapping covers
+		 * [KDP-0x2000, KDP+0x2000) after SHMLBA alignment. Everything below KDP-0x2000 is
+		 * UNMAPPED, so the pool init's stores silently fault (ignoresegv skips them), the pool
+		 * data structure is never written, the allocator reads garbage, and the zeroing loop
+		 * stalls. Fix: explicitly map and zero 0x8000 bytes below the kernel-data shmem base.
+		 * The shmem base is at (KernelDataAddr & ~(SHMLBA-1)); we back the region just below it.
 		 * Default off; gated so the 1.1 path is untouched. See SPRG0-KDP-DESIGN.md. */
-		ppc_cpu->sprg_reg(0) = KernelDataAddr;
-		memset(Mac2HostAddr(KernelDataAddr - 0x1000), 0, 0x1000);   /* zero the negative KDP scratch */
-		WriteMacInt32(KernelDataAddr - 4, KernelDataAddr);          /* [SPRG0-4] = KDP */
+		const uint32 kdp = KernelDataAddr;
+		const uint32 sub_kdp_size = 0x8000;
+		const uint32 shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64
+		const uint32 sub_kdp_base = shmem_base - sub_kdp_size;
+		if (vm_acquire_fixed(Mac2HostAddr(sub_kdp_base), sub_kdp_size) < 0) {
+			fprintf(stderr, "[NW-TRAMP] WARNING: failed to map sub-KDP region [%08x..%08x): %s\n",
+			        sub_kdp_base, shmem_base, strerror(errno));
+		} else {
+			memset(Mac2HostAddr(sub_kdp_base), 0, sub_kdp_size);
+			fprintf(stderr, "[NW-TRAMP] mapped+zeroed sub-KDP pool region [%08x..%08x) (%u KB)\n",
+			        sub_kdp_base, shmem_base, sub_kdp_size / 1024);
+		}
+
+		/* P4: SDR1 / HTAB backing. The nanokernel reads SDR1 (SPR 25) to locate the HTAB
+		 * and zeroes it during init. On real HW the Trampoline bootloader sets SDR1; we
+		 * enter the nanokernel directly, so SDR1 is uninitialized. Without this, mfspr SDR1
+		 * returned a sentinel (0xdead001f) → HTAB zeroing targeted unmapped 0xDEAD0000 →
+		 * ~500K SEGVs → effectively permanent stall. Allocate 64KB (minimum PPC HTAB) and
+		 * point SDR1 at it. The base must be 64KB-aligned (HTABORG is bits 0-15 of SDR1). */
+		const uint32 htab_size = 0x10000;  // 64KB minimum HTAB
+		const uint32 htab_base = (sub_kdp_base - htab_size) & ~(htab_size - 1);  // 64KB-aligned
+		if (vm_acquire_fixed(Mac2HostAddr(htab_base), htab_size) < 0) {
+			fprintf(stderr, "[NW-TRAMP] WARNING: failed to map HTAB region [%08x..%08x): %s\n",
+			        htab_base, htab_base + htab_size, strerror(errno));
+		} else {
+			memset(Mac2HostAddr(htab_base), 0, htab_size);
+			uint32 sdr1_val = htab_base;  // HTABMASK=0 → 64KB HTAB
+			ppc_cpu->gpr(0) = 0;
+			ppc_cpu->sdr1_reg() = sdr1_val;
+			fprintf(stderr, "[NW-TRAMP] HTAB mapped [%08x..%08x) (%u KB), SDR1=%08x\n",
+			        htab_base, htab_base + htab_size, htab_size / 1024, sdr1_val);
+		}
+
+		ppc_cpu->sprg_reg(0) = kdp;
+		memset(Mac2HostAddr(kdp - 0x1000), 0, 0x1000);
+		WriteMacInt32(kdp - 4, kdp);
 		fprintf(stderr, "[NW-TRAMP] SPRG0=%08x, [SPRG0-4]=KDP=%08x, zeroed [-0x1000,0) (parcels probe)\n",
-		        (uint32)KernelDataAddr, (uint32)KernelDataAddr);
+		        (uint32)kdp, (uint32)kdp);
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

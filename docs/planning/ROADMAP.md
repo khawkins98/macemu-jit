@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-08 (D3 reframed to active correctness-via-forcing-function; fctiw fixed; New World handoff)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-08 (D3: sub-KDP pool fix, past zeroing-loop wall, at allocator/init loop; DX workflow items logged)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -823,17 +823,39 @@ dropped), **`fctiw` dynamic FPSCR[RN]** (test-jit 350/350). Source-verified key 
 nanokernel **builds its own HTAB/SDR1/SPRG0** — SheepShaver's MMU stub silently *eats* those writes; the
 fix is "honor the writes / let cold-init run", not "fake Trampoline post-conditions".
 
-**Now at the second wall — supervisor/MMU fidelity (the page-table init, ROM `0x322990`).** This is the
-"thin PPC stack" gap the forcing-function was meant to surface. MMU is implementable without gutting the
-flat model — the handoff §3 gives a **lazy rung-ladder** (rung 1 "honor-the-write / real-RAM HTAB", zero
-hot-path cost → rung 5 softmmu only if data forces it) + a decisive first experiment that *measures*
-whether a real MMU is ever needed (PPC 4 KB vs host 16 KB is the hinge for the heavy rungs). Canonical
+**Sub-KDP pool region mapped (2026-06-08):** the zeroing-loop stall at `0x50322990` was NOT an MMU/SDR1
+gap — it was a **memory-layout gap**: `KERNEL_AREA_SIZE=0x2000` doesn't cover the nanokernel's heap
+region at `KDP-0x7000` (`0x68FF7000`). Stores silently faulted (`ignoresegv` skipped them → pool data
+never initialized → garbage zeroing size → infinite loop). Fix: `vm_acquire_fixed` 32 KB below the
+shmem base, `SS_NW_TRAMPOLINE`-gated. Confirmed via SIGSEGV-handler instrumentation (10 faults → 0).
+**Pool init succeeds; advances to 29 unique PCs** in a new allocator/init loop (`0x50326440–0x503264c4`).
+
+**Now at the third wall — allocator/init loop (29 PCs, `0x50326440` region).** The pool init completes,
+but the nanokernel loops in its initialization sequence. Not yet characterized — the exit condition
+needs disassembly + register dump. The **MMU rung-ladder** (handoff §3) remains the plan for when/if
+a real MMU gap surfaces — the sub-KDP fix proved this stall was simpler than theorized. Canonical
 options: `MMU-NANOKERNEL-MP-PLAN.md`; design memos `MMU-WITHOUT-GUTTING-FLATMEM.md` +
 `MMU-DEFERRAL-REDTEAM.md`; RE design `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
 
 Strategic forks (handoff §2.5/§2.6): ROM-port (current) vs synthetic-environment-on-1.1 vs "synthetic
 ROM" (not feasible — the Toolbox *is* Mac OS). Discipline: advance while each wall yields a *general*
 fix; never regress the 1.1 path (`make test-jit`=100 gate).
+
+### D3-DX. 🟡 Workflow improvement: NW ROM testing ergonomics
+
+During D3 investigation, multiple workflow friction points surfaced:
+- **No `--rom` CLI flag.** SheepShaver reads ROM path from the prefs file only. Testing a different ROM
+  requires creating a separate prefs file and passing `--config /path/to/prefs`. Wasted time when
+  agents try `--rom` (doesn't exist). **Options:** (a) document the `--config` workaround prominently,
+  (b) add a `--rom` override flag, (c) both. Low effort, high agent-productivity payoff.
+- **Diagnostic prefs recipe not in CLAUDE.md.** The handoff doc §1.5 has a `printf` one-liner for
+  creating `/tmp/trace901.prefs`, but this isn't in CLAUDE.md's "Running" section where agents look
+  first. Should be a documented pattern.
+- **Diagnostic code in ppc-cpu.cpp caused test failures.** One-shot `fprintf` probes from previous
+  investigation sessions, if not reverted, cause `test-jit` crashes (exit 139) because the diagnostic
+  code references NW-specific guest addresses that fault in harness mode. **Rule:** always `git checkout`
+  diagnostic instrumentation before committing real fixes. A `git stash` workflow or a dedicated
+  `SS_NW_DEBUG` compile-time guard would prevent this.
 
 ## D4. 🟡 DingusPPC comparative investigation (exploratory)
 

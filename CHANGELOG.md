@@ -11,6 +11,42 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-08
 
+### [SheepShaver] SDR1 register + HTAB allocation — nanokernel page-table init unblocked
+
+- **General correctness fix (all guests):** `mfspr`/`mtspr SDR1` (SPR 25) now read/write a real
+  register (`ppc-registers.hpp`, `ppc-execute.cpp`). Previously, `mfspr SDR1` returned a hardcoded
+  sentinel `0xdead001f`; `mtspr SDR1` was silently ignored. SDR1 field appended LAST in
+  `powerpc_registers` (preserves JIT hardcoded offsets). `test-jit=100`.
+- **HTAB allocation (New World only, env-gated):** the `SS_NW_TRAMPOLINE` trampoline maps + zeros
+  64 KB at `0x68FE0000` (below sub-KDP pool) and seeds `SDR1=0x68FE0000`. The nanokernel's own
+  `mfspr SDR1` now returns this real base, and its zeroing loop writes to mapped memory (microseconds
+  instead of 131s of faulting stores).
+- **ROM-patch skip:** `rom_patches.cpp` `sdr1_read` and `pgtb_clear` patches (which replaced
+  `mfspr SDR1` with `lis r8,0xdead` and NOP'd the `stwx` zeroing) are now skipped for parcels
+  (gated on `g_rom_904_lenient`). The 1.1 LZSS path is byte-identical.
+- Boot advances past the HTAB wall to **420 compiled blocks**, settling at a new wall (`0x50312250`).
+  OldWorld Mac OS 8.6 boot verified (no regression).
+
+### [SheepShaver] Sub-KDP pool region mapped — nanokernel heap allocator unblocked
+
+- **Memory-layout fix (New World only, env-gated):** the nanokernel's heap/pool allocator initializes
+  a free-list at `KDP - 0x7000` (guest `0x68FF7000`). `KERNEL_AREA_SIZE = 0x2000` — the shmem mapping
+  only covers `[0x68FFC000, 0x69000000)` after SHMLBA alignment. The pool region at `0x68FF7000` is
+  **unmapped**, so pool init's `stw` stores silently fault (the default `ignoresegv=true` skips them
+  via `SIGSEGV_RETURN_SKIP_INSTRUCTION`), the pool data structure is never written, and the allocator
+  reads garbage → infinite zeroing loop at `0x50322990` (the "128-PC wedge").
+- **Fix:** `vm_acquire_fixed` + zero 32 KB below the kernel-data shmem base, inside the
+  `SS_NW_TRAMPOLINE` gate (OldWorld path is byte-identical). **Verified** via SIGSEGV-handler
+  instrumentation (probe present during both before/after runs): **10 faults** in
+  `[0x68FF5000..0x68FF7000)` before fix → **zero faults** after. `test-jit=100` (350/350).
+  OldWorld boot to Finder verified (~9.2s).
+- **Advances the parcels nanokernel through its complete init sequence:** pool free-list allocation,
+  pool-init (`0x50322784`), zeroing loop (`0x50322990`), serial debug output, SR/BAT loading, and
+  address-space context switch. Boot reaches **373 unique PCs** (up from 128), **410 compiled blocks**.
+  Hits the **SDR1/HTAB wall** at block 14000: `mfspr SDR1` returns `0xdead001f` (sentinel) →
+  nanokernel computes HTAB at `0xDEAD0000` (2 MB) → zeroing loop at `0x50311ff4` → 524K faulting
+  stores → ~131s effective stall. Next: implement SDR1 read/write (general correctness fix).
+
 ### [SheepShaver] SPRG0-3 registers implemented — general JIT correctness fix
 
 - **Correctness fix (all guest OSes):** `mfspr`/`mtspr` for SPRG0-3 (SPR 272-275) were previously

@@ -309,6 +309,7 @@ public:
 	// SPRG0-3 direct accessor (public: host-side supervisor-environment setup, e.g. Trampoline
 	// emulation in init_emul_ppc). i in [0,3].
 	uint32 & sprg_reg(int i) { return regs().sprg[i]; }
+	uint32 & sdr1_reg() { return regs().sdr1; }
 
 	// Set syscall callback
 	void set_syscall_callback(syscall_fn fn) { execute_do_syscall = fn; }

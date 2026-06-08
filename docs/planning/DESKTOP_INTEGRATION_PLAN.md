@@ -198,8 +198,14 @@ Pure launcher/wrapper work. SheepShaver binary is a sidecar child process; Tauri
 - [x] **Screenshot capture**: Live VNC screenshots every ~10s + final frame on shutdown. Stored
   in `.sheepvm/screenshot.png`. BGR→RGB channel fix via `vnc_capture.py`.
 - [x] **Drag-and-drop file import**: ROM, disk, CD, prefs files → routed to wizard step or import.
-- [ ] **CRT/scanline shaders + integer scaling** (stretch): SDL render pipeline or Metal
-  post-process pass.
+- [ ] **CRT/scanline shaders** (stretch): SDL render pipeline or Metal post-process pass.
+  (Integer scaling is now a pref toggle in the Settings panel.)
+- [ ] **Boot splash / POST screen**: Show a branded overlay in the SiliconSheep window during
+  the emulator's black-screen boot period (before the guest framebuffer has content). PC
+  POST-style: RAM check, ROM version, JIT status, etc. Play the Mac startup chime audio
+  (SheepShaver doesn't currently play it — the ROM's boot sound code doesn't reach the host
+  audio path). Dismiss automatically when the first non-black guest frame arrives, or on
+  click. Gives polish to the ~1-3s dead period and makes errors visible without opening logs.
 - [x] **Coach marks**: Mouse capture toast on first launch ("Click inside the classic desktop to
   capture the mouse. Press Ctrl-F5 to release.").
 

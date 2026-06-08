@@ -54,7 +54,7 @@
  *	Stub-pressure trace (SS_STUB_TRACE) — the MMU/nanokernel "second wall" probe.
  *
  *	SheepShaver runs the guest as a flat-addressed CPU by FAKING/DROPPING the privileged
- *	supervisor ops (mfspr SDR1→0xdead001f, mfspr-other→0, mtspr BAT/SDR1/SPRG/DEC→dropped,
+ *	supervisor ops (mfspr-other→0, mtspr BAT/DEC→dropped; SDR1+SPRG are now real registers,
  *	mtmsr/mtsr/tlbie/rfi→illegal-ignored). On the aarch64 JIT these all route through the
  *	INTERPRETER (the JIT only inlines LR/CTR/XER and `return false`s the rest), so counting
  *	here is runtime-accurate. We bucket boot vs steady-state (flipped at the first guest idle
@@ -1290,8 +1290,8 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_CTR:	d = ctr();		break;
 	case powerpc_registers::SPR_VRSAVE:	d = vrsave();	break;
 #ifdef SHEEPSHAVER
-	case powerpc_registers::SPR_SDR1:	d = 0xdead001f;
-		if (ss_stub_on()) ss_stub_mfspr[ss_stub_phase][spr & 1023]++;
+	case powerpc_registers::SPR_SDR1:
+		d = regs().sdr1;
 		break;
 	case powerpc_registers::SPR_PVR: {
 		extern uint32 PVR;
@@ -1344,6 +1344,9 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_CTR:	ctr() = s;		break;
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
 #ifdef SHEEPSHAVER
+	case powerpc_registers::SPR_SDR1:
+		regs().sdr1 = s;
+		break;
 	case powerpc_registers::SPR_SPRG0:
 	case powerpc_registers::SPR_SPRG0 + 1:
 	case powerpc_registers::SPR_SPRG0 + 2:

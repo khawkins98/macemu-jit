@@ -257,6 +257,8 @@ struct powerpc_registers
 								// so dropping them left it reading 0 -> garbage KDP -> spinlock deadlock.
 								// JIT mfspr/mtspr fall back to the interpreter for SPRG, which uses this
 								// field by name — so its exact offset is irrelevant to codegen.
+	uint32 sdr1;				// SDR1 (SPR 25) — HTAB base/mask. Previously returned a sentinel
+								// (0xdead001f); the nanokernel reads SDR1 to locate and zero the HTAB.
 };
 
 #endif /* PPC_REGISTERS_H */

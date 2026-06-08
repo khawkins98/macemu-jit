@@ -17,7 +17,7 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-08 — New World parcels boot as a JIT-correctness forcing-function: SPRG bug + supervisor-env wall
+## 2026-06-08 — New World parcels boot: SPRG bug, sub-KDP memory gap, and workflow footguns
 
 **Strategy (maintainer-confirmed):** the goal is **PPC/JIT correctness**, not 9.2 per se. SheepShaver
 models only a thin slice of the PPC supervisor stack; the New World ROM / 9.2 boot is the *forcing
@@ -32,17 +32,47 @@ found it: `SS_LOG_FIRST_BLOCKS=N` (first-N block-entry PCs = the boot path) + a 
 dump + `SS_JIT_VERIFY` (clean → not codegen). The deadlock was a spinlock whose lock addr came from a
 garbage KDP (`r1=0xfcffffff`).
 
-**The wall behind it (next target) — Trampoline/per-CPU supervisor environment.** Implementing SPRG
-did NOT clear the deadlock: the parcels nanokernel expects a **Trampoline-established** per-CPU block —
-`SPRG0`→per-CPU area (reg-save space below it), `[SPRG0-4]`→KDP, KDP placed vs a *real* SDR1/HTAB.
-SheepShaver builds none of it (fixed `KernelDataAddr` + faked SDR1=`0xdead001f`). This is the
-supervisor/MMU-fidelity "second wall" (xref MMU-NANOKERNEL-MP-PLAN). Concrete next steps in the plan.
+**Second harvest — sub-KDP pool region unmapped (memory-layout gap).** The nanokernel's heap/pool
+allocator initializes a free-list at `KDP - 0x7000` (guest `0x68FF7000`). `KERNEL_AREA_SIZE` is only
+`0x2000` (8 KB), so the shmem mapping covers `[KDP-0x2000, KDP+0x2000)` after SHMLBA alignment.
+Everything below `KDP-0x2000` is **unmapped** → pool init's `stw` stores silently fault
+(`ignoresegv=true` default → `SIGSEGV_RETURN_SKIP_INSTRUCTION`) → pool data structure is never
+written → allocator reads garbage metadata → zeroing loop computes a multi-GB size → infinite stall.
+**Fix:** `vm_acquire_fixed` 32 KB below the shmem base (`SS_NW_TRAMPOLINE` gate, OldWorld untouched).
+**VERIFIED** (probe present during both before/after runs): **10 faults → 0 faults**, pool stores land.
+Boot advances 128 → 265 unique PCs; pool-init, zeroing loop, allocator, and HTAB/page-table init all
+complete (410 compiled blocks). See `HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`.
+
+**⚠️ Methodology: verify faults empirically before fixing.** The advisor correctly blocked the fix
+until I instrumented the SIGSEGV handler — the symptom ("stores don't land") had two possible
+mechanisms: (a) unmapped memory → fault → skip, or (b) memory IS mapped but stores go somewhere
+unexpected. One-shot `[SEGV-SUB-KDP]` log in `sigsegv_handler` definitively confirmed (a): 10 faults
+in `[0x68FF5000..0x68FF7000)`, all at ROM PCs. Without this, the fix would have been built on an
+unverified theory (cf. session-5 retraction, the a46cda99 debacle).
+
+**What the fix unblocked — and the next wall.** With pool stores landing, the nanokernel advances
+through its complete init: allocator (0x50326440), pool-init (0x50322784), zeroing (0x50322990),
+serial debug output (the 0x50326xxx PCs are a char-by-char print routine with serial port at
+KDP-0x900=0, I/O skipped), SR loading (all 16 SRs), BAT loading (all 8 BAT pairs + 7400 extended) —
+**373 unique PCs**, 410 compiled blocks. At block 14000, the nanokernel reads **SDR1** (SPR 25,
+`mfspr r8, 0x19` at 0x50311fd4) to locate the HTAB. Gets our sentinel `0xdead001f` → computes HTAB
+base=0xDEAD0000, size=2 MB → zeroing loop at 0x50311ff4 for 524K iterations. Entire range unmapped →
+~500K SEGVs at ~4K/s → effectively permanent stall. This is the **SDR1/HTAB wall** — the exact wall
+predicted by the handoff doc's §3 rung-ladder. Fix: implement SDR1 read/write (general correctness —
+qualifies under forcing-function rationale) + map a backing region for the HTAB.
 
 **Two process footguns (don't relearn):** (1) changing `ppc-registers.hpp` needs ALL PPC TUs
 recompiled — the Makefile doesn't track that header dep → stale `.o` = silent struct-offset mismatch =
 `test-jit=0` (looks catastrophic, isn't; `rm obj/ppc-*.o obj/sheepshaver_glue.o obj/ppc-jit.o`).
 (2) The JIT **hardcodes** byte offsets into `powerpc_registers` (e.g. `PPCR_RESERVE_VALID=1060`), so
 new struct fields MUST be appended LAST. See memory [[stale_build_struct_offsets]], [[newworld_parcels_port]].
+
+**Workflow footgun: can't override ROM path from the command line.** SheepShaver has no `--rom`
+flag — the `rom` pref is read from `~/.sheepshaver_prefs` (or `--config <file>`). To test a different
+ROM, either edit the prefs file or create a separate prefs file and use `--config`. The diagnostic
+prefs recipe: `printf 'rom /path/to/rom\nramsize 268435456\nnogui true\n' > /tmp/trace.prefs`. Then
+`SheepShaver --config /tmp/trace.prefs`. This is not documented anywhere obvious — agents waste time
+trying `--rom` flags that don't exist. See ROADMAP improvement item.
 
 ## 2026-06-07 — Early-boot dead-ends were invisible in the log → pre-idle boot-stall watchdog ([ALARM])
 

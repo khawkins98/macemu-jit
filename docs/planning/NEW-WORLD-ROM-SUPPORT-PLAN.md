@@ -515,12 +515,25 @@ nanokernel version. The negative-offset PSA addressing proves this is a **v2 PSA
 The blue task is created by `NKInit.s` ~1203 with `kFlagBlue`, `SchRdyTaskNow`
 enqueues it on `NominalReadyQ`, scheduler selects it, `rfi` enters DR Emulator.
 
-**Open contradiction:** the v2 source's `SchIdleTask` does NOT poll `[KDP-0x900]`,
-but we *observed* the running 9.0.1 ROM polling that address in its idle loop
-(`0x5032751C`). This may be a v2.0→v2.28 delta or an SMP signaling slot. The idle
-loop needs disassembly before we can determine the correct dispatch trigger.
+**RESOLVED — `[KDP-0x900]` is the VIA base address pointer, not a work queue.**
+Disassembly of the idle loop confirms: `check_work` at `0x50326880` reads
+`[KDP-0x900]` as a **pointer**, then does `lbz r30, 2(r28)` (VIA register B) +
+`eieio` — classic VIA polling for serial/keyboard input. The "found work" handler
+at `0x5032756c` is the **Thud kernel debugger console**, processing keystrokes
+into `ThudBuffer` at `-0x960`. When `[KDP-0x900]` = 0 (no VIA), it returns
+r8 = -1 ("no input") and the idle loop spins harmlessly.
 
-Sources: `elliotnunn/powermac-rom` (`NKPublic.a`, `NKOpaque.a`, `NKInit.s`, `NKScheduler.s`).
+**The idle loop is NOT the task dispatch path.** The 68k emulator (blue task)
+dispatch is **interrupt-driven**: DEC exception → nanokernel exception handler →
+`SchEval` (finds blue task on `NominalReadyQ`) → `SchReturn` → `rfi` to DR
+Emulator entry. The dispatch at `0x503126b4` is reached from the interrupt handler,
+not from the idle loop. This means synthesizing the environment requires either:
+(a) making the DEC interrupt → scheduler path work end-to-end, or
+(b) skipping the nanokernel entirely and entering the DR Emulator directly with
+    the correct CPU state (the true "synthesize post-init" approach).
+
+Sources: `elliotnunn/powermac-rom` (`NKPublic.a`, `NKOpaque.a`, `NKInit.s`, `NKScheduler.s`);
+ROM disassembly at `0x50326880` (check_work), `0x5032756c` (Thud), `0x503126b4` (dispatch).
 
 ### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
 

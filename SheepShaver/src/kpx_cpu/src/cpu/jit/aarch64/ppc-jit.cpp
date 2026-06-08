@@ -4514,8 +4514,21 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x1F408000 | (hC << 16) | (hB << 10) | (hA << 5) | hD); /* ARM FMSUB = Ra-Rn*Rm = frB-frA*frC (PPC fnmsub; ARM/PPC names are crossed) */
 			return true; }
 
-		/* 64-bit FP conversions (G5/PPC970) */
+		/* 64-bit FP conversions (G5/PPC970 only) — ⚠ SUSPECT / likely-dead on this target.
+		 * These (fctid/fctidz/fcfid) are 64-bit-only PPC instructions. SheepShaver emulates a 32-bit
+		 * 7400 (PVR 0x000c), where they are ILLEGAL, and the INTERPRETER does NOT implement them at all
+		 * (ppc-decode.cpp registers fp_int_convert only for fctiw 63/14 + fctiwz 63/15). So:
+		 *   - they have NO interpreter ground truth and NO test-jit vector — unvalidated;
+		 *   - if a guest ever executes one, the JIT (which fakes a result here) and the interp (which
+		 *     treats it as illegal) DIVERGE silently.
+		 * They should never run on a 32-bit guest. The one-shot JIT_LOG below makes it LOUD if one is
+		 * ever compiled, so the cause is obvious rather than a silent divergence. (Architecturally the
+		 * cleaner fix would be to `return false` and let the interp own them — but there's no evidence
+		 * anything hits this, so it's left as-is + flagged. See ROADMAP D3 fctid note.) */
 		case 814: /* fctid frD,frB — FP to 64-bit integer (round per FPSCR) */
+			{ static bool warned = false; if (!warned) { warned = true;
+			  JIT_LOG("WARN: fctid (64-bit FP->int, op=%08x) compiled — interp does NOT implement it; "
+			          "illegal on the emulated 32-bit 7400. JIT result will DIVERGE; should not occur.", op); } }
 			emit_load_fpr(0, frb);
 			emit32(0x9E700000 | (0 << 5) | RTMP0); /* FCVTNS Xd, Dn (round to nearest) */
 			/* Store as 64-bit integer in FPR slot (PPC stores int result in FPR) */
@@ -4524,6 +4537,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 
 		case 815: /* fctidz frD,frB — FP to 64-bit integer (round toward zero) */
+			{ static bool warned = false; if (!warned) { warned = true;
+			  JIT_LOG("WARN: fctidz (64-bit FP->int, op=%08x) compiled — interp does NOT implement it; "
+			          "illegal on the emulated 32-bit 7400. JIT result will DIVERGE; should not occur.", op); } }
 			emit_load_fpr(0, frb);
 			emit32(0x9E780000 | (0 << 5) | RTMP0); /* FCVTZS Xd, Dn */
 			emit32(0x9E670000 | (RTMP0 << 5) | 0); /* FMOV Dd, Xn */
@@ -4531,6 +4547,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 
 		case 846: /* fcfid frD,frB — 64-bit integer to FP */
+			{ static bool warned = false; if (!warned) { warned = true;
+			  JIT_LOG("WARN: fcfid (64-bit int->FP, op=%08x) compiled — interp does NOT implement it; "
+			          "illegal on the emulated 32-bit 7400. JIT result will DIVERGE; should not occur.", op); } }
 			emit_load_fpr(0, frb);
 			emit32(0x9E660000 | (0 << 5) | RTMP0); /* FMOV Xn, Dd */
 			emit32(0x9E620000 | (RTMP0 << 5) | 0); /* SCVTF Dd, Xn */

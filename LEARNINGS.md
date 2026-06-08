@@ -19,6 +19,8 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 
 ## 2026-06-08 — New World parcels boot: MMU/page-table wall broken, three harvests
 
+**Sixth harvest — 32-bit address space wrap-around in mem_search (infinite loop).** In `ss_rpc_handle_mem_search`, clamping `end_addr` to `0xFFFFFFFC` to avoid overflow is insufficient if the loop iterator `addr` is a `uint32_t` and the check condition is `addr + 4 <= end_addr`. When `addr` reaches `0xFFFFFFFC`, `addr + 4` wraps around to `0` (which is `<= end_addr`), resetting the search back to the start and causing an infinite loop. **Fix:** Use `uint64_t` for the loop iterator `addr` to cleanly bypass 32-bit overflow limitations and terminate successfully.
+
 **Third harvest — [KDP-0x20] IRP pointer never set (memory-layout gap).** The nanokernel's free-list
 bank scan reads bank entries from an Info Record Page (IRP) base stored at `[KDP-0x20]`. The skipped
 cold-init normally sets this to `KDP - 0xA000`. Without it, `[KDP-0x20]=0` → bank scan reads guest low

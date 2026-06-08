@@ -11,6 +11,15 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-08
 
+### [shared] RPC mem_search overflow + New World mapping visibility in ss_rpc_is_mapped
+
+- **Correctness Fix:** Fixed an infinite loop in `ss_rpc_handle_mem_search` caused by `uint32_t` wrap-around in the loop variable `addr`. When `addr` reached `0xFFFFFFFC`, `addr + 4` overflowed to `0x0`, remaining `<= end_addr` and causing an infinite loop. Changed the loop iterator to `uint64_t` to resolve this.
+- **Diagnostics Extension:** Extended `ss_rpc_is_mapped` to recognize the custom memory regions dynamically mapped under `SS_NW_TRAMPOLINE` (HTAB, sub-KDP pool, and page descriptors), enabling diagnostics tools to query these regions via RPC memory search/read commands.
+
+### [SheepShaver] move SS_DUMP_ROM from patch_68k to PatchROM (`ecd341f3`)
+
+- Moved `SS_DUMP_ROM` execution into the general `PatchROM()` function. This ensures that the decompressed ROM image is successfully dumped for offline analysis even when the versioned patch stages in `patch_68k()` fail or are skipped.
+
 ### [SheepShaver] SDR1 register + HTAB allocation — nanokernel page-table init unblocked
 
 - **General correctness fix (all guests):** `mfspr`/`mtspr SDR1` (SPR 25) now read/write a real

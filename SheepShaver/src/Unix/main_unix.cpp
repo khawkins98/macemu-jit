@@ -986,6 +986,21 @@ static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
 	if (addr >= KERNEL_DATA_BASE && end <= KERNEL_DATA_BASE + KERNEL_AREA_SIZE) return true;
 	// Kernel Data (alternate)
 	if (addr >= KERNEL_DATA2_BASE && end <= KERNEL_DATA2_BASE + KERNEL_AREA_SIZE) return true;
+	// New World Trampoline regions
+	if (getenv("SS_NW_TRAMPOLINE")) {
+		const uint32_t kdp = KernelDataAddr;
+		const uint32_t sub_kdp_size = 0x8000;
+		const uint32_t shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64
+		const uint32_t sub_kdp_base = shmem_base - sub_kdp_size;
+		const uint32_t htab_size = 0x10000;
+		const uint32_t htab_base = kdp + 0x2000;
+		const uint32_t ram_size_bytes = RAMSize;
+		const uint32_t page_count = ram_size_bytes / 4096;
+		const uint32_t pgdesc_size = (page_count * 4 + 0xFFF) & ~0xFFF;
+		const uint32_t kmem_base = (sub_kdp_base - pgdesc_size) & ~0xFFFF;
+		const uint32_t kmem_end  = htab_base + htab_size;
+		if (addr >= kmem_base && end <= kmem_end) return true;
+	}
 	return false;
 }
 
@@ -1022,9 +1037,9 @@ static int ss_rpc_handle_mem_search(rpc_connection_t *conn) {
 	p += wrote;
 
 	if (end_addr > 0xFFFFFFFC) end_addr = 0xFFFFFFFC;
-	for (uint32_t addr = start; addr + 4 <= end_addr; addr += 4) {
-		if (!ss_rpc_is_mapped(addr, 4)) continue;
-		uint32_t word = ReadMacInt32(addr);
+	for (uint64_t addr = start; addr + 4 <= end_addr; addr += 4) {
+		if (!ss_rpc_is_mapped((uint32_t)addr, 4)) continue;
+		uint32_t word = ReadMacInt32((uint32_t)addr);
 		if (word == value) {
 			if (count >= MAX_MATCHES) {
 				truncated = true;

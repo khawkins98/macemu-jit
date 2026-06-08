@@ -673,6 +673,23 @@ bool PatchROM(void)
 
 	// Copy 68k emulator to 2MB boundary
 	memcpy(ROMBaseHost + ROM_SIZE, ROMBaseHost + (ROM_SIZE - 0x100000), 0x100000);
+
+	// SS_DUMP_ROM: dump full decompressed ROM image for offline disassembly.
+	// Lives here (PatchROM) not in patch_68k() so it fires even when patch_68k fails on parcels.
+	{
+		const char *dump_path = getenv("SS_DUMP_ROM");
+		if (dump_path && *dump_path) {
+			FILE *f = fopen(dump_path, "wb");
+			if (f) {
+				fwrite(ROMBaseHost, 1, ROM_SIZE, f);
+				fclose(f);
+				fprintf(stderr, "[ROM-DUMP] wrote %u bytes to %s\n", (unsigned)ROM_SIZE, dump_path);
+			} else {
+				fprintf(stderr, "[ROM-DUMP] failed to open %s for writing: %s\n", dump_path, strerror(errno));
+			}
+		}
+	}
+
 	return true;
 }
 
@@ -2435,19 +2452,6 @@ static bool patch_68k(void)
 		}
 	}
 	
-	// SS_DUMP_ROM: dump full decompressed ROM image for offline disassembly
-	const char *dump_path = getenv("SS_DUMP_ROM");
-	if (dump_path && *dump_path) {
-		FILE *f = fopen(dump_path, "wb");
-		if (f) {
-			fwrite(ROMBaseHost, 1, ROM_SIZE, f);
-			fclose(f);
-			fprintf(stderr, "[ROM-DUMP] wrote %u bytes to %s\n", (unsigned)ROM_SIZE, dump_path);
-		} else {
-			fprintf(stderr, "[ROM-DUMP] failed to open %s for writing: %s\n", dump_path, strerror(errno));
-		}
-	}
-
 	return true;
 }
 

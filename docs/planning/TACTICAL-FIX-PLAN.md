@@ -71,3 +71,30 @@ This document aligns prioritized tactical fixes with the project's five core str
 ### ☐ 9. Complete Vacuousness Guard
 - **Scope:** Deep tier — sentinel/mutation harness for memory-only results.
 - **Status:** Shallow tier (NOP check) is already live.
+
+---
+
+## Further Investigations: Suspect Code & Coherence Audit
+
+### ☐ 12. GPR64 RA Coherence Hole
+- **Scope:** `emit_load_gpr64` / `emit_store_gpr64` (used by PPC64 doubleword ops like `ld`, `std`, `sld`) read/write the `PPCRegs` struct directly, bypassing the Register Allocator's low-word cache.
+- **Risk:** High (if PPC64 code runs). A 32-bit op leaves a dirty low word in a host register; a subsequent 64-bit read sees the stale struct word.
+- **Action:** Route the low-word through `ra_load`/`ra_store` once a PPC64/G5 path is active.
+- **Files:** `src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp` (~L823).
+
+### ☐ 13. Vestigial PPC64 FP Conversions (`fctid`, `fcfid`)
+- **Scope:** The JIT implements `fctid`, `fctidz`, and `fcfid` (64-bit conversions), but the interpreter treats them as illegal instructions on the default 7400 CPU.
+- **Risk:** Divergence. If a guest issues these, the JIT will execute a "fake" 64-bit conversion while the interpreter will crash/illegal-op.
+- **Action:** Either finish real 64-bit/G5 emulation or make these JIT cases return `false` to match the interpreter's illegal-op behavior.
+- **Files:** `src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp` (~L4517).
+
+### ☐ 14. `unsigned long` & Pointer Casting Audit
+- **Scope:** Widespread use of `unsigned long` (64-bit on macOS) for `uint32` and pointers, often combined with explicit `(uint32)` casts.
+- **Risk:** Truncation bugs or mismanaged `NATMEM_OFFSET` arithmetic.
+- **Action:** Audit `vm.hpp` and `sigsegv.cpp` for potential 64-to-32-bit truncation in address calculations.
+- **Technical Note:** The project relies on `host = 0x400000000000 + guest`. Ensure all guest addresses are explicitly promoted to `uint64_t` before addition.
+
+### ☐ 15. SDR1 "0xdead001f" Sentinel Propagation
+- **Scope:** The nanokernel uses SDR1 to derive KDP and HTAB.
+- **Risk:** If any code dereferences the `0xdead0000` base without our specific `ignoresegv` or Trampoline backing, it will stall.
+- **Action:** Replace all `0xdead001f` sentinels with real, RAM-backed register logic (Tracked in Pillar 1/Item 6).

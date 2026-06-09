@@ -32,6 +32,7 @@ parcels 9.0.1 ROM's DR Emulator dispatch and 68k init path.
   - [Physical Page Array (0x6C0–0x700)](#physical-page-array-0x6c00x700)
   - [Miscellaneous / Late-Init Fields (0x900–0x920)](#miscellaneous--late-init-fields-0x9000x920)
 - [Negative-Offset Fields (below KDP)](#negative-offset-fields-below-kdp)
+  - [SPRG0 per-task frame (negative offsets from per-task frame pointer)](#sprg0-per-task-frame-negative-offsets-from-per-task-frame-pointer)
 - [Fields Read by Reset.s (consumer digest)](#fields-read-by-resetsmust-be-set-by-inits)
 - [Fields Set by InitEmulation (Emulate.s)](#fields-set-by-initemulation-emulates)
 - [Fields NOT Set by Init/Reset](#fields-not-set-by-initreset-set-at-runtime-or-by-trampoline)
@@ -41,7 +42,7 @@ parcels 9.0.1 ROM's DR Emulator dispatch and 68k init path.
 - [ECB (EmulatorData / EDP) Structure](#ecb-emulatordata--edp-structure-kdp0x1000)
 - [NEWWORLD-Specific KDP Fields (main.cpp)](#newworld-specific-kdp-fields-maincpp)
 - [Trampoline Seeding Summary (Path B)](#trampoline-seeding-summary-ss_nw_synth_entry-path)
-- [Wall Status](#wall-status-resolved--2026-06-08)
+- [Wall Status](#wall-status-updated--2026-06-09)
 
 ---
 
@@ -61,6 +62,7 @@ r13 = KernelMemoryBase. r14 = HTAB mask. r15 = total kernel memory size.
 | Offset | Name | Init.s line | Source register | Value comes from | Purpose |
 |--------|------|-------------|-----------------|------------------|---------|
 | 0x080:0x280 | SegMaps (4 x 16 entries) | — | — | Reset.s:ResetSegMaps (bulk copy from ConfigInfo) | Segment map arrays |
+| **0x080:0x100** | **SegMap32SupInit** | — | — | Reset.s:ResetSegMaps → `addi r27, r1, 0x78; lwzu r25, 8(r27)` pattern | 16 segments × 8 bytes (ptr, flags). Pointers to PMDT chains. **Spike-verified (2026-06-09):** corrupted during page-init loop — the page-init loop overwrites the value NKInit copied (`0x68FFE920` → `0x0000FFFF`) via an indirect store. CreateAreasFromPageMap reads these via `addi r27, r1, 0x78; lwzu r25, 8(r27)`. Our SegMap spike writes fresh data at ROM+0x30d600 immediately before CAFPM, bypassing the corruption. |
 | 0x280:0x300 | BatRanges | — | — | Reset.s:ResetBatRanges (from ConfigInfo) | BAT range entries |
 | 0x300:0x340 | CurIBAT/CurDBAT | — | — | Runtime (SetSpace) | Current BAT register shadows |
 | 0x340:0x360 | NCBPointerCache | — | — | Reset.s:161 (`_clrNCBCache`), zeroed | Non-cacheable block pointer cache |
@@ -113,7 +115,7 @@ r13 = KernelMemoryBase. r14 = HTAB mask. r15 = total kernel memory size.
 | 0x650 | MRBase | 229 | r12 | `_kaddr` from CodeBase to MRBase label | no | MemRetry code base address |
 | 0x654 | SysContextPtrLogical | 234 | r12 | `ConfigInfo.LA_EmulatorData + ConfigInfo.ECBOffset` | no | Logical addr of system ContextBlock |
 | 0x658 | SysContextPtr | 237 | r12 | `rED + ConfigInfo.ECBOffset` (physical) | no | Physical addr of system ContextBlock |
-| 0x65C | ContextPtr | 238 | r12 | Same as SysContextPtr (initial) | no | Currently active ContextBlock |
+| 0x65C | ContextPtr | 238 | r12 | Same as SysContextPtr (initial) | no | Currently active ContextBlock. **Also read by DR Emulator at 0x5036f920**: `lwz r6, 0x65c(r1)` — context block for 68k emulator state. Uninitialized at current wall → crash at guest PC 0x00000000. |
 
 ### Scheduler, Flags, and Interrupt Masking (0x660–0x680)
 
@@ -133,7 +135,7 @@ r13 = KernelMemoryBase. r14 = HTAB mask. r15 = total kernel memory size.
 | Offset | Name | Init.s line | Source register | Value comes from | Read by Reset.s? | Purpose |
 |--------|------|-------------|-----------------|------------------|-------------------|---------|
 | 0x66C | PageMapFreePtr | 262 | r13 | `PageMapPtr + ConfigInfo.PageMapInitSize` | no | First free byte in PageMap |
-| 0x684 | PageMapPtr | 260 | r13 | `r1 + KDP.PageMap` (= KDP + 0x920) | yes (line 11): loaded into rPgMap=r18 | Start of PageMap buffer |
+| 0x684 | PageMapPtr / PA_PageMapStart ptr | 260 | r13 | `r1 + KDP.PageMap` (= KDP + 0x920) — set at 0x50310874: `addi r13, r1, 0x920; stw r13, 0x684(r1)` | yes (line 11): loaded into rPgMap=r18 | Points to KDP+0x920. Start of PageMap buffer. |
 | 0x688 | **PageAttributeInit** | 256 | r12 | `ConfigInfo.PageAttributeInit` | yes (line 321): default PTE lower-word attrs | Default WIMG/PP for new Page Table Entries |
 | 0x68C | HtabSingleEA | — (zeroed) | r0 | zero | no (runtime: PageTable.s) | Last single-page PMDT EA in HTAB |
 | 0x690 | HtabSinglePTE | — (zeroed) | r0 | zero | no (runtime: PageTable.s) | Ptr to that PTE |
@@ -166,7 +168,9 @@ r13 = KernelMemoryBase. r14 = HTAB mask. r15 = total kernel memory size.
 |--------|------|-------------|-----------------|------------------|---------|
 | 0x908 | RTASDispatch | Init.s:153/165 | r8 | From `r8` if RTAS present, else 0 | RTAS dispatch entry point |
 | 0x90C | RTASData | Init.s:155/166 | — | From `HWInfo.RTAS_PrivDataArea` if RTAS, else 0 | RTAS private data area |
-| 0x910 | (legacy PageMap word) | Init.s:264 | — | Zeroed for backward compat | Legacy compatibility |
+| **0x910** | **(scratch / possible NKPublic field)** | Init.s:264 | — | Zeroed for backward compat in Init.s | **Used by our SegMap spike stub** to save/restore LR (spike saves LR here, does bl, restores). May be a real NKPublic-exported field — verify against `OldKern/KDP.h` before using in production code. |
+| **0x920** | **PA_PageMapStart (PageMap buffer start)** | Init.s:260 / 262 | r13 | `r1 + 0x920` (KDP + 0x920), also stored to `KDP+0x684` | Start of PMDT data / PageMap buffer. Set at 0x50310874: `addi r13, r1, 0x920; stw r13, 0x684(r1)`. Our spike writes PMDT entries (PMDT[0] = 256MB RAM area, PMDT[1] = sentinel) here before CreateAreasFromPageMap runs. |
+| **0xedc** | **NanoKernelInfo.ConfigFlags** | — (runtime) | — | Runtime | Read/written by idle loop exit path at 0x50327540: `ori r8, r8, 2` sets "work was dispatched" flag. |
 
 ---
 
@@ -176,12 +180,29 @@ r13 = KernelMemoryBase. r14 = HTAB mask. r15 = total kernel memory size.
 |---|---|---|---|
 | -0x04 | 0x68FFDFF0 | KDP (self-pointer) | `lwz r1, -4(r1)` chase pattern |
 | -0x20 | 0x68FFDFE0 | IRP base (0x68FF4000) | Info Record Page — the skipped cold-init at 0x5031008C normally computes `KDP - 0xA000`. Bank scan reads bank entries at `IRP + 0xDF0..IRP + 0xEBC` (26 eight-byte {start,size} pairs). |
-| -0x110 | 0x68FFDEF0 | saved LR | Context save area for interrupt handlers |
+| -0x110 | 0x68FFDEF0 | saved LR | Context save area for interrupt handlers. Also used as saved outer r1 in SPRG0-relative per-task frame (see SPRG0 per-task offsets below). |
 | -0x10C | 0x68FFDEF4 | saved CR | Context save area for interrupt handlers |
-| -0x108..-0x80 | 0x68FFDEF8.. | saved r24-r31 | Context save area (stmw/lmw) |
-| -0x900 | 0x68FFD700 | work queue | Idle loop at 0x50326880 checks this; 0 = no pending work. Trampoline seeds `1` to trigger dispatch. |
+| -0x108..-0x80 | 0x68FFDEF8.. | saved r24-r31 | Context save area (stmw/lmw). SPRG0 per-task frame: `-0x108..-0x108+32` = saved r24-r31 (stmw/lmw frame). |
+| **-0x340** | 0x68FFDC60 | current task context ptr | CAS sentinel in dequeue at 0x50312700 |
+| **-0x8fc** | 0x68FFD704 | (cleared field) | Zeroed during extended idle processing |
+| -0x900 | 0x68FFD700 | VIA base / NoIdeaR23 | **Spike-verified (2026-06-09):** Physical base address of the 6522 VIA chip. Read by SchIdleTask's `check_work` at 0x50326880. If null, check_work returns -1 and idle loop spins. Nanokernel exits idle, VIA interrupt handler runs, scheduler dispatch reaches DR Emulator entry when populated with a fake VIA page at 0x68FAF000. Thud console (0x503263fc) also checks this. Seeded by SS_NW_TRAMPOLINE spike. |
 | -0x964 | 0x68FFD69C | target MSR (SRR1) | Dispatch routine at 0x503126B4 reads this for `mtspr SRR1` before `rfi` into the DR Emulator. Trampoline seeds `0x0000D032`. |
-| -0xAF0 | 0x68FFD510 | lock word | Spinlock; the first lock acquire at 0x50312700 |
+| **-0xAF0** | 0x68FFD510 | RTASLock / work-queue head | Spinlock / pending-work check at 0x503265ac. CAS target for task dequeue at 0x50312700. |
+
+### SPRG0 per-task frame (negative offsets from per-task frame pointer)
+
+These offsets are relative to the **SPRG0-relative per-task frame** (the stack pointer of a
+suspended task, not the static KDP). Observed in the scheduler save/restore path around
+0x503265cc.
+
+| Offset from frame | Purpose |
+|---|---|
+| -4 | Saved outer r1 (stack pointer of interrupted context) |
+| -0x110 | Saved LR (restored at 0x503265cc) |
+| -0x10c | Saved CR (restored at 0x503265cc) |
+| -0x108..-0x108+32 | Saved r24-r31 (stmw/lmw frame) |
+| -0x340 | Current task context ptr (CAS sentinel in dequeue at 0x50312700) |
+| -0x8fc | (cleared field) — zeroed during extended idle processing |
 
 ---
 
@@ -551,7 +572,9 @@ the DR Emulator directly.
 
 ---
 
-## Wall Status (RESOLVED -- 2026-06-08)
+## Wall Status (Updated -- 2026-06-09)
+
+### Resolved (2026-06-08): Free-list / page-table subsystem
 
 **All three walls in the free-list / page-table subsystem have been broken.** The fixes:
 
@@ -563,5 +586,25 @@ the DR Emulator directly.
    of descriptors (growing upward) fit below the sub-KDP pool.
 
 **Result:** 65536 pages correctly added to free list, 568 compiled blocks, 153M blocks/s.
-Nanokernel reaches idle loop at `0x5032751C` (waiting for `[KDP-0x900]` work queue).
-Next wall is the PPC->68k handoff -- see HANDOFF-NEWWORLD-SUPERVISOR-MMU.md.
+
+### Resolved (2026-06-09): SegMap/CreateAreasFromPageMap + idle loop / VIA
+
+4. **SegMap corruption (CreateAreasFromPageMap):** page-init loop corrupts `KDP+0x80` (SegMap32SupInit
+   pointers). Fixed by a 34-instruction PPC stub at ROM+0x30d600 that writes minimal SegMap + PMDT
+   data immediately before both `bl CreateAreasFromPageMap` call sites (0x3124e4, 0x312568).
+   CAFPM processes the data (PC 0x5031f530 reached), boot advances 451 -> 568 compiled blocks.
+
+5. **Idle loop / VIA base (`[KDP-0x900]`):** nanokernel's `check_work` reads `[KDP-0x900]` as the
+   VIA base address. If null, returns -1 and spins forever. Spike fix: populate with a fake VIA page
+   at 0x68FAF000, env-gated on `SS_NW_TRAMPOLINE`. Nanokernel exits idle, VIA interrupt handler runs,
+   scheduler dispatch reaches DR Emulator.
+
+### Current wall (2026-06-09): DR Emulator entry (0x5046e8c0)
+
+Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror).
+DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from
+`KDP+0x65c`. All uninitialized -> crash at guest PC 0x00000000. Root cause: `patch_68k` /
+`jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs
+from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory
+problem — this is the PPC->68k emulator boundary, requiring 68k HLE shim infrastructure.
+See HANDOFF-NEWWORLD-SUPERVISOR-MMU.md.

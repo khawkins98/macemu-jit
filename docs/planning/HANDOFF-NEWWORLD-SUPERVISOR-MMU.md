@@ -1,6 +1,6 @@
 # Handoff: New World supervisor-stack fidelity (the PPC MMU / page-table work)
 
-> **Status:** 🟡 Active handoff · **Created:** 2026-06-08 · **Updated:** 2026-06-08
+> **Status:** 🟡 Active handoff · **Created:** 2026-06-08 · **Updated:** 2026-06-09
 > **Why this doc exists:** Hand a fresh agent the next phase of work — giving SheepShaver's PPC JIT a
 > consistent supervisor/MMU environment so the New World nanokernel boots further — AND, just as
 > importantly, the *rationale* so the agent doesn't bounce off the predictable "SheepShaver wasn't
@@ -67,7 +67,9 @@ under our JIT — far further than ever before. The journey + the proven path:
 | Sub-KDP pool region unmapped (`0x68FF7000` below KERNEL_AREA) | Root cause: `KERNEL_AREA_SIZE=0x2000` (8 KB) → shmem covers only `[0x68FFC000,0x69000000)`. Pool init's stores to `0x68FF5000–0x68FF7000` fault → `ignoresegv` silently skips them → pool data never written → allocator reads garbage → infinite zeroing loop at `0x50322990`. Fix: `vm_acquire_fixed` 32 KB below shmem base (env-gated). **VERIFIED** via SIGSEGV-handler instrumentation with probe present during both before/after runs (10 faults → 0). Boot advances 128 → 265 unique PCs; pool-init + zeroing-loop + allocator + HTAB/page-table init all complete. | ✅ committed + verified (env-gated) |
 | SDR1/HTAB zeroing stall at `0x50311ff4` | **Three-part fix:** (a) real SDR1 register (`ppc-registers.hpp`+`ppc-execute.cpp`: `mfspr`/`mtspr SDR1` read/write); (b) trampoline allocates 64 KB HTAB at `0x68FE0000`, seeds `SDR1=0x68FE0000`; (c) ROM patcher skips `sdr1_read`+`pgtb_clear` patches for parcels (gated on `g_rom_904_lenient`) so the real `mfspr SDR1` + real zeroing loop execute against mapped memory. HTAB zeroing now completes in milliseconds. **General correctness fix** (SDR1 was silently wrong for all guests). | ✅ committed |
 | Page descriptor free-list empty (`0x50312250`) | **Three-part fix:** (a) Seed `[KDP-0x20]` = IRP base (`KDP - 0xA000 = 0x68FF4000`), with bank entries at `IRP+0xDF0/DF4`. (b) Skip `desc_create` ROM patch for NW path (it NOP'd the `stwu r31,4(r29)` that stores page descriptors). (c) Lower `KernelMemoryBase` to `sub_kdp_base - pgdesc_size` (256KB for descriptors growing UPWARD). **General fix**: `desc_create` skip gated on `g_rom_904_lenient`. Free list now correctly populated: r22=0x3FFFC (65536 pages), 568 blocks, 153M blocks/s. | ✅ verified |
-| **CURRENT WALL: nanokernel idle loop at `0x5032751C`** | Nanokernel completed all init and reached its idle loop: `lwz r1,0(0); addi r1,r1,1; stw r1,0(0); bl check_work; cmpwi r8,-1; bne done; b loop`. The `check_work` function at `0x50326880` reads `[KDP-0x900]`; if zero, returns -1 (no work). This is the **PPC→68k handoff wall** — the nanokernel is waiting for an interrupt or KCall that never comes because `jump68k` is diagnostically skipped. **Fundamentally different class of problem** from the MMU/page-table walls above. | ☐ todo |
+| CreateAreasFromPageMap wall (`0x5031f3b8`) | **Root cause: KDP+0x80 (SegMap pointers) corrupted during page-init loop** — correct value `0x68FFE920` written by NKInit SegMap copy, but overwritten to `0x0000FFFF` by an indirect store during page-init. **Spike fix**: PPC stub at ROM+0x30d600 writes minimal SegMap + PMDT data (one 256MB RAM area + sentinels for 16 segments) immediately before calling CreateAreasFromPageMap, bypassing the corruption by construction. Both `bl` call sites (0x3124e4 non-cr5, 0x312568 cr5 path) redirected. **Confirmed**: CreateAreasFromPageMap processes the data (PC 0x5031f530 = normal-area handler reached), boot advances 451→568 compiled blocks at 54M blocks/s. Env-gated on `SS_NW_TRAMPOLINE`. | ✅ spike verified |
+| Nanokernel idle loop at `0x5032751C` | Nanokernel completed all init and reached its idle loop: `lwz r1,0(0); addi r1,r1,1; stw r1,0(0); bl check_work; cmpwi r8,-1; bne done; b loop`. The `check_work` function at `0x50326880` reads `[KDP-0x900]` (VIA base address); if zero, returns -1 (no work). **Fix (2026-06-09):** fake VIA page at 0x68FAF000 stored in `KDP-0x900`, env-gated on `SS_NW_TRAMPOLINE`. Nanokernel exits idle, VIA interrupt handler runs, scheduler dispatch reaches DR Emulator. | ✅ spike verified |
+| **CURRENT WALL: DR Emulator entry (0x5046e8c0)** | Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror). DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from KDP+0x65c. All uninitialized → crash at guest PC 0x00000000. Root cause: `patch_68k` / `jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory problem — this is the PPC→68k emulator boundary, requiring 68k HLE shim infrastructure. | ☐ todo |
 
 **SDR1/HTAB wall (RESOLVED).** With the sub-KDP fix verified, the nanokernel hit the SDR1/HTAB
 wall at `0x50311ff4`: `mfspr SDR1` returned the `0xdead001f` sentinel → 524K faulting stores.
@@ -101,14 +103,22 @@ from the emulator (via `fwrite(Mac2HostAddr(rom_base), ...)`) and disassemble th
 analyzed the compressed file produced an entirely fabricated disassembly — plausible addresses and
 register names, but wrong instructions. This wasted a full investigation cycle.
 
-**The current wall (nanokernel idle loop at `0x5032751C`).** After all init completes (568 unique
-compiled blocks, 153M blocks/s), the nanokernel enters its idle loop: increments a counter at guest
-address 0, calls a "check for work" function at `0x50326880` which reads `[KDP-0x900]`, and if
-zero (no pending work), returns -1 and loops. This is the **PPC→68k handoff wall** — the nanokernel
-has finished its own init and is waiting for an external event (interrupt, KCall) that never comes
-because the `jump68k` patch is diagnostically skipped. This is a fundamentally different class of
-problem: not a missing memory region or register, but the **transition from supervisor PPC code to
-the 68k OS layer**.
+**Idle loop / VIA fix (2026-06-09).** After all init completes (568 unique compiled blocks, 54M
+blocks/s), the nanokernel enters its idle loop: increments a counter at guest address 0, calls
+`check_work` at `0x50326880` which reads `[KDP-0x900]` (VIA base address), and if zero returns -1
+and loops. **Fix:** a fake VIA page at 0x68FAF000 is stored in `KDP-0x900`, env-gated on
+`SS_NW_TRAMPOLINE`. With the fake VIA populated, the nanokernel exits idle, the VIA interrupt handler
+runs, and nanokernel dispatch at 0x503126b4 executes `rfi` into the **DR Emulator entry at 0x5046f900**.
+
+**The current wall (DR Emulator entry at 0x5046e8c0 / 0x5046f900).** The nanokernel's dispatch
+routine seeds SPRG0 (`KDP+0x5a0`), SRR0 (`KDP+0x5a4 + 0x26e8 = 0x5046f900`), and SRR1
+(`KDP-0x964 = 0x0000D032`), then does `rfi`. The DR Emulator's cold-start at 0x5046f900 reads
+low-memory globals: ECB ptr at guest address 0x2804, counter at 0x2818, context block from
+`KDP+0x65c`. All of these are uninitialized → crash at guest PC 0x00000000. Root cause: `patch_68k`
+/ `jump68k` is diagnostically skipped (`SS_ROM_SKIP_JUMP68K`) because the NW ROM's jump68k byte
+signature differs from OldWorld (the 1.1 pattern is absent). **Character change**: no longer a
+supervisor-memory problem — this is the **PPC→68k emulator boundary**, requiring 68k HLE shim
+infrastructure to populate the low-memory globals and ECB the DR Emulator expects.
 
 ---
 
@@ -205,6 +215,30 @@ that's fine" is correct: **we never need to emulate Open Firmware** (OF overwrit
 runs; its lasting value is the device tree, which SheepShaver already fakes via NameRegistry). The
 minimal hand-off to fake is: a sane **`NKSystemInfo` bank map** + a **non-hostile supervisor MMU** (honor
 or consistently fake SDR1/HTAB/SPRG0/segments) + the **device-tree** identity we already provide.
+
+## 1.7 Decision log — CreateAreasFromPageMap wall (2026-06-09)
+
+**The wall.** `CreateAreasFromPageMap` (`0x5031f3b8`) reads **SegMap pointers from KDP+0x80**. After `NKInit` copies the SegMap the correct value is `0x68FFE920`, but by the time CAFPM is called that pointer had been **overwritten to `0x0000FFFF`** by something inside the page-init loop (`0x503214fc`, visited 10–100 times). CAFPM then operates on garbage and cannot create the memory areas the nanokernel expects.
+
+**Approach chosen — PPC stub bypass (option 2).** Rather than hunting the corruption source, a **34-instruction PPC stub at ROM+0x30d600** writes minimal, correct SegMap + PMDT data *immediately before* the `bl CreateAreasFromPageMap`, so nothing can clobber it. Both call sites (`0x3124e4` non-CR5 path, `0x312568` CR5 path) are redirected to the stub, which writes: **PMDT[0]** — a 256 MB RAM area `{page=0, count=0xFFFF, flags=0x2}`; **PMDT[1]** — sentinel `{page=0, count=0xFFFF, flags=0x200}`; empty sentinels for segments 1–15; and **SegMap[0] → PMDT[0]**, SegMap[1–15] → empty sentinel. The stub then falls through to the real CAFPM call. Corruption is bypassed by construction — zero gap between write and read.
+
+**Paths not taken, and why.**
+
+*Hunt the exact corrupt store.* All checked stores (the `stwu` at `0x503121d4`, `dcbst`/`sync` sequences) were innocent; the culprit is likely an **indirect store through a runtime-computed pointer** inside the page-init loop that would require deep RE to isolate. Abandoned because: the stub bypasses it by construction, understanding the cause wouldn't change the fix, and diminishing returns for a hypothesis test.
+
+*Write SegMap/PMDT from C++ at patch time (`WriteMacInt32`).* Won't work — the corruption happens at **runtime** during page-init, so data written at patch time is overwritten before CAFPM reads it.
+
+*NOP the entire `bl CreateAreasFromPageMap` (`SS_NW_NOP_AREAS`).* Tested earlier — boot did reach the idle loop, confirming it unblocks. But it doesn't exercise CAFPM and can't confirm the SegMap data theory. The stub is strictly better: it tests the hypothesis **and** creates the areas.
+
+*Full SegMap/PMDT implementation up front.* Build a complete SegMap with proper IRP/KDP/EDP/ROM/I/O region entries for all 16 segments. Deferred — the spike is a cheaper hypothesis test; if CAFPM can't process minimal data, a full implementation fails for the same reason. Now that the spike confirms the theory, a full implementation can follow.
+
+*Fix the corruption root cause in page-init.* The "proper" fix, but: (a) the corruption is likely intentional nanokernel behaviour (page-init builds a free list that temporarily reuses KDP fields as scratch space); (b) the real Trampoline would repopulate SegMap data **after** page-init anyway; (c) our stub emulates exactly what the Trampoline would do.
+
+**Result.** The spike confirmed the hypothesis — CAFPM processed the stub's data (PC `0x5031f530`, the normal-area handler, was reached), boot advanced from **451 → 568 compiled blocks at 54M blocks/s**, and the nanokernel completed all init and entered its **idle loop at `0x5032751C`**. The idle loop wall was subsequently broken (fake VIA page at 0x68FAF000 in `KDP-0x900`) — the nanokernel now exits idle and dispatches to the **DR Emulator entry at 0x5046f900**. Current wall: DR Emulator low-memory globals uninitialized (see §1 table).
+
+**Open question for a production implementation.** The spike uses a single minimal 256 MB RAM area. A full implementation should add **I/O region entries (type=`0xC00`)** for the VIA/CUDA address ranges and possibly separate entries for IRP/KDP/EDP/HTAB supervisor regions. The SegMap sentinel-writing loop at `0x503123f4` normally writes I/O sentinels; the spike's stub overwrites those. The stub is env-gated on `SS_NW_TRAMPOLINE` and does not affect the OldWorld path.
+
+---
 
 ## 2. Your task
 

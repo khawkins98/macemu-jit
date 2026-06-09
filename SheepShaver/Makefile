@@ -6,6 +6,7 @@ JIT_DIR     := src/kpx_cpu/src/cpu/jit/aarch64
 ROM_HARNESS := rom-harness/rom-harness
 
 ROM         := /workspace/tmp/rpi-basilisk-assets/ppc-roms/PowerMac-9500-OldWorld.rom
+NW_ROM_PATH ?= /Users/Shared/macemu/2001-12-19 - Mac OS ROM 9.0.1.rom
 DISK        := /workspace/tmp/ss-test-disk.img
 BENCH_DISK  := /workspace/tmp/Benchmark.hda
 PREFS_DIR   := /tmp/ss-desktop
@@ -19,7 +20,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-rom harness-count ui-introspect-test ui-introspect-serialize-test \
+        test test-opcodes test-jit test-nw-init test-rom harness-count ui-introspect-test ui-introspect-serialize-test \
         e2e e2e-smoke e2e-bench e2e-workload e2e-test e2e-setup e2e-clean ui-dump \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
@@ -143,6 +144,32 @@ test-jit: build-ss
 	@echo ""
 	@echo "TIP: For deeper verification, boot with:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
 	@echo "     For quick perf A/B:  cd rom-harness && make bench"
+
+# test-nw-init: NewWorld nanokernel init regression test.
+# Proves the DR Emulator is reached after nanokernel init — checks for the
+# "first compile in 64KB region 50460000" signal, which only appears after the
+# nanokernel has completed its entire init sequence and handed off to the DR Emulator.
+# Requires the NewWorld ROM at NW_ROM_PATH (optional; skip with exit 0 if absent).
+test-nw-init: build-ss
+	@echo ""
+	@echo "=== NewWorld Nanokernel Init Regression Test ==="
+	@if [ ! -f "$(NW_ROM_PATH)" ]; then \
+		echo "SKIP: NW ROM not found at: $(NW_ROM_PATH)"; \
+		echo "      Set NW_ROM_PATH=/path/to/rom to override."; \
+		exit 0; \
+	fi
+	@printf 'rom $(NW_ROM_PATH)\nramsize 268435456\nnogui true\n' > /tmp/test_nw_init.prefs
+	@SS_NW_TRAMPOLINE=1 SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1 SS_JIT_NO_CHAIN=1 \
+		perl -e 'alarm 10; exec @ARGV' \
+		$(SS_BIN) --config /tmp/test_nw_init.prefs > /dev/null 2>/tmp/test_nw_init.log; true
+	@if grep -q "first compile in 64KB region 50460000" /tmp/test_nw_init.log; then \
+		echo "PASS: nanokernel init complete, DR Emulator reached (first compile in 64KB region 50460000)"; \
+	elif grep -q "SIGSEGV" /tmp/test_nw_init.log; then \
+		echo "FAIL: SIGSEGV before nanokernel init completed"; exit 1; \
+	else \
+		echo "FAIL: success signal not seen (nanokernel init did not complete within 10s)"; exit 1; \
+	fi
+	@rm -f /tmp/test_nw_init.prefs /tmp/test_nw_init.log
 
 # --- End-to-end VNC harness (ROADMAP A5) -------------------------------------
 #   make e2e         boot -> clean-shutdown smoke (the system-level regression gate)

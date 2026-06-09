@@ -1429,12 +1429,28 @@ void init_emul_ppc(void)
 		const uint32 emul_code_base = (uint32)ROMBase + 0x46d218;
 		WriteMacInt32(kdp + 0x5a0, kdp);             // context ptr = KDP (same as SPRG0)
 		WriteMacInt32(kdp + 0x5a4, emul_code_base);  // 68k code base (mirror region)
-		// [KDP-0x900] = VIA base address (NOT a work queue). The nanokernel's
-		// Thud console (0x3263fc) checks this: non-zero → VIA I/O (hangs without
-		// hardware); zero → skip VIA, process string, return to caller.
-		WriteMacInt32(kdp - 0x900, 0);
+		// [KDP-0x900] = VIA base address. The nanokernel's SchIdleTask
+		// (0x5032751c) polls VIA IFR via this pointer; if null, check_work
+		// returns -1 and the idle loop spins forever. The Thud console
+		// (0x3263fc) also checks it: non-zero → VIA I/O; zero → skip.
+		// Allocate a fake VIA page so both paths work (reads/writes hit
+		// mapped memory; no real VIA behavior, but no hang either).
+		const uint32 fake_via_addr = kmem_base - 0x1000;
+		if (vm_acquire_fixed(Mac2HostAddr(fake_via_addr), 0x1000) == 0) {
+			memset(Mac2HostAddr(fake_via_addr), 0, 0x1000);
+			uint8 *via = (uint8 *)Mac2HostAddr(fake_via_addr);
+			via[2] = 0x01;   // VIA IFR: bit 0 = timer 1 interrupt pending
+			via[6] = 0x42;   // VIA T1C-L: plausible counter value
+			WriteMacInt32(kdp - 0x900, fake_via_addr);
+			fprintf(stderr, "[NW-TRAMP] fake VIA at %08x, [KDP-0x900]=%08x\n",
+			        fake_via_addr, fake_via_addr);
+		} else {
+			fprintf(stderr, "[NW-TRAMP] WARNING: fake VIA alloc failed at %08x, "
+			        "idle loop will spin\n", fake_via_addr);
+			WriteMacInt32(kdp - 0x900, 0);
+		}
 		fprintf(stderr, "[NW-TRAMP] dispatch: +0x5a0(ctx)=%08x, +0x5a4(code_base)=%08x, "
-		        "entry=%08x, [-0x900](via)=0\n",
+		        "entry=%08x\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
 
 		// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.

@@ -17,7 +17,38 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-09 (latest) — Parcels handoff is scheduler-dispatched; redirect correct but unreachable
+## 2026-06-09 (latest) — SegMap spike confirms CreateAreasFromPageMap theory; NW forcing function closed
+
+**KDP+0x80 corruption is real but bypassable**: The SegMap pointers at KDP+0x80 ARE corrupted
+during the page-init loop (correct value 0x68FFE920 after NKInit copy, corrupted to 0x0000FFFF
+before CAFPM entry). The exact store was not identified — likely an indirect store through a
+runtime pointer in the page-init function (0x503214fc). Bypassed by writing fresh data
+immediately before CAFPM via a PPC stub.
+
+**KDP-0x900 = VIA base, not a work queue**: Previous comment in sheepshaver_glue.cpp said
+"NOT a work queue." Confirmed by RE: it's the 6522 VIA physical base address. The nanokernel's
+SchIdleTask polls VIA IFR (offset +2) for timer-1 interrupt. A fake mapped page with IFR bit 0
+set lets the idle loop exit.
+
+**Stop-rule fires correctly at DR Emulator boundary**: The 68k handoff requires
+reverse-engineering NW-specific entry points and porting 84 HLE shims
+(PATCH-68K-SHIM-INVENTORY.md) — pure ROM-specific work with no general emulator payoff. The
+lateral-thinking audit confirmed: DR Emulator is the same PPC code as OldWorld (just at a
+different ROM offset), so exercising it adds no new JIT coverage. The supervisor-mode
+correctness vein (SPRG, fctiw, SDR1, HTAB, page-descriptors, SegMap, VIA) is mined.
+
+**Methodology validated**: The "spike before full implementation" approach (option 2 from the
+prior session) worked perfectly — 34 PPC instructions, 1 hour to write+test, conclusive
+hypothesis confirmation. Compare to the multi-hour corruption hunt that preceded it. The
+advisor's "stop hunting, the spike doesn't need it" guidance was correct.
+
+**Encoding verification by disassembly is essential**: Every hand-assembled PPC instruction in
+the stub was verified by dumping the patched ROM and running capstone. No encoding errors. This
+is the methodology: write, dump, disassemble, test. Don't trust hand-math alone.
+
+---
+
+## 2026-06-09 — Parcels handoff is scheduler-dispatched; redirect correct but unreachable
 
 **Path A redirect works at the RE level** — the rfi block at ROM+0x3126cc (mtsrr0;mtsrr1;rfi
 → mtctr;bctr;nop) is correctly patched and test-jit passes 350/350. But it's **never reached**:

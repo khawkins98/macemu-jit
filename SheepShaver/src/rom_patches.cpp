@@ -1047,6 +1047,85 @@ static bool patch_nanokernel_boot(void)
 		*lp = htonl(POWERPC_NOP);
 	}
 
+	// SPIKE: SegMap/PMDT stub — populate KDP SegMap pointers + PMDT data right before
+	// CreateAreasFromPageMap runs, bypassing the unknown KDP+0x80 corruption during
+	// page-init. PPC stub at ROM+0x30d600 writes minimal valid data and calls through.
+	// Hypothesis test: if boot advances past CreateAreasFromPageMap, the SegMap data
+	// theory is confirmed and a full implementation (IRP/KDP/EDP/ROM entries) follows.
+	if (g_rom_904_lenient && getenv("SS_NW_TRAMPOLINE")) {
+		const uint32 stub_rom_offset = 0x30d600;
+		uint32 *stub = (uint32 *)(ROMBaseHost + stub_rom_offset);
+		int n = 0;
+
+		stub[n++] = htonl(0x7C0802A6);  // mflr r0
+		stub[n++] = htonl(0x90010910);  // stw r0, 0x910(r1)  — save LR in KDP scratch
+
+		// PMDT[0] at KDP+0x920: RAM 256MB {page=0, count=0xFFFF, flags=0x2 (RW)}
+		stub[n++] = htonl(0x3D000000);  // lis r8, 0
+		stub[n++] = htonl(0x6108FFFF);  // ori r8, r8, 0xFFFF  → r8 = 0x0000FFFF
+		stub[n++] = htonl(0x91010920);  // stw r8, 0x920(r1)   — PMDT[0].page_count
+		stub[n++] = htonl(0x39200002);  // li r9, 2
+		stub[n++] = htonl(0x91210924);  // stw r9, 0x924(r1)   — PMDT[0].flags (type=0 normal)
+
+		// PMDT[1] at KDP+0x928: sentinel {page=0, count=0xFFFF, flags=0x200}
+		stub[n++] = htonl(0x91010928);  // stw r8, 0x928(r1)   — PMDT[1].page_count
+		stub[n++] = htonl(0x39200200);  // li r9, 0x200
+		stub[n++] = htonl(0x9121092C);  // stw r9, 0x92C(r1)   — PMDT[1].flags (sentinel type)
+
+		// Empty sentinel at KDP+0x930 (for segments 1-15)
+		stub[n++] = htonl(0x91010930);  // stw r8, 0x930(r1)
+		stub[n++] = htonl(0x91210934);  // stw r9, 0x934(r1)
+
+		// SegMap[0] = &PMDT[0] = KDP+0x920
+		stub[n++] = htonl(0x39010920);  // addi r8, r1, 0x920
+		stub[n++] = htonl(0x91010080);  // stw r8, 0x80(r1)
+
+		// SegMap[1..15] = &empty_sentinel = KDP+0x930
+		stub[n++] = htonl(0x39210930);  // addi r9, r1, 0x930
+		stub[n++] = htonl(0x91210088);  // stw r9, 0x88(r1)
+		stub[n++] = htonl(0x91210090);  // stw r9, 0x90(r1)
+		stub[n++] = htonl(0x91210098);  // stw r9, 0x98(r1)
+		stub[n++] = htonl(0x912100A0);  // stw r9, 0xA0(r1)
+		stub[n++] = htonl(0x912100A8);  // stw r9, 0xA8(r1)
+		stub[n++] = htonl(0x912100B0);  // stw r9, 0xB0(r1)
+		stub[n++] = htonl(0x912100B8);  // stw r9, 0xB8(r1)
+		stub[n++] = htonl(0x912100C0);  // stw r9, 0xC0(r1)
+		stub[n++] = htonl(0x912100C8);  // stw r9, 0xC8(r1)
+		stub[n++] = htonl(0x912100D0);  // stw r9, 0xD0(r1)
+		stub[n++] = htonl(0x912100D8);  // stw r9, 0xD8(r1)
+		stub[n++] = htonl(0x912100E0);  // stw r9, 0xE0(r1)
+		stub[n++] = htonl(0x912100E8);  // stw r9, 0xE8(r1)
+		stub[n++] = htonl(0x912100F0);  // stw r9, 0xF0(r1)
+		stub[n++] = htonl(0x912100F8);  // stw r9, 0xF8(r1)
+
+		// bl CreateAreasFromPageMap (0x5031f3b8)
+		// stub bl is at 0x30d600 + n*4 = 0x30d678, disp = 0x31f3b8 - 0x30d678 = 0x11D40
+		stub[n++] = htonl(0x48011D41);  // bl 0x5031f3b8
+
+		stub[n++] = htonl(0x80010910);  // lwz r0, 0x910(r1)  — restore LR
+		stub[n++] = htonl(0x7C0803A6);  // mtlr r0
+		stub[n++] = htonl(0x4E800020);  // blr
+
+		fprintf(stderr, "[ROMPATCH] SPIKE: SegMap/PMDT stub at ROM+%06x (%d insns)\n",
+		        stub_rom_offset, n);
+
+		// Redirect both bl CreateAreasFromPageMap call sites to our stub.
+		// Site 1 (non-cr5 cold boot path): 0x3124e4, bytes 4800ced5
+		static const uint8 bl_cafpm_1[] = {0x48, 0x00, 0xce, 0xd5};
+		if ((base = find_rom_data(0x3124c0, 0x312500, bl_cafpm_1, sizeof(bl_cafpm_1))) != 0) {
+			lp = (uint32 *)(ROMBaseHost + base);
+			*lp = htonl(0x4BFFB11D);  // bl 0x5030d600 (disp = 0x30d600 - 0x3124e4 = -0x4EE4)
+			fprintf(stderr, "[ROMPATCH] SPIKE: redirected bl at %06x → stub\n", base);
+		}
+		// Site 2 (cr5 path): 0x312568, bytes 4800ce51
+		static const uint8 bl_cafpm_2[] = {0x48, 0x00, 0xce, 0x51};
+		if ((base = find_rom_data(0x312540, 0x312580, bl_cafpm_2, sizeof(bl_cafpm_2))) != 0) {
+			lp = (uint32 *)(ROMBaseHost + base);
+			*lp = htonl(0x4BFFB099);  // bl 0x5030d600 (disp = 0x30d600 - 0x312568 = -0x4F68)
+			fprintf(stderr, "[ROMPATCH] SPIKE: redirected bl at %06x → stub\n", base);
+		}
+	}
+
 	// Don't load SRs and BATs.
 	// PARCELS: the SR/BAT-load routine was restructured (its 1.1 signature `7c0004ac 839d0000
 	// 938105e8` is absent even whole-image). But the ops it performs — `mtsrin` (segment-register

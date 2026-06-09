@@ -9,6 +9,27 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-09
+
+### [SheepShaver] NewWorld nanokernel init — complete (forcing function closed)
+
+- **SegMap/PMDT spike**: PPC stub at ROM+0x30d600 writes minimal SegMap pointers + PMDT
+  data (one 256MB RAM area + sentinels for 16 segments) immediately before
+  CreateAreasFromPageMap, bypassing KDP+0x80 corruption during page-init. Both `bl` call
+  sites (0x3124e4, 0x312568) redirected. Replaces NOP_AREAS and MARKER_TEST diagnostics.
+- **Fake VIA page**: Mapped page at 0x68FAF000 with IFR timer bit set, stored at
+  KDP-0x900. Nanokernel's SchIdleTask exits idle loop, VIA interrupt handler runs,
+  scheduler dispatches to DR Emulator.
+- **Result**: PPC nanokernel init sequence fully complete — boot reaches DR Emulator entry
+  (0x5046f900) at 568 compiled blocks, 54M blocks/s. Crash at PC=0 is expected (68k
+  environment not initialized; `SS_ROM_SKIP_JUMP68K` still active).
+- **Forcing function closed**: Stop-rule fires — remaining work (68k HLE shim porting) is
+  ROM-specific byte-patching with no general emulator fix on the horizon. The NW boot
+  harvested: SPRG0-3, fctiw rounding, SDR1/HTAB, page-descriptor free-list, SegMap/PMDT,
+  VIA idle loop. Milestone captured as `make test-nw-init` regression gate.
+- All changes env-gated on `SS_NW_TRAMPOLINE`, default off. No regression to OldWorld
+  path (test-jit score=100, 350/350).
+
 ## 2026-06-08
 
 ### [shared] RPC mem_search overflow + New World mapping visibility in ss_rpc_is_mapped

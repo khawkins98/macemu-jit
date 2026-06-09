@@ -28,13 +28,11 @@
 > drifted layouts) — but it's a cheap check before committing to Phase 2.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 >
-> **▶ FRESH-AGENT HANDOFF (2026-06-09):** Path A jump68k redirect is PATCHED (mtctr/bctr at
-> 0x3126cc) but **UNREACHABLE** — the parcels handoff is scheduler-dispatched (blue-task ready
-> queues at KDP-0x9f0/-0x9d0/-0x9b0/-0x990), not reached sequentially from init. SheepShaver
-> bypasses the Trampoline that populates those queues. Path B is a dead end (Mixed-Mode wall).
-> The current wall is **Trampoline/scheduler emulation** — populating the boot-task ready queues
-> so the nanokernel's scheduler dispatches the 68k handoff. Stop-rule fires: no general fixes
-> banked this session; all changes are parcels-specific.
+> **▶ FRESH-AGENT HANDOFF (2026-06-09):** Path A redirect patched but unreachable (scheduler-
+> dispatched). Two new approaches documented in "FORWARD APPROACHES" section below: **α** =
+> probe ready queues → fix interrupt delivery or seed missing NKInit input (potential general
+> fix); **β** = revive Path B with scoped Mixed-Mode Manager HLE shim. Plan: spike α first
+> (probe → diagnose), pivot to β if α's wall is deep.
 
 ---
 
@@ -740,6 +738,60 @@ the 17 patterns (7 hard-abort) that need real RE or confirmation as unnecessary.
 Use `SS_ROM_LENIENT=1 SS_ROM_PATCH_TRACE=1` to map pattern hits for any new ROM version,
 then cross-reference the inventory table. See `SheepShaver/docs/DIAGNOSTICS.md` ("ROM
 patching diagnostics") for the full log format.
+
+### ⭐ FORWARD APPROACHES (2026-06-09) — two creative angles on the scheduler-dispatch wall
+
+The Path A jump68k redirect (mtctr/bctr at 0x3126cc) is correct RE but UNREACHABLE — the
+parcels handoff is scheduler-dispatched via blue-task ready queues, not sequential from init.
+Path B (SS_NW_SYNTH_ENTRY) hit the Mixed-Mode Manager wall. Two new approaches identified:
+
+#### Approach α — "Fix the dispatch, don't bypass the nanokernel"
+
+The nanokernel BOOTS (568 blocks, idle loop at 0x5032751C). The question is whether
+NKInit.s already created and enqueued the blue task on NominalReadyQ — and the scheduler
+just never fires — or whether the task was never created due to a missing input.
+
+**Gating experiment (5 min):** probe the four ready-queue heads at the idle loop:
+```
+SS_PROBE_PC=0x5032751c:[0x68ffd610],[0x68ffd630],[0x68ffd650],[0x68ffd670]
+```
+Where: `-0x9f0`=CriticalReadyQ, `-0x9d0`=LatencyProtectReadyQ, `-0x9b0`=NominalReadyQ
+(blue task), `-0x990`=IdleReadyQ. (Addresses assume KDP=0x68ffe000.)
+
+**If NominalReadyQ non-zero (task exists):** the wall is interrupt delivery. The DEC
+exception → SchEval → SchReturn → rfi path never fires. Likely MSR[EE]=0 at the idle
+loop, or our interrupt model doesn't deliver DEC in a form the parcels nanokernel expects.
+**HIGH general payoff** — a real PPC interrupt-model bug surfaced by the NW boot.
+
+**If NominalReadyQ zero (task never created):** NKInit.s's blue-task creation is gated on
+a missing ConfigInfo/NKSystemInfo field that the Trampoline would have populated. Seed it.
+**MEDIUM general payoff** — correct environment construction.
+
+**Fallback:** synthesize a TCB and enqueue directly on NominalReadyQ (1KB task struct,
+signature 'TASK', ContextBlockPtr at +0x88). ZERO general payoff but bounded.
+
+**Key enabler:** clone the v2 NanoKernel source from `elliotnunn/powermac-rom` branches —
+the scheduler/init code is annotated assembly, transforms binary RE into reading.
+
+#### Approach β — "Revive Path B with a scoped Mixed-Mode Manager HLE shim"
+
+Path B died because `0xFFC0` (Mixed-Mode) traps without a nanokernel. But SheepShaver
+already has EMUL_OP/NativeOp machinery for PPC↔68k transitions. A boot-scoped F-line
+handler that intercepts `0xFFC0`, reads the routine descriptor (documented format from
+Inside Macintosh), and dispatches to PPC via existing machinery could bypass the entire
+nanokernel/scheduler/Trampoline problem.
+
+**Unknown:** how many distinct routine descriptors does the parcels 68k init invoke?
+If 3–10 → bounded 1-day spike. If 30+ → fans out, becomes open-ended.
+
+**Advantages:** sidesteps scheduler, Trampoline, ready-queue, and interrupt-delivery
+problems entirely. Direct prior art in SheepShaver's existing Mixed-Mode thunks.
+
+**Risk:** each routine descriptor may call further Mixed-Mode transitions (recursive
+fan-out). The cold-start dispatch infrastructure from the earlier Path B experiment is
+already built (5-instruction ROM patch, exception vector stubs, KDP field seeding).
+
+#### Plan: spike α first (probe → diagnose → fix), pivot to β if α's wall is deep.
 
 ### NEXT CORRECTNESS TARGET (2026-06-08) — Trampoline / per-CPU supervisor environment (the real "second wall")
 

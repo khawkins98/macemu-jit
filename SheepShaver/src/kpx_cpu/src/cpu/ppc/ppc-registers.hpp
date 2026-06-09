@@ -218,6 +218,8 @@ struct powerpc_registers
 		SPR_LR		= 8,
 		SPR_CTR		= 9,
 		SPR_SDR1	= 25,
+		SPR_SRR0	= 26,
+		SPR_SRR1	= 27,
 		SPR_PVR		= 287,
 		SPR_VRSAVE	= 256,
 		SPR_SPRG0	= 272,
@@ -264,6 +266,8 @@ struct powerpc_registers
 	uint32 bat[16];				// BAT registers (SPR 528-543): IBAT0U/L..IBAT3U/L, DBAT0U/L..DBAT3U/L.
 								// Previously dropped; the nanokernel sets up BATs to map logical→physical
 								// address ranges, then uses those logical addresses for page tables/free lists.
+	uint32 srr0;				// SRR0 (SPR 26) — Save/Restore Register 0 (exception return PC).
+	uint32 srr1;				// SRR1 (SPR 27) — Save/Restore Register 1 (exception return MSR).
 };
 
 #endif /* PPC_REGISTERS_H */

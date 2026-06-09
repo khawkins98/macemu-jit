@@ -1293,6 +1293,12 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_SDR1:
 		d = regs().sdr1;
 		break;
+	case powerpc_registers::SPR_SRR0:
+		d = regs().srr0;
+		break;
+	case powerpc_registers::SPR_SRR1:
+		d = regs().srr1;
+		break;
 	case powerpc_registers::SPR_PVR: {
 		extern uint32 PVR;
 		d = PVR;
@@ -1349,6 +1355,12 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 #ifdef SHEEPSHAVER
 	case powerpc_registers::SPR_SDR1:
 		regs().sdr1 = s;
+		break;
+	case powerpc_registers::SPR_SRR0:
+		regs().srr0 = s;
+		break;
+	case powerpc_registers::SPR_SRR1:
+		regs().srr1 = s;
 		break;
 	case powerpc_registers::SPR_SPRG0:
 	case powerpc_registers::SPR_SPRG0 + 1:
@@ -1458,6 +1470,11 @@ void powerpc_cpu::execute_isync(uint32 opcode)
 {
 	execute_invalidate_cache_range();
 	increment_pc(4);
+}
+
+void powerpc_cpu::execute_rfi(uint32 opcode)
+{
+	pc() = regs().srr0;
 }
 
 /**

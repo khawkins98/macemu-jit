@@ -471,6 +471,7 @@ private:
 	template< class RA, class RB >
 	void execute_icbi(uint32 opcode);
 	void execute_isync(uint32 opcode);
+	void execute_rfi(uint32 opcode);
 	void execute_invalidate_cache_range();
 	static void call_execute_invalidate_cache_range(powerpc_cpu * cpu);
 	template< class RA, class RB >

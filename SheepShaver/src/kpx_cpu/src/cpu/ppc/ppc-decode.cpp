@@ -510,6 +510,11 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	  PPC_I(ISYNC),
 	  X_form, 19, 150, CFLOW_NORMAL
 	},
+	{ "rfi",
+	  EXECUTE_0(rfi),
+	  PPC_I(RFI),
+	  XL_form, 19, 50, CFLOW_BRANCH
+	},
 	{ "lbz",
 	  EXECUTE_LOADSTORE(nop, RA_or_0, D, true, 1, false, false),
 	  PPC_I(LBZ),

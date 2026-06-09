@@ -107,6 +107,7 @@ enum powerpc_instruction {
 	PPC_I(FSUBS),
 	PPC_I(ICBI),
 	PPC_I(ISYNC),
+	PPC_I(RFI),
 	PPC_I(LBZ),
 	PPC_I(LBZU),
 	PPC_I(LBZUX),

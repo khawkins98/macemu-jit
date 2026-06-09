@@ -17,7 +17,34 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-09 (latest) — SegMap spike confirms CreateAreasFromPageMap theory; NW forcing function closed
+## 2026-06-09 part 2 (latest) — DR Emulator entry wall falls; stop-rule revised
+
+**The DR Emulator entry wall fell to a TRIVIAL fix**: promoting 4 existing KDP field writes
+from a nested diagnostic guard (`SS_NW_SYNTH_ENTRY`) to the outer `SS_NW_TRAMPOLINE` block.
+No new code needed — the writes existed but were unreachable on Path A.
+
+**The `jump68k` redirect ALREADY WORKS for NewWorld** via `parcels_rfi_dat` pattern (Path A:
+`mtctr;bctr;nop`). The `SS_ROM_SKIP_JUMP68K` env var was a diagnostic bypass that PREVENTED
+it from running. Dropping that flag lets the full dispatch chain work.
+
+**`patch_68k_emul()` runs for all ROM types** and writes the DR Emulator entry stub at
+ROM+0x36f900. Not gated on ROM type.
+
+**Boot now reaches DR Emulator** (region 50460000 compiles), then crashes at PC=0x72bf0000 —
+nanokernel register-restore path loads garbage from ECB. Next wall: dispatch table or
+cold-start init setup in `patch_68k_emul()`.
+
+**Stop-rule revised**: The original closure ("remaining work = 84-shim byte-pattern porting")
+was wrong. The DR Emulator wall fell without any byte-pattern porting. New discipline: keep
+advancing as long as each wall costs <1 day and the forcing function yields insights.
+
+Methodology validation: the "promote existing code" pattern keeps recurring — scaffolding
+written for one diagnostic path turns out to be exactly what the forward path needs, just
+gated too tightly.
+
+---
+
+## 2026-06-09 — SegMap spike confirms CreateAreasFromPageMap theory; NW forcing function closed
 
 **KDP+0x80 corruption is real but bypassable**: The SegMap pointers at KDP+0x80 ARE corrupted
 during the page-init loop (correct value 0x68FFE920 after NKInit copy, corrupted to 0x0000FFFF

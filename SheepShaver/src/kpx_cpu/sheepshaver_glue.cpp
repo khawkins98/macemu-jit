@@ -1416,8 +1416,8 @@ void init_emul_ppc(void)
 		 * The parcels nanokernel's dispatch routine (0x503126b4) does:
 		 *   lwz r8, 0x5a0(r1)  → mtspr SPRG0  (context ptr)
 		 *   lwz r8, 0x5a4(r1)  → addi +0x26e8 → mtspr SRR0  (68k code base → entry)
-		 *   lwz r4, 0x648(r1)  (opcode table — already set by warm path)
-		 *   lwz r9, -0x964(r1) → mtspr SRR1   (target MSR — already set)
+		 *   lwz r4, 0x648(r1)  (opcode table — set below)
+		 *   lwz r9, -0x964(r1) → mtspr SRR1   (UserModeMSR — set below)
 		 *   rfi  → enters SheepShaver's DR Emulator at code_base + 0x26e8
 		 *
 		 * The cold-init path (0x50310040, never taken) sets +0x5a0/+0x5a4 and posts
@@ -1453,30 +1453,33 @@ void init_emul_ppc(void)
 		        "entry=%08x\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
 
+		// ECB pointer and DR Emulator KDP fields (read by DR Emulator at handoff).
+		// These must be set for Path A (nanokernel trampoline) as well as Path B.
+		const uint32 ecb = kdp + 0x1000;
+		WriteMacInt32(kdp + 0x65c, ecb);          // ECB ptr → EmulatorData at KDP+0x1000
+		WriteMacInt32(kdp + 0x660, 0);
+		WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);  // EMUL_RETURN handler
+		WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);
+		WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x480000);  // opcode dispatch table
+		WriteMacInt32(kdp - 0x964, 0x0000d032);                  // UserModeMSR
+
+		// 68k exception vectors: SP=0 (diagnostic), reset PC, and rte stubs for 2..63.
+		const uint32 reset_68k = (uint32)ROMBase + 0x2a;
+		WriteMacInt32(0, 0);
+		WriteMacInt32(4, reset_68k);
+		const uint32 rte_addr = (uint32)ROMBase + 0x3196;
+		for (int vec = 2; vec < 64; vec++)
+			WriteMacInt32(vec * 4, rte_addr);
+		fprintf(stderr, "[NW-TRAMP] ECB=%08x +0x648(dispatch)=%08x +0x5f0(emul_ret)=%08x "
+		        "guest[4](68k-reset)=%08x\n",
+		        ecb, (uint32)ROMBase + 0x480000,
+		        (uint32)ROMBase + 0x366080, reset_68k);
+
 		// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.
 		// Skips the nanokernel and enters DR Emulator directly. Dead end
 		// at Mixed-Mode (0xFFC0 F-line needs nanokernel). Kept for
-		// diagnostics. KDP field seeding and exception vectors below may
-		// transfer to Path A; the ROM patch at 0x310000 is Path-B-only.
+		// diagnostics. ROM patch at 0x310000 is Path-B-only.
 		if (getenv("SS_NW_SYNTH_ENTRY")) {
-			const uint32 ecb = kdp + 0x1000;
-			const uint32 reset_68k = (uint32)ROMBase + 0x2a;
-
-			// KDP fields — likely needed by Path A too (DR Emulator reads these)
-			WriteMacInt32(kdp + 0x65c, ecb);
-			WriteMacInt32(kdp + 0x660, 0);
-			WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);
-			WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);
-			WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x480000);
-			WriteMacInt32(kdp - 0x964, 0x0000d032);
-
-			// 68k vectors — likely needed by Path A too (defensive stubs)
-			WriteMacInt32(0, 0);
-			WriteMacInt32(4, reset_68k);
-			const uint32 rte_addr = (uint32)ROMBase + 0x3196;
-			for (int vec = 2; vec < 64; vec++)
-				WriteMacInt32(vec * 4, rte_addr);
-
 			fprintf(stderr, "[NW-SYNTH] KDP=%08x ECB=%08x 68k-reset=%08x\n",
 			        kdp, ecb, reset_68k);
 			fprintf(stderr, "[NW-SYNTH] guest[0]=%08x guest[4]=%08x "

@@ -1,6 +1,6 @@
 # Handoff: New World supervisor-stack fidelity (the PPC MMU / page-table work)
 
-> **Status:** 🟡 Active handoff · **Created:** 2026-06-08 · **Updated:** 2026-06-09
+> **Status:** 🟡 Active — hybrid approach (§2.7) · **Created:** 2026-06-08 · **Updated:** 2026-06-09
 > **Why this doc exists:** Hand a fresh agent the next phase of work — giving SheepShaver's PPC JIT a
 > consistent supervisor/MMU environment so the New World nanokernel boots further — AND, just as
 > importantly, the *rationale* so the agent doesn't bounce off the predictable "SheepShaver wasn't
@@ -69,7 +69,7 @@ under our JIT — far further than ever before. The journey + the proven path:
 | Page descriptor free-list empty (`0x50312250`) | **Three-part fix:** (a) Seed `[KDP-0x20]` = IRP base (`KDP - 0xA000 = 0x68FF4000`), with bank entries at `IRP+0xDF0/DF4`. (b) Skip `desc_create` ROM patch for NW path (it NOP'd the `stwu r31,4(r29)` that stores page descriptors). (c) Lower `KernelMemoryBase` to `sub_kdp_base - pgdesc_size` (256KB for descriptors growing UPWARD). **General fix**: `desc_create` skip gated on `g_rom_904_lenient`. Free list now correctly populated: r22=0x3FFFC (65536 pages), 568 blocks, 153M blocks/s. | ✅ verified |
 | CreateAreasFromPageMap wall (`0x5031f3b8`) | **Root cause: KDP+0x80 (SegMap pointers) corrupted during page-init loop** — correct value `0x68FFE920` written by NKInit SegMap copy, but overwritten to `0x0000FFFF` by an indirect store during page-init. **Spike fix**: PPC stub at ROM+0x30d600 writes minimal SegMap + PMDT data (one 256MB RAM area + sentinels for 16 segments) immediately before calling CreateAreasFromPageMap, bypassing the corruption by construction. Both `bl` call sites (0x3124e4 non-cr5, 0x312568 cr5 path) redirected. **Confirmed**: CreateAreasFromPageMap processes the data (PC 0x5031f530 = normal-area handler reached), boot advances 451→568 compiled blocks at 54M blocks/s. Env-gated on `SS_NW_TRAMPOLINE`. | ✅ spike verified |
 | Nanokernel idle loop at `0x5032751C` | Nanokernel completed all init and reached its idle loop: `lwz r1,0(0); addi r1,r1,1; stw r1,0(0); bl check_work; cmpwi r8,-1; bne done; b loop`. The `check_work` function at `0x50326880` reads `[KDP-0x900]` (VIA base address); if zero, returns -1 (no work). **Fix (2026-06-09):** fake VIA page at 0x68FAF000 stored in `KDP-0x900`, env-gated on `SS_NW_TRAMPOLINE`. Nanokernel exits idle, VIA interrupt handler runs, scheduler dispatch reaches DR Emulator. | ✅ spike verified |
-| **CURRENT WALL: DR Emulator entry (0x5046e8c0)** | Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror). DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from KDP+0x65c. All uninitialized → crash at guest PC 0x00000000. Root cause: `patch_68k` / `jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory problem — this is the PPC→68k emulator boundary, requiring 68k HLE shim infrastructure. | ☐ todo |
+| **CURRENT WALL: DR Emulator entry (0x5046e8c0)** | Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror). DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from KDP+0x65c. All uninitialized → crash at guest PC 0x00000000. Root cause: `patch_68k` / `jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory problem — this is the PPC→68k emulator boundary, requiring 68k HLE shim infrastructure. **New approach (2026-06-09):** synthetic ECB stub — see §2.7. | 🟡 next |
 
 **SDR1/HTAB wall (RESOLVED).** With the sub-KDP fix verified, the nanokernel hit the SDR1/HTAB
 wall at `0x50311ff4`: `mfspr SDR1` returned the `0xdead001f` sentinel → 524K faulting stores.
@@ -313,6 +313,115 @@ Toolbox dependency**. So "fully synthetic" collapses to "synthesize the environm
 Toolbox" — which is what the supervisor work in §1.6/§3 already is. **Conclusion: we always need a real
 ROM for the Toolbox; we are effectively synthesizing the firmware/supervisor layer regardless.** Don't
 chase a no-ROM-file design; do treat "synthesize the supervisor environment" as the legitimate core.
+
+## 2.7 The hybrid approach — minimal hardware model for boot, HLE for runtime (2026-06-09)
+
+> **Status:** 🟡 Active investigation — reopening the NW chapter with a new approach.
+> **Decision:** The stop-rule that closed the NW forcing function (§1.7) was based on the premise
+> that the remaining work = "84 HLE shim byte-pattern porting." The hybrid reframe changes that
+> calculus: the DR Emulator wall may be solvable with a **synthetic ECB stub** (same proven technique
+> as the SegMap/PMDT spike), not a full shim port.
+
+### The insight: two phases, two emulation strategies
+
+| Phase | What the ROM talks to | Natural emulation style |
+|---|---|---|
+| **Boot** (nanokernel init → 68k OS startup) | Hardware: VIA, PMU, NVRAM, OF device tree, interrupt controllers | **LLE** — model the hardware responses |
+| **Runtime** (Finder, apps) | Toolbox traps, framebuffer, file system | **HLE** — intercept traps → host calls (existing shims) |
+
+SheepShaver already does HLE for runtime. The hybrid adds minimal LLE for boot — not a full
+machine model, but enough device registers to satisfy the ROM's probing.
+
+### The reframe: most hardware is already neutralized
+
+The 84 `patch_68k` shims already NOP out Cuda init, SCC, GC interrupt mask, CPU-speed probes.
+The fake VIA page (§1 wall table) is the only genuine "device model" needed before DR Emulator.
+**The actual wall is the PPC→68k handoff, not more hardware.**
+
+### Approach: synthetic ECB stub (same technique as SegMap/PMDT spike)
+
+The DR Emulator entry at `0x5046f900` reads a small set of low-memory globals:
+- ECB (Emulator Control Block) pointer at guest `0x2804`
+- Counter at guest `0x2818`
+- Context block from `KDP+0x65c`
+
+Rather than RE'ing the full `jump68k` byte pattern in the 9.0.1 ROM (which differs from
+OldWorld), write a **synthetic initializer stub** — a PPC stub at a spare ROM offset that
+populates the words the DR Emulator cold-start reads, then jumps to entry. Construct the
+post-jump68k world by ABI contract rather than pattern-matching.
+
+**Precedent:** The SegMap/PMDT spike at ROM+0x30d600 used exactly this technique — 34 PPC
+instructions that write minimal correct data immediately before the consumer reads it. The
+synthetic ECB stub is the same pattern applied to the next wall.
+
+### Implementation plan
+
+1. **Disassemble DR Emulator entry (`0x5046f900` in decompressed ROM)** — enumerate every
+   memory read in the cold-start sequence. This tells us whether the stub needs 4 words or 40.
+   Use `SS_DUMP_ROM` + capstone. **(S — hours)**
+
+2. **Write synthetic ECB stub** — PPC stub at a spare ROM offset, env-gated on
+   `SS_NW_TRAMPOLINE`. Populate the enumerated globals, redirect the nanokernel→DR Emulator
+   dispatch. Same pattern as the SegMap spike. **(S — hours, once reads are enumerated)**
+
+3. **Trace first 68k Toolbox traps** — once DR Emulator executes, see which `patch_68k`
+   shims fire and which fail. The shim inventory (PATCH-68K-SHIM-INVENTORY.md) shows 28
+   in-range + 31 relocated + 25 absent for 9.0.1. **(M — days per wave)**
+
+4. **MMIO dispatch for live devices (if needed)** — the existing SIGSEGV handler (`sigsegv.h`)
+   can serve as an MMIO dispatch: leave a page unmapped, decode the faulting instruction on
+   access, dispatch to a C++ handler. No new abstraction needed. Only build this if step 3
+   reveals a device-register access the passive fake-page model can't satisfy. **(L — only if
+   data demands it)**
+
+### Scariest unknowns
+
+1. **ECB structure depth** — could be 2 fields or 20; one missed init word = same crash.
+2. **68k low-memory layout divergence** — OldWorld vs NewWorld may have different globals at
+   the same addresses; the 25 absent shim patterns are this risk concretized.
+3. **jump68k vs DR Emulator distinction** — NewWorld uses a different PPC→68k handoff path
+   (nanokernel dispatch + `rfi` + SRR0) than OldWorld's `jump68k`. The OldWorld shim
+   infrastructure may not apply without modification.
+
+### Why this reopens the NW chapter
+
+The stop-rule fired because "remaining work = ROM-specific byte-patching with no general fix
+on the horizon." The synthetic-stub approach changes that: if the DR Emulator wall falls to a
+4-word init (like SegMap fell to a 34-instruction stub), the cost is low and the forcing
+function can keep running — potentially surfacing more general bugs in the 68k execution path.
+The stop-rule should be re-evaluated after step 1 (ECB enumeration) gives us the real scope.
+
+### §2.7.1 Result: DR Emulator entry cleared (2026-06-09)
+
+The synthetic ECB stub approach worked on first attempt. The fix was even simpler than
+expected: the KDP field writes already existed inside `SS_NW_SYNTH_ENTRY` (Path B diagnostic)
+— they just needed promoting to the outer `SS_NW_TRAMPOLINE` block (Path A).
+
+**What was added to `SS_NW_TRAMPOLINE`:**
+- `KDP+0x65c` → ECB pointer (KDP+0x1000)
+- `KDP+0x660` → 0
+- `KDP+0x5f0`, `KDP+0x5f4` → EMUL_RETURN handler (ROMBase+0x366080)
+- `KDP+0x648` → opcode dispatch table (ROMBase+0x480000)
+- `KDP-0x964` → UserModeMSR (0x0000d032)
+- Guest `[0]`=0 (68k SP), `[4]`=ROMBase+0x2a (68k reset PC), `[8..255]`=RTE stubs
+
+**Test result (without `SS_ROM_SKIP_JUMP68K`):**
+- `jump68k REDIRECTED` via Path A (`parcels_rfi_dat` pattern → `mtctr;bctr;nop`)
+- DR Emulator region 50460000 compiled (pc=5046e8c0) — cold-start entered
+- Crash at PC=0x72bf0000: nanokernel register-restore at 0x503244e8 loaded garbage from
+  ECB, `rfi` to uninitialized SRR0
+
+**Next wall:** The 68k dispatch table or cold-start init subroutine at ROM+0x36db94. The
+crash pattern (sequential garbage in r0-r31, 0x80000 spacing) suggests the ECB fields
+written by the cold-start init computed wrong handler addresses, or `patch_68k_emul()`
+didn't fully populate the dispatch table for NewWorld.
+
+**Stop-rule revision:** Original closure was "remaining work = 84-shim porting." This wall
+fell to ~10 lines of existing code promotion — no byte-pattern work. New discipline: keep
+the forcing function running while walls fall cheaply (<1 day each). Re-evaluate when a
+wall requires multi-day ROM-specific RE with no general payoff.
+
+---
 
 ## 3. MMU on Apple Silicon — approaches & ideas
 

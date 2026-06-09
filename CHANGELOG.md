@@ -11,6 +11,14 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-09
 
+### [SheepShaver] NewWorld: DR Emulator entry wall cleared
+
+- **NewWorld: DR Emulator entry wall cleared** — promoted ECB/KDP field writes (ECB ptr at
+  +0x65c, EMUL_RETURN at +0x5f0/+0x5f4, 68k vectors) from `SS_NW_SYNTH_ENTRY` diagnostic to
+  `SS_NW_TRAMPOLINE` Path A; boot now enters DR Emulator cold-start (region 50460000
+  compiles). Next wall: 68k dispatch table setup. Stop-rule revised — hybrid approach
+  validated.
+
 ### [SheepShaver] NewWorld nanokernel init — complete (forcing function closed)
 
 - **SegMap/PMDT spike**: PPC stub at ROM+0x30d600 writes minimal SegMap pointers + PMDT

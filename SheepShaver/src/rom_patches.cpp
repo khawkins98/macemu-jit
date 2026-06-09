@@ -649,13 +649,12 @@ bool PatchROM(void)
 	if (!patch_68k_emul()) return false;
 	if (!patch_nanokernel()) return false;
 	if (!patch_68k()) {
-		// DIAGNOSTIC boot (parcels, SS_ROM_SKIP_JUMP68K + lenient): patch_68k installs 68k-side EMUL_OP
-		// HLE (nvram/via/drivers/time) whose parcels byte-patterns are absent. NONE of it is reached
-		// before the un-redirected jump68k handoff wedges the boot, so let PatchROM complete anyway to
-		// observe the PPC-side runtime via [ALARM]/[HB]. ⚠ A REAL port must port these HLE shims.
-		if (g_rom_904_lenient && getenv("SS_ROM_SKIP_JUMP68K"))
-			fprintf(stderr, "[ROMPATCH] parcels: patch_68k incomplete — DIAGNOSTIC boot continues "
-			        "(68k HLE unreached before jump68k wedge)\n");
+		// Parcels: patch_68k installs 68k-side EMUL_OP HLE (nvram/via/drivers/time) whose byte-patterns
+		// are absent. With the jump68k redirect (Path A), the 68k init WILL be reached — missing HLE
+		// shims are the expected next wall. Let PatchROM complete so we can observe where it stalls.
+		if (g_rom_904_lenient)
+			fprintf(stderr, "[ROMPATCH] parcels: patch_68k incomplete — boot continues "
+			        "(missing 68k HLE shims are the expected next wall)\n");
 		else
 			return false;
 	}
@@ -1107,24 +1106,16 @@ static bool patch_nanokernel_boot(void)
 	}
 
 	// Jump to 68k emulator.
-	// PARCELS: the resume-68k routine (mtsprg2;mtsrr0;mtsrr1;rfi) signature is absent, and the 1.1
-	// jump68k_caller byte-anchor maps to a page-table/debug-logging region on parcels (NOT the boot
-	// handoff). So the boot-time PPC->68k redirect cannot yet be located statically — it needs
-	// boot-flow tracing (the genuine RE frontier; see NEW-WORLD-ROM-SUPPORT-PLAN.md). DIAGNOSTIC
-	// path (SS_ROM_SKIP_JUMP68K + lenient): leave the handoff UN-redirected so PatchROM completes and
-	// we can boot to observe where the parcels nanokernel wedges via the [ALARM]/[HB] watchdog +
-	// trace ring. The boot WILL NOT reach the 68k OS this way (it wedges at the un-redirected handoff)
-	// — this is purely to gather the first runtime trace of a parcels ROM. 1.1 path unchanged.
+	// 1.1: mtsprg2;mtsrr0;mtsrr1 pattern → find caller → redirect to SheepShaver's emulator.
+	// Parcels: that pattern is absent. Instead, find the rfi block at 0x3126cc (lwz r4,0x648(r1);
+	// lwz r8,0x5a4(r1); lwz r9,-0x964(r1); addi r8,r8,0x26e8; mtsrr0; mtsrr1; rfi) and replace
+	// just the 3-instruction tail (mtsrr0;mtsrr1;rfi → mtctr r8;bctr;nop). Keeps the ROM's own
+	// register setup; only swaps out the privilege transition for a direct branch.
 	static const uint8 jump68k_dat[] = {0x7d, 0x92, 0x43, 0xa6, 0x7d, 0x5a, 0x03, 0xa6, 0x7d, 0x7b, 0x03, 0xa6};
 	if ((loc = find_rom_data(0x310000, 0x320000, jump68k_dat, sizeof(jump68k_dat))) == 0) {
-		if (g_rom_904_lenient && getenv("SS_ROM_SKIP_JUMP68K")) {
-			fprintf(stderr, "[ROMPATCH] parcels: jump68k NOT patched (DIAGNOSTIC) — boot will wedge "
-			        "at the PPC->68k handoff; watching via [ALARM]/[HB]\n");
-
-			// Parcels I/O poll patches: the nanokernel polls hardware registers
-			// (VIA/CUDA status at [r28+2], bit 2 = ready) that don't exist in
-			// emulation. NOP each beq-back so the poll falls through immediately.
-			// Pattern: lbz rN,2(r28); eieio; andi. rN,rN,4; beq $-0xC
+		if (g_rom_904_lenient) {
+			// Parcels I/O poll patches (needed for both redirect and diagnostic paths):
+			// the nanokernel polls VIA/CUDA status registers that don't exist in emulation.
 			{
 				static const uint32 io_poll_beq_offsets[] = {
 					0x326504, 0x3266f4, 0x326864, 0x326968, 0x326b60
@@ -1140,7 +1131,30 @@ static bool patch_nanokernel_boot(void)
 				fprintf(stderr, "[ROMPATCH] parcels: patched %d/5 I/O poll loops (VIA/CUDA ready-wait)\n", patched);
 			}
 
-			return true;
+			// Path A: find the parcels rfi block and redirect via mtctr/bctr
+			static const uint8 parcels_rfi_dat[] = {
+				0x80, 0x81, 0x06, 0x48,  // lwz r4, 0x648(r1)  — dispatch table
+				0x81, 0x01, 0x05, 0xa4,  // lwz r8, 0x5a4(r1)  — emul code base
+				0x81, 0x21, 0xf6, 0x9c   // lwz r9, -0x964(r1) — UserModeMSR
+			};
+			uint32 rfi_loc;
+			if ((rfi_loc = find_rom_data(0x310000, 0x320000, parcels_rfi_dat, sizeof(parcels_rfi_dat))) != 0) {
+				D(bug("parcels jump68k rfi block at %08lx\n", rfi_loc));
+				lp = (uint32 *)(ROMBaseHost + rfi_loc + 16);  // skip 4 kept instructions
+				*lp++ = htonl(0x7d0903a6);  // mtctr r8  (was mtsrr0 r8)
+				*lp++ = htonl(POWERPC_BCTR); // bctr      (was mtsrr1 r9)
+				*lp   = htonl(POWERPC_NOP);  // nop       (was rfi)
+				fprintf(stderr, "[ROMPATCH] parcels: jump68k REDIRECTED at %08x — "
+				        "mtsrr0;mtsrr1;rfi → mtctr;bctr;nop (Path A)\n", rfi_loc);
+				return true;
+			}
+
+			// Fallback: diagnostic skip (SS_ROM_SKIP_JUMP68K)
+			if (getenv("SS_ROM_SKIP_JUMP68K")) {
+				fprintf(stderr, "[ROMPATCH] parcels: jump68k NOT patched (DIAGNOSTIC) — boot will wedge "
+				        "at the PPC->68k handoff; watching via [ALARM]/[HB]\n");
+				return true;
+			}
 		}
 		return false;
 	}

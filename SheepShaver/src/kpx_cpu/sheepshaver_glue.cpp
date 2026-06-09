@@ -1429,9 +1429,12 @@ void init_emul_ppc(void)
 		const uint32 emul_code_base = (uint32)ROMBase + 0x46d218;
 		WriteMacInt32(kdp + 0x5a0, kdp);             // context ptr = KDP (same as SPRG0)
 		WriteMacInt32(kdp + 0x5a4, emul_code_base);  // 68k code base (mirror region)
-		WriteMacInt32(kdp - 0x900, 1);                // seed work queue (non-zero → dispatch)
+		// [KDP-0x900] = VIA base address (NOT a work queue). The nanokernel's
+		// Thud console (0x3263fc) checks this: non-zero → VIA I/O (hangs without
+		// hardware); zero → skip VIA, process string, return to caller.
+		WriteMacInt32(kdp - 0x900, 0);
 		fprintf(stderr, "[NW-TRAMP] dispatch: +0x5a0(ctx)=%08x, +0x5a4(code_base)=%08x, "
-		        "entry=%08x, [-0x900](wq)=1\n",
+		        "entry=%08x, [-0x900](via)=0\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
 
 		// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.

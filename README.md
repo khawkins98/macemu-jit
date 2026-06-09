@@ -1,3 +1,21 @@
+# macemu-jit — SheepShaver for Apple Silicon
+
+## Why does this exist?
+
+I remember being a teenager and thinking SheepShaver was pretty neat. I kept waiting for somebody to crack New World ROM support so I could run Mac OS 9.2 out of the box — do all the really cool things that other emulators over the years have brought to their platforms. But classic macOS was an evolutionary dead end. Things switched to OS X, and the old world moved on. Nobody was ever going to finish the job.
+
+After waiting a quarter of a century, it became obvious that nobody else was going to get New World ROMs running just-in-time on Apple Silicon either. So I thought maybe I would.
+
+I have some software development background, but I don't have the domain expertise, and I frankly don't have the software chops to pull something like this off on my own — not without a four-year grant to go learn it properly. What I do have is curiosity, some stubbornness, and access to an AI coding partner that turned out to be a surprisingly good collaborator on gnarly low-level problems. It's been an interesting learning experience. I think what came out of it is pretty neat.
+
+## A note on AI
+
+Yes, a lot of AI was used to write this code. I wouldn't call it vibe coding — there's been real discipline applied, real creativity, and real decisions made along the way. It's been a genuine partnership with the agent, not just prompting and hoping.
+
+I appreciate that plenty of people won't think much of that, and will consider this project complete trash because of it. They're welcome to that opinion. We don't have to agree. This is my hobby, and this is how I went about it. I'm sharing it back in case anyone finds it useful — to run it, fork it, pick it apart, or just take whatever bits help them. It's open source. Do what you like with it.
+
+---
+
 ## macOS Apple Silicon (arm64)
 
 This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit), adding an AArch64 JIT backend that translates PowerPC instructions to native ARM64 at runtime. **SheepShaver** boots Mac OS 8.x–9.x to the Finder desktop with the full native JIT on M-series Macs.

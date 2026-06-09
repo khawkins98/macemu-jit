@@ -25,7 +25,7 @@ Upstream merge: kanjitalk755/macemu@e2a210ef
 
 | Our commit | Source | Upstream |
 |------------|--------|----------|
-| [`b3d61f1d`](https://github.com/khawkins98/macemu-jit/commit/b3d61f1d) — keyboard grab tracks mouse grab state | [robxnano keyboard-grab branch](https://github.com/robxnano/macemu/tree/keyboard-grab) | [kanjitalk755@e2a210ef](https://github.com/kanjitalk755/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037) |
+| [`c661ee90`](https://github.com/khawkins98/macemu-jit/commit/c661ee90c7bec1c14b4ce7df8e7af87e77a1e01c) — keyboard grab tracks mouse grab state | [robxnano keyboard-grab branch](https://github.com/robxnano/macemu/tree/keyboard-grab) | [kanjitalk755@e2a210ef](https://github.com/kanjitalk755/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037) |
 
 ---
 
@@ -73,46 +73,56 @@ JIT, SDL3, networking, launcher/UI integration, and portability work that may ca
 The summary table is the quick answer to _"what is each fork really trying to do?"_; the
 sections below it contain commit-level detail.
 
+### Status legend
+
+| Symbol | Meaning |
+|--------|---------|
+| ❓ | **Pending** — spotted, not yet investigated or decided |
+| ✅ | **Integrated** — cherry-picked into this repo (see [Integrated so far](#integrated-so-far)) |
+| ❌ | **Rejected** — reviewed and decided not to integrate (reason noted inline) |
+
 ### At-a-glance: what each fork is trying to do
 
-| Fork | Primary goal / theme | What it's really trying to do |
-|------|----------------------|-------------------------------|
-| [MatthiasWM/kanjitalk_macemu](https://github.com/MatthiasWM/kanjitalk_macemu) | macOS linker fix | Keep kanjitalk's Unix build working on Darwin by avoiding `--export-dynamic` on macOS. |
-| [eyeonpower/macemu](https://github.com/eyeonpower/macemu) / [amcchord/macemu](https://github.com/amcchord/macemu) | memory layout + SDL3 fixes | Stabilize BasiliskII/SDL paths on newer hosts with contiguous allocation and SDL3 fixes. |
-| [AndrewNile/macemu](https://github.com/AndrewNile/macemu) | larger VM allocation refactor | Rework memory acquisition more broadly than eyeonpower's BasiliskII-only patch. |
-| [Cronocide/macemu](https://github.com/Cronocide/macemu) | parallel SheepShaver ARM64 JIT bring-up | Add an AArch64 JIT backend and patch resulting freezes/crashes in upstream SheepShaver. |
-| [zydeco/macemu](https://github.com/zydeco/macemu) | macOS-native rootless/Xcode build | Make BasiliskII feel like a native macOS app: rootless desktop windows, Xcode/Homebrew fixes, static deps. |
-| [quentinmit/macemu](https://github.com/quentinmit/macemu) | VDE networking | Make SheepShaver networking usable with VDE and persistent pref-driven configuration. |
-| [audiocontrol-org/macemu](https://github.com/audiocontrol-org/macemu) | networked SCSI bridge lab | Drive external hardware / OS 9 workflows via a `scsi2pi` backend, Docker automation, and deep device-manager tracing. |
-| [sirmick/macemu](https://github.com/sirmick/macemu) | Apple Silicon headless/browser streaming | Replace SDL-centric UI assumptions with IPC video and built-in web streaming. |
-| [mihaip/macemu](https://github.com/mihaip/macemu) | browser/Emscripten port (Infinite Mac) | Turn BasiliskII/SheepShaver into browser-delivered emulators and polish web-specific UX/media paths. |
-| [mstevenson/macemu](https://github.com/mstevenson/macemu) | macOS window/fullscreen polish | Improve the macOS window model around fullscreen, resizing, magnification, and default disk discovery. |
-| [robxnano/macemu](https://github.com/robxnano/macemu) | build-system + prefs-dir modernization | Prototype Meson/macOS builds, a Qt 6 SheepShaver prefs dialog, and more native config-file locations (XDG/Application Support/AppData). |
-| [SegHaxx/macemu-flatpak](https://github.com/SegHaxx/macemu-flatpak) | Flatpak/distribution modernization | Package macemu for Flatpak and strip away legacy desktop assumptions with XDG support, 64-bit cleanup, and old-backend removals. |
-| [andyvand/macemu](https://github.com/andyvand/macemu) | Android host port | Carry BasiliskII toward Android/guisan while also testing a few macOS/SDL3 display tweaks. |
-| [timothy-fuchs/macemu](https://github.com/timothy-fuchs/macemu) | DPI LCD rotation tweak | Add a small-screen/Waveshare rotation pref in BasiliskII's SDL2 video path. |
-| [vaccinemedia/macemu](https://github.com/vaccinemedia/macemu) | GTK/SDL UX polish | Improve Linux prefs UX with scaling controls and better drag-and-drop CD-ROM behavior. |
-| [seanmadawala/macemu](https://github.com/seanmadawala/macemu) | GTK4 + PulseAudio modernization | Update the old Linux desktop stack to current GUI/audio APIs. |
-| [jrepp/macemu](https://github.com/jrepp/macemu) / [vasi/macemu](https://github.com/vasi/macemu) | portability hygiene | Carry small but valuable build, linker, Wayland, and signal-handler fixes across modern hosts. |
-| [siddhartha77/macemu](https://github.com/siddhartha77/macemu) | guest/host clock decoupling | Reduce host-time coupling after startup, mainly for deterministic runtime behavior. |
-| [jsdf/macemu](https://github.com/jsdf/macemu) | original browser BasiliskII port | Early Emscripten proof that later fed into the Infinite Mac line of work. |
-| [DavidLudwig/macemu](https://github.com/DavidLudwig/macemu) | macOS SDL2 performance tuning | Tune pixel formats, rendering, and VOSF behavior for OSX-era SDL2 builds. |
-| [kwhr0/macemu](https://github.com/kwhr0/macemu) | alternative interpreter cores | Experiment with TinyPPC/Tiny68020 and maintain Xcode-native macOS builds. |
-| [uyjulian/macemu](https://github.com/uyjulian/macemu) | macOS-only BasiliskII simplification | Strip BasiliskII down to a macOS-only/CMake target and try an ARAnyM-derived 68K JIT path. |
-| [ucosty/macemu](https://github.com/ucosty/macemu) | guest-side debug hooks | Add tiny debug conveniences like an emulated `putchar` instruction. |
-| [DMJC/macemu](https://github.com/DMJC/macemu) | joystick → ADB input | Add gamepad support for BasiliskII by mapping SDL joystick input onto ADB. |
+| Fork | Primary goal / theme | What it's really trying to do | Status |
+|------|----------------------|-------------------------------|--------|
+| [MatthiasWM/kanjitalk_macemu](https://github.com/MatthiasWM/kanjitalk_macemu) | macOS linker fix | Keep kanjitalk's Unix build working on Darwin by avoiding `--export-dynamic` on macOS. | ❓ |
+| [eyeonpower/macemu](https://github.com/eyeonpower/macemu) / [amcchord/macemu](https://github.com/amcchord/macemu) | memory layout + SDL3 fixes | Stabilize BasiliskII/SDL paths on newer hosts with contiguous allocation and SDL3 fixes. | ❓ |
+| [AndrewNile/macemu](https://github.com/AndrewNile/macemu) | larger VM allocation refactor | Rework memory acquisition more broadly than eyeonpower's BasiliskII-only patch. | ❓ |
+| [Cronocide/macemu](https://github.com/Cronocide/macemu) | parallel SheepShaver ARM64 JIT bring-up | Add an AArch64 JIT backend and patch resulting freezes/crashes in upstream SheepShaver. | ❓ |
+| [zydeco/macemu](https://github.com/zydeco/macemu) | macOS-native rootless/Xcode build | Make BasiliskII feel like a native macOS app: rootless desktop windows, Xcode/Homebrew fixes, static deps. | ❓ |
+| [quentinmit/macemu](https://github.com/quentinmit/macemu) | VDE networking | Make SheepShaver networking usable with VDE and persistent pref-driven configuration. | ❓ |
+| [audiocontrol-org/macemu](https://github.com/audiocontrol-org/macemu) | networked SCSI bridge lab | Drive external hardware / OS 9 workflows via a `scsi2pi` backend, Docker automation, and deep device-manager tracing. | ❓ |
+| [sirmick/macemu](https://github.com/sirmick/macemu) | Apple Silicon headless/browser streaming | Replace SDL-centric UI assumptions with IPC video and built-in web streaming. | ❓ |
+| [mihaip/macemu](https://github.com/mihaip/macemu) | browser/Emscripten port (Infinite Mac) | Turn BasiliskII/SheepShaver into browser-delivered emulators and polish web-specific UX/media paths. | ❓ |
+| [mstevenson/macemu](https://github.com/mstevenson/macemu) | macOS window/fullscreen polish | Improve the macOS window model around fullscreen, resizing, magnification, and default disk discovery. | ❓ |
+| [robxnano/macemu](https://github.com/robxnano/macemu) | build-system + prefs-dir modernization | Prototype Meson/macOS builds, a Qt 6 SheepShaver prefs dialog, and more native config-file locations (XDG/Application Support/AppData). | ✅ (keyboard-grab) |
+| [SegHaxx/macemu-flatpak](https://github.com/SegHaxx/macemu-flatpak) | Flatpak/distribution modernization | Package macemu for Flatpak and strip away legacy desktop assumptions with XDG support, 64-bit cleanup, and old-backend removals. | ❓ |
+| [andyvand/macemu](https://github.com/andyvand/macemu) | Android host port | Carry BasiliskII toward Android/guisan while also testing a few macOS/SDL3 display tweaks. | ❓ |
+| [timothy-fuchs/macemu](https://github.com/timothy-fuchs/macemu) | DPI LCD rotation tweak | Add a small-screen/Waveshare rotation pref in BasiliskII's SDL2 video path. | ❓ |
+| [vaccinemedia/macemu](https://github.com/vaccinemedia/macemu) | GTK/SDL UX polish | Improve Linux prefs UX with scaling controls and better drag-and-drop CD-ROM behavior. | ❓ |
+| [seanmadawala/macemu](https://github.com/seanmadawala/macemu) | GTK4 + PulseAudio modernization | Update the old Linux desktop stack to current GUI/audio APIs. | ❓ |
+| [jrepp/macemu](https://github.com/jrepp/macemu) / [vasi/macemu](https://github.com/vasi/macemu) | portability hygiene | Carry small but valuable build, linker, Wayland, and signal-handler fixes across modern hosts. | ❓ |
+| [siddhartha77/macemu](https://github.com/siddhartha77/macemu) | guest/host clock decoupling | Reduce host-time coupling after startup, mainly for deterministic runtime behavior. | ❓ |
+| [jsdf/macemu](https://github.com/jsdf/macemu) | original browser BasiliskII port | Early Emscripten proof that later fed into the Infinite Mac line of work. | ❓ |
+| [DavidLudwig/macemu](https://github.com/DavidLudwig/macemu) | macOS SDL2 performance tuning | Tune pixel formats, rendering, and VOSF behavior for OSX-era SDL2 builds. | ❓ |
+| [kwhr0/macemu](https://github.com/kwhr0/macemu) | alternative interpreter cores | Experiment with TinyPPC/Tiny68020 and maintain Xcode-native macOS builds. | ❓ |
+| [uyjulian/macemu](https://github.com/uyjulian/macemu) | macOS-only BasiliskII simplification | Strip BasiliskII down to a macOS-only/CMake target and try an ARAnyM-derived 68K JIT path. | ❓ |
+| [ucosty/macemu](https://github.com/ucosty/macemu) | guest-side debug hooks | Add tiny debug conveniences like an emulated `putchar` instruction. | ❓ |
+| [DMJC/macemu](https://github.com/DMJC/macemu) | joystick → ADB input | Add gamepad support for BasiliskII by mapping SDL joystick input onto ADB. | ❓ |
 
 ---
 
 ## 🔴 High Priority — macOS arm64 / build / memory / JIT
 
 ### [MatthiasWM/kanjitalk_macemu](https://github.com/MatthiasWM/kanjitalk_macemu) — `--export-dynamic` macOS linker fix
+- **Status**: ❓
 - **Commit**: [`964e8127d6c1`](https://github.com/MatthiasWM/kanjitalk_macemu/commit/964e8127d6c1d584edf4d19fa4ad248b6ebe6d7d) (2026-03-25)
 - **Merged**: into kanjitalk755 as [PR #296](https://github.com/kanjitalk755/macemu/pull/296) on 2026-03-26
 - Fix: conditionally adds `--export-dynamic` only on non-Darwin hosts (macOS linker rejects it)
 - Applies to both `BasiliskII/src/Unix/configure.ac` and `SheepShaver/src/Unix/configure.ac`
 
 ### [eyeonpower/macemu](https://github.com/eyeonpower/macemu) / [amcchord/macemu](https://github.com/amcchord/macemu) — contiguous RAM/ROM/scratch allocation (BasiliskII)
+- **Status**: ❓
 - **Commit**: [`2d388f768246`](https://github.com/eyeonpower/macemu/commit/2d388f768246180aa4263c5c50d511fa13488f55) (2025-12-27)
   - Also present in [amcchord @ `2d388f768246`](https://github.com/amcchord/macemu/commit/2d388f768246180aa4263c5c50d511fa13488f55)
 - Allocates RAM, ROM, and scratch memory as one contiguous block in `BasiliskII/src/Unix/main_unix.cpp`
@@ -120,6 +130,7 @@ sections below it contain commit-level detail.
 - Small, surgical patch; easy to audit
 
 ### [AndrewNile/macemu](https://github.com/AndrewNile/macemu) — bulk memory acquisition (SheepShaver + `vm_alloc`)
+- **Status**: ❓
 - **Commit**: [`94a9f6cc229f`](https://github.com/AndrewNile/macemu/commit/94a9f6cc229f6436b60850484e681f770c0f0080) (2025-07-19)
 - "Acquire memory in bulk" — touches `BasiliskII/src/CrossPlatform/vm_alloc.cpp`,
   `SheepShaver/src/Unix/main_unix.cpp`, `SheepShaver/src/Unix/sysdeps.h`, Windows glue,
@@ -128,6 +139,7 @@ sections below it contain commit-level detail.
 - AndrewNile is actively rebasing/merging from kanjitalk755, so this fork is a decent "maintained delta" reference
 
 ### [Cronocide/macemu](https://github.com/Cronocide/macemu) — parallel SheepShaver AArch64 JIT bring-up
+- **Status**: ❓
 - **Commits**:
   - [`e110c93db22b`](https://github.com/Cronocide/macemu/commit/e110c93db22b7e8b06a469a15376bc4d78adeee5) (2026-03-16) — add AArch64 JIT backend support to SheepShaver
   - [`ad80ac805bf0`](https://github.com/Cronocide/macemu/commit/ad80ac805bf0935e156684f69ed123a85af44ea2) (2026-03-19) — fix freezes and crashes
@@ -136,11 +148,13 @@ sections below it contain commit-level detail.
 - Likely useful as a **parallel portability/design reference**, even if this repo's hand-written ARM64 JIT has moved further
 
 ### [amcchord/macemu](https://github.com/amcchord/macemu) — SDL3 `UnlockTexture` fix
+- **Status**: ❓
 - **Commit**: [`e596e21583e4`](https://github.com/amcchord/macemu/commit/e596e21583e488d8997f71e3b8509eb51792977e) (2026-01-31)
 - "SDL3: Fixed so that blit is not required in `SDL_UnlockTexture()`"
 - We use SDL3 by default for SheepShaver, so this is still worth checking against our SDL3 path
 
 ### [zydeco/macemu](https://github.com/zydeco/macemu) — macOS aarch64 static link + Xcode build
+- **Status**: ❓
 - **Branch**: [`rootless`](https://github.com/zydeco/macemu/tree/rootless) (last notable macOS activity 2024-03)
 - Notable commits:
   - [`841a7cc04820`](https://github.com/zydeco/macemu/commit/841a7cc048203d52ee84b63eaeb15b59e73f1d68) — rootless: only redraw mask once on show-desktop
@@ -154,6 +168,7 @@ sections below it contain commit-level detail.
 ## 🟠 Medium-High Priority — networking / alternative host-guest plumbing
 
 ### [quentinmit/macemu](https://github.com/quentinmit/macemu) — VDE support for SheepShaver
+- **Status**: ❓
 - **Commit**: [`06d8bc02631b`](https://github.com/quentinmit/macemu/commit/06d8bc02631b14a023ca29b1bd85bb1c129755db) (2026-05-06)
 - Fixes and extends VDE support in SheepShaver:
   - packets now have correct length (no trailing garbage)
@@ -165,6 +180,7 @@ sections below it contain commit-level detail.
 - **[sirmick/macemu](https://github.com/sirmick/macemu/tree/ss-vde)** also has an `ss-vde` branch — likely related or derived
 
 ### [audiocontrol-org/macemu](https://github.com/audiocontrol-org/macemu) — network SCSI bridge + automated OS 9 lab
+- **Status**: ❓
 - **Branches checked**:
   - [`feature/scsi-network-bridge`](https://github.com/audiocontrol-org/macemu/tree/feature/scsi-network-bridge) — 7 commits ahead of `master`
   - [`os9-minimal`](https://github.com/audiocontrol-org/macemu/tree/os9-minimal) — 68 commits ahead of `master`
@@ -180,6 +196,7 @@ sections below it contain commit-level detail.
 ## 🟡 Medium Priority — display / input / UI / browser-facing work
 
 ### [sirmick/macemu](https://github.com/sirmick/macemu) (= [realhidden/macemu](https://github.com/realhidden/macemu)) — IPC video + web streaming for Apple Silicon
+- **Status**: ❓
 - **Branches**: [`master`](https://github.com/sirmick/macemu/tree/master) / [`tutorial-m1-mac`](https://github.com/sirmick/macemu/tree/tutorial-m1-mac) (2025-12 to 2026-01)
 - Adds a full **web-streaming video backend** for SheepShaver:
   - IPC-based video capture piped to a built-in HTTP server
@@ -192,6 +209,7 @@ sections below it contain commit-level detail.
 - Most relevant fork if we ever want a browser-accessible/headless display path for Silicon Sheep
 
 ### [mihaip/macemu](https://github.com/mihaip/macemu) — Infinite Mac / Emscripten line, plus UX/media work
+- **Status**: ❓
 - **Default branch**: [`infinite-mac-kanjitalk755`](https://github.com/mihaip/macemu/tree/infinite-mac-kanjitalk755)
 - **Older branches checked**: `bas-emscripten-release`, `bas-emscripten-mainthread`, `bas-singlethread-release`, `infinite-mac-jsdf`, `master`
 - This is the most important **browser-delivery** fork in the kanjitalk tree
@@ -203,6 +221,7 @@ sections below it contain commit-level detail.
 - The older `bas-emscripten-*` branches are clearly descended from the earlier jsdf browser work, but the current branch is the one to care about
 
 ### [mstevenson/macemu](https://github.com/mstevenson/macemu) — macOS window/fullscreen UX polish
+- **Status**: ❓
 - **Branches**:
   - [`standardize-fullscreen-shortcut`](https://github.com/mstevenson/macemu/tree/standardize-fullscreen-shortcut) — 8 commits ahead
   - [`close-button-exit`](https://github.com/mstevenson/macemu/tree/close-button-exit) — 1 commit ahead
@@ -216,6 +235,7 @@ sections below it contain commit-level detail.
 - Relevant if we want more native-feeling window behavior on macOS, even though this is BasiliskII-focused
 
 ### [vaccinemedia/macemu](https://github.com/vaccinemedia/macemu) — GTK UI scaling + placeholder CD-ROM
+- **Status**: ❓
 - **Branches checked**: only `master` exists as of 2026-06-09
 - Commits:
   - [`666797fdee43`](https://github.com/vaccinemedia/macemu/commit/666797fdee43eb681131959685af3e64a2a30a49) — GTK3 SDL scaling settings
@@ -225,11 +245,13 @@ sections below it contain commit-level detail.
 - Linux/GTK focused, but still useful UI polish reference
 
 ### [seanmadawala/macemu](https://github.com/seanmadawala/macemu) — GTK4 + PulseAudio port
+- **Status**: ❓
 - **Commit**: [`67ce9a297e5a`](https://github.com/seanmadawala/macemu/commit/67ce9a297e5aec805ec6e5103542a8f3a5b7d934) (2026-03-05)
 - Ports SheepShaver prefs editor to GTK4 and adds a PulseAudio Simple API backend
 - Modernizes Linux desktop integration rather than macOS, but the prefs-editor cleanup is conceptually useful
 
 ### [DavidLudwig/macemu](https://github.com/DavidLudwig/macemu) (cebix fork) — macOS SDL2 performance + render knobs
+- **Status**: ❓
 - Notable commits:
   - [`50986dcf467f`](https://github.com/DavidLudwig/macemu/commit/50986dcf467f793aec7e3ec2005d1f0c7b64758e) — use ARGB8888 texture to avoid pixel-format conversion on OSX GPUs/drivers
   - [`ef26204e6d6b`](https://github.com/DavidLudwig/macemu/commit/ef26204e6d6b19378d27ef0baf91adeac729d671) — reduce pixel updates in SDL2 backend
@@ -238,6 +260,7 @@ sections below it contain commit-level detail.
 - Old (2017), but still one of the clearest macOS/SDL-specific optimization forks in the cebix tree
 
 ### [jsdf/macemu](https://github.com/jsdf/macemu) (cebix fork) — original browser BasiliskII port
+- **Status**: ❓
 - **Default branch**: [`bas-emscripten-release`](https://github.com/jsdf/macemu/tree/bas-emscripten-release)
 - Key branch set: `bas-emscripten-release`, `bas-emscripten-mainthread`, `bas-singlethread-release`
 - Foundational commit: [`1730d17db9e8`](https://github.com/jsdf/macemu/commit/1730d17db9e8f3832397e91ce2a43a43aaccfeae) — Emscripten port of BasiliskII
@@ -248,6 +271,7 @@ sections below it contain commit-level detail.
 ## 🔵 Build / portability / runtime behavior
 
 ### [jrepp/macemu](https://github.com/jrepp/macemu) (merged from [vasi/archpower](https://github.com/vasi/macemu/tree/archpower))
+- **Status**: ❓
 - **Merged via**: [kanjitalk755 PR #302](https://github.com/kanjitalk755/macemu/pull/302) (2026-05)
 - Commits:
   - [`aff612c41b5f`](https://github.com/jrepp/macemu/commit/aff612c41b5f17faad3391ad045f6cb17666e135) — fix incorrect `printf` / `snprintf` use
@@ -260,6 +284,7 @@ sections below it contain commit-level detail.
 - Good source of small modern-host hygiene fixes; `vasi/archpower` remains the broader branch family behind these
 
 ### [siddhartha77/macemu](https://github.com/siddhartha77/macemu) — decouple clock from host after startup
+- **Status**: ❓
 - Diverges from kanjitalk by only two commits, but both are conceptually interesting:
   - [`7f367cf8eb62`](https://github.com/siddhartha77/macemu/commit/7f367cf8eb62a3d981bc03012e58eb08531656f8) — decouple clock from host after startup
   - [`ea2057210ccd`](https://github.com/siddhartha77/macemu/commit/ea2057210ccd90dd8867134a74636a7daae3c47a) — decouple clock from host for BII
@@ -267,6 +292,7 @@ sections below it contain commit-level detail.
 - Not macOS-specific, but worth remembering if guest-time coupling becomes a problem
 
 ### [robxnano/macemu](https://github.com/robxnano/macemu) — Meson/Qt6/prefs-dir modernization
+- **Status**: ✅ `keyboard-grab` branch integrated as [`c661ee90`](https://github.com/khawkins98/macemu-jit/commit/c661ee90c7bec1c14b4ce7df8e7af87e77a1e01c); remaining branches (`meson`, `qt6`, `prefs-dir`) still ❓
 - **Interesting branches**:
   - [`qt6`](https://github.com/robxnano/macemu/tree/qt6) — 8 commits ahead of kanjitalk `master`
   - [`meson`](https://github.com/robxnano/macemu/tree/meson) — 6 commits ahead
@@ -282,6 +308,7 @@ sections below it contain commit-level detail.
 - Best fork in this batch for **desktop-plumbing modernization**: alternative build-system work, more native per-OS config locations, and a non-GTK prefs UI path
 
 ### [SegHaxx/macemu-flatpak](https://github.com/SegHaxx/macemu-flatpak) (cebix fork) — Flatpak packaging + de-legacy-ing the desktop stack
+- **Status**: ❓
 - **Branches checked**: [`master`](https://github.com/SegHaxx/macemu-flatpak/tree/master), [`flatpak`](https://github.com/SegHaxx/macemu-flatpak/tree/flatpak)
 - Key commits:
   - [`617c4041`](https://github.com/SegHaxx/macemu-flatpak/commit/617c4041) — implement XDG Base Directory Specification
@@ -297,6 +324,7 @@ sections below it contain commit-level detail.
 ## 🟢 Niche / specific-interest forks
 
 ### [timothy-fuchs/macemu](https://github.com/timothy-fuchs/macemu) — Waveshare / small-LCD rotation parameter
+- **Status**: ❓
 - **Branches**: [`master`](https://github.com/timothy-fuchs/macemu/tree/master), [`screen_rotation_param_for_waveshare_dpi_lcd_support`](https://github.com/timothy-fuchs/macemu/tree/screen_rotation_param_for_waveshare_dpi_lcd_support), [`waveshare_2.8_inch_dpi_lcd_support`](https://github.com/timothy-fuchs/macemu/tree/waveshare_2.8_inch_dpi_lcd_support)
 - Unique commit on top of kanjitalk `master`:
   - [`254ef18c`](https://github.com/timothy-fuchs/macemu/commit/254ef18c) — add a rotation parameter for Waveshare DPI LCD panels
@@ -304,6 +332,7 @@ sections below it contain commit-level detail.
 - Very hardware-specific, but worth noting if handheld / tiny-display BasiliskII deployments ever matter
 
 ### [andyvand/macemu](https://github.com/andyvand/macemu) — Android + guisan host port experiment
+- **Status**: ❓
 - Diverges from kanjitalk by five commits, but they are substantial:
   - [`9c4802ce`](https://github.com/andyvand/macemu/commit/9c4802ce) — add support for guisan
   - [`4dfb7bdd`](https://github.com/andyvand/macemu/commit/4dfb7bdd) — add Android support
@@ -314,6 +343,7 @@ sections below it contain commit-level detail.
 - Relevant mainly as a host-port/reference curiosity rather than a direct input to this macOS arm64 fork
 
 ### [kwhr0/macemu](https://github.com/kwhr0/macemu) — TinyPPC + Tiny68020 alternative interpreters (macOS native)
+- **Status**: ❓
 - Commits:
   - [`bfb142928ea6`](https://github.com/kwhr0/macemu/commit/bfb142928ea65a05497fd2a58c007169a72514d5) — Sonoma compatibility fixes
   - [`98682169c6f5`](https://github.com/kwhr0/macemu/commit/98682169c6f5b2d8135cf407ec23b5ad65426bfc) — Xcode10 build fix
@@ -322,6 +352,7 @@ sections below it contain commit-level detail.
 - Best viewed as an **alternative interpreter/reference-core** fork, not a JIT fork
 
 ### [uyjulian/macemu](https://github.com/uyjulian/macemu) (cebix fork) — macOS-only BasiliskII + ARAnyM JIT experiment
+- **Status**: ❓
 - Interesting branches:
   - [`core_cleanup`](https://github.com/uyjulian/macemu/tree/core_cleanup) — remove non-macOS targets, convert BasiliskII to CMake, drop SheepShaver/cxmon from focus
   - [`kanjitalk755_aranym_wip`](https://github.com/uyjulian/macemu/tree/kanjitalk755_aranym_wip) — very large experimental line with ARAnyM-derived JIT/compiler work
@@ -331,6 +362,7 @@ sections below it contain commit-level detail.
 - Very experimental and stale, but potentially interesting for future BasiliskII JIT archaeology on macOS
 
 ### [ucosty/macemu](https://github.com/ucosty/macemu) (cebix fork) — debug `putchar` instruction
+- **Status**: ❓
 - Compare view: [cebix master vs ucosty master](https://github.com/cebix/macemu/compare/master...ucosty:macemu:master)
 - Unique commits:
   - [`d4ab5504ba62`](https://github.com/ucosty/macemu/commit/d4ab5504ba62723239cc569bc0017dd8dc28959a) — add `putchar` emulated instruction for debugging
@@ -338,6 +370,7 @@ sections below it contain commit-level detail.
 - Minimal delta, but the debug op is genuinely handy
 
 ### [DMJC/macemu](https://github.com/DMJC/macemu) — SDL joystick mapped to ADB (BasiliskII)
+- **Status**: ❓
 - **Branch**: [`codex/update-basilisk-2-for-adb-joystick-support`](https://github.com/DMJC/macemu/tree/codex/update-basilisk-2-for-adb-joystick-support)
 - Key commits:
   - [`5d0f131edbd5`](https://github.com/DMJC/macemu/commit/5d0f131edbd5693b8f14ef56de41300107b9b612) — add SDL2 joystick support mapped to ADB

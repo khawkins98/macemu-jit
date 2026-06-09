@@ -1281,6 +1281,15 @@ static void update_mouse_grab()
 	SDL_SetWindowRelativeMouseMode(sdl_window, mouse_grabbed);
 }
 
+// Sync keyboard grab to match current mouse grab state.
+// Prevents host keyboard shortcuts (e.g. Cmd-Tab on macOS, Super on Linux)
+// from firing while the emulator has mouse focus.
+// Source: robxnano/macemu keyboard-grab branch, merged kanjitalk755@e2a210ef
+static void update_keyboard_grab()
+{
+	SDL_SetWindowKeyboardGrab(sdl_window, mouse_grabbed);
+}
+
 // Grab mouse, switch to relative mouse mode
 void driver_base::grab_mouse(void)
 {
@@ -1288,6 +1297,7 @@ void driver_base::grab_mouse(void)
 	if (!mouse_grabbed) {
 		mouse_grabbed = true;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		disable_mouse_accel();
 		ADBSetRelMouseMode(true);
@@ -1300,6 +1310,7 @@ void driver_base::ungrab_mouse(void)
 	if (mouse_grabbed) {
 		mouse_grabbed = false;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		restore_mouse_accel();
 		ADBSetRelMouseMode(false);

@@ -1523,12 +1523,24 @@ static void update_mouse_grab()
 	}
 }
 
+// Sync keyboard grab to match current mouse grab state.
+// Requires SDL 2.0.16+. Without this, host shortcuts (e.g. Super/Win key on
+// Linux desktops) can fire while the emulator has mouse focus.
+// Source: robxnano/macemu keyboard-grab branch, merged kanjitalk755@e2a210ef
+static void update_keyboard_grab()
+{
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+	SDL_SetWindowKeyboardGrab(sdl_window, mouse_grabbed ? SDL_TRUE : SDL_FALSE);
+#endif
+}
+
 // Grab mouse, switch to relative mouse mode
 void driver_base::grab_mouse(void)
 {
 	if (!mouse_grabbed) {
 		mouse_grabbed = true;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		disable_mouse_accel();
 		ADBSetRelMouseMode(true);
@@ -1541,6 +1553,7 @@ void driver_base::ungrab_mouse(void)
 	if (mouse_grabbed) {
 		mouse_grabbed = false;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		restore_mouse_accel();
 		ADBSetRelMouseMode(false);

@@ -1284,7 +1284,7 @@ static void update_mouse_grab()
 // Sync keyboard grab to match current mouse grab state.
 // Prevents host keyboard shortcuts (e.g. Cmd-Tab on macOS, Super on Linux)
 // from firing while the emulator has mouse focus.
-// Source: robxnano/macemu keyboard-grab branch, merged kanjitalk755@e2a210ef
+// Source: https://github.com/robxnano/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037
 static void update_keyboard_grab()
 {
 	SDL_SetWindowKeyboardGrab(sdl_window, mouse_grabbed);

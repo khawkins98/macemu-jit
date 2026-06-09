@@ -1526,7 +1526,7 @@ static void update_mouse_grab()
 // Sync keyboard grab to match current mouse grab state.
 // Requires SDL 2.0.16+. Without this, host shortcuts (e.g. Super/Win key on
 // Linux desktops) can fire while the emulator has mouse focus.
-// Source: robxnano/macemu keyboard-grab branch, merged kanjitalk755@e2a210ef
+// Source: https://github.com/robxnano/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037
 static void update_keyboard_grab()
 {
 #if SDL_VERSION_ATLEAST(2, 0, 16)

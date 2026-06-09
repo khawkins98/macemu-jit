@@ -696,6 +696,67 @@ bool PatchROM(void)
 	// Copy 68k emulator to 2MB boundary
 	memcpy(ROMBaseHost + ROM_SIZE, ROMBaseHost + (ROM_SIZE - 0x100000), 0x100000);
 
+	// NewWorld DR Emulator register-fixup trampoline (SS_NW_TRAMPOLINE).
+	//
+	// The nanokernel's context-switch restores r29/r30/r31 from the ECB
+	// with addresses computed for its own BAT/SR layout (0x75xxxxxx), and
+	// writes 68k vectors (guest[0]/[4]) using its virtual ROM address
+	// (0x97xxxxxx).  Neither exists in SheepShaver's flat model.
+	//
+	// Trampoline at mirror 0x50429b40 (genuine free space, 222KB zero run
+	// at ROM+0x329b40): fixes r29/r30/r31, writes correct 68k vectors,
+	// then branches to cold-start.  Table[0] redirected here.
+	//
+	// Diagnostic mode: always cold-starts (re-inits handler table every
+	// context-switch).  Production ongoing-entry support is TODO.
+	static auto PatchROM_NW_trampoline = []() {
+		if (!getenv("SS_NW_TRAMPOLINE"))
+			return;
+
+		uint32 *tbl0 = (uint32 *)(ROMBaseHost + 0x46e8c0);
+		uint32 old_val = ntohl(*tbl0);
+		const uint32 expected = 0x48001040u;  // b +0x1040 (ongoing entry)
+		if (old_val != expected) {
+			fprintf(stderr, "[NW-TRAMP] table[0] @ ROM+0x46e8c0: unexpected %08x "
+			        "(expected %08x) — skipping trampoline\n", old_val, expected);
+			return;
+		}
+
+		const uint32 tramp_offset = 0x429b40;
+		uint32 *tp = (uint32 *)(ROMBaseHost + tramp_offset);
+		if (ntohl(tp[0]) != 0 || ntohl(tp[1]) != 0) {
+			fprintf(stderr, "[NW-TRAMP] trampoline target ROM+0x%x not zero "
+			        "(%08x %08x) — skipping\n",
+			        tramp_offset, ntohl(tp[0]), ntohl(tp[1]));
+			return;
+		}
+
+		// Register fixups (r29/r30/r31 from nanokernel virtual → flat model)
+		tp[0]  = htonl(0x3FE068FFu);  // lis  r31, 0x68ff
+		tp[1]  = htonl(0x63FFF000u);  // ori  r31, r31, 0xf000  → r31=0x68fff000 (ECB)
+		tp[2]  = htonl(0x3FC05046u);  // lis  r30, 0x5046       → r30=0x50460000 (mirror)
+		tp[3]  = htonl(0x3FA05046u);  // lis  r29, 0x5046
+		tp[4]  = htonl(0x63BDE000u);  // ori  r29, r29, 0xe000  → r29=0x5046e000 (dispatch)
+		// 68k vector fixups: nanokernel wrote guest[0]/[4] using its own
+		// virtual addresses (0x97xxxxxx).  Cold-start at 5046e9b4 reads
+		// guest[0]=SSP, guest[4]=PC as flat addresses — must be valid.
+		tp[5]  = htonl(0x3B800000u);  // li   r28, 0            (base for stw)
+		tp[6]  = htonl(0x3C005000u);  // lis  r0, 0x5000
+		tp[7]  = htonl(0x6000002Au);  // ori  r0, r0, 0x002a    → r0=0x5000002a (ROM+0x2a)
+		tp[8]  = htonl(0x901C0004u);  // stw  r0, 4(r28)        guest[4] = 68k reset PC
+		tp[9]  = htonl(0x3C000010u);  // lis  r0, 0x0010        → r0=0x00100000 (1MB)
+		tp[10] = htonl(0x901C0000u);  // stw  r0, 0(r28)        guest[0] = 68k initial SSP
+		tp[11] = htonl(0x48044DF8u);  // b    +0x44df8          → 0x5046e964 (cold-start)
+
+		*tbl0 = htonl(0x4BFBB280u);  // table[0] → trampoline
+
+		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "
+		        "(12 insns), table[0] → trampoline → cold-start\n", tramp_offset);
+		fprintf(stderr, "[NW-TRAMP] fixup: r31=0x68fff000 r30=0x50460000 "
+		        "r29=0x5046e000 guest[4]=0x5000002a guest[0]=0x00100000\n");
+	};
+	PatchROM_NW_trampoline();
+
 	// SS_DUMP_ROM: dump full decompressed ROM image for offline disassembly.
 	// Lives here (PatchROM) not in patch_68k() so it fires even when patch_68k fails on parcels.
 	{

@@ -1422,13 +1422,11 @@ void init_emul_ppc(void)
 		 *
 		 * The cold-init path (0x50310040, never taken) sets +0x5a0/+0x5a4 and posts
 		 * the first work item to [KDP-0x900]. We seed them here instead.
-		 * code_base: patch_68k_emul() writes emulator start at ROM+0x36f900; the ROM
-		 * mirror (memcpy at end of PatchROM) copies it to ROM+0x46f900. The opcode
-		 * table (0x5046e8c0) is in the mirror, so code_base is too:
-		 * 0x5046f900 - 0x26e8 = 0x5046d218. */
-		const uint32 emul_code_base = (uint32)ROMBase + 0x46d218;
+		 * code_base: patch_68k_emul() writes emulator start at ROM+0x36f900.
+		 * 0x5036f900 - 0x26e8 = 0x5036d218. */
+		const uint32 emul_code_base = (uint32)ROMBase + 0x36d218;
 		WriteMacInt32(kdp + 0x5a0, kdp);             // context ptr = KDP (same as SPRG0)
-		WriteMacInt32(kdp + 0x5a4, emul_code_base);  // 68k code base (mirror region)
+		WriteMacInt32(kdp + 0x5a4, emul_code_base);  // 68k code base (primary ROM)
 		// [KDP-0x900] = VIA base address. The nanokernel's SchIdleTask
 		// (0x5032751c) polls VIA IFR via this pointer; if null, check_work
 		// returns -1 and the idle loop spins forever. The Thud console
@@ -1460,7 +1458,7 @@ void init_emul_ppc(void)
 		WriteMacInt32(kdp + 0x660, 0);
 		WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);  // EMUL_RETURN handler
 		WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);
-		WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x480000);  // opcode dispatch table
+		WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x380000);  // opcode dispatch table
 		WriteMacInt32(kdp - 0x964, 0x0000d032);                  // UserModeMSR
 
 		// 68k exception vectors: SP=0 (diagnostic), reset PC, and rte stubs for 2..63.
@@ -1472,8 +1470,38 @@ void init_emul_ppc(void)
 			WriteMacInt32(vec * 4, rte_addr);
 		fprintf(stderr, "[NW-TRAMP] ECB=%08x +0x648(dispatch)=%08x +0x5f0(emul_ret)=%08x "
 		        "guest[4](68k-reset)=%08x\n",
-		        ecb, (uint32)ROMBase + 0x480000,
+		        ecb, (uint32)ROMBase + 0x380000,
 		        (uint32)ROMBase + 0x366080, reset_68k);
+
+		// ECB pre-population: the nanokernel scheduler context-switches to the
+		// DR Emulator by restoring GPRs from ECB and bctr'ing to ECB+0xfc.
+		// Without cold-start init, the ECB is garbage → crash. Pre-populate
+		// the fields the context-switch reads:
+		//   ECB+0xfc        = dispatch target (ongoing entry 0x5036f900)
+		//   ECB+0x104+N*8   = saved GPR N (zero most, set r24/r29)
+		//   ECB+0x7fc+i*4   = 68k opcode handler table (0x97 entries)
+		// The nanokernel's context-switch restore uses r6 = KDP+0x1100
+		// (not KDP+0x1000). ECB "base" for the restore is at +0x100 from ecb.
+		const uint32 ctx = ecb + 0x100;
+		memset(Mac2HostAddr(ecb), 0, 0x2000);
+		WriteMacInt32(ctx + 0xfc, (uint32)ROMBase + 0x36f900);  // dispatch → ongoing entry
+		WriteMacInt32(ctx + 0x1c4, reset_68k);   // saved r24 = 68k reset PC
+		WriteMacInt32(ctx + 0x1ec, (uint32)ROMBase + 0x380000);  // saved r29 = dispatch table
+
+		// Build 0x97-entry 68k opcode handler table at ECB+0x7fc.
+		// Each entry = halfword from ROM+0x36dc42 OR'd with page base.
+		const uint32 page_base = (uint32)ROMBase + 0x36e000;
+		const uint8 *hw_src = ROMBaseHost + 0x36dc42;
+		for (int i = 0; i < 0x97; i++) {
+			uint16 hw = (hw_src[i*2] << 8) | hw_src[i*2 + 1];
+			WriteMacInt32(ecb + 0x7fc + i * 4, hw | page_base);
+		}
+
+		WriteMacInt32(XLM_KERNEL_DATA, kdp);
+		fprintf(stderr, "[NW-TRAMP] ECB pre-populated: dispatch=%08x r24=%08x r29=%08x "
+		        "table[0x97] at ECB+0x7fc, XLM_KERNEL_DATA=%08x\n",
+		        (uint32)ROMBase + 0x36f900, reset_68k,
+		        (uint32)ROMBase + 0x380000, kdp);
 
 		// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.
 		// Skips the nanokernel and enters DR Emulator directly. Dead end

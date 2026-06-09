@@ -137,6 +137,8 @@ Independent of lenient mode; useful on any ROM to see where patterns land.
 | `[JIT Ns] HOT-PC ...` | same sampled PC 3+ heartbeats | **sampling hint only** — see retraction note above |
 | `[JIT Ns] STALL: comp=...` | `SS_JIT_RING_DUMP_ON_STALL=<n>` | one-shot trace-ring dump on compile freeze |
 | `[JIT Ns] interrupt delivered` | each guest interrupt | diag log file only |
+| `[NW-MIRROR] table[0] @ ROM+0x46e8c0: OOOO → PPPP (cold-start redirect)` | `SS_NW_TRAMPOLINE=1` at ROM-patch time | confirms the mirror table[0] cold-start patch applied; if the existing value is unexpected, prints `unexpected value XXXX — skipping patch` instead |
+| `[WATCH] pc=... addr=... value=...` | `SS_JIT_WATCH_ADDR` on each detected change | watchpoint hit — see env var entry above for full format |
 
 ## Boot-stall watchdog (`[ALARM]` / `[STALL]`)
 
@@ -182,7 +184,7 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_JIT_PROFILE=1` (or `=/path`) | Execution-weighted hot-block profiler (OPTIMIZATION-PLAN §P0): each block counts its executions + an instruction-mix tag; dumps the top-40 hottest blocks (pc/exec/%/mix/insns/region) at exit to stderr (or to `/path`). Also emits a `[JIT-RUN-PROFILE]` line: empirical **guest-MIPS** (wall-clock throughput, "operations per second" for the whole run — boot/app/benchmark), and a **deterministic** execution-weighted `a64/guest-op` codegen-density A/B metric (zero host-noise; emitted whole-block, an inflated upper bound — use for deltas, not as a literal executed count). Capture per workload via the e2e harness (`SS_JIT_PROFILE=/path make e2e` / `e2e-bench`). Zero cost when unset. |
 | `SS_JIT_PROFILE_DISASM=1` | With `SS_JIT_PROFILE`, also dump each top block's first 16 PPC instruction words (big-endian encodings), captured at compile time. Disassemble offline with capstone (`CS_ARCH_PPC`, `CS_MODE_BIG_ENDIAN`, `struct.pack('>I', word)`). Used to identify hot blocks — e.g. the boot atomic-primitive cluster in §P0. (Compile-time capture, not exit-time reads: the NATMEM reservation has PROT_NONE holes that fault on read.) |
 | `SS_JIT_DEBUG_PC=0xNNNNNNNN` | Per-PC debug output. |
-| `SS_JIT_WATCH_ADDR=dec,dec` | Guest-memory watchpoints (decimal, comma-separated). |
+| `SS_JIT_WATCH_ADDR=dec,dec` | Guest-memory watchpoints (decimal, comma-separated). Emits `[WATCH] pc=PPPPPPPP addr=AAAAAAAA value=VVVVVVVV  (was WWWWWWWW ...)` on each detected change. PC is block-entry granularity for JIT, exact instruction for interpreter. Grep for `[WATCH]` to parse programmatically. |
 | `SS_JIT_WATCH_STUB=1` | Software watchpoint on Mixed Mode switch-back stubs (`ppc-cpu.cpp`). |
 | `SS_JIT_TRACE_RING=1` | Block-level execution-history ring; dumped to `/tmp/ss_jit_ring.txt` by the SIGSEGV handler (records J/I blocks, inline calls, EMUL_OP entry/return). |
 | `SS_JIT_RING_DUMP_TRIGGER=1` | Dump the trace ring when the DR emulator executes stack-region code (`ppc-cpu.cpp`). |
@@ -192,10 +194,11 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_EMULOP_TRACE=1` | Log SCSI `EMUL_OP` return values to `/tmp/emulop_trace.log` (`sheepshaver_glue.cpp`). |
 | `SS_UI_DUMP_DIR=<dir>` | **Feature gate (not a JIT diagnostic)** — enables on-demand guest UI introspection. When set, the idle hook services `ss_ui.req` and writes a Backend-A window-list JSON snapshot (`ss_ui.A.json`) + nonce-stamped `ss_ui.done`. Zero cost when unset. See `SheepShaver/docs/UI-INTROSPECTION.md` for the full reference. |
 | `SS_DUMP_ROM=/path` | Dump the full decompressed ROM image at startup (after patching). Essential for NewWorld CHRP ROMs where the `.rom` file is compressed. See CLAUDE.md "Disassembling the Decompressed ROM" for the capstone workflow. |
-| `SS_PROBE_PC=0xADDR[:fields][;…]` | No-recompile register/memory dump at block-entry PCs (`ppc-cpu.cpp`). Fields: `rN` (GPR), `[0xADDR]` (guest mem 4-byte read), or omit for full dump. Logarithmic sampling (visit 1, 10, 100, ...). Up to 8 PCs, 16 fields. See CLAUDE.md "PC Probes" for format and examples. |
+| `SS_PROBE_PC=0xADDR[:fields][;…]` | No-recompile register/memory dump at block-entry PCs (`ppc-cpu.cpp`). Fields: `rN` (GPR), `[0xADDR]` (guest mem 4-byte read), `[rN:SIZE]` (SIZE bytes from address in gpr(N); SIZE hex, 0x prefix optional, clamped to 4KB — output 8 words/line with `+0xOFFSET:` labels), or omit for full dump. Logarithmic sampling (visit 1, 10, 100, ...). Up to 8 PCs, 16 fields. See CLAUDE.md "PC Probes" for format and examples. |
 | `SS_ROM_LENIENT=1` | Force lenient ROM-patch mode for any NewWorld ROM (`rom_patches.cpp`). Pattern misses log `[ROMPATCH] SKIP` and continue instead of aborting. Permanent ROM-porting tool. See the "ROM patching diagnostics" section above. |
 | `SS_ROM_PATCH_TRACE=1` | Log every `find_rom_data` pattern search as `[ROMPATCH] ... -> HIT/RELOCATED/MISS` (`rom_patches.cpp`). Independent of lenient mode. See the "ROM patching diagnostics" section above. |
 | `SS_ROM_NO_904=1` | Opt out of checksum-based auto-lenient for the 9.0.4 G4 ROM. Does not affect `SS_ROM_LENIENT=1`. |
+| `SS_NW_TRAMPOLINE=1` | Enable NewWorld nanokernel trampoline path (`rom_patches.cpp`). Gates the `[NW-MIRROR]` cold-start patch at ROM+0x46e8c0 and other NW-specific trampoline code. Required for New World ROM diagnostic boots. |
 
 ### Dump the trace ring from a running (or hung) process
 

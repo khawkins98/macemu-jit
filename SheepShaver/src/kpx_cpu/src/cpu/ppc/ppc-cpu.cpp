@@ -76,10 +76,15 @@ static double jit_ticks_to_ns(uint64_t ticks) {
 
 // SS_PROBE_PC: dump registers/memory at specified guest PCs without recompilation.
 // Format: SS_PROBE_PC=0xADDR[:field1,field2,...][;0xADDR2[:fields]]
-// Fields: rN (GPR), [0xADDR] (guest mem 4-byte read), or omit for full dump.
+// Fields: rN (GPR), [0xADDR] (guest mem 4-byte read), [rN:SIZE] (SIZE bytes from gpr(N)), or omit for full dump.
+// [rN:SIZE]: SIZE in hex (0x prefix optional), clamped to 4KB. Output: hex words 4 bytes each, 8 per line.
 // Logarithmic sampling: visit 1, 10, 100, 1000, 10000, 100000, ...
-enum probe_field_type { PROBE_GPR, PROBE_MEM };
-struct probe_field { probe_field_type type; uint32_t value; /* reg# or guest addr */ };
+enum probe_field_type { PROBE_GPR, PROBE_MEM, PROBE_MEM_REG };
+struct probe_field {
+	probe_field_type type;
+	uint32_t value;  /* reg# (PROBE_GPR/PROBE_MEM_REG) or guest addr (PROBE_MEM) */
+	uint32_t size;   /* byte count for PROBE_MEM_REG; unused for other types */
+};
 struct probe_entry {
 	uint32_t pc;
 	bool dump_all;
@@ -133,13 +138,35 @@ static int parse_probes(const char *env) {
 					if (p->fields[p->n_fields].value <= 31)
 						p->n_fields++;
 				} else if (field[0] == '[') {
-					// Memory: [0xADDR]
-					char *addr_start = field + 1;
-					char *bracket = strchr(addr_start, ']');
+					// Memory: [0xADDR] or register-indirect range [rN:SIZE]
+					char *inner = field + 1;
+					char *bracket = strchr(inner, ']');
 					if (bracket) *bracket = '\0';
-					p->fields[p->n_fields].type = PROBE_MEM;
-					p->fields[p->n_fields].value = (uint32_t)strtoul(addr_start, NULL, 16);
-					p->n_fields++;
+					// Detect [rN:SIZE] vs [0xADDR]
+					if ((inner[0] == 'r' || inner[0] == 'R') &&
+					    inner[1] >= '0' && inner[1] <= '9') {
+						// Register-indirect memory range: [rN:SIZE]
+						char *colon2 = strchr(inner, ':');
+						if (colon2) {
+							*colon2 = '\0';
+							uint32_t regnum = (uint32_t)atoi(inner + 1);
+							uint32_t sz = (uint32_t)strtoul(colon2 + 1, NULL, 16);
+							if (sz > 0x1000) sz = 0x1000;  // clamp to 4KB
+							if (sz == 0) sz = 4;             // minimum one word
+							if (regnum <= 31) {
+								p->fields[p->n_fields].type  = PROBE_MEM_REG;
+								p->fields[p->n_fields].value = regnum;
+								p->fields[p->n_fields].size  = sz;
+								p->n_fields++;
+							}
+						}
+					} else {
+						// Absolute guest address: [0xADDR]
+						p->fields[p->n_fields].type  = PROBE_MEM;
+						p->fields[p->n_fields].value = (uint32_t)strtoul(inner, NULL, 16);
+						p->fields[p->n_fields].size  = 0;
+						p->n_fields++;
+					}
 				}
 				field = strtok_r(NULL, ",", &saveptr2);
 			}
@@ -572,8 +599,8 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 		for (int w = 0; w < awatch_state; w++) {
 			uint32 now = vm_read_memory_4(awatch_addr[w]);
 			if (awatch_have_last[w] && now != awatch_last[w]) {
-				fprintf(stderr, "ADDR-WATCH: [%08x] %08x -> %08x  record #%u type=%c block %08x->%08x sp=%08x r24=%08x\n",
-				        awatch_addr[w], awatch_last[w], now, jit_ring_idx, type, from_pc, to_pc,
+				fprintf(stderr, "[WATCH] pc=%08x addr=%08x value=%08x  (was %08x record #%u type=%c block %08x->%08x sp=%08x r24=%08x)\n",
+				        from_pc, awatch_addr[w], now, awatch_last[w], jit_ring_idx, type, from_pc, to_pc,
 				        rec->r1, rec->r24);
 				fflush(stderr);
 				/* Dump the ring on the first few changes so the lead-up is captured. */
@@ -1595,11 +1622,25 @@ void powerpc_cpu::execute(uint32 entry)
 														fprintf(stderr, " r%d=0x%08x",
 														        pe->fields[fi].value,
 														        (uint32_t)gpr(pe->fields[fi].value));
-													} else {
+													} else if (pe->fields[fi].type == PROBE_MEM) {
 														// No bounds check: unmapped address will SIGSEGV (developer tool)
 														uint32_t val = vm_read_memory_4(pe->fields[fi].value);
 														fprintf(stderr, " [0x%08x]=0x%08x",
 														        pe->fields[fi].value, val);
+													} else {
+														// PROBE_MEM_REG: [rN:SIZE] — dump SIZE bytes from address in gpr(N)
+														uint32_t base_addr = (uint32_t)gpr(pe->fields[fi].value);
+														uint32_t sz = pe->fields[fi].size;
+														fprintf(stderr, "\n  mem[r%u=0x%08x +0x0000..+0x%04x]:",
+														        pe->fields[fi].value, base_addr, sz);
+														uint32_t nwords = (sz + 3) / 4;
+														for (uint32_t wi = 0; wi < nwords; wi++) {
+															if ((wi & 7) == 0)
+																fprintf(stderr, "\n    +0x%04x:", wi * 4);
+															uint32_t val = vm_read_memory_4(base_addr + wi * 4);
+															fprintf(stderr, " %08x", val);
+														}
+														fprintf(stderr, "\n");
 													}
 												}
 												fprintf(stderr, "\n");
@@ -2069,9 +2110,23 @@ void powerpc_cpu::execute(uint32 entry)
 										for (int fi = 0; fi < pe->n_fields; fi++) {
 											if (pe->fields[fi].type == PROBE_GPR)
 												fprintf(stderr, " r%u=0x%08x", pe->fields[fi].value, (uint32_t)gpr(pe->fields[fi].value));
-											else {
+											else if (pe->fields[fi].type == PROBE_MEM) {
 												uint32_t val = vm_read_memory_4(pe->fields[fi].value);
 												fprintf(stderr, " [0x%08x]=0x%08x", pe->fields[fi].value, val);
+											} else {
+												// PROBE_MEM_REG: [rN:SIZE] — dump SIZE bytes from address in gpr(N)
+												uint32_t base_addr = (uint32_t)gpr(pe->fields[fi].value);
+												uint32_t sz = pe->fields[fi].size;
+												fprintf(stderr, "\n  mem[r%u=0x%08x +0x0000..+0x%04x]:",
+												        pe->fields[fi].value, base_addr, sz);
+												uint32_t nwords = (sz + 3) / 4;
+												for (uint32_t wi = 0; wi < nwords; wi++) {
+													if ((wi & 7) == 0)
+														fprintf(stderr, "\n    +0x%04x:", wi * 4);
+													uint32_t val = vm_read_memory_4(base_addr + wi * 4);
+													fprintf(stderr, " %08x", val);
+												}
+												fprintf(stderr, "\n");
 											}
 										}
 										fprintf(stderr, "\n");

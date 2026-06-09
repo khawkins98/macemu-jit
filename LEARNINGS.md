@@ -17,7 +17,33 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-08 (latest) — Path B (SS_NW_SYNTH_ENTRY) is a dead end; Path A is the forward path
+## 2026-06-09 (latest) — Parcels handoff is scheduler-dispatched; redirect correct but unreachable
+
+**Path A redirect works at the RE level** — the rfi block at ROM+0x3126cc (mtsrr0;mtsrr1;rfi
+→ mtctr;bctr;nop) is correctly patched and test-jit passes 350/350. But it's **never reached**:
+the parcels nanokernel doesn't jump to 0x3126cc sequentially from init. It dispatches the 68k
+handoff via the **blue-task scheduler** (ready queues at KDP-0x9f0/-0x9d0/-0x9b0/-0x990).
+
+Evidence: `SS_LOG_FIRST_BLOCKS=100000` shows 396 unique blocks, NONE in 0x312200-0x3126ff. The
+init flow goes 0x310000 → 0x3121d4 → 0x322xxx (deep init) → idle loop at 0x5032751C. The handoff
+block only fires when a boot task is enqueued in the NominalReadyQ — which is done by the
+**Trampoline bootloader** that runs on real hardware BEFORE the nanokernel.
+
+SheepShaver bypasses the Trampoline entirely (it enters the nanokernel directly), so the ready
+queues are empty and the scheduler never dispatches the handoff. Same pattern as SPRG0: the
+emulator skips a hardware-setup phase that seeds the runtime.
+
+**[KDP-0x900] is VIA base, not a work queue.** Previously set to 1 thinking it was a dispatch flag.
+The nanokernel's Thud console (0x3263fc) loads this and if non-zero, enters CUDA/VIA I/O that hangs
+without real hardware. Setting to 0 = skip VIA. This was the cause of the comp=629 CUDA-loop hang.
+
+**Stop-rule fires:** no general emulator fixes banked — all changes (redirect, VIA fix, I/O poll
+hoist, lenient gate) are parcels-specific. Next wall: Trampoline/scheduler emulation to populate
+boot-task queues.
+
+---
+
+## 2026-06-08 — Path B (SS_NW_SYNTH_ENTRY) is a dead end; Path A is the forward path
 
 **Path B** (skip nanokernel, enter DR Emulator directly) hits a fundamental wall at the first
 Mixed-Mode transition. The parcels ROM's 68k init dispatches PPC modules via `_MixedModeMagic`

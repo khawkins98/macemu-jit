@@ -28,11 +28,13 @@
 > drifted layouts) — but it's a cheap check before committing to Phase 2.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 >
-> **▶ FRESH-AGENT HANDOFF:** the frontier has shifted. Path B (`SS_NW_SYNTH_ENTRY`) skips the
-> nanokernel entirely — see "ARCHITECTURE DECISION" below. The current wall is **`patch_68k()` HLE
-> porting** (68k-side byte patterns differ between OldWorld 1.1 and parcels ROMs). The supervisor/MMU
-> handoff ([`HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`](HANDOFF-NEWWORLD-SUPERVISOR-MMU.md)) is Path A
-> context — still valid as fallback reference, but not the active frontier.
+> **▶ FRESH-AGENT HANDOFF (2026-06-09):** Path A jump68k redirect is PATCHED (mtctr/bctr at
+> 0x3126cc) but **UNREACHABLE** — the parcels handoff is scheduler-dispatched (blue-task ready
+> queues at KDP-0x9f0/-0x9d0/-0x9b0/-0x990), not reached sequentially from init. SheepShaver
+> bypasses the Trampoline that populates those queues. Path B is a dead end (Mixed-Mode wall).
+> The current wall is **Trampoline/scheduler emulation** — populating the boot-task ready queues
+> so the nanokernel's scheduler dispatches the 68k handoff. Stop-rule fires: no general fixes
+> banked this session; all changes are parcels-specific.
 
 ---
 

@@ -8,6 +8,24 @@ After waiting a quarter of a century, it became obvious that nobody else was goi
 
 I have some software development background, but I don't have the domain expertise, and I frankly don't have the software chops to pull something like this off on my own — not without a four-year grant to go learn it properly. What I do have is curiosity, some stubbornness, and access to an AI coding partner that turned out to be a surprisingly good collaborator on gnarly low-level problems. It's been an interesting learning experience. I think what came out of it is pretty neat.
 
+To be clear — yes, other projects like QEMU and UTM do give you Mac OS 9 on Apple Silicon. But they don't have a JIT for classic Mac OS workloads, so they're slow. And they're not SheepShaver. Part of what motivated this project was wanting to understand how SheepShaver actually works, how far it could go if somebody really tried to resurrect it, and whether it could be made fast and modern on current hardware. SheepShaver has this genuinely unusual architecture where the boundaries between the emulator and the host deliberately blur — the guest runs inside the host's address space, using host threads, with the OS partially replaced by the emulator itself. It's closer in spirit to a cooperative co-system than a traditional emulator, and I find that really interesting. There's more detail on that below.
+
+## What makes SheepShaver architecturally unusual
+
+SheepShaver sits in a genuinely unusual place in the emulator landscape — different enough from something like Dolphin or QEMU that it's worth explaining.
+
+**Dolphin** (and most traditional emulators) draw a hard line between guest and host. Guest memory is a buffer. Guest CPU state is a struct. The guest OS, ROM, and application code are all behind that wall. The JIT's job is purely to translate guest instructions into host instructions for speed; the guest remains a complete, isolated simulation of the hardware.
+
+**SheepShaver** was designed for a different world. It was originally built to run *native* PowerPC Mac OS code on *PowerPC Linux and BeOS* hosts — meaning there was no CPU to emulate at all. The guest and host shared the same ISA, so Mac OS could run directly on the real CPU. What SheepShaver actually emulated was the *Mac-specific hardware* (custom chips, memory map, ROM traps) and *intercepted* a subset of Mac OS calls to replace them with host equivalents — real pthreads for Mac threads, real file I/O for Mac file access, and so on. The result was less "emulator running a guest" and more "Mac OS running cooperatively inside a POSIX process."
+
+That original design assumption still shapes everything:
+- **Guest memory lives in the host's virtual address space** at a fixed offset (`NATMEM_OFFSET`). A guest pointer is just a host pointer plus a constant — no translation table, no TLB simulation.
+- **Guest threads are host threads.** The Mac OS thread scheduler doesn't fight a simulated interrupt model; it uses real OS scheduling.
+- **The ROM is partially replaced.** SheepShaver patches Mac OS at boot time, replacing dozens of system calls with `EMUL_OP` trap instructions that jump back into the host. It's genuinely a hybrid — half emulation, half high-level reimplementation.
+- **The JIT exists to handle the x86/ARM host case**, where the ISA is different and PowerPC instructions must actually be translated. But the cooperative architecture remains; the JIT-compiled guest code runs in the same process, same address space, same threads as the host.
+
+This is part of what makes it so interesting to work on, and also part of what makes it hard. A lot of assumptions are baked in that were reasonable in 1998 on a native PPC box and require careful thought on a modern arm64 host under macOS's security model.
+
 ## A note on AI
 
 Yes, a lot of AI was used to write this code. I wouldn't call it vibe coding — there's been real discipline applied, real creativity, and real decisions made along the way. It's been a genuine partnership with the agent, not just prompting and hoping.

@@ -39,6 +39,23 @@ the emulator, restrict yourself to the **harnesses** — `make test-jit` and the
 `rom-harness` exercise the JIT *without* opening the SDL window or booting, so they never collide.
 To pull a parallel branch's commits in and avoid late surprises: `git merge <other-branch>`.
 
+## Fast iteration loop
+
+Three tools cut the build→test→investigate cycle from minutes to seconds. Reach for them
+before resorting to a full rebuild or a boot. Each has a canonical deep reference — this
+section is the discovery index, not a second copy of the details.
+
+| Tool | What it buys you | Canonical reference |
+|------|------------------|---------------------|
+| **ccache** | Warm SheepShaver rebuilds ~12× faster (clean-tree ~5.88s cold → ~0.48s warm). Opt in by re-running `configure` with `CC="ccache gcc" CXX="ccache g++"`. Per-checkout config state — each worktree/clone needs its own configure run. | The worktree `configure` recipe above; `CLAUDE.md` SheepShaver build section. |
+| **Batch harness** (`SS_HARNESS_BATCH=1 make test-jit`) | All vectors in one process per mode instead of one process per vector — **~3s vs ~32s**. Use for the inner loop; run plain `make test-jit` as the authoritative gate at least once per task/commit (process-per-vector isolation is the stronger contract). | `SheepShaver/jit-test/README.md` "Batch mode" — mechanics, per-vector reset, the content-vs-score equivalence proof. |
+| **SS_SEED_MEM** | No-recompile guest-memory poke — write a 32-bit word at a fixed address (immediate, at NW-trampoline-end) or at the first JIT visit of a PC (`0xPC:0xADDR=0xVAL`). Probe a fix hypothesis without rebuilding. | `SheepShaver/docs/DIAGNOSTICS.md` env-var table (forms, limits, `[SEED]` output); `CLAUDE.md` "Guest Memory Seeding". |
+
+**The equivalence lesson** (why batch mode's proof compares REGDUMP *content*, not scores):
+a batch run that omitted the FP/VR reset between vectors still passed `score=100` because
+both modes shared the same stale-state bug — score-only equivalence is vacuous when both
+sides share a defect. See `LEARNINGS.md` (2026-06-10) and the jit-test README.
+
 ## Commit Style
 
 ```

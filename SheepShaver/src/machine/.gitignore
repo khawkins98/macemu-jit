@@ -14,3 +14,5 @@ test_virt_clock
 test_virt_clock.dSYM/
 test_event_sched
 test_event_sched.dSYM/
+test_exc_core
+test_exc_core.dSYM/

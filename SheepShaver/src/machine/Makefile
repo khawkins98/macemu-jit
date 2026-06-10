@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched
+TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core
 
 test: $(TESTS)
 	./test_machine_profile
@@ -14,6 +14,7 @@ test: $(TESTS)
 	./test_mmio_machfault
 	./test_virt_clock
 	./test_event_sched
+	./test_exc_core
 
 test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/machine_profile.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_machine_profile.cpp machine_profile.cpp
@@ -41,6 +42,9 @@ test_virt_clock: test_virt_clock.cpp virt_clock.cpp ../include/virt_clock.h
 
 test_event_sched: test_event_sched.cpp event_sched.cpp ../include/event_sched.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_event_sched.cpp event_sched.cpp
+
+test_exc_core: test_exc_core.cpp exc_core.cpp ../include/exc_core.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_exc_core.cpp exc_core.cpp
 
 clean:
 	rm -f $(TESTS)

@@ -40,6 +40,7 @@
 #ifdef SHEEPSHAVER
 #include "main.h"
 #include "prefs.h"
+#include "machine_profile.h"
 #endif
 
 #if ENABLE_MON
@@ -1321,7 +1322,13 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 		 * other stubbed SPR — which makes such waits never elapse. Surfaced by the parcels (9.0.1)
 		 * nanokernel init wait at ROM 0x3127a8 (mfspr DEC; subf.; bgt) that hangs with DEC frozen
 		 * at 0. Env-gated experiment; off by default so 1.1/8.6/9.0.4 paths are unchanged. */
-		static const int synth = (getenv("SS_SYNTH_DEC") && getenv("SS_SYNTH_DEC")[0] != '0') ? 1 : 0;
+		/* M1 (MACHINE-LAYER-PLAN M1 row): the newworld profile gets the synthetic
+		 * down-counter by default - check_work's drain/timeout loop (S3 §2.4) needs a
+		 * moving DEC. SS_SYNTH_DEC still overrides both ways (=0 forces frozen).
+		 * mtspr DEC stays dropped; the real clock is M2. */
+		static const int synth = getenv("SS_SYNTH_DEC")
+			? (getenv("SS_SYNTH_DEC")[0] != '0')
+			: (MachineProfileIsNewWorld() ? 1 : 0);
 		if (synth) {
 			d = (uint32)(0u - (uint32)get_tb_ticks());	// decreases over time at the TB rate
 			break;

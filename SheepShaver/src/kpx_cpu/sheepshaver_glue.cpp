@@ -1473,22 +1473,26 @@ void init_emul_ppc(void)
 		// Non-null: check_work does BAT3-setup, reads RR0 byte 2, checks
 		// bit 0 ("Rx char available"). If set, reads data byte 6.
 		//
-		// WARNING: setting byte 2 bit 0 = 1 causes the nanokernel's idle/yield
-		// primitive (0x503272e0 → idle loop at 0x5032751c) to fall through to
-		// the character-processing path (0x50327540 → Thud debug console),
-		// endlessly consuming phantom characters. Setting byte 2 = 0 with
-		// a non-null base causes check_work's timeout loop (0x50326548) to
-		// self-modify scc[2], creating phantom "char available" state.
-		// Setting the base to 0 is safest — check_work returns -1 immediately.
-		//
 		// The register access pattern (alternating reg#/data writes at
 		// offsets 2 and 6) matches a Zilog SCC (8530), not a VIA 6522.
-		// Leave [KDP-0x900] = 0 (no SCC hardware). check_work returns -1
-		// immediately when the SCC base is null — no BAT setup, no polling,
-		// no risk of the nanokernel's own SCC register writes creating
-		// phantom "char available" state on fake memory.
-		WriteMacInt32(kdp - 0x900, 0);
-		fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0 (no SCC — check_work returns -1)\n");
+		//
+		// M1: point check_work at the bus's SCC region (0xF3012000). The SCC 8530
+		// model (machine/dev_scc8530.cpp) answers RR0 honestly — bit0 ("Rx char
+		// available") is always 0 because no Rx source is connected in M1, so the
+		// old M0 phantom-character hazards no longer apply: the nanokernel's idle/
+		// yield primitive (0x503272e0) never falls through to the Thud debug console
+		// (0x50327540), and check_work's timeout loop (0x50326548) sees a stable
+		// "no character" state. The byte writes the nanokernel makes during SCC init
+		// now Mach-fault into the model instead of corrupting fake memory
+		// (SPIKE-S3 §2: lbz +2 = RR0, lbz +6 = data, full WR init at 0x50326980).
+		// SS_NW_NO_SCC=1 restores the M0 behavior (base 0 → check_work returns -1).
+		if (!MachineEnvFlag("SS_NW_NO_SCC")) {
+			WriteMacInt32(kdp - 0x900, 0xF3012000);
+			fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0xF3012000 (SCC via MMIO bus)\n");
+		} else {
+			WriteMacInt32(kdp - 0x900, 0);
+			fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0 (no SCC — check_work returns -1)\n");
+		}
 		fprintf(stderr, "[NW-TRAMP] dispatch: +0x5a0(ctx)=%08x, +0x5a4(code_base)=%08x, "
 		        "entry=%08x\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);

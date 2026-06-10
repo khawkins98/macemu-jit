@@ -2119,10 +2119,18 @@ static bool patch_68k(void)
 	} else fprintf(stderr, "[ROMPATCH] SKIP mem_top (absent in parcels)\n");
 
 	// Don't initialize SCC (via 0x1ac)
+	// M1 (ROM-PATCH-AUDIT: scc_init RETIRE@M1): on the fidelity profile the guest's
+	// own SCC init must run and reach the SCC 8530 model through the bus - the patch
+	// would make the device model dead code. Paravirtual keeps the patch.
+	// MachineUsesMMIOBus() is deliberately NOT the gate: the SS_MMIO_BUS third config
+	// is still paravirtual and the rest of the paravirtual patch set expects the
+	// patched init - only the full fidelity (newworld) profile retires it.
 	static const uint8 scc_init_caller_dat[] = {0x21, 0xce, 0x01, 0x08, 0x22, 0x78, 0x0d, 0xd8};
 	base = find_rom_data(0x180, 0x1f0, scc_init_caller_dat, sizeof(scc_init_caller_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
-	if (base) {
+	if (MachineProfileIsNewWorld()) {
+	fprintf(stderr, "[M1] scc_init ROM patch retired (newworld profile): guest SCC init will run\n");
+	} else if (base) {
 	D(bug("scc_init_caller %08lx\n", base + 12));
 	wp = (uint16 *)(ROMBaseHost + base + 12);
 	loc = ntohs(wp[1]) + ((uintptr)wp - (uintptr)ROMBaseHost) + 2;

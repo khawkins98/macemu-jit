@@ -1163,7 +1163,21 @@ static uint64_t mmio_via_now_ticks(void *)
 {
 	return GetTicks_usec() * VIA_CLOCK_HZ / 1000000ull;
 }
-static void mmio_dump_stats_atexit(void) { MMIOBusDumpStats(stderr); }
+// Device model instances. File scope (not block-scope statics in the bring-up
+// block below) so mmio_dump_stats_atexit can drain the VIA's latched Cuda-protocol
+// warning at exit. Behavior is otherwise identical to the prior static locals.
+static SCC8530 scc;
+static VIA6522 via;
+static void mmio_dump_stats_atexit(void)
+{
+	MMIOBusDumpStats(stderr);
+	// Emit the VIA's one-shot Cuda warning here (the device latches it on the
+	// fault-reachable path where stdio is forbidden; §2g).
+	const char *cuda_warn = VIATakePendingWarning(&via);
+	if (cuda_warn)
+		fprintf(stderr, "[MMIO] via6522: Cuda-protocol register touched (%s) - "
+		        "loud stub only until M3 (MACHINE-LAYER-PLAN M3)\n", cuda_warn);
+}
 
 // ---
 
@@ -1553,8 +1567,7 @@ int main(int argc, char **argv)
 			QuitEmulator();
 		}
 
-		static SCC8530 scc;
-		static VIA6522 via;
+		// scc/via are file-scope statics (see mmio_dump_stats_atexit above).
 		SCCReset(&scc, 0xF3012000);
 		VIAReset(&via, 0xF3016000, mmio_via_now_ticks, NULL);
 

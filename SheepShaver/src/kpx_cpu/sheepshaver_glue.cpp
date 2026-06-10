@@ -1005,6 +1005,13 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	fprintf(stderr, "SIGSEGV\n");
 	fprintf(stderr, "  pc %p\n", sigsegv_get_fault_instruction_address(sip));
 	fprintf(stderr, "  ea %p\n", sigsegv_get_fault_address(sip));
+	// Machine Layer M1 acceptance instrumentation (Task 12): the atexit MMIO
+	// stats dump is skipped when the diagnostic boot dies on a signal, so emit
+	// the bus telemetry here, before the heavier register/disasm/trace dumps
+	// that can themselves re-fault. The fault PC is a normal guest PC (not a
+	// bus dispatch), so no device lock is held — reading the counters is safe.
+	if (MachineUsesMMIOBus())
+		MMIOBusDumpStats(stderr);
 	dump_registers();
 	dump_log();
 	dump_disassembly(pc, 8, 8);

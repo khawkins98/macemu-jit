@@ -24,7 +24,9 @@
 #include "vm_alloc.h"
 #include "cpu/vm.hpp"
 #include "cpu/ppc/ppc-cpu.hpp"
-#ifndef SHEEPSHAVER
+#ifdef SHEEPSHAVER
+#include "machine_profile.h"   /* M3a Task 4: newworld gate in check_spcflags */
+#else
 #include "basic-kernel.hpp"
 #endif
 
@@ -1430,6 +1432,18 @@ bool powerpc_cpu::check_spcflags()
 #ifdef SHEEPSHAVER
 	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
 		spcflags().clear(SPCFLAG_CPU_HANDLE_INTERRUPT);
+		/* M3a Task 4: real DEC exception delivery (newworld profile ONLY —
+		 * the gate sits BEFORE any new side effect; paravirtual takes the legacy
+		 * path below byte-identically). The hook consumes only the VirtClock DEC
+		 * latch (rev 2 M3: InterruptFlags/VIA stays with HandleInterrupt until
+		 * M3b's PIC). Delivered: live regs mutated in place; return true — the
+		 * dispatcher re-derives the next block from pc(); never fall through to
+		 * HandleInterrupt in the same call (rev 2 F3). Not pending, or deferred
+		 * (EE off / execute_depth > 1, latch left SET): the hook returns false
+		 * and we fall through to the legacy path exactly as before. The HANDLE
+		 * flag is cleared exactly once above, common to both paths. */
+		if (MachineProfileIsNewWorld() && SheepExcDeliverPending())
+			return true;
 		static bool processing_interrupt = false;
 		if (!processing_interrupt) {
 			processing_interrupt = true;
@@ -2182,8 +2196,20 @@ void powerpc_cpu::execute(uint32 entry)
 							 * first minute, then every 60s.  See jit-heartbeat.hpp. */
 							{
 								static hb_state hb;
+								/* M3a Task 4: [EXC] DEC-delivery counters ride the heartbeat
+								 * (rev 2 M5: SIGALRM boot-killers skip atexit dumps). Newworld
+								 * only — paravirtual heartbeat lines stay byte-identical. */
+								char excbuf[80]; excbuf[0] = 0;
+								if (MachineProfileIsNewWorld()) {
+									uint64_t exc[3];
+									SheepExcStats(exc);
+									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu",
+									         (unsigned long long)exc[0], (unsigned long long)exc[1],
+									         (unsigned long long)exc[2]);
+								}
 								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
-								        compiled, rgn_jit_blocks, rgn_jit_to_interp);
+								        compiled, rgn_jit_blocks, rgn_jit_to_interp,
+								        excbuf[0] ? excbuf : NULL);
 							}
 							/* Boot-stall probe: until the guest reaches Process-Manager idle,
 							 * read the front modal screen and log a [STALL] line each heartbeat.
@@ -2363,8 +2389,19 @@ void powerpc_cpu::execute(uint32 entry)
 							 * first minute, then every 60s.  See jit-heartbeat.hpp. */
 							{
 								static hb_state hb;
+								/* M3a Task 4: [EXC] counters on the heartbeat (see JIT-mode
+								 * call site above). Newworld only. */
+								char excbuf[80]; excbuf[0] = 0;
+								if (MachineProfileIsNewWorld()) {
+									uint64_t exc[3];
+									SheepExcStats(exc);
+									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu",
+									         (unsigned long long)exc[0], (unsigned long long)exc[1],
+									         (unsigned long long)exc[2]);
+								}
 								hb_tick(&hb, jit_log_file, false, now, interp_block_count,
-								        0, rgn_interp_blocks, rgn_interp_to_jit);
+								        0, rgn_interp_blocks, rgn_interp_to_jit,
+								        excbuf[0] ? excbuf : NULL);
 							}
 							/* SS_JIT_MEMDUMP_AT: timer-based memory dump (interpreter mode) */
 							{

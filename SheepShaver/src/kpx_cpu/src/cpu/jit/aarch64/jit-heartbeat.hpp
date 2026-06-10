@@ -109,10 +109,14 @@ static inline void hb_fmt_time(double now, char *buf, size_t n)
  *   compiled  - compiled block count (ignored when !jit_mode)
  *   rgn       - region counters indexed by RGN_NK/RGN_DR/RGN_RAM (size >= 3)
  *   trans     - j2i transitions (jit_mode) or i2j transitions (!jit_mode)
+ *   extra     - optional preformatted suffix appended verbatim before any
+ *               findings (M3a Task 4: " | exc=delivered/defEE/defDepth" on the
+ *               newworld profile); NULL = no suffix (paravirtual lines unchanged)
  */
 static inline void hb_tick(hb_state *st, FILE *log_file, bool jit_mode, double now,
                            uint64_t blocks, uint32_t compiled,
-                           const uint64_t *rgn, uint64_t trans)
+                           const uint64_t *rgn, uint64_t trans,
+                           const char *extra = NULL)
 {
 	if (st->next_due == 0)
 		st->next_due = 10.0;
@@ -226,6 +230,10 @@ static inline void hb_tick(hb_state *st, FILE *log_file, bool jit_mode, double n
 		len = snprintf(line, sizeof line,
 		         "[HB %s] blocks=%s (%.1fM/s) interp | iNK=%s iDR=%s iRAM=%s i2j=%s | rss=%s cpu=%s",
 		         tbuf, bbuf, rate_m, r0, r1, r2, trbuf, rssbuf, cpubuf);
+
+	/* Optional caller-supplied suffix (e.g. M3a [EXC] counters) before findings. */
+	if (extra && extra[0] && len > 0 && (size_t)len < sizeof line)
+		len += snprintf(line + len, sizeof line - len, "%s", extra);
 
 	/* Append findings: "[WARN: a; b]" / "[SUSPECT: a]".  Plain text — color is
 	 * applied only around the stderr copy, never stored in the line itself. */

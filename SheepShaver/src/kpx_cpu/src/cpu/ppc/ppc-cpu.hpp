@@ -251,6 +251,11 @@ private:
 
 public:
 
+	// M3a Task 4: execute() nesting-depth accessor for the deliverability gate
+	// (depth == 1 means check_spcflags is running inside the outermost execute()).
+	// Trivial public getter only — no powerpc_registers change (no JIT offset impact).
+	int current_execute_depth() const { return execute_depth; }
+
 	// Initialization & finalization
 	void initialize();
 #ifdef SHEEPSHAVER
@@ -540,6 +545,15 @@ inline void powerpc_cpu::trigger_interrupt()
 
 #ifdef SHEEPSHAVER
 extern void HandleInterrupt(powerpc_registers *r);
+/* M3a Task 4: real DEC exception delivery hook (sheepshaver_glue.cpp).
+ * Called from check_spcflags' HANDLE arm on the newworld profile, BEFORE the
+ * legacy HandleInterrupt path. Returns true iff a pending DEC exception was
+ * delivered in place (live regs mutated; the dispatcher re-derives from pc()).
+ * Returns false when nothing is pending or delivery was deferred (EE off /
+ * execute_depth > 1) — the caller then falls through to the legacy path. */
+extern bool SheepExcDeliverPending(void);
+/* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth. */
+extern "C" void SheepExcStats(uint64_t out[3]);
 #endif
 
 #endif /* PPC_CPU_H */

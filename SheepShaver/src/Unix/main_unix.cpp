@@ -1269,7 +1269,24 @@ static void vclk_dec_arm(void *, uint64_t ns_until_expiry, uint32_t gen)
 		if (last_dec_timer)
 			g_event_sched->cancel_timer(last_dec_timer);
 		last_dec_timer = g_event_sched->add_oneshot_timer(ns_until_expiry,
-		                                 [gen]() { VirtClockDECExpire(&g_virt_clock, gen); });
+		                                 [gen]() {
+			VirtClockDECExpire(&g_virt_clock, gen);
+			// M3a Task 4.1: kick the CPU thread so the block-boundary poll runs the
+			// DEC delivery hook (sheepshaver_glue.cpp deliver_pending_dec_exception).
+			// Gated on the latch actually being set: a stale-generation expire no-ops
+			// inside VirtClockDECExpire and must not wake HandleInterrupt spuriously.
+			// The newworld gate is belt-and-braces (this scheduler also runs on the
+			// SS_MMIO_BUS=1 named third config, where the deprecated SS_SYNTH_DEC
+			// override could force the virtual clock on - paravirtual stays inert).
+			//
+			// Lazy-latch note: VirtClockReadDEC can also latch dec_fire on the CPU
+			// thread (virt_clock.cpp - pure module, deliberately not modified). That
+			// path needs no kick seam of its own: the CPU thread is by definition
+			// running, and the latch is picked up by the EE-edge re-raises
+			// (mtmsr/rfi, Task 3) and by the next kick from this scheduler path.
+			if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+				TriggerInterrupt();
+		});
 	}
 }
 
@@ -2213,6 +2230,16 @@ static void *tick_func(void *arg)
 		}
 
 		// Trigger 60Hz interrupt
+		// M3a Task 5 (tick interplay; M3A-ENTRY-TABLE.md finding 3): on the
+		// newworld diagnostic boot this gate reads NK-owned memory - the staged
+		// nanokernel parks XLM_IRQ_NEST at 0xFFFFFFFF, so the test below is
+		// permanently false and this trigger NEVER fires there. The 60 Hz
+		// re-trigger safety net therefore does NOT exist on that boot; the live
+		// DEC delivery sources are the EE-edge re-raises (mtmsr/rfi, Task 3) and
+		// the scheduler expiry kick (vclk_dec_arm, Task 4.1). Where it DOES fire
+		// (paravirtual), HandleInterrupt runs the legacy path unchanged; its
+		// newworld keep-set is Ticks-only (Task 2 fences). No code change -
+		// the gate is correct as-is for paravirtual.
 		if (ReadMacInt32(XLM_IRQ_NEST) == 0) {
 			SetInterruptFlag(INTFLAG_VIA);
 			TriggerInterrupt();

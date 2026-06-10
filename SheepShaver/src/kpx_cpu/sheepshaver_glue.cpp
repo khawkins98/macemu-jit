@@ -29,6 +29,7 @@
 #include "machine_profile.h"
 #include "mmio_bus.h"
 #include "virt_clock.h"
+#include "exc_core.h"
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -81,6 +82,22 @@
 extern "C" {
 #include "dis-asm.h"
 }
+
+/* M3a Task 3: interrupt entry table — newworld profile only.
+ * Default interrupt_entry = 0x50412b1c (probe-verified in M3A-ENTRY-TABLE.md).
+ * syscall_entry = 0 (unresolved; descope active — see M3A-ENTRY-TABLE.md §5).
+ * Override via SS_EXC_ENTRY=0xINT[,0xSC] for no-rebuild iteration.
+ * Paravirtual never reads this table. */
+#define NW_INTERRUPT_ENTRY_DEFAULT 0x50412b1cu  /* M3A-ENTRY-TABLE.md probe-verified */
+ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u };
+
+/* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
+ * runs the hook). CPU-thread-only writers (check_spcflags context, plan §2g), so
+ * plain uint64_t is fine; readers (heartbeat, crash dump) run on the same thread
+ * or post-mortem. Exposed via SheepExcStats(). */
+static uint64_t exc_stat_delivered_dec  = 0;
+static uint64_t exc_stat_deferred_ee    = 0;
+static uint64_t exc_stat_deferred_depth = 0;
 
 // Emulation time statistics
 #ifndef EMUL_TIME_STATS
@@ -280,6 +297,10 @@ public:
 
 	// Handle MacOS interrupt
 	void interrupt(uint32 entry);
+
+	// M3a Task 4: deliver a pending DEC exception in place (newworld profile).
+	// Returns true iff delivered (live regs mutated); false if not pending or deferred.
+	bool deliver_pending_dec_exception();
 
 	// Make sure the SIGSEGV handler can access CPU registers
 	friend sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip);
@@ -702,9 +723,150 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	ctr()= saved_ctr;
 	gpr(1) = saved_sp;
 
+	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1
+	// (the delivery hook defers while execute_depth > 1; this nested execute()
+	// just returned and host state is restored, so re-raise if the latch is
+	// still set — the next outermost-depth poll can then deliver).
+	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+		trigger_interrupt();
+
 #if EMUL_TIME_STATS
 	interrupt_time += (clock() - interrupt_start);
 #endif
+}
+
+/*
+ *  M3a Task 4: real DEC exception delivery at the block-boundary poll
+ *  (docs/superpowers/plans/2026-06-10-machine-layer-m3a.md, KDP-SHIM mode per
+ *  docs/planning/machine/M3A-ENTRY-TABLE.md).
+ *
+ *  Called from check_spcflags' HANDLE arm (ppc-cpu.cpp), newworld profile only,
+ *  on the CPU thread (§2g — no locking beyond the VirtClock atomics).
+ *
+ *  Contract notes:
+ *   - Source discrimination (rev 2 M3): this hook consumes ONLY the VirtClock
+ *     DEC latch. InterruptFlags/VIA pending stays with HandleInterrupt (fenced
+ *     for newworld in Task 2) until M3b's PIC.
+ *   - restart PC = block-start: the JIT chain-entry poll stores the block-start
+ *     PC into pc() before any body code runs, so pc() here is always a
+ *     not-yet-executed instruction => a valid SRR0. DR-emulator blocks have no
+ *     entry poll (rev 2 F8) — delivery inside chained DR loops waits for the
+ *     between-block dispatcher check (acceptable; irrelevant to the diagnostic
+ *     boot).
+ *   - XLM_IRQ_NEST is deliberately IGNORED in favor of the real MSR[EE] gate:
+ *     the staged NK parks it at 0xFFFFFFFF (M3A-ENTRY-TABLE.md finding 3).
+ *     Revisit if Task 7 shows the NK manipulating it as its interrupt mask.
+ *   - Deferral (EE off or execute_depth > 1) leaves the latch SET and returns
+ *     false (legacy fall-through unchanged). The re-raise comes from the Task 3
+ *     EE-edge hooks (mtmsr/rfi) and the Task 4.4 nested-execute-return rechecks.
+ *     The LAZY latch path (VirtClockReadDEC -> dec_fire on the CPU thread,
+ *     virt_clock.cpp — pure module, deliberately not modified) needs no kick of
+ *     its own: its latch is picked up by those same EE-edge re-raises and by the
+ *     next scheduler-expiry kick (main_unix.cpp vclk_dec_arm).
+ */
+bool sheepshaver_cpu::deliver_pending_dec_exception()
+{
+	if (!VirtClockDECPending(&g_virt_clock))
+		return false;
+	// Deliverability rule (MACHINE-LAYER-PLAN §2d): never deliver inside nested
+	// executes — depth 1 means we are at the outermost execute().
+	if (current_execute_depth() != 1) {
+		exc_stat_deferred_depth++;
+		return false;
+	}
+	if (!ExcDeliverable(msr_reg())) {
+		exc_stat_deferred_ee++;
+		return false;
+	}
+	VirtClockClearDECPending(&g_virt_clock);
+
+	const uint32 restart_pc = pc();
+
+	// Compute the architectural transition from the PRE-exception MSR (the shim
+	// below never touches msr, so ordering vs the KDP writes is free).
+	ExcTransition t = ExcEnter(restart_pc, msr_reg(), EXC_DECREMENTER, &g_exc_entry_table);
+
+	// SS_EXC_BARE=1: the bounded direct-entry experiment — skip the KDP ABI shim
+	// entirely, apply only the architectural transition. Resolved once.
+	static const bool exc_bare = []() {
+		const char *e = getenv("SS_EXC_BARE");
+		return e && e[0] && e[0] != '0';
+	}();
+
+	if (!exc_bare) {
+		/* --- KDP register-save shim (KDP-SHIM mode, M3A-ENTRY-TABLE.md) ---
+		 * Transcribed EXACTLY from sheepshaver_cpu::interrupt() above (same
+		 * offsets, same order, same rlwimi/record_cr0/CR-splice), with THREE
+		 * honest upgrades:
+		 *   1. gpr(10)/gpr(12) = the REAL restart PC (was: trampoline address)
+		 *   2. gpr(11)         = the REAL composed SRR1 (was: 0xf072 literal;
+		 *                        byte-equal on the boot-real 0xf072 case —
+		 *                        exc_core Task 1 test 3)
+		 *   3. SRR0/SRR1/MSR/PC = the real ExcEnter transition (below)
+		 * and FOUR omissions (we are not nesting — the guest handler runs on the
+		 * live CPU and returns via real rfi, Task 3):
+		 *   1. NO stack swap to SignalStackBase (so KDP+0x004 saves the LIVE
+		 *      guest r1, not a host signal-stack pointer — strictly more honest)
+		 *   2. NO trampoline allocation
+		 *   3. NO nested execute()
+		 *   4. NO saved/restored host PC/LR/CTR/SP around the handler. */
+		WriteMacInt32(KERNEL_DATA_BASE + 0x004, gpr(1));
+		WriteMacInt32(KERNEL_DATA_BASE + 0x018, gpr(6));
+
+		gpr(6) = ReadMacInt32(KERNEL_DATA_BASE + 0x65c);
+		if (gpr(6) == 0) {
+			// The NK handler prologue stores through r6 in its first instructions
+			// (rev 2 #1) — a zero ECB means silent guest-memory corruption. Abort
+			// loudly instead. (Probe-verified live value: 0x68fff000.)
+			fprintf(stderr, "[EXC] FATAL: [KDP+0x65c] (ECB) is 0 at DEC delivery "
+			        "(restart_pc=%08x) — KDP shim has no save area\n", restart_pc);
+			abort();
+		}
+		WriteMacInt32(gpr(6) + 0x13c, gpr(7));
+		WriteMacInt32(gpr(6) + 0x144, gpr(8));
+		WriteMacInt32(gpr(6) + 0x14c, gpr(9));
+		WriteMacInt32(gpr(6) + 0x154, gpr(10));
+		WriteMacInt32(gpr(6) + 0x15c, gpr(11));
+		WriteMacInt32(gpr(6) + 0x164, gpr(12));
+		WriteMacInt32(gpr(6) + 0x16c, gpr(13));
+
+		gpr(1)  = KernelDataAddr;
+		gpr(7)  = ReadMacInt32(KERNEL_DATA_BASE + 0x660);
+		gpr(8)  = 0;
+		gpr(10) = t.srr0;		// honest upgrade: real restart PC (was: trampoline)
+		gpr(12) = t.srr0;		// honest upgrade: real restart PC (was: trampoline)
+		gpr(13) = get_cr();		// captured BEFORE the rlwimi's record_cr0 — interrupt()'s exact order
+
+		// rlwimi. r7,r7,8,0,0  (the Rc form mutates CR0 via record_cr0, AFTER r13
+		// captured the pre-rlwimi CR — replicating interrupt() exactly)
+		uint32 result = op_ppc_rlwimi::apply(gpr(7), 8, 0x80000000, gpr(7));
+		record_cr0(result);
+		gpr(7) = result;
+
+		gpr(11) = t.srr1;		// honest upgrade: real composed SRR1 (was: 0xf072 literal)
+		// CR splice: interrupt() injects SRR1 bits into CR fields 1-3
+		// (mask 0x0fff0000) AFTER setting gpr(11). Replicated with the real SRR1
+		// for ABI fidelity. Since SRR1 <= 0xFFFF always (EXC_SRR1_KEEP_MASK),
+		// (srr1 & 0x0fff0000) == 0 — byte-identical to the legacy 0xf072 case.
+		cr().set((gpr(11) & 0x0fff0000) | (get_cr() & ~0x0fff0000));
+	}
+
+	// Apply the architectural transition to the LIVE registers. The dispatcher
+	// re-derives the next block from pc() after check_spcflags returns true
+	// (rev 2 code-verified) — in-place delivery, no nested execute.
+	srr0_reg() = t.srr0;
+	srr1_reg() = t.srr1;
+	msr_reg()  = t.msr;
+	pc()       = t.pc;
+	exc_stat_delivered_dec++;
+
+	// First few deliveries to stderr for live-boot triage (Task 7); the running
+	// totals ride the [HB] heartbeat (rev 2 M5: SIGALRM skips atexit dumps).
+	if (exc_stat_delivered_dec <= 5)
+		fprintf(stderr, "[EXC] DEC delivered #%llu: restart=%08x srr1=%08x msr=%08x -> entry=%08x%s\n",
+		        (unsigned long long)exc_stat_delivered_dec, t.srr0, t.srr1, t.msr, t.pc,
+		        exc_bare ? " (BARE)" : "");
+	return true;
 }
 
 // Execute 68k routine
@@ -798,6 +960,10 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	ctr()= saved_ctr;
 	set_cr(saved_cr);
 
+	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1.
+	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+		trigger_interrupt();
+
 #if EMUL_TIME_STATS
 	exec68k_time += (clock() - exec68k_start);
 #endif
@@ -849,6 +1015,10 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	lr() = saved_lr;
 	ctr()= saved_ctr;
 
+	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1.
+	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+		trigger_interrupt();
+
 #if EMUL_TIME_STATS
 	macos_exec_time += (clock() - macos_exec_start);
 #endif
@@ -870,6 +1040,10 @@ inline void sheepshaver_cpu::execute_ppc(uint32 entry)
 
 	// Restore branch registers
 	lr() = saved_lr;
+
+	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1.
+	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+		trigger_interrupt();
 }
 
 void sheepshaver_cpu::call_get_resource(powerpc_cpu * cpu, uint32 old_get_resource) {
@@ -904,6 +1078,21 @@ inline void sheepshaver_cpu::get_resource(uint32 old_get_resource)
 
 // PowerPC CPU emulator
 static sheepshaver_cpu *ppc_cpu = NULL;
+
+// M3a Task 4: free-function seam for check_spcflags (declared in ppc-cpu.hpp
+// next to HandleInterrupt — same idiom). Newworld-gated at the call site.
+bool SheepExcDeliverPending(void)
+{
+	return ppc_cpu && ppc_cpu->deliver_pending_dec_exception();
+}
+
+// M3a Task 4 telemetry export (heartbeat + crash-path dump).
+extern "C" void SheepExcStats(uint64_t out[3])
+{
+	out[0] = exc_stat_delivered_dec;
+	out[1] = exc_stat_deferred_ee;
+	out[2] = exc_stat_deferred_depth;
+}
 
 // C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
 extern "C" void ss_dump_registers_json(char *buf, int bufsz) {
@@ -1054,6 +1243,17 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// signal-death path, and the seam DoD asserts mtspr_dec/mfspr_dec counts.
 	if (VirtClockReady(&g_virt_clock))
 		VirtClockDumpStats(&g_virt_clock, stderr);
+	// Machine Layer M3a (Task 4): same reasoning for the DEC exception-delivery
+	// telemetry — the heartbeat is periodic and the atexit path never runs on
+	// signal death, so emit the counters here too. Newworld-only (the hook never
+	// runs on paravirtual; keeps paravirtual crash output byte-identical).
+	if (MachineProfileIsNewWorld()) {
+		uint64_t exc[3];
+		SheepExcStats(exc);
+		fprintf(stderr, "[EXC] delivered_dec=%llu deferred_ee=%llu deferred_depth=%llu\n",
+		        (unsigned long long)exc[0], (unsigned long long)exc[1],
+		        (unsigned long long)exc[2]);
+	}
 	dump_registers();
 	dump_log();
 	dump_disassembly(pc, 8, 8);
@@ -1769,6 +1969,31 @@ void init_emul_ppc(void)
 		 * "post-init" point, after the nanokernel trampoline has populated the KDP /
 		 * ECB. The PC-triggered form fires later at its target block entry. */
 		ss_seed_mem_apply_immediate();
+
+		/* M3a Task 3: initialize the exception entry table for newworld.
+		 * Default: interrupt_entry = 0x50412b1c (probe-verified, M3A-ENTRY-TABLE.md).
+		 *          syscall_entry   = 0 (unresolved — descope active).
+		 * Override: SS_EXC_ENTRY=0xINT[,0xSC] for no-rebuild iteration. */
+		{
+			const char *exc_env = getenv("SS_EXC_ENTRY");
+			if (exc_env && exc_env[0]) {
+				char *endp = NULL;
+				uint32_t ie = (uint32_t)strtoul(exc_env, &endp, 0);
+				uint32_t sc = 0;
+				if (endp && *endp == ',')
+					sc = (uint32_t)strtoul(endp + 1, NULL, 0);
+				g_exc_entry_table.interrupt_entry = ie;
+				g_exc_entry_table.syscall_entry   = sc;
+				fprintf(stderr, "[EXC] entry table override (SS_EXC_ENTRY): "
+				        "interrupt=0x%08x syscall=0x%08x\n",
+				        g_exc_entry_table.interrupt_entry,
+				        g_exc_entry_table.syscall_entry);
+			} else {
+				fprintf(stderr, "[EXC] entry table: interrupt=0x%08x syscall=0x%08x\n",
+				        g_exc_entry_table.interrupt_entry,
+				        g_exc_entry_table.syscall_entry);
+			}
+		}
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

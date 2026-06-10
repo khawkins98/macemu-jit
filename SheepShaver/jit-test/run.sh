@@ -1775,9 +1775,14 @@ TEST_ORDER+=(av_vsum2sws_neg)
 # --- repro for the confirmed vspltb/vsplth JIT bug (NOT in TEST_ORDER) ---
 
 # --- Wave 0: SR/MSR stored-state round-trip vectors (Task 1, M5-MMU-SR-WALL-ANALYSIS) ---
+# Coverage honesty (rev 3): test-jit is DIFFERENTIAL (interp vs JIT REGDUMP), and all
+# six SR/MSR ops fall back to the interpreter in both engines - so these vectors guard
+# the JIT/interp-divergence axis (e.g. a JIT case re-nativizing mfsr to constant 0
+# diffs immediately) but CANNOT catch a same-in-both regression (decode dropping back
+# to execute_illegal makes both sides agree on the cold value). The stored-state
+# guarantee itself is asserted by the handlers' design + the Wave 0 acceptance boot.
 # mtmsr->mfmsr: lis r3,0x1234; ori r3,r3,0x5678 (r3=0x12345678); mtmsr r3; mfmsr r5
-# r5 must equal r3 (0x12345678) to prove the stored-state round-trip works.
-# Uses different source (r3) and dest (r5) registers so the REGDUMP can't vacuously pass.
+# r5 must equal r3 (0x12345678); different source (r3) and dest (r5) registers.
 T_sr_mtmsr_mfmsr="3C601234 60635678 7C600124 7CA000A6"
 TEST_ORDER+=(sr_mtmsr_mfmsr)
 
@@ -1786,6 +1791,12 @@ TEST_ORDER+=(sr_mtmsr_mfmsr)
 # r5 must equal r3 (0xDEADBEEF) to prove SR write/read-back works.
 T_sr_mtsrin_mfsrin="3C60DEAD 6063BEEF 3C807000 7C6021E4 7CA02526"
 TEST_ORDER+=(sr_mtsrin_mfsrin)
+
+# mtsr->mfsr (rev 3: the SR_field bits-12-15 extraction path, distinct from the
+# rB>>28 indexed forms above): lis r3,0xCAFE; ori r3,r3,0xBABE; mtsr 7,r3; mfsr r5,7
+# r5 must equal r3 (0xCAFEBABE). Encodings capstone-verified.
+T_sr_mtsr_mfsr="3C60CAFE 6063BABE 7C6701A4 7CA704A6"
+TEST_ORDER+=(sr_mtsr_mfsr)
 
 # ==== QUARANTINE: confirmed JIT divergences awaiting a fix (ROADMAP A2) ========
 # Run but do NOT count toward pass/fail/score — KNOWN-FAIL repros of a confirmed

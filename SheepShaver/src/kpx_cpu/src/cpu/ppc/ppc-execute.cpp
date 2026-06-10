@@ -164,7 +164,9 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 	    *getenv("SS_LOG_ILLEGAL") != '0') {
 		uint32 primary = opcode >> 26;
 		uint32 xo = (opcode >> 1) & 0x3FF;
-		if (primary == 31 && xo == 146) { /* mtmsr */
+		if (primary == 31 && xo == 146) { /* mtmsr — UNREACHABLE since Wave 0 decoded
+			mtmsr (execute_mtmsr carries this same MSR[VEC] log); fires only if the
+			decode entry ever regresses — kept as that tripwire. */
 			uint32 rs = (opcode >> 21) & 0x1F;
 			uint32 val = gpr(rs);
 			fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsr pc=%08x op=%08x rS=r%u val=%08x MSR[VEC]=%s\n",

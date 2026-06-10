@@ -43,6 +43,7 @@ prefs_desc common_prefs_items[] = {
 	{"seriala", TYPE_STRING, false,     "device name of Mac serial port A"},
 	{"serialb", TYPE_STRING, false,     "device name of Mac serial port B"},
 	{"rom", TYPE_STRING, false,         "path of ROM file"},
+	{"machine", TYPE_STRING, false,     "machine profile: paravirtual (default) or newworld"},
 	{"bootdrive", TYPE_INT32, false,    "boot drive number"},
 	{"bootdriver", TYPE_INT32, false,   "boot driver number"},
 	{"ramsize", TYPE_INT32, false,      "size of Mac RAM in bytes"},
@@ -106,6 +107,10 @@ void AddPrefsDefaults(void)
 	PrefsAddBool("ignoreillegal", true);
 	PrefsAddBool("noclipconversion", false);
 	PrefsAddBool("ignoresegv", true);
+
+	// Machine Layer profile (docs/planning/MACHINE-LAYER-PLAN.md). paravirtual =
+	// today's proven path; newworld = the Core99 fidelity profile (M0+).
+	PrefsAddString("machine", "paravirtual");
 
 	// On aarch64 the native JIT (ppc-jit.cpp, USE_AARCH64_JIT) runs unconditionally;
 	// this pref controls the legacy kpx_cpu codegen JIT only. Default true on all builds.

@@ -99,6 +99,7 @@
 #include "version.h"
 #include "prefs.h"
 #include "prefs_editor.h"
+#include "machine_profile.h"
 #include "cpu_emulation.h"
 #include "emul_op.h"
 #include "xlowmem.h"
@@ -1289,6 +1290,11 @@ int main(int argc, char **argv)
 
 	// Read preferences
 	PrefsInit(vmdir, argc, argv);
+
+	// Resolve the machine profile (MACHINE-LAYER-PLAN.md M0): pref + env,
+	// before anything consults it (ROM patching, sigsegv policy, NW gates).
+	MachineProfileInit();
+
 	// Only use nogui preference if not passed as command line argument
 	if (use_gui == -1)
 		use_gui = !PrefsFindBool("nogui");

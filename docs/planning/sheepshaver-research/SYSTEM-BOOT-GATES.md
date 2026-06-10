@@ -86,9 +86,18 @@ error paths) and several others. The table above covers the boot-gate-relevant c
 0x0404: a9c9         _SysError              ; FATAL — model rejection
 ```
 
-The subroutine at ~0x7E24 probes the ROM environment (likely ROM version, feature flags,
-or nanokernel characteristics). Returns 0 if acceptable, non-zero if rejected. The 1998
-v1.1 ROM fails this check.
+The subroutine at ~0x7E24 probes the ROM environment. Returns 0 if acceptable, non-zero if
+rejected. The 1998 v1.1 ROM fails this check.
+
+> **RESOLVED by Spike S1 (2026-06-10, `docs/planning/spikes/SPIKE-S1-QEMU-GATE-CHECK.md`):**
+> the probe is a **CFM boot-fragment audit**, not a model/version check. It selects a
+> checklist via `Gestalt('mach')` (short 3-entry list for machineType 406), then verifies
+> fragments (DebugLib, InterfaceLib, Math64Lib, MPLibrary, …) via
+> `GetResource('fovr'/'sfvr'/'nlib', id)` + CFM `GetMemFragment`/`GetSharedLibrary('pwpc')`.
+> The "version words" previously noted here are actually **resource IDs**. The 9.0.1 ROM's
+> `prcl` parcels provide this state natively (unpatched 9.2.1 boots to Finder on it under
+> QEMU mac99); the 1.1 ROM (no parcels, no fragment names) **structurally cannot pass** —
+> which is why identity patches never worked.
 
 **Bypass:** NOP the A9C9 at offset 0x0404 (`4E71`). The `moveq` still executes but the
 _SysError never fires — d0 is subsequently overwritten.
@@ -224,14 +233,18 @@ the SCC (Zilog 8530 Serial Communications Controller):
 0x500cc9c0: jmp     (a6)             ; dispatch back to loop
 ```
 
-Key register state at stall:
-- r18 = 0xF3016000 — SCC channel A hardware address
-- r19 = 0xF3012000 — SCC channel B hardware address
-- r24 = 0x500cc998 — 68k PC (ROM serial init code)
+Key register state at stall *(labels CORRECTED by Spike S3, 2026-06-10 —
+`docs/planning/spikes/SPIKE-S3-STALL-DEVICE-PROBE.md`)*:
+- r18 = 0xF3016000 — **VIA 6522 base** (NOT SCC ch A; IFR/T2 at 0x200-stride offsets)
+- r19 = 0xF3012000 — **SCC base** (ch A control at +2, data at +6)
+- r24 = 0x500cc998 — 68k PC (ROM **factory serial test monitor**, "STM 2.2/CTE 2.1")
 
-The v1.1 ROM's serial init code is adequate for Mac OS 9.0.4 (which boots successfully),
-but 9.2.1's initialization hits a polling path that requires SCC status bits that
-SheepShaver's serial emulation doesn't provide.
+Per S3: the loop polls SCC RR0 bit 0 ("Rx char available") at 0xF3012002, and the monitor's
+designed escape is a **VIA T2 timeout** + Cuda handshake — the VIA timer is plausibly the
+actual un-stick mechanism, since an honest "no Rx char" SCC never terminates the blocking
+read. Note also (Spike S1): even past this stall, 9.2-on-1.1 is structurally capped by the
+missing CFM boot fragments (§ Gate 2 above) — this path is a device-model testbed, not a
+route to a 9.2 boot.
 
 ### Options
 

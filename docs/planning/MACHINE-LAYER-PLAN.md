@@ -1,8 +1,9 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
-> **Status:** 🟢 Approved architecture (rev 3) — implementation not started · **Created:** 2026-06-10
-> · **Updated:** 2026-06-10 (rev 2 + rev 3: two rounds of adversarial code-review findings — §8;
-> plus §9 holistic success assessment with re-scoring triggers)
+> **Status:** 🟢 Approved architecture (rev 4) — **spikes S1–S3 complete, all green; next: M0**
+> · **Created:** 2026-06-10
+> · **Updated:** 2026-06-10 (rev 2+3: two adversarial review rounds — §8; rev 4: spike results
+> folded in — §3 spikes, M1/M2/M7 re-scoped, §9 re-score #1: capability ~70–75%)
 > **Decision (2026-06-10):** Stop extending the ROM-patching/paravirtualization approach toward
 > NewWorld and Mac OS 9.2.x one bug at a time. Instead, build the thing SheepShaver never had:
 > a **real machine-model layer** — MMIO bus, virtual clock, device models, interrupt/exception
@@ -69,12 +70,11 @@ Decisions made 2026-06-10 (with Ken):
    a *different* machine; supporting both would mean two address maps, two PICs, two device
    trees. The 1.1-ROM/9.2.1 tactical path (Path B's frontier) gets **only standalone device
    model(s) at the addresses the stall loop actually polls** — not the full profile.
-   *(rev 3 correction: the device identity behind the stall is NOT settled. Our own AddrMap
-   patch — `rom_patches.cpp:1903` — assigns 0xF3016000 to the **VIA** and 0xF3012000 to the
-   SCC, and the project has flip-flopped on the `[KDP-0x900]` identity twice. A pre-M1 probe
-   pass must disassemble the actual stall loop and pin which device(s)/offsets it polls —
-   it may need the VIA (+ timer) as well as or instead of the SCC, which would change M1's
-   scope. See §3 spikes.)*
+   *(rev 3 caveat — RESOLVED by spike S3 (rev 4): the stall is the ROM's serial test monitor
+   polling SCC ch A (0xF3012002) with a VIA 6522 T2-timeout escape (0xF3016000) — r18=VIA,
+   r19=SCC; M1's scope is SCC + VIA timer/IFR. And per spike S1, the 1.1-ROM path is a bus
+   testbed only — 9.2 audits CFM boot fragments that only parcels ROMs provide, so 9.2-on-1.1
+   is structurally capped regardless of devices.)*
 
 ---
 
@@ -306,33 +306,56 @@ Each milestone is independently valuable and gated; the paravirtual profile's ga
 (`make test-jit`, `make e2e`, bench history) stay green throughout — the standing
 non-regression contract.
 
-**Pre-M0 spikes** *(rev 3 — cheap experiments that de-risk the plan's two biggest bets,
-run BEFORE committing to the milestone sequence)*:
-- **S1 — QEMU gate-check (days, ~zero code):** boot Mac OS 9.2.x under QEMU `mac99` with the
-  same 9.0.1 "Mac OS ROM" file. Directly answers M7's untested premise ("9.0.1 may satisfy
-  9.2.x's gates natively") — what 9.2's gate-2 subroutine (~0x7E24) actually checks is still
-  unknown. Statically RE-ing that probe is the second cheap angle. If 9.0.1 fails, the
-  near-free fallback is a **newer family ROM** (9.6.1/9.8.1 differ from 9.0.1 by 0.04% in the
-  nanokernel — HANDOFF §1.5), before falling back to the 4-byte bypass.
-- **S2 — Mach fault-decode spike (~1 day):** trap one unmapped page, decode one JIT-emitted
-  `LDR`, inject a value via `thread_set_state`, resume, observe the `REV`'d result in the
-  guest. Proves M1's keystone end-to-end (incl. measuring the real Mach round-trip cost)
-  before the bus is designed around it.
-- **S3 — stall-loop device probe (~half day):** disassemble the 9.2.1 post-splash polling
-  loop and the nanokernel `check_work` consumer; pin **which device(s)** (SCC vs VIA vs both)
-  and which register offsets they poll (decision 5 rev-3 caveat). Determines M1's actual
-  device scope.
+**Pre-M0 spikes** — ✅ **ALL THREE COMPLETE (2026-06-10, same day — see
+`docs/planning/spikes/`)**. Results, each of which changed the plan (rev 4):
+
+- ✅ **S1 — QEMU gate-check** (`SPIKE-S1-QEMU-GATE-CHECK.md`): **gates PASS natively on the
+  9.0.1 ROM** — the unpatched 9.2.1 installer (all `_SysError` sites A9C9-intact, verified)
+  boots to Finder under QEMU mac99 with the 2001 "Mac OS ROM 9.0.1" swapped in. **And the
+  gate-2 probe (~0x7E24) is not a model check at all: it is a CFM boot-fragment audit** —
+  `Gestalt('mach')` selects a checklist, then verifies DebugLib/InterfaceLib/Math64Lib/
+  MPLibrary/… fragments via `GetResource('fovr'/'sfvr'/'nlib')` + CFM lookups — state the
+  9.0.1 ROM's `prcl` parcels provide and **the 1.1 ROM structurally cannot** (no parcels, no
+  fragment names). Consequences: (a) M7's path is settled — native 9.0.1 ROM, no ROM-swap
+  rung, 4-byte bypass kept only for the residual $76-on-HD-copy case; (b) **Path B was
+  structurally doomed**, retroactively explaining why identity patches never worked; (c) M1
+  consumer (a) (9.2-on-1.1) is re-framed as a **bus/SCC testbed only** — its endgame is
+  capped by the missing parcels, it is not a route to 9.2. Bonus: `macos921.dsk` actually
+  contains Mac OS **8.6**, not 9.2.1.
+- ✅ **S2 — Mach fault-decode spike** (`SPIKE-S2-MACH-FAULT-DECODE.md`, working code in
+  `spikes/s2-mach-fault-decode/`): **keystone validated end-to-end, first try** — PROT_NONE
+  page → Mach EXC_BAD_ACCESS on a handler thread → decode the exact JIT form
+  (`LDR Wt,[Xn,Wm,UXTW]`, mask 0xFFE0FC00/0xB8604800) → inject raw BE via
+  `thread_set_state` → resumed `REV` yields the correct guest value; **identical from a
+  MAP_JIT page** (known-unknown resolved); zero entitlement/hardened-runtime friction.
+  **Measured cost: ~5.8–9.6 µs/fault (typical ~8.5 µs) vs sub-ns mapped — ~10⁴×** — the
+  2.6M iter/s idle poll would cost ~22 wall-s per guest-s through the fault path, hard-
+  confirming backpatch-in-M1-scope. Decoder gotchas captured for M1: PAC-safe PC accessors,
+  rt==31→WZR, zero-extended W writeback, width-keyed inject (LDRB has no REV; stores REV
+  *before* STR so the faulting value is already raw BE).
+- ✅ **S3 — stall-loop device probe** (`SPIKE-S3-STALL-DEVICE-PROBE.md`): **the identities
+  were mislabeled again** (decision-5 caveat vindicated). The 9.2.1 post-splash stall is the
+  ROM's factory **serial test monitor** ("STM 2.2/CTE 2.1") polling **SCC ch A** (RR0 bit 0
+  at 0xF3012002, data +6) — but the monitor's designed escape is a **VIA 6522 T2 timeout**
+  (IFR at 0xF3016000, 0x200 stride) + Cuda handshakes: r18=VIA, r19=SCC (SYSTEM-BOOT-GATES
+  §5 had the labels backwards — corrected). An honest "no Rx char" SCC alone plausibly
+  never terminates the monitor's blocking read — **the VIA timer is likely the real
+  un-stick mechanism**. `check_work` (9.0.1) is **SCC-only, conclusively** (full Zilog WR
+  init sequence decoded; HANDOFF §1.7.1 confirmed, commit e0e8640e refuted) — but its
+  timeout loop needs a **ticking DEC** (M2 dependency reaching into M1 consumer (b)).
+  **M1 device scope: SCC 8530 + VIA 6522 timer/IFR surface (Cuda as loud stub).** Open
+  follow-up: the 9.2.1 entry path into the monitor (cheap SS_PROBE_PC probe).
 
 | # | Milestone | Definition of done | Effort |
 |---|---|---|---|
 | **M0** | **Profile plumbing + machine description** | `machine` pref (`paravirtual` default / `newworld`); `SS_NW_*` env-gate sprawl consolidated under the profile; fidelity profile disables `ignoresegv` + legacy serial-skip hacks; paravirtual byte-identical, all gates green. **Plus the §2a machine-description artifact** (Core99 address map, interrupt tree, device-tree skeleton) reviewed against the 9.0.1 ROM's actual probes, **including a ROM-patch audit table** *(rev 3)*: every `PatchROM`/`patch_nanokernel`/`patch_68k` patch that neutralizes device init (`via_init*`, `scc_init`, `cuda_init`, GC interrupt-mask NOPs…) classified keep-on-fidelity / retire-at-Mx / replace-with-device-model — device models behind patched-out guest init are dead code, so each device milestone's DoD names the patches it retires and asserts the un-patched ROM init sequence completes. | M |
-| **M1** | **MMIO bus + boot-stall device model(s)** | Three-path dispatch (§2b): AArch64 fault decoder + Mach writeback + endianness contract for the JIT path (validated by spike S2); software range-check in interpreter accessors (profile-gated, interpreter-mode bench proof); explicit `bus_read/write` host-accessor entry points; region kinds (trapped/aperture) in the API; **JIT backpatch for hot sites (in scope, not reserve)**; per-region fault-rate logging + idle-detection hook; §2g locking rules implemented. Device model(s) per spike S3 (SCC 8530, possibly VIA timer) answer the ROM's polling. Consumers: (a) 9.2.1-on-1.1-ROM boot progresses past the post-splash stall — run as a **named third config** (`paravirtual` + bus + device − serial-skips), with `SS_COMPAT_92X`'s SCC-neutralizing patches retired so the DoD asserts **observed device register traffic**, not just boot progress (no false pass); (b) nanokernel `check_work` polls a real device **at an unmapped F3 address** (not a RAM pointer) without a fault storm (backpatch + idle-detection proven). Device unit tests + QEMU conformance (§5). | **L** |
-| **M2** | **Virtual clock** | Guest-visible TB/DEC honoring `mtspr`/`mfspr` (the `SS_SYNTH_DEC` hack retired); host event scheduler for device timers; DEC-expiry raises the CPU decrementer exception *condition* (delivery lands in M3). | M |
+| **M1** | **MMIO bus + SCC 8530 + VIA timer/IFR surface** *(scope set by spikes S2+S3)* | Three-path dispatch (§2b): AArch64 fault decoder + Mach writeback + endianness contract for the JIT path (S2-validated; S2's decoder gotchas are the unit-test checklist); software range-check in interpreter accessors (profile-gated, interpreter-mode bench proof); explicit `bus_read/write` host-accessor entry points; region kinds (trapped/aperture) in the API; **JIT backpatch for hot sites (in scope — S2 measured ~8.5 µs/fault, ~10⁴× a mapped access)**; per-region fault-rate logging + idle-detection hook; §2g locking rules implemented. Devices per S3: **SCC 8530** (legacy +2/+6 layout, WR-pointer state machine, RR0/RR1 bits) **+ VIA 6522 timer/IFR surface** (the serial monitor's T2-timeout escape is plausibly the real un-stick; Cuda = loud stub) **+ a minimal DEC tick** (pulled forward from M2: `check_work`'s timeout loop needs it — full clock/scheduler stays M2). Consumers: (a) 9.2.1-on-1.1-ROM boot exits the serial-monitor stall — **a bus/device testbed only, NOT a route to 9.2** (S1: the 1.1 ROM structurally lacks the parcels/CFM fragments 9.2 audits) — run as a **named third config** (`paravirtual` + bus + devices − serial-skips), `SS_COMPAT_92X`'s SCC-neutralizing patches retired, DoD asserts **observed device register traffic** (no false pass); (b) nanokernel `check_work` polls a real SCC **at an unmapped F3 address** (not a RAM pointer) without a fault storm (backpatch + idle-detection proven). Device unit tests + QEMU conformance (§5). | **L** |
+| **M2** | **Virtual clock** | Guest-visible TB/DEC honoring `mtspr`/`mfspr` (the `SS_SYNTH_DEC` hack and M1's minimal DEC tick retired/absorbed); host event scheduler for device timers; DEC-expiry raises the CPU decrementer exception *condition* (delivery lands in M3). | M |
 | **M3** | **Interrupt & exception architecture + PIC + VIA/Cuda** ← *the big rock* | §2d in full: MSR(EE)/SRR0-1/`rfi` model; vector-base experiment decided (direct-entry vs single mapping); OpenPIC model routing device inputs; VIA/Cuda (timers via M2 scheduler, ADB, RTC); the `[NW-INT]` host-injection hack and nested-execute interrupt path **deleted on the fidelity profile**; nanokernel idle loop wakes via real delivery on the 9.0.1 diagnostic boot; `SDL_PumpEvents` relocated. | **XL** |
 | **M4** | **NVRAM + MacIO container + DBDMA stubs** | Full partitioned 8 KB NVRAM behind the bus at the KeyLargo-correct address; MacIO container address map live; **DBDMA channel stubs that abort loudly** (NewWorld serial/audio drivers probe DBDMA — rev-2 addition; real channel engine only when a milestone demands it). | S–M |
 | **M5** | **Supervisor environment + boot framebuffer** | Rung 2 SR/BAT stored state; synthesized Trampoline handoff replaces `SS_NW_TRAMPOLINE` ad-hoc writes, publishing the M0 device tree — **including a boot-framebuffer aperture** *(rev 3)*: the ROM draws happy-Mac/splash to the OF display node's `address` long before any `.ndrv` loads, so M5 publishes a mapped-aperture bus region backed by real memory and blitted to SDL (also the first live test of the aperture region kind before Metal). Without it, M7 debugs a black screen. | M |
 | **M6** | **PPC→68k handoff + shim triage** *(inherited Path A walls — HANDOFF §2.8 Phases 1–2, previously hidden inside "integration")* | DR Emulator cold-start ECB/dispatch-table completion (currently crashes at `rfi` to garbage SRR0); `patch_68k` shim triage for the 9.0.1 ROM (28 in-range / 31 relocated-unverified / 25 absent — incremental, boot-path-first per the obstacle map). | **L (1–2+ wks, incremental)** |
-| **M7** | **Mac OS 9.2.2 boots on the fidelity profile** | End-to-end: 9.0.1 ROM (gate compatibility answered up-front by spike S1, not discovered here), boot to Finder, E2E lifecycle PASS on the `newworld` profile. Fallback ladder *(rev 3)*: newer family ROM (9.6.1/9.8.1) → 4-byte gate bypass. | L (integration) |
+| **M7** | **Mac OS 9.2.2 boots on the fidelity profile** | End-to-end: **native 9.0.1 ROM — gate compatibility PROVEN by spike S1** (unpatched 9.2.1 boots to Finder under QEMU mac99 with this ROM; the gate-2 CFM-fragment audit is satisfied by the ROM's own parcels). Boot to Finder, E2E lifecycle PASS on the `newworld` profile. 4-byte bypass retained only for the residual $76-on-HD-copy case (QEMU couldn't exercise it). | L (integration) |
 | **M8+** | **Platform features** (separate designs when reached) | PMU power management (builds on the M1 idle-detection hook); Metal-mapped video via the `.ndrv` seam + mapped-aperture bus regions; fidelity profile becomes default once it dominates paravirtual on the E2E + bench matrix. | — |
 
 **Sequencing notes:**
@@ -530,3 +553,23 @@ of three documented paths."
 
 **Re-scoring triggers:** after spikes S1–S3 (adjust M1 scope + M7 path), after the M3
 vector-base experiment (adjust the capability estimate), and at any stop-rule invocation.
+
+### Re-score #1 — post-spikes (2026-06-10, same day; all three spikes complete)
+
+| Bet | Was | Now | Why |
+|---|---|---|---|
+| Platform | ~90% | **~92%** | S2 removed the keystone unknown (fault-decode works end-to-end incl. MAP_JIT, zero platform friction); the bus's hardest mechanism is now demonstrated code, not a design. |
+| Capability (M7) | ~60–65% | **~70–75%** | S1 removed the gate unknown *in the favorable direction* — unpatched 9.2.1 boots to Finder on the 9.0.1 ROM under QEMU, so M7 needs no System-file patching and no ROM-swap rung. The remaining drag is unchanged: M3 (exception architecture) and M6 (DR Emulator handoff + shims) — neither was touched by the spikes. |
+| Vision | unscoreable | unscoreable | Unchanged; still downstream. |
+
+Qualitative shifts:
+- **The plan's epistemics validated on day one:** all three spikes changed the plan (S1
+  re-framed M1 consumer (a) and settled M7; S2 quantified the fault cost and resolved the
+  MAP_JIT unknown; S3 corrected the device identities a *third* time and pulled a DEC tick
+  into M1). The "beliefs must become experiments" discipline is paying measurably.
+- **Path B's post-mortem is now mechanistic:** the gate-2 probe audits CFM boot fragments
+  that only parcels ROMs provide — identity patches never had a chance. The pivot was
+  correct for reasons deeper than we knew when we made it.
+- **New honest negative:** the 9.2-on-1.1 demo (M1 consumer (a)) is a testbed, not a
+  product milestone — the visible "9.2 splash on the old ROM" win will not become a boot.
+  The real 9.2 path runs entirely through the fidelity profile + 9.0.1 ROM (M3→M6).

@@ -156,32 +156,34 @@ the `btst #2,$0B20` check at 0x03CA fires on CD/ISO boot but not HD boot.
 - Stalls at identical HOT-PC (0x50484038) with identical rate (~2.6M blocks/s)
 - **Conclusion: stall is ROM-vintage-structural, NOT disk-related**
 
-### 2.7 Post-splash stall identified: SCC serial polling
+### 2.7 Post-splash stall: A-line vector corruption (resolved)
 
-SS_PROBE_PC at the HOT-PC revealed the root cause. The 68k PC stabilizes at **0x500cc998**
-(ROM offset 0xcc998) — serial initialization code polling the SCC (Zilog 8530):
+The observable symptom was SCC serial polling at `0x500cc998`, but deeper investigation
+(2026-06-10) identified the real root cause: **guest `$28` (A-line exception vector)
+corruption**.
 
-| Register | Value | Meaning |
-|----------|-------|---------|
-| r24 | 0x500cc998 | 68k PC (ROM serial init) |
-| r18 | 0xF3016000 | SCC channel A hardware |
-| r19 | 0xF3012000 | SCC channel B hardware |
+The Memory Manager's heap block-split routine writes through a corrupt free-list
+backward-link (`0x1F`), clobbering the LSB of the longword at `$28` — changing the A-line
+vector from `0x50015570` (valid Trap Dispatcher) to `0x50015500` (Name Registry data).
+All subsequent A-line traps dispatch to non-code, triggering illegal-instruction exceptions
+that land in the ROM serial debug monitor, which polls SCC forever.
 
-The code tests SCC status bits (`btst.b #$0, $2(a3)`) and loops until a condition is met.
-SheepShaver's serial emulation doesn't return the status values this polling path expects.
-The v1.1 ROM's serial init is adequate for 9.0.4 but 9.2.1 hits a deeper polling path.
+**Confirmed NOT a JIT bug** — interpreter mode reproduces identical corruption. The 1.1 ROM's
+heap/low-memory initialization is structurally incompatible with 9.2.1's Memory Manager.
 
 Full analysis in `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` §5.
 
-### 2.8 Next steps
+### 2.8 Conclusion: 1.1 ROM cannot boot 9.2.1
 
-The SCC stall is the new frontier:
-1. **Fix the SCC stall** — examine SheepShaver's `serial.cpp` / SCC emulation, determine
-   what status bits the polling code expects, and either improve the emulation or patch the
-   ROM polling loop
-2. **Bracket with Mac OS 9.1** — user is sourcing a 9.1 disc; 9.1 may not hit this init path
-3. **Implement `SS_COMPAT_92X` auto-patch** — automate the gate bypasses as a boot-time flag
-4. **Try the 9.0.1 ROM** — may satisfy 9.2.1's SCC init expectations natively
+The Upgrade Card path is **closed as a dead end**. Two independent structural barriers:
+1. **CFM boot fragment audit** (Gate 2, Spike S1) — 9.2.1 requires named boot fragments
+   that the 1.1 ROM's parcels don't provide. The 9.0.1 ROM provides them natively.
+2. **Memory Manager heap incompatibility** (§2.7) — the 1.1 ROM's heap setup produces a
+   corrupt free-list when 9.2.1's Memory Manager runs, clobbering the A-line vector.
+
+Both are ROM-vintage problems, not emulation bugs. Identity patches and gate bypasses
+cannot address them. The successor approach is the **Machine Layer** architecture
+(`MACHINE-LAYER-PLAN.md`) — dual machine profiles with proper device models.
 
 ---
 

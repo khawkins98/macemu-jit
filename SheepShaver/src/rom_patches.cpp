@@ -609,6 +609,7 @@ bool PatchROM(void)
 	// rom_detect_type() returns -1 (unrecognized) or 0..5 matching the
 	// ROMTYPE_* enum ordering in rom_patches.h.
 	ROMType = rom_detect_type(ROMBaseHost);
+	fprintf(stderr, "[ROMPATCH] ROM type detected: %d (%s)\n", ROMType, rom_type_name(ROMType));
 	if (ROMType < 0)
 		return false;
 
@@ -1598,6 +1599,8 @@ static bool patch_nanokernel(void)
 	lp[2] = htonl(POWERPC_NOP);
 	} else fprintf(stderr, "[ROMPATCH] SKIP virt2phys (absent in parcels)\n");
 
+	// ppc_excp_tbl: sets XLM_RUN_MODE=MODE_NATIVE when entering PPC exception table.
+	// Absent in 9.0.1+ ROMs — MODE_NATIVE is permanently dead for NewWorld.
 	static const uint8 ppc_excp_tbl_dat[] = {0x39, 0x01, 0x04, 0x20, 0x7d, 0x13, 0x43, 0xa6};
 	base = find_rom_data(0x313000, 0x314000, ppc_excp_tbl_dat, sizeof(ppc_excp_tbl_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
@@ -1663,6 +1666,8 @@ static bool patch_nanokernel(void)
 	*lp = htonl(0x48000000 | (ntohl(*lp) & 0xffff));	// bl	0x00312ddc
 	} else fprintf(stderr, "[ROMPATCH] SKIP restore_fpu_caller (absent in parcels)\n");
 
+	// m68k_excp_tbl: sets XLM_RUN_MODE=MODE_68K when entering 68k exception table.
+	// Absent in 9.0.1+ ROMs — paired with ppc_excp_tbl (both dead for NewWorld).
 	static const uint8 m68k_excp_tbl_dat[] = {0x81, 0x21, 0x06, 0x58, 0x39, 0x01, 0x03, 0x60, 0x7d, 0x13, 0x43, 0xa6};
 	base = find_rom_data(0x310000, 0x314000, m68k_excp_tbl_dat, sizeof(m68k_excp_tbl_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
@@ -1838,14 +1843,23 @@ static bool patch_68k(void)
 		D(bug("universal_info %08lx\n", base));
 		lp = (uint32 *)(ROMBaseHost + base - 0x14);
 		lp[0x00 >> 2] = htonl(ADDR_MAP_PATCH_SPACE - (base - 0x14));
-		lp[0x10 >> 2] = htonl(0xcc003d11);		// Make it like the PowerMac 9500 UniversalInfo
+		{
+			const char *nw = getenv("SS_NW_MODEL");
+			if (nw && *nw && *nw != '0') {
+				lp[0x10 >> 2] = htonl(0xcc009611);	// BoxFlag byte = 0x96 → $0CB2:$0CB3 = 0x0196 = 406
+				lp[0x60 >> 2] = htonl(0x00000196);	// gestaltMachineType = 406
+				fprintf(stderr, "[NW-MODEL] UniversalInfo BoxFlag=0x96 + gestaltMachineType=406\n");
+			} else {
+				lp[0x10 >> 2] = htonl(0xcc003d11);	// PowerMac 9500 UniversalInfo
+				lp[0x60 >> 2] = htonl(0x0000003d);
+			}
+		}
 		lp[0x14 >> 2] = htonl(0x3fff0401);
 		lp[0x18 >> 2] = htonl(0x0300001c);
 		lp[0x1c >> 2] = htonl(0x000108c4);
 		lp[0x24 >> 2] = htonl(0xc301bf26);
 		lp[0x28 >> 2] = htonl(0x00000861);
 		lp[0x58 >> 2] = htonl(0x30200000);
-		lp[0x60 >> 2] = htonl(0x0000003d);
 		} else fprintf(stderr, "[ROMPATCH] SKIP universal_info (absent in parcels)\n");
 	} else if (ROMType == ROMTYPE_ZANZIBAR) {
 		base = 0x12b70;
@@ -1870,6 +1884,9 @@ static bool patch_68k(void)
 		lp[0x24 >> 2] = htonl(0xc301bf26);
 		lp[0x28 >> 2] = htonl(0x00000861);
 		lp[0x58 >> 2] = htonl(0x30410000);
+		// SS_NW_MODEL: present gestaltMachineType 406 (0x196) — the universal NewWorld
+		// machine type — so Mac OS 9.2's startup disk check accepts this ROM.
+		// Default: 0x3d (PowerMac 9500 era). 406 = all NewWorld Macs (B&W G3+).
 		lp[0x60 >> 2] = htonl(0x0000003d);
 	}
 
@@ -2116,6 +2133,13 @@ static bool patch_68k(void)
 	*wp++ = htons(M68K_EMUL_OP_RESET);
 	*wp = htons(M68K_RTS);
 	} else fprintf(stderr, "[ROMPATCH] SKIP scc_init (absent in parcels)\n");
+
+	// SS_COMPAT_92X: SCC serial monitor patches — REMOVED (non-working).
+	// Five patches tried (bset NOP, read bypass, write bypass, table init skip, tst NOP)
+	// all treated symptoms of the serial debug monitor stall, not the root cause.
+	// The serial monitor is a ROM debugger entered via an exception/trap path;
+	// the fix must address WHY 9.2.1 enters it (8.6 never does). See
+	// docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md §5.
 
 	// Don't EnableExtCache (via 0x1f6) and don't DisableIntSources(via 0x1fc)
 	static const uint8 ext_cache_dat[] = {0x4e, 0x7b, 0x00, 0x02};

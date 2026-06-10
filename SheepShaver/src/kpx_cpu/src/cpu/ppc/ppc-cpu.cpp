@@ -687,6 +687,50 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 		}
 	}
 
+	/* SS_JIT_RING_68K_MONITOR: detect changes to guest $28 (A-line vector)
+	 * and trigger ring dump when corruption is detected.
+	 * Fires once, dumps ring + exits — use with SS_JIT_TRACE_RING=1.
+	 *
+	 * History: built to diagnose the 9.2.1-on-1.1-ROM post-splash stall.
+	 * Root cause (2026-06-10): 9.2.1's Memory Manager heap block-split
+	 * routine writes through a corrupt free-list backward-link (0x1F),
+	 * clobbering $28's LSB (0x50015570 -> 0x50015500). All A-line traps
+	 * then dispatch to Name Registry ASCII data -> illegal insn -> ROM
+	 * serial debug monitor -> SCC poll forever. Confirmed NOT a JIT bug
+	 * (interpreter reproduces). Guest/ROM-vintage mismatch only — does not
+	 * occur on 8.6, and won't occur on 9.0.1 ROM (Machine Layer path).
+	 * See SYSTEM-BOOT-GATES.md §5 for full write-up. */
+	{
+		static int mon_state = -1;
+		static uint32 last_28 = 0;
+		if (mon_state < 0) {
+			const char *e = getenv("SS_JIT_RING_68K_MONITOR");
+			mon_state = (e && *e == '1') ? 1 : 0;
+		}
+		if (mon_state >= 1) {
+			uint32 cur_28 = vm_read_memory_4(0x28);
+			if (cur_28 != last_28) {
+				fprintf(stderr, "[$28-CHG] %08x -> %08x  from_pc=%08x r24=%08x r1=%08x\n",
+				        last_28, cur_28, from_pc, rec->r24, rec->r1);
+				if (last_28 == 0x50015570 && cur_28 != 0x50015570
+			    && vm_read_memory_4(0x1DAC) != 0xFFFFFFFF) {
+					fprintf(stderr, "[$28-CHG] CORRUPTION DETECTED — dumping ring\n");
+					fprintf(stderr, "  ALL GPRs:");
+					for (int gi = 0; gi < 32; gi++)
+						fprintf(stderr, " r%d=%08x", gi, r->gpr[gi]);
+					fprintf(stderr, "\n");
+					fprintf(stderr, "  MEM[$28]=%08x  [$1DAC]=%08x [$0E00]=%08x\n",
+					        cur_28, vm_read_memory_4(0x1DAC), vm_read_memory_4(0x0E00));
+					ppc_jit_dump_trace_ring();
+					fprintf(stderr, "[$28-CHG] dump complete — exiting\n");
+					fflush(stderr);
+					kill(getpid(), SIGTERM);
+				}
+				last_28 = cur_28;
+			}
+		}
+	}
+
 	/* SS_JIT_RING_DUMP_AT_PC=<hex>: dump the ring shortly after the first
 	 * block with from_pc == <hex> is recorded.  A countdown of 200 records
 	 * after the trigger ensures the ring contains both the anchor block and

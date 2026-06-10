@@ -210,10 +210,10 @@ Disk offset 0x18F39748 + 0x70A4 = 0x18FA07EC:  A9 C9 → 4E 71
 Result: Mac OS 9.2 splash screen appears (Happy Mac + "Mac OS 9.2 / Welcome to Mac OS").
 Boot then stalls at a deeper ROM/System initialization mismatch (see §5).
 
-## 5. Post-gate stall — SCC serial polling (identified)
+## 5. Post-gate stall — root cause: A-line vector corruption (resolved)
 
 After bypassing both gates, boot reaches the Mac OS 9.2 splash screen but stalls.
-SS_PROBE_PC analysis identified the cause: ROM serial initialization code polling SCC hardware.
+The observable symptom is a tight SCC polling loop, but the actual root cause is deeper.
 
 ### Symptoms
 
@@ -222,38 +222,56 @@ SS_PROBE_PC analysis identified the cause: ROM serial initialization code pollin
 - Same stall pattern with ALL A9C9 NOP'd — not another _SysError gate
 - Identical stall on both HD and ISO boot — ROM-structural, not disk-related
 
-### Root cause
+### Root cause: A-line vector ($28) corruption
 
-The 68k PC stabilizes at **0x500cc998** (ROM offset 0xcc998) — serial init code polling
-the SCC (Zilog 8530 Serial Communications Controller):
+**The 68k A-line exception vector at guest `$28` is corrupted** from `0x50015570` (valid
+Trap Dispatcher) to `0x50015500` (ROM Name Registry ASCII data). This causes ALL subsequent
+A-line traps to dispatch to non-code, triggering illegal-instruction exceptions that land
+in the ROM's serial debug monitor (STM 2.2/CTE 2.1), which polls SCC hardware forever.
+
+**Corruption mechanism** (traced via `$28-CHG` change-detector):
+
+The ROM Memory Manager's free-list block-split routine at `0x50042dd0` calls a doubly-linked
+list insert at `0x50041b50`. The node at guest `0xb78` has a backward-link (`$1C` offset) of
+`0x1F`. When the insert routine executes:
 
 ```
-0x500cc998: btst.b  #$11,d7          ; test SCC status bit
-0x500cc99c: btst.b  #$0,$2(a3)       ; read SCC status register directly
-0x500cc9c0: jmp     (a6)             ; dispatch back to loop
+0x50041b64  move.l     a3, $1c(a4)    ; a4=$be8, writes to $c04
+0x50041b68  move.l     a4, $c(a3)     ; a3=$1f, writes 4 bytes at $2b ← CLOBBERS $28 LSB
 ```
 
-Key register state at stall *(labels CORRECTED by Spike S3, 2026-06-10 —
-`docs/planning/spikes/SPIKE-S3-STALL-DEVICE-PROBE.md`)*:
-- r18 = 0xF3016000 — **VIA 6522 base** (NOT SCC ch A; IFR/T2 at 0x200-stride offsets)
-- r19 = 0xF3012000 — **SCC base** (ch A control at +2, data at +6)
-- r24 = 0x500cc998 — 68k PC (ROM **factory serial test monitor**, "STM 2.2/CTE 2.1")
+The `move.l a4, $c(a3)` with `a3=0x1F` writes the longword `0x00000be8` at address `0x2b`.
+On 68k, this overwrites bytes `$2b-$2e`. Since `$28-$2b` holds the A-line vector, the LSB
+of `$28` changes from `0x70` to `0x00` — turning `0x50015570` into `0x50015500`.
 
-Per S3: the loop polls SCC RR0 bit 0 ("Rx char available") at 0xF3012002, and the monitor's
-designed escape is a **VIA T2 timeout** + Cuda handshake — the VIA timer is plausibly the
-actual un-stick mechanism, since an honest "no Rx char" SCC never terminates the blocking
-read. Note also (Spike S1): even past this stall, 9.2-on-1.1 is structurally capped by the
-missing CFM boot fragments (§ Gate 2 above) — this path is a device-model testbed, not a
-route to a 9.2 boot.
+**The corrupt pointer `0x1F` originates from the guest.** The Memory Manager heap state
+set up by the 1.1 ROM does not match what 9.2.1's heap code expects, resulting in an
+uninitialized or misinterpreted backward-link field.
 
-### Options
+### Discriminator: NOT a JIT bug
 
-1. **Improve SCC emulation** in `serial.cpp` — make the SCC status register return
-   appropriate values during serial init polling
-2. **Patch ROM serial init** at 0x500cc998 — NOP the polling loop or force the branch
-3. **Intercept SCC I/O** in the memory map to return "ready" status
+**Confirmed by interpreter-mode reproduction.** Running with `SS_USE_JIT=0` produces the
+identical corruption: `$28` transitions `0x50015570 → 0x50015500` via the same Memory
+Manager code path. The JIT is not involved.
 
-This stall is the current frontier for the Upgrade Card (Path B) approach.
+This is a **guest/ROM mismatch** — the 1.1 ROM's low-memory and heap initialization is
+structurally incompatible with 9.2.1's Memory Manager expectations. Combined with Spike S1's
+finding that the 1.1 ROM lacks the CFM boot fragments 9.2.1 requires, this confirms the
+1.1 ROM **cannot boot 9.2.1** regardless of gate bypasses.
+
+### Observable stall (downstream of corruption)
+
+After `$28` corruption, the DR emulator dispatches A-line traps to `0x50015500` (Name
+Registry ASCII data). The 68k interpreter executes these bytes as instructions, hits an
+illegal instruction, and the exception handler enters the ROM's serial test monitor at
+`0x500cc998`, which polls SCC RR0 bit 0 ("Rx char available") at `0xF3012002` indefinitely.
+
+### Resolution
+
+This stall is **closed as a dead end** for the Upgrade Card path. The 1.1 ROM cannot
+satisfy 9.2.1's boot requirements — both the CFM fragment audit (Gate 2 probe) and the
+Memory Manager heap layout are structurally incompatible. See `MACHINE-LAYER-PLAN.md` for
+the successor approach (dual machine profiles with a Core99 fidelity target).
 
 ## 6. Applicability to other Mac OS versions
 

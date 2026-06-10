@@ -119,7 +119,7 @@ Post-M1 diagnostic spike (2026-06-10):
 
 - **Gates:** machine suite 8/8 binaries (192+ checks) ALL PASS; `make test-jit` 350/350
   batch+legacy score=100 throughout; `make test-opcodes` inert (interpreter determinism
-  unchanged); rom-harness builds clean; `make e2e-test` 122/122; positive seam check
+  unchanged); rom-harness builds clean; `make e2e-test` 122/122; paravirtual `make e2e` lifecycle PASS (boot to Finder, clean shutdown — final binary); positive seam check
   (`mfspr r3,DEC` force-on returned nonzero through the real interpreter seam).
 
 ### [SheepShaver] Machine Layer M1: MMIO bus + SCC 8530 + VIA timer/IFR surface + JIT backpatch

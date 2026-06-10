@@ -26,6 +26,7 @@
 #include "emul_op.h"
 #include "rom_patches.h"
 #include "macos_util.h"
+#include "machine_profile.h"
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -1292,7 +1293,7 @@ void init_emul_ppc(void)
 	// (ROM 0x312700, boot block 12) reads a garbage lock word and deadlocks. Seed SPRG0 with the
 	// KernelData base as a first probe; watch the next read via SS_LOG_FIRST_BLOCKS. 1.1 sets its own
 	// SPRG0 in Init, so this initial value is harmless there. See NEW-WORLD-ROM-SUPPORT-PLAN.md.
-	if (getenv("SS_NW_TRAMPOLINE")) {
+	if (MachineProfileIsNewWorld()) {
 		/* P1: SPRG0 = per-CPU block base.
 		 * P2: the nanokernel indexes KDP at NEGATIVE offsets (lock word at [KDP-0xb50]).
 		 * P3 (new): the nanokernel's pool/heap allocator initializes a free-list at KDP-0x7000
@@ -1507,7 +1508,7 @@ void init_emul_ppc(void)
 		// Skips the nanokernel and enters DR Emulator directly. Dead end
 		// at Mixed-Mode (0xFFC0 F-line needs nanokernel). Kept for
 		// diagnostics. ROM patch at 0x310000 is Path-B-only.
-		if (getenv("SS_NW_SYNTH_ENTRY")) {
+		if (MachineEnvFlag("SS_NW_SYNTH_ENTRY")) {
 			fprintf(stderr, "[NW-SYNTH] KDP=%08x ECB=%08x 68k-reset=%08x\n",
 			        kdp, ecb, reset_68k);
 			fprintf(stderr, "[NW-SYNTH] guest[0]=%08x guest[4]=%08x "

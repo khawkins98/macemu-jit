@@ -25,6 +25,7 @@
 #include "main.h"
 #include "macos_util.h"
 #include "user_strings.h"
+#include "machine_profile.h"
 #include "emul_op.h"
 #include "thunks.h"
 
@@ -105,8 +106,8 @@ void DoPatchNameRegistry(void)
 		// real New World ROM environment (Path A: re-RE patch_nanokernel_boot for the parcels layout).
 		// Kept default-off as groundwork: the `compatible` injection is still needed alongside Path A,
 		// just not sufficient by itself.
-		const char *nw_model = getenv("SS_NW_MODEL");
-		if (nw_model && *nw_model && *nw_model != '0') {
+		if (MachineEnvFlag("SS_NW_MODEL")) {
+			const char *nw_model = getenv("SS_NW_MODEL");  // safe: MachineEnvFlag guarantees non-null/non-empty/non-"0"
 			const char *model = (nw_model[0] == '1' && nw_model[1] == '\0') ? "PowerMac3,1" : nw_model;
 			RegistryPropertyCreateStr(device_tree.addr(), "model", model);
 			// `compatible`: NUL-separated list a G4 (PowerMac3,1) reports.

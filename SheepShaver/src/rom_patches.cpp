@@ -30,6 +30,7 @@
 #include "rom_patches.h"
 #include "main.h"
 #include "prefs.h"
+#include "machine_profile.h"
 #include "cpu_emulation.h"
 #include "emul_op.h"
 #include "xlowmem.h"
@@ -677,7 +678,7 @@ bool PatchROM(void)
 	// dead end at the first Mixed-Mode transition (0xFFC0 F-line requires
 	// nanokernel). Kept as a diagnostic/research tool; Path A (jump68k
 	// redirect via the nanokernel) is the forward path.
-	if (getenv("SS_NW_SYNTH_ENTRY") && getenv("SS_NW_TRAMPOLINE")) {
+	if (MachineEnvFlag("SS_NW_SYNTH_ENTRY") && MachineProfileIsNewWorld()) {
 		uint32 *lp = (uint32 *)(ROMBaseHost + 0x310000);
 		lp[0] = htonl(0x7C3042A6);  // mfspr r1, SPRG0       (r1 = KDP)
 		lp[1] = htonl(0x3BE11000);  // addi r31, r1, 0x1000  (r31 = ECB)
@@ -710,7 +711,7 @@ bool PatchROM(void)
 	// Diagnostic mode: always cold-starts (re-inits handler table every
 	// context-switch).  Production ongoing-entry support is TODO.
 	static auto PatchROM_NW_trampoline = []() {
-		if (!getenv("SS_NW_TRAMPOLINE"))
+		if (!MachineProfileIsNewWorld())
 			return;
 
 		uint32 *tbl0 = (uint32 *)(ROMBaseHost + 0x46e8c0);
@@ -810,7 +811,7 @@ static bool patch_nanokernel_boot(void)
 	*lp = htonl(0x48000000 | ((base - loc - 8) & 0x3fffffc));	// b		ROMBase+0x3101b0
 	lp = (uint32 *)(ROMBaseHost + base);
 	*lp++ = htonl(0x80200000 + XLM_KERNEL_DATA);		// lwz	r1,(pointer to Kernel Data)
-	if (getenv("SS_NW_TRAMPOLINE")) {
+	if (MachineProfileIsNewWorld()) {
 		// NW parcels: seed r13/r14/r15 with REAL kernel memory layout so Init.s computes
 		// valid KernelMemoryBase/End. Without this, r13=0xDEAD0000 propagates to KDP+0x638
 		// and the free-list priming loop walks garbage addresses forever.
@@ -1113,7 +1114,7 @@ static bool patch_nanokernel_boot(void)
 	// page-init. PPC stub at ROM+0x30d600 writes minimal valid data and calls through.
 	// Hypothesis test: if boot advances past CreateAreasFromPageMap, the SegMap data
 	// theory is confirmed and a full implementation (IRP/KDP/EDP/ROM entries) follows.
-	if (g_rom_904_lenient && getenv("SS_NW_TRAMPOLINE")) {
+	if (g_rom_904_lenient && MachineProfileIsNewWorld()) {
 		const uint32 stub_rom_offset = 0x30d600;
 		uint32 *stub = (uint32 *)(ROMBaseHost + stub_rom_offset);
 		int n = 0;

@@ -988,7 +988,7 @@ static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
 	// Kernel Data (alternate)
 	if (addr >= KERNEL_DATA2_BASE && end <= KERNEL_DATA2_BASE + KERNEL_AREA_SIZE) return true;
 	// New World Trampoline regions
-	if (getenv("SS_NW_TRAMPOLINE")) {
+	if (MachineProfileIsNewWorld()) {
 		const uint32_t kdp = KernelDataAddr;
 		const uint32_t sub_kdp_size = 0x8000;
 		const uint32_t shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64

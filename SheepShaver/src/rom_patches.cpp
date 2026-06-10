@@ -2111,6 +2111,7 @@ static bool patch_68k(void)
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static const uint8 run_diags_dat[] = {0x60, 0xff, 0x00, 0x0c};
 		base = find_rom_data(0x110, 0x128, run_diags_dat, sizeof(run_diags_dat));
+		bool run_diags_parcels_alt = false;
 		if (base == 0 && g_rom_904_lenient) {
 			// Parcels 9.0.x: BRA.L displacement differs (0x000A8C88 vs 0x000CA46E),
 			// but the moveq/move.l pair 8 bytes after the BRA.L is the same as OldWorld.
@@ -2118,6 +2119,7 @@ static bool patch_68k(void)
 			base = find_rom_data(0xd0, 0xf0, run_diags_alt, sizeof(run_diags_alt));
 			if (base) {
 				base -= 8; // BRA.L is 8 bytes before the moveq pattern (movea.l between)
+				run_diags_parcels_alt = true;
 				fprintf(stderr, "[ROMPATCH] parcels: run_diags via OldWorld-style pattern, BRA.L at %08lx\n", (unsigned long)base);
 			}
 		}
@@ -2128,6 +2130,22 @@ static bool patch_68k(void)
 		*wp++ = htons(0x4df9);			// lea	xxx,a6
 		*wp++ = htons((RAMBase + RAMSize - 0x1c) >> 16);
 		*wp = htons((RAMBase + RAMSize - 0x1c) & 0xffff);
+		// [M6a Wave-2 #3] Parcels boot-code layout (M6A-WAVE2-SHIM-RECON.md queue row 3,
+		// confirmed by static RE of /tmp/rom901.bin @0xd2-0x104): the BRA.L we just replaced
+		// is followed at base+6 by `movea.l (a7),a6` (0x2C57) — RunDiags' contract there is
+		// "BootGlobs at (a7)", so with RunDiags skipped it reloads a6 from zeroed low RAM
+		// ([0x2600] = 0), clobbering the lea above. The 0 then flows: pushed at 0xe0,
+		// re-read at 0xfa (`movea.l 0xc(a7),a6`), and the BootGlobs movem at 0xfe
+		// (`movem.l d0-d1/d3-d4,-0x5a(a6)`) wild-writes ea=0xffffffa6 (the post-Hnfo crash,
+		// pc=0x50468910). NOP the clobber so the lea's BootGlobs pointer survives.
+		if (run_diags_parcels_alt) {
+			wp = (uint16 *)(ROMBaseHost + base + 6);
+			if (ntohs(*wp) == 0x2c57) {		// movea.l (a7),a6
+				*wp = htons(M68K_NOP);
+				fprintf(stderr, "[ROMPATCH] parcels: run_diags a6-clobber (movea.l (a7),a6) NOPed at %08lx\n", (unsigned long)(base + 6));
+			} else
+				fprintf(stderr, "[ROMPATCH] WARNING: run_diags alt layout mismatch at %08lx (expected 0x2c57, got %04x) — a6 clobber NOT patched\n", (unsigned long)(base + 6), ntohs(*wp));
+		}
 		} else fprintf(stderr, "[ROMPATCH] SKIP run_diags (absent in 9.0.4; sets 68k stack — boot likely needs this)\n");
 	} else {
 		static const uint8 run_diags_dat[] = {0x74, 0x00, 0x2f, 0x0e};

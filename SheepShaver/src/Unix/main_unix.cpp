@@ -1149,18 +1149,69 @@ static void ss_rpc_init_server(void) {
 
 // --- Machine Layer M1: MMIO bus helpers (MACHINE-LAYER-PLAN.md §2b; CORE99 §4 fence) ---
 
-// MacIO addresses with no device model yet: abort-loudly stubs (CORE99-MACHINE-DESCRIPTION §4 fence).
+// MacIO addresses with no device model yet (CORE99-MACHINE-DESCRIPTION §4 fence).
+//
+// M6a Wave 2 fence-policy change (2026-06-11): M1 shipped these as abort-loudly
+// stubs to prevent silent drift. The fence has now served its purpose — the
+// newworld 68k boot's device-init walk PROVABLY probes unmodeled sub-blocks
+// (first observed: read8 of 0xF3018040, IDE at +0x18000 per the Core99 map) —
+// so per the fence's own evidence-driven rule the minimal honest model is
+// ABSENT-HARDWARE (open-bus) semantics:
+//   reads  -> all-ones for the access width (0xFF/0xFFFF/0xFFFFFFFF — what an
+//             empty IDE/SCSI bus reads back on real hardware);
+//   writes -> ignored;
+//   telemetry -> region stats count every access (unchanged); the FIRST touch
+//             of each 0x1000-aligned sub-block logs one stderr line.
+// SS_MMIO_STRICT=1 (resolved once at bus bring-up) restores the M1 abort-loudly
+// contract as a knob. Decision made by the orchestrator under night
+// authorization; recorded in CORE99-MACHINE-DESCRIPTION §4, pending user
+// ratification. Modeled regions (SCC, VIA) are unaffected.
+//
+// §2g tension (documented, not resolved): these handlers can run on the Mach
+// exception-handler thread, where §2g forbids stdio. The M1 stub already
+// fprintf'd from that context (tolerable because it abort()ed immediately);
+// the first-touch line keeps that existing pattern because it is strictly
+// bounded (<=128 lines per process lifetime, in practice 1-2) — unlike the VIA
+// Cuda warning there is no latch/drain seam here. If this ever deadlocks in
+// practice, convert to the VIA latch pattern (drained in mmio_dump_stats_atexit).
+static bool mmio_strict = false;   // set once in the bring-up block below
+
+static void mmio_stub_first_touch(uint32_t addr, const char *what, unsigned size)
+{
+	// 128 sub-blocks of 0x1000 cover the 0x80000 MacIO container. Guarded by
+	// the macio-stub region lock (device callbacks run under it), so plain
+	// non-atomic words are race-free.
+	static uint32_t touched[4];   // 128-bit once-per-sub-block bitmap
+	uint32_t idx = (addr - 0xF3000000u) >> 12;
+	if (idx >= 128) idx = 127;    // defensive clamp; the bus only routes the container
+	if (touched[idx >> 5] & (1u << (idx & 31))) return;
+	touched[idx >> 5] |= 1u << (idx & 31);
+	fprintf(stderr, "[MMIO] macio-stub: first touch of unmodeled sub-block 0x%08x "
+	        "(%s%u) - absent-device semantics (SS_MMIO_STRICT=1 restores abort)\n",
+	        0xF3000000u + (idx << 12), what, size * 8);
+}
+
 static uint64_t mmio_stub_read(void *, uint32_t addr, unsigned size)
 {
-	fprintf(stderr, "[MMIO] FATAL: read%u from unmodeled MacIO address 0x%08x "
-	        "(CORE99-MACHINE-DESCRIPTION §4 fence)\n", size * 8, addr);
-	abort();
+	if (mmio_strict) {
+		fprintf(stderr, "[MMIO] FATAL: read%u from unmodeled MacIO address 0x%08x "
+		        "(CORE99-MACHINE-DESCRIPTION §4 fence; SS_MMIO_STRICT=1)\n", size * 8, addr);
+		abort();
+	}
+	mmio_stub_first_touch(addr, "read", size);
+	// Open-bus/absent-device: all-ones for the access width.
+	return (size >= 8) ? ~0ull : ((1ull << (size * 8)) - 1);
 }
 static void mmio_stub_write(void *, uint32_t addr, unsigned size, uint64_t v)
 {
-	fprintf(stderr, "[MMIO] FATAL: write%u of 0x%llx to unmodeled MacIO address 0x%08x\n",
-	        size * 8, (unsigned long long)v, addr);
-	abort();
+	if (mmio_strict) {
+		fprintf(stderr, "[MMIO] FATAL: write%u of 0x%llx to unmodeled MacIO address 0x%08x "
+		        "(CORE99-MACHINE-DESCRIPTION §4 fence; SS_MMIO_STRICT=1)\n",
+		        size * 8, (unsigned long long)v, addr);
+		abort();
+	}
+	mmio_stub_first_touch(addr, "write", size);
+	// Absent device: write ignored (region stats still count it).
 }
 // M2: the single host time authority. GetTicks_usec() is the emulator's existing
 // monotonic source; everything (TB, DEC, VIA ticks, scheduler deadlines) derives
@@ -1720,6 +1771,12 @@ int main(int argc, char **argv)
 	// Machine Layer M1: MMIO bus + device models (MACHINE-LAYER-PLAN.md §2b; CORE99 §1).
 	// Active on the newworld profile or the named third config SS_MMIO_BUS=1.
 	if (MachineUsesMMIOBus()) {
+		// Resolve the strict-fence knob ONCE here (getenv is not safe on the Mach
+		// handler thread where the stub handlers can run; §2g).
+		{
+			const char *strict_env = getenv("SS_MMIO_STRICT");
+			mmio_strict = (strict_env && strcmp(strict_env, "1") == 0);
+		}
 		// Claim the MacIO container so no later mapping can land there. The region
 		// stays PROT_NONE forever: every access must Mach-fault into the bus.
 		void *want = (void *)(uintptr_t)(NATMEM_OFFSET + 0xF3000000ull);
@@ -1752,7 +1809,8 @@ int main(int argc, char **argv)
 		// run under the region lock via MMIOBusWithRegion.
 		VIABindScheduler(&via, g_event_sched, MMIOBusWithRegion);
 		atexit(mmio_dump_stats_atexit);
-		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000, scc 0xF3012000, via 0xF3016000\n");
+		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000 (%s), scc 0xF3012000, via 0xF3016000\n",
+		        mmio_strict ? "strict fence: abort on unmodeled" : "absent-device stub");
 
 		// SS_SCC_RX_INJECT=DELAY_S:HEXBYTES — debug/demo Rx injection into SCC ch A.
 		// Format: unsigned decimal seconds, colon, then hex byte pairs (no separator).

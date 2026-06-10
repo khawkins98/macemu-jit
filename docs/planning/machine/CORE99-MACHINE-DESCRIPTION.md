@@ -146,6 +146,22 @@ Notes for M1 implementers:
   gpr(19); the hacks test gpr 8/16/20 — S3 §1.6) and are retired on the fidelity profile
   (M0 Tasks 3–4).
 
+> **Fence-policy update (2026-06-11, M6a Wave 2 — pending user ratification).** The
+> abort-loudly fence has served its anti-drift purpose: the newworld 68k boot's
+> device-init walk now PROVABLY probes unmodeled MacIO sub-blocks (first hit: `read8`
+> of `0xF3018040` = IDE at +0x18000 per the AddrMap / §5 Q3). Per this fence's own
+> evidence-driven rule, the minimal honest model for proven-probed-but-unmodeled MacIO
+> is **absent-hardware (open-bus) semantics**: reads return all-ones for the access
+> width (0xFF/0xFFFF/0xFFFFFFFF — what an empty IDE/SCSI bus reads back on real
+> hardware), writes are ignored, region stats keep counting every access, and the
+> first touch of each 0x1000-aligned sub-block logs one stderr line
+> (`[MMIO] macio-stub: first touch of unmodeled sub-block …`). Modeled regions (SCC
+> `0xF3012000`, VIA `0xF3016000`) are unchanged. **`SS_MMIO_STRICT=1`** restores the
+> M1 abort-loudly contract as a knob, preserving the original fence for anti-drift
+> audits. Decision made by the orchestrator under night authorization; recorded here
+> for user ratification. Implementation: `main_unix.cpp` `mmio_stub_read/write` +
+> `mmio_stub_first_touch`.
+
 ## 5. Open questions
 
 One line each, with the experiment that settles it:

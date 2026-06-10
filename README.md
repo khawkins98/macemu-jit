@@ -39,7 +39,7 @@ I appreciate that plenty of people won't think much of that, and will consider t
 This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit), adding an AArch64 JIT backend that translates PowerPC instructions to native ARM64 at runtime. **SheepShaver** boots Mac OS 8.x–9.x to the Finder desktop with the full native JIT on M-series Macs.
 
 > **Scope:** SheepShaver (PowerPC) is the working macOS emulator. **BasiliskII** (68K) does *not* currently build on macOS arm64 — see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`. A native macOS launcher, **Silicon Sheep** (Tauri), is in development — see [`SiliconSheep/`](SiliconSheep/).
-> **External targets under investigation:** We are also tracking [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac), [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc), and [twvd/snow](https://github.com/twvd/snow) as emulators we target for comparative research. We have not integrated work from these projects yet, but they use similar GPL-family licenses and may contain ideas we can incorporate after targeted evaluation.
+> **Related projects:** [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc) (full PPC Mac emulator), [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac) (browser-based Mac emulation), and [twvd/snow](https://github.com/twvd/snow) (Rust classic-Mac emulator) are tracked as comparative references. Initial evaluations are in `docs/planning/` (dormant — useful reference, not driving active work).
 
 ### Project direction
 
@@ -61,8 +61,10 @@ the previous: **get it running → make it drivable/testable → make it measura
    correctness first, measured continuously against stage 3. **First win: preliminary AltiVec (Velocity
    Engine) support** — the JIT translates PowerPC AltiVec → ARM64 NEON, and with the opt-in `altivec`
    pref a real app (AltiVec Fractal Carbon) now detects and runs its vector kernel through the JIT (see
-   below). Next: broader OS/software reach (New World ROM → Mac OS 9.1/9.2, fuller device/OS modeling).
-   [DingusPPC](https://github.com/dingusdev/dingusppc) is our reference for fuller PPC-Mac-stack modeling.
+   below). **Active: the Machine Layer** — a proper hardware emulation layer (MMIO bus, SCC 8530 serial,
+   VIA 6522 timer, AArch64 fault-based MMIO dispatch) enabling the 9.0.1 NewWorld ROM to boot natively.
+   M0 (machine profiles) and M1 (device models) are complete; the nanokernel boots into its MMU init
+   phase. See [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md).
 5. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, a vector register
    allocator, HLE), with the stage-3 benchmarks gating every change against regressions.
 
@@ -74,7 +76,7 @@ usability experience. The full tactical backlog lives in [`docs/planning/ROADMAP
 Install build dependencies via Homebrew:
 
 ```bash
-brew install autoconf automake sdl2 vde
+brew install autoconf automake sdl3 vde
 ```
 
 You also need:
@@ -150,7 +152,7 @@ and `VSCR[SAT]` is not modeled. Making it fully safe (model VR context save/rest
 
 ### Known limitations
 
-- Mac OS 9.2.1 "Internal Edition" requires a newer ROM (Mac OS ROM 9.0.1+); ROM 1.1 identifies as an older machine model and will not boot 9.2.1.
+- Mac OS 9.2.x requires a newer ROM (Mac OS ROM 9.0.1) — the 1998 v1.1 ROM is structurally incompatible (missing CFM boot fragments + heap layout mismatch). The **Machine Layer** work targets this with proper device models and the 9.0.1 ROM; see `docs/planning/MACHINE-LAYER-PLAN.md`.
 - Boot from CD ISO is slow (full SCSI scan on each boot); a pre-installed disk image is recommended for day-to-day use.
 
 > The full native JIT now covers the **whole** ROM range including the 68K DR emulator
@@ -174,6 +176,8 @@ if present, is a fuller working index — but it is gitignored, so the canonical
 **Status & history:** [`JIT-STATUS.md`](JIT-STATUS.md) (pass/fail + boot status) · [`CHANGELOG.md`](CHANGELOG.md) (what changed, by date/component) · [`docs/UPSTREAM-LINEAGE-SYNC.md`](docs/UPSTREAM-LINEAGE-SYNC.md) (fork lineage).
 
 **JIT internals:** [`docs/planning/SheepShaver-AARCH64_JIT_PLAN.md`](docs/planning/SheepShaver-AARCH64_JIT_PLAN.md) (PPC→ARM64) · [`BasiliskII/docs/AARCH64_JIT_BRINGUP.md`](BasiliskII/docs/AARCH64_JIT_BRINGUP.md) (68K→ARM64 + bug history) · [`docs/planning/OPTIMIZATION-PLAN.md`](docs/planning/OPTIMIZATION-PLAN.md).
+
+**Machine Layer** *(active — Mac OS 9.x support)*: [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md) — dual machine profiles, MMIO bus, device models (SCC 8530, VIA 6522), enabling the 9.0.1 NewWorld ROM. Supersedes the earlier [NewWorld ROM port](docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md) and [Upgrade Card](docs/planning/UPGRADE-CARD-PATH.md) approaches.
 
 **E2E testing & guest automation:**
 - [`SheepShaver/e2e/README.md`](SheepShaver/e2e/README.md) — the E2E harness: smoke / Speedometer benchmark / real-app workload gates, with the toolkit map.

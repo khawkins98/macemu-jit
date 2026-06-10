@@ -46,16 +46,17 @@
 | `SheepShaver/src/include/dev_via6522.h` / `src/machine/dev_via6522.cpp` / `test_dev_via6522.cpp` | create | VIA timer/IFR surface, Cuda loud-stub decode |
 | `SheepShaver/src/include/a64_mmio_decode.h` / `src/machine/a64_mmio_decode.cpp` / `test_a64_mmio_decode.cpp` | create | Pure AArch64 access decoder (no Mach deps) |
 | `SheepShaver/src/machine/mmio_machfault.cpp` (+ decl in mmio_bus.h) | create | Mach-fault MMIO dispatch: decode→bus→thread-state writeback; site counters; backpatch trigger |
-| `SheepShaver/src/machine/Makefile` | modify | Add the four new standalone tests |
+| `SheepShaver/src/machine/test_mmio_machfault.cpp` | create | Standalone fault-dispatch unit test (rev 2 C2; Task 6 Step 4) |
+| `SheepShaver/src/machine/Makefile` | modify | Add the five new standalone tests (4 device/decoder + test_mmio_machfault) |
 | `SheepShaver/src/include/machine_profile.h` + `src/machine/machine_profile.cpp` + test | modify | Add `MachineUsesMMIOBus()` (newworld ∨ `SS_MMIO_BUS`) |
-| `SheepShaver/src/Unix/Makefile.in` | modify | SRCS += the four new non-test .cpp |
+| `SheepShaver/src/Unix/Makefile.in` | modify | SRCS += the five new non-test .cpp; DEFS += `-DSS_MMIO_BACKPATCH` (rev 2 C4 — emulator build only, not rom-harness) |
 | `SheepShaver/src/Unix/main_unix.cpp` | modify | PROT_NONE reservation, bus init + device registration, stats atexit, SS_JIT_VERIFY incompat, gate widening |
 | `SheepShaver/src/CrossPlatform/sigsegv.cpp` | modify | New `SIGSEGV_RETURN_STATE_MODIFIED` + thread-state accessor |
 | `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` | modify | MMIO dispatch in sigsegv_handler; `[KDP-0x900]`=SCC base on newworld; gate widening |
 | `SheepShaver/src/kpx_cpu/src/cpu/vm.hpp` | modify | Interpreter range check (branch-gated) |
 | `SheepShaver/src/include/cpu_emulation.h` | modify | `Mac2HostAddr` MMIO guard |
 | `SheepShaver/src/kpx_cpu/src/cpu/ppc/ppc-execute.cpp` | modify | DEC synthetic tick default-on for newworld |
-| `SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp` | modify | MMIO thunk emission at init + cache-bounds accessor + patch helper |
+| `SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp` | modify | MMIO thunk emission at init + cache-bounds accessor + patch helper — all under `#ifdef SS_MMIO_BACKPATCH` (rev 2 C4) |
 | `SheepShaver/src/rom_patches.cpp` | modify | `scc_init` retirement on newworld |
 | docs: `MACHINE-LAYER-PLAN.md`, `ROM-PATCH-AUDIT.md`, `CHANGELOG.md`, `CORE99-MACHINE-DESCRIPTION.md` | modify | M1 bookkeeping |
 
@@ -1099,6 +1100,20 @@ bool MMIOMachFaultDispatch(uint32_t guest_addr, void *thread_state64)
 
 Regenerate: `cd SheepShaver/src/Unix && ./config.status Makefile`.
 
+**Add `-DSS_MMIO_BACKPATCH` to the ppc-jit.cpp build (rev 2 finding C4).** Task 9's additions to
+`ppc-jit.cpp` (`#include "a64_mmio_decode.h"`, `MMIOBusRead/Write` calls, `A64*` functions) are gated
+behind `#ifdef SS_MMIO_BACKPATCH` (see Task 9). The emulator build must define it; the rom-harness
+build must NOT (it compiles ppc-jit.cpp standalone). Add `-DSS_MMIO_BACKPATCH` to the emulator build's
+CPPFLAGS for ppc-jit.cpp via `SheepShaver/src/Unix/Makefile.in` — a global `DEFS += -DSS_MMIO_BACKPATCH`
+addition is fine here (it must not reach `SheepShaver/rom-harness/Makefile`). Consequence: in any build
+without the define, the weak symbols `ppc_jit_pc_in_cache` / `ppc_jit_backpatch_mmio` consumed by
+`mmio_machfault.cpp` (Task 6 Step 2) resolve absent, so the fault path stays cold-only — correct.
+
+**Also add the `test_mmio_machfault` recipe to `SheepShaver/src/machine/Makefile`** (Task 6 Step 4's new
+standalone test, per finding C2): a recipe linking `test_mmio_machfault.cpp + mmio_machfault.cpp +
+mmio_bus.cpp + a64_mmio_decode.cpp` (pattern of the other test recipes), add `./test_mmio_machfault` to
+the `test:` target, and add the binary name to `SheepShaver/src/machine/.gitignore`.
+
 - [ ] **Step 3: Bus bring-up in main_unix.cpp**
 
 In `SheepShaver/src/Unix/main_unix.cpp`, after the RAM/ROM mapping block (~line 1502, after ROM is mapped) — guarded so paravirtual default is untouched:
@@ -1192,6 +1207,12 @@ The M0 gates use `!MachineProfileIsNewWorld()`. On `SS_MMIO_BUS=1` (paravirtual 
 
 Do NOT touch the other M0 profile gates (HandleInterrupt, rom_patches sites).
 
+**Note (rev 2 finding C1):** the two `main_unix.cpp` gates (2309/2477) live inside the
+`#if !EMULATED_PPC` sigsegv handler, which is **dead code on macOS arm64** (`EMULATED_PPC = 1`,
+config.h:12). They are runtime no-ops here; update them only for correctness on non-EMULATED_PPC
+Linux builds. The gates that actually take effect on this target are the two `sheepshaver_glue.cpp`
+sites (947/981).
+
 - [ ] **Step 5: Build + paravirtual smoke**
 
 ```bash
@@ -1218,17 +1239,54 @@ This is the S2 spike productionized. **Read `spikes/s2-mach-fault-decode/main.cp
 ```cpp
 	SIGSEGV_RETURN_STATE_MODIFIED,   // handler mutated the thread state in place (Mach only)
 ```
-(b) Thread-state accessor. Near `sigsegv_get_fault_address` in sigsegv.cpp + declared in sigsegv.h:
+(b) Thread-state accessor. Near `sigsegv_get_fault_address` in sigsegv.cpp + declared in sigsegv.h (decl insertion: sigsegv.h:179, after `sigsegv_get_fault_instruction_address`; enum `sigsegv_return_t` is at sigsegv.h:153–157, add `SIGSEGV_RETURN_STATE_MODIFIED` after `SIGSEGV_RETURN_SKIP_INSTRUCTION` at :156):
 ```cpp
 // Mach path only: raw ARM_THREAD_STATE64 of the faulting thread (mutable in place;
 // written back when the handler returns SIGSEGV_RETURN_STATE_MODIFIED). NULL elsewhere.
 void *sigsegv_get_thread_state(sigsegv_info_t *sip);
 ```
-Implementation returns the `sip->thr_state` ARM_THREAD_STATE64 storage under `HAVE_MACH_EXCEPTIONS` + `_STRUCT_ARM_THREAD_STATE64`, else NULL. (Inspect `sigsegv_info_t`'s actual member names around sigsegv.cpp:2621–2639 `mach_get_thread_state` and mirror them.)
 
-(c) Honor the new code in `handle_badaccess` (~2786–2818): where `SIGSEGV_RETURN_SKIP_INSTRUCTION` triggers `aarch64_skip_instruction(regs)` + `mach_set_thread_state`, add a branch for `SIGSEGV_RETURN_STATE_MODIFIED` that calls `mach_set_thread_state` **without** the skip. On non-Mach builds treat it as unhandled (it can't be returned there).
+**CRITICAL — the accessor MUST lazily fetch thread state before returning storage (rev 2 finding C1).**
+On arm64, `handle_badaccess` enters the user-handler switch with `has_thr_state == false`: the
+pre-fetch block at sigsegv.cpp:2725–2784 is inside `#if defined(__APPLE__) && defined(__x86_64__)`
+and is **skipped entirely** on arm64. The first (and only) lazy fetch on the legacy path is the SKIP
+branch at sigsegv.cpp:2795–2796. So if `sigsegv_get_thread_state` returns `&SIP->thr_state` raw, it
+hands back **uninitialized stack storage** (and `thr_state_count` stays uninitialized), corrupting the
+`mach_set_thread_state` writeback — garbage PC, garbage rt write, crash or silent wrong result.
+Required implementation (mirrors the SKIP branch at 2795–2796):
+```cpp
+// Mach path only: raw ARM_THREAD_STATE64 of the faulting thread (mutable in place; written
+// back by handle_badaccess on SIGSEGV_RETURN_STATE_MODIFIED). Lazily fetches on first call.
+void *sigsegv_get_thread_state(sigsegv_info_t *SIP)
+{
+#if defined(HAVE_MACH_EXCEPTIONS) && defined(_STRUCT_ARM_THREAD_STATE64)
+    if (!SIP->has_thr_state) {
+        mach_get_thread_state(SIP);   // sets thr_state + thr_state_count + has_thr_state
+        SIP->has_thr_state = true;
+    }
+    return &SIP->thr_state;
+#else
+    (void)SIP;
+    return NULL;
+#endif
+}
+```
+Place it inside the `#ifdef HAVE_MACH_EXCEPTIONS` block, after `mach_set_thread_state`'s closing brace
+(sigsegv.cpp:2639, before the block's `#endif`). `mach_get_thread_state`/`mach_set_thread_state` are
+`static` in sigsegv.cpp — the accessor and the STATE_MODIFIED branch must live in that file. The
+member is `thr_state` of type `SIGSEGV_THREAD_STATE_TYPE` (= `arm_thread_state64_t` on macOS arm64).
 
-This file is shared with BasiliskII: keep every addition inside `#ifdef HAVE_MACH_EXCEPTIONS` (+ `_STRUCT_ARM_THREAD_STATE64` where ARM-specific) so x86/Linux builds are textually unaffected.
+(c) Honor the new code in `handle_badaccess` (~2786–2818): where `SIGSEGV_RETURN_SKIP_INSTRUCTION`
+triggers `aarch64_skip_instruction(regs)` + `mach_set_thread_state`, add a branch for
+`SIGSEGV_RETURN_STATE_MODIFIED` that calls `mach_set_thread_state` **without** the skip. Insert after
+the SKIP block's `break;`/`#endif` (sigsegv.cpp:2808) and before `case SIGSEGV_RETURN_FAILURE:` (:2810),
+guarded by `#ifdef HAVE_MACH_EXCEPTIONS`. The build has no `-Wswitch`/`-Wswitch-enum`; the only switch
+over `sigsegv_return_t` is this one. On non-Mach builds the case doesn't exist (can't be returned there).
+
+This file is **not** shared with BasiliskII — BasiliskII has its own separate copy at
+`BasiliskII/src/CrossPlatform/sigsegv.cpp` (rev 2 finding C3 reframe). Modifying SheepShaver's copy
+does not touch BasiliskII's. Still keep every addition inside `#ifdef HAVE_MACH_EXCEPTIONS`
+(+ `_STRUCT_ARM_THREAD_STATE64` where ARM-specific) for SheepShaver's own x86/Linux build matrix.
 
 - [ ] **Step 2: Implement `mmio_machfault.cpp`**
 
@@ -1247,7 +1305,10 @@ This file is shared with BasiliskII: keep every addition inside `#ifdef HAVE_MAC
 #include <stdio.h>
 #include <stdlib.h>
 
-// Provided by ppc-jit.cpp (Task 9); weak-stubbed false until then.
+// Provided by ppc-jit.cpp (Task 9), but only when that build defines SS_MMIO_BACKPATCH
+// (rev 2 finding C4). Weak: absent until Task 9 lands, AND absent in any build that does not
+// define SS_MMIO_BACKPATCH (e.g. the rom-harness standalone build). When both resolve absent the
+// hot-site test below short-circuits and the fault path stays cold-only — correct for all builds.
 extern "C" bool ppc_jit_pc_in_cache(const void *host_pc) __attribute__((weak));
 extern "C" bool ppc_jit_backpatch_mmio(uint32_t *site, const A64MemAccess *acc) __attribute__((weak));
 
@@ -1325,9 +1386,24 @@ bool MMIOMachFaultDispatch(uint32_t guest_addr, void *thread_state64)
 
 Note on `A64SwapForWidth` masking for sub-register stores: for size_log2<3 the swap helper truncates to the width first (it does — see Task 4), so high garbage in x[rt] is harmless.
 
-- [ ] **Step 3: Hook the dispatch into the SheepShaver handler**
+- [ ] **Step 3: Hook the dispatch into the SheepShaver glue handler ONLY**
 
-In `sheepshaver_glue.cpp` `sigsegv_handler` (~919), **before** the ROM-write skip and legacy hacks, after the fault address is computed. The handler works with host fault addresses — convert to guest: the existing code derives guest-relative addresses (read the function; it compares against ROMBase etc. — follow its existing conversion idiom; guest = host − `VMBaseDiff`):
+The live SIGSEGV handler on this target is **only** `sheepshaver_glue.cpp:919`'s
+`sigsegv_handler(sigsegv_info_t*)` — installed via `sigsegv_install_handler` because
+`EMULATED_PPC = 1` on macOS arm64 (config.h:12). The `main_unix.cpp:2275` handler
+(`static void sigsegv_handler(int, siginfo_t*, void*)`) is inside `#if !EMULATED_PPC` and is
+**dead code** here — it never compiles into the executable. Do NOT add MMIO dispatch there.
+(The main_unix.cpp:2309/2477 gate-widening in Task 5 lives in this same dead handler — see Task 5
+Step 4's no-op note — but is still done for non-EMULATED_PPC Linux builds.)
+
+Insert the dispatch block in the glue handler at sheepshaver_glue.cpp:929 — **after `addr` is
+computed at :928, before the ROM-write check at :932**. The ROM-write check at :932 uses
+`ROMBaseHost` host-pointer arithmetic; a device-space fault (`0xF3000000+`) would not match it and
+would fall through to the legacy serial hacks or be swallowed by `ignoresegv`, so MMIO dispatch
+must precede it. `addr` (from `sigsegv_get_fault_address(sip)`) is a host virtual address in the
+`0x400000000000+` range; `VMBaseDiff = NATMEM_OFFSET` is visible via the include chain
+`cpu_emulation.h → cpu/vm.hpp` (do NOT redeclare it). The conversion `gaddr = (uint32)((uintptr)addr
+- VMBaseDiff)` is correct:
 
 ```cpp
 	// Machine Layer M1: MMIO bus dispatch (MACHINE-LAYER-PLAN §2b, JIT path).
@@ -1344,18 +1420,44 @@ In `sheepshaver_glue.cpp` `sigsegv_handler` (~919), **before** the ROM-write ski
 	}
 ```
 
-Include `"mmio_bus.h"` at the top of sheepshaver_glue.cpp. (`VMBaseDiff` is the vm.hpp translation base; if it isn't directly visible here, use the existing idiom this function already uses to compare `addr` against guest ranges — do NOT invent a second conversion.)
+Include `"mmio_bus.h"` at the top of sheepshaver_glue.cpp alongside the existing includes. `VMBaseDiff`
+is already visible here via the `cpu_emulation.h → cpu/vm.hpp` include chain (`const uintptr VMBaseDiff
+= NATMEM_OFFSET`, vm.hpp:196) — use it directly; do NOT redeclare it or invent a second conversion.
 
 - [ ] **Step 4: Build + functional fault-path test (no full boot)**
 
 ```bash
 cd SheepShaver && make build-ss && make test-jit       # paravirtual still 350/350
 ```
-Then a 5-second bus smoke: run the harness single-vector path with the bus forced on — an `SS_MMIO_BUS=1` run of any vector must behave identically (no MMIO touched):
-```bash
-SS_MMIO_BUS=1 SS_TEST_HEX=38601234 SS_TEST_JIT=1 make test-opcodes
-```
-Expected: vector passes; stderr shows `[MMIO] bus active …` and the atexit stats dump with all-zero counters.
+
+**Do NOT use an `SS_TEST_HEX` smoke here (rev 2 finding C2).** The `SS_TEST_HEX` path returns from
+`main()` at main_unix.cpp:1162 — **before** `PrefsInit`, `MachineProfileInit`,
+`sigsegv_install_handler`, and the bus bring-up block. With `SS_TEST_HEX` set, `MMIOBusActivate()` is
+never called, no Mach handler is installed, `mmio_bus_active` stays false, and the atexit dump prints
+nothing. `SS_MMIO_BUS=1 SS_TEST_HEX=…` can never activate the bus; that "smoke" is a false-positive
+generator (the vector passes only because it never touches device space).
+
+Instead, add a standalone unit test that exercises the fault dispatcher directly:
+`SheepShaver/src/machine/test_mmio_machfault.cpp` (M0 test style; recipe added to
+`SheepShaver/src/machine/Makefile`, links `mmio_machfault.cpp + mmio_bus.cpp + a64_mmio_decode.cpp` —
+see Task 5 additions). Keep `mmio_machfault.cpp`'s includes lean (the mach headers `<mach/mach.h>`,
+`<mach/thread_status.h>` are available on the host). The test must:
+
+1. Register a fake `MMIO_TRAPPED` region + `MMIOBusActivate()`.
+2. Build a synthetic `arm_thread_state64_t`: place a hand-assembled load insn
+   (`0xB8604800 | (1<<16) | (19<<5) | 1` = `LDR w1, [x19, w0, UXTW]`) in a buffer, point `__pc` at it,
+   set `__x[0]` = the device guest address (e.g. `0xF3012002`).
+3. Call `MMIOMachFaultDispatch(0xF3012002, &ts)` directly.
+4. Assert: **load** — raw-BE injection into `__x[rt]` (REV-swapped form), `__pc` advanced by 4;
+   **store** path — value extracted from `__x[rt]`, swapped, delivered to the bus; **rt==31** —
+   value discarded but the access still dispatched (PC still advances); the **undecodable-insn → abort**
+   path is NOT in-process testable (it calls `abort()`); cover decode-rejection in `test_a64_mmio_decode`
+   (which already asserts non-JIT forms return false) and document the abort branch as untestable here.
+   (PAC note: `arm_thread_state64_get/set_pc` macros are NOPs without ptrauth/entitlements in a
+   standalone test — safe on the M-series dev host; leave a `#if __has_feature(ptrauth_calls)` comment.)
+
+Run: `make -C SheepShaver/src/machine test_mmio_machfault && SheepShaver/src/machine/test_mmio_machfault`
+— Expected: `RESULT: ALL PASS`. `make test-jit` (350/350) remains the "paravirtual unchanged" gate.
 
 - [ ] **Step 5: Commit** — `feat(machine): M1 Mach fault path - decode JIT accesses, bus dispatch, thread-state writeback (S2 productionized)`
 
@@ -1387,13 +1489,34 @@ static inline bool vm_is_mmio(uint32_t addr)
 }
 ```
 
-Then in each of the 8 public accessors (`vm_read_memory_{1,2,4,8}`, `vm_write_memory_{1,2,4,8}`), first line:
+Then add the check as the first line of each of the 8 public accessors, with the **literal width
+matching each accessor** (rev 2 finding M2 — do NOT hardcode width 4):
 
 ```cpp
-	if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 4);        // reads (cast per width)
-	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 4, v); return; }       // writes
+	// vm_read_memory_1:  if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 1);
+	// vm_read_memory_2:  if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 2);
+	// vm_read_memory_4:  if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 4);
+	// vm_read_memory_8:  if (vm_is_mmio(addr)) return          MMIOBusRead(addr, 8);
+	// vm_write_memory_1: if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 1, value); return; }
+	// vm_write_memory_2: if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 2, value); return; }
+	// vm_write_memory_4: if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 4, value); return; }
+	// vm_write_memory_8: if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 8, value); return; }
 ```
-(width literal matches each accessor: 1/2/4/8). The `_reversed` variants (`vm_read_memory_2_reversed`, `vm_read_memory_4_reversed`, and write counterparts if present) get the same check with the value byte-swapped via `__builtin_bswap16/32` (a reversed read of device space = architectural value swapped). This covers all interpreter loads/stores **and** every `ReadMacInt*`/`WriteMacInt*` host accessor automatically (cpu_emulation.h:63–70 are thin wrappers) — i.e. §2b path 3's integer case for free.
+(match each accessor's actual value parameter name and return type.)
+
+**`_reversed` variants:**
+- `vm_read_memory_1_reversed` / `vm_write_memory_1_reversed` are **`#define` aliases** of the
+  non-reversed byte accessors (vm.hpp:244, 275) — they need **NO edit** (the byte form already
+  has the check; a 1-byte swap is identity).
+- `vm_read_memory_2_reversed` / `_4_reversed` (and the `_2_reversed` / `_4_reversed` write
+  counterparts) get the same check, but on the **architectural** value byte-swapped via
+  `__builtin_bswap16` / `__builtin_bswap32` (a reversed access of device space = the architectural
+  value swapped). E.g. for `vm_read_memory_2_reversed`:
+  `if (vm_is_mmio(addr)) return (uint32)__builtin_bswap16((uint16)MMIOBusRead(addr, 2));`
+  and the write counterpart swaps the stored value before `MMIOBusWrite`.
+
+This covers all interpreter loads/stores **and** every `ReadMacInt*`/`WriteMacInt*` host accessor
+automatically (cpu_emulation.h:63–70 are thin wrappers) — i.e. §2b path 3's integer case for free.
 
 - [ ] **Step 2: `Mac2HostAddr` guard (raw-pointer host accessors)**
 
@@ -1445,7 +1568,10 @@ Expected: medians within noise (<2%); score=100 both. Record both medians in the
 ```bash
 cd SheepShaver && make build-ss && make test-jit && make -C src/machine test
 ```
-Expected: 350/350 score=100; ALL PASS ×5.
+Expected: 350/350 score=100; ALL PASS (now ×6 with `test_mmio_machfault` from Task 6). These are
+build/regression gates only — they do **not** exercise the bus fault path (rev 2 finding C2: the
+harness `SS_TEST_HEX` path exits before bus bring-up). Bus-path coverage comes from the
+`test_mmio_machfault` unit test (Task 6 Step 4) + the Task 12 acceptance boot.
 
 - [ ] **Step 6: Commit** — `feat(machine): M1 interpreter range check + host-accessor guards (Mac2HostAddr abort, probe/watch refusal) — interp bench delta <2%`
 
@@ -1487,7 +1613,23 @@ Expected: 350/350. Paravirtual unchanged (env unset, profile paravirtual ⇒ syn
 **Files:**
 - Modify: `SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp`
 
-S2 measured ~8.5 µs/fault (~10⁴× a mapped access): the fault path is discovery-only; hot sites must become direct bus calls. Design (validated by the Task-0 facts): **x30 is dead mid-block** ⇒ a `BL` at any access site is safe; **EA is always in w0 (RTMP0)**; guest GPRs live in callee-saved x21–x28 (safe across calls) but **guest FPRs live in caller-saved v16–v23** and temps x0–x3 may be live ⇒ the thunk saves x0–x17 + v0–v7 + v16–v31.
+**All Task 9 additions are gated behind `#ifdef SS_MMIO_BACKPATCH` (rev 2 finding C4).** `ppc-jit.cpp`
+is compiled **standalone** by `SheepShaver/rom-harness/Makefile` (INCLUDES=`-I$(JITDIR)` only; links only
+`rom-harness.o + ppc-jit.o`), which has neither `a64_mmio_decode.h` on its include path nor the bus
+symbols to link. Wrap **every** Task 9 addition — the `#include "a64_mmio_decode.h"`, the `MMIOBusRead/
+Write` externs, `emit_mmio_thunk`, `ppc_jit_pc_in_cache`, `ppc_jit_backpatch_mmio`,
+`ppc_jit_mmio_thunk_dispatch`, and the Step-3 selftest — in `#ifdef SS_MMIO_BACKPATCH`. The emulator
+build defines it (Makefile.in DEFS, see Task 5 Step 2); the rom-harness build does not, so it still
+compiles and links cleanly, and the weak symbols in `mmio_machfault.cpp` stay absent → fault path
+cold-only there.
+
+S2 measured ~8.5 µs/fault (~10⁴× a mapped access): the fault path is discovery-only; hot sites must
+become direct bus calls. Design (validated by the Task-0 facts): **x30 is dead mid-block** ⇒ a `BL` at
+any access site is safe; **EA is always in w0 (RTMP0)**; guest GPRs live in callee-saved x21–x28 (safe
+across calls) but **guest FPRs live in caller-saved v16–v23** and temps x0–x3 may be live ⇒ the thunk
+saves **x0..x28** (banking x18 too for slot regularity) + q0–q7 + q16–q31, and additionally **saves/
+restores NZCV** around the BLR (the lazy CR0 / live flags can span an access site — see NZCV note in
+Step 1).
 
 **Patch shapes** (decided by the original insn at the fault PC, captured in a side table):
 - load, width>1: `LDR;REV` → `BL mmio_thunk; NOP` — helper writes the **architectural** value to the frame slot for rt (the REV is gone). Verify insn@pc+4 with `A64IsPairedSwap` before patching; if it doesn't match (shouldn't happen — contract), don't patch, keep fault-servicing.
@@ -1497,9 +1639,11 @@ S2 measured ~8.5 µs/fault (~10⁴× a mapped access): the fault path is discove
 
 - [ ] **Step 1: Emit the thunk at JIT init + export cache-bounds + side table**
 
-In ppc-jit.cpp add (near the cache globals):
+In ppc-jit.cpp add (near the cache globals) — **the entire block, and every other Task 9 addition,
+is wrapped in `#ifdef SS_MMIO_BACKPATCH … #endif`** (rev 2 finding C4):
 
 ```cpp
+#ifdef SS_MMIO_BACKPATCH
 /* ---- M1 MMIO backpatch (MACHINE-LAYER-PLAN §2b polling strategy) ---- */
 #include "a64_mmio_decode.h"
 extern "C" uint64_t MMIOBusRead(uint32_t addr, unsigned size);   // C++ linkage ok via decl in mmio_bus.h; match it
@@ -1551,40 +1695,59 @@ extern "C" void ppc_jit_mmio_thunk_dispatch(uint64_t *frame, uint32_t *site)
 }
 ```
 
-Thunk emission, called once from `ppc_jit_aarch64_init` after the cache is allocated (uses the existing `emit32`/`jit_cache_begin_write`/`jit_cache_end_write` machinery; reserve the thunk at the cache start so every later site is within BL range):
+Thunk emission, called once from `ppc_jit_aarch64_init` after the cache is allocated.
 
+**Use the verified encodings — do NOT re-derive (rev 2 T9-encodings).** The full, byte-exact thunk
+(66 insns, frame layout, every helper formula, and the clang cross-check) is in
+`docs/superpowers/plans/m1-task9-thunk-encodings.md`. The implementer **must port the verified helper
+functions from `spikes/m1-thunk-prework/thunk_ref.c`** (`emit_stp_x` / `emit_ldp_x` / `emit_str_x_imm` /
+`emit_ldr_x_imm` / `emit_stp_q` / `emit_ldp_q` / `emit_sub_sp_imm` / `emit_add_sp_imm` / `emit_load_imm64`)
+rather than hand-packing immediates inline. Each helper `assert()`s its immediate alignment/range — keep
+those asserts. Verified facts the emitter must honor:
+
+- **Frame = 640 bytes total**: `STP x29,x30,[sp,#-16]!` (the fp/lr pre-index push, 16 B) **then**
+  `SUB sp,sp,#624` (rev 2 M1/T9 — **#624, not #640**; the sketch's `#640` over-allocated). 624 is a
+  16-multiple (the only hard alignment rule for the BLR).
+- Slots **relative to the new SP** (= frame base passed to the dispatcher in x0): x0..x27 as 14 STP
+  pairs at offsets 0..208 (x{i} at i*8); **x28 via a single `STR x28,[sp,#224]`** — the correct word is
+  **`0xf90073fc`** (`emit_str_x_imm(28, 224)`); the old sketch constant `0xf90070fc` was **WRONG**
+  (base = x7, not sp). An **8-byte alignment pad at offset 232**; the Q region (q0–q7, q16–q31) starts at
+  **240** (STP-Q imm7 scales by 16, so Q must begin on a 16-multiple).
+- `mov x0, sp` must be the **ADD-alias `0x910003E0`** (= `ADD x0, sp, #0`) — NOT the ORR-MOV form
+  (reg 31 there is XZR → x0 = 0, silently breaking the frame-base arg).
+- `sub x1, x30, #4` = `0xD10013C1`; `blr x16` = `0xD63F0200`; `ret` = `0xD65F03C0`; `ldp x29,x30,[sp],#16`
+  = `0xA8C17BFD`. (All sketch constants except `str x28` were verified correct, but prefer the helpers.)
+
+**Cache-pointer wiring (rev 2 C3).** `emit32` writes through `jit_code_ptr`, which is **uninitialized at
+JIT init** (it is only set inside the block compiler at ppc-jit.cpp:5286/5541). If `emit_mmio_thunk`
+emits without setting it, the thunk lands at NULL and `jit_cache_wp` never advances (the first compiled
+block overwrites it). The emitter must therefore:
 ```cpp
 static void emit_mmio_thunk(void)
 {
 	jit_cache_begin_write();
-	mmio_thunk_entry = jit_cache_wp;
-	/* prologue: room for x0-x28 (29 slots -> 30 for alignment) + q0-q7 + q16-q31
-	 * (24 vregs * 16B) + fp/lr pair. Total frame = 30*8 + 24*16 + 16 = 640 bytes. */
-	emit32(0xA9BF7BFD);                          // stp x29, x30, [sp, #-16]!
-	emit32(0xD10A03FF /* sub sp, sp, #640 */);
-	for (int r = 0; r < 28; r += 2)              // stp x{r},x{r+1},[sp,#r*8]
-		emit32(0xA9000000 | ((r + 1) << 10) | (31 << 5) | r | (((r * 8) / 8) << 15));
-	emit32(0xF90000FC | (28 << 0) | ((28 * 8 / 8) << 10));   // str x28,[sp,#224]
-	int qoff = 240;
-	for (int q = 0; q < 8; q += 2, qoff += 32)   // stp q{q},q{q+1}
-		emit32(0xAD000000 | ((q + 1) << 10) | (31 << 5) | q | ((qoff / 16) << 15));
-	for (int q = 16; q < 32; q += 2, qoff += 32)
-		emit32(0xAD000000 | ((q + 1) << 10) | (31 << 5) | q | ((qoff / 16) << 15));
-	/* args: x0 = frame base (sp), x1 = site = x30 - 4 */
-	emit32(0x910003E0);                          // mov x0, sp
-	emit32(0xD10013C1);                          // sub x1, x30, #4
-	emit_load_imm64(16, (uint64_t)(uintptr_t)&ppc_jit_mmio_thunk_dispatch);
-	a64_blr(16);
-	/* restore everything (loads pick up the dispatcher's frame[rt] update) */
-	... mirror of the save sequence with LDP/LDR ...
-	emit32(0x910A03FF /* add sp, sp, #640 */);
-	emit32(0xA8C17BFD);                          // ldp x29, x30, [sp], #16
-	a64_ret();
-	jit_cache_end_write(mmio_thunk_entry, (jit_cache_wp - mmio_thunk_entry) * 4);
+	jit_code_ptr = jit_cache_wp;          // (rev 2 C3) emit32 writes through jit_code_ptr — set it
+	mmio_thunk_entry = jit_code_ptr;
+	/* ... prologue / saves / NZCV-save / BLR / NZCV-restore / restores / epilogue,
+	 *     all via the ported helpers; reserve the thunk at cache start so every later
+	 *     site is within BL ±128 MB range ... */
+	jit_cache_wp = jit_code_ptr;          // (rev 2 C3) publish the advanced write pointer
+	jit_cache_end_write(mmio_thunk_entry, (jit_code_ptr - mmio_thunk_entry) * 4);  // restores W^X + invalidates icache
 }
 ```
 
-**Encoding note for the implementer:** do NOT trust the hand-packed STP immediates above — write a tiny local helper `emit_stp_x(rt, rt2, imm)` / `emit_stp_q(...)` / the LDP mirrors using the architecture manual fields (STP 64-bit signed-offset: `0xA9000000 | (imm7 << 15) | (rt2 << 10) | (31 << 5) | rt`, imm7 = byteoff/8; STP Q: `0xAD000000 | (imm7 << 15) | …`, imm7 = byteoff/16; SUB/ADD sp imm12 = `0xD1/0x91 ...`), and add a `static_assert`-style self-check: after emission, disassemble-by-eye once with `lldb` or compare against a `clang -c` reference of the same sequence. The thunk is the single most encoding-sensitive code in M1 — **unit-proof it before wiring it to faults** (Step 2's standalone exercise).
+**NZCV save/restore (rev 2 NZCV).** The thunk saves **no** NZCV by default, but the JIT's lazy CR0 (or
+any live flags) can span a memory-access site, and the C callback (plus the BLR itself) clobbers NZCV.
+Do **not** rely on auditing flag liveness — unconditionally save/restore around the BLR with x9 as
+scratch (x9's guest value is already banked in the frame and restored afterward, so it is free here):
+`MRS x9, NZCV` (= **`0xD53B4209`**, Rt=9) immediately before `BLR x16`, and `MSR NZCV, x9`
+(= **`0xD51B4209`**, Rt=9) immediately after the BLR, **before** the LDP/LDR restores. **Verify these
+two encodings against clang in the Step-3 selftest** — they were not among the prework's 18 cross-checked
+helpers.
+
+**Constraint comment (rev 2 N1):** the `stwcx.` site has a `CBZ +8` immediately before the STR; patching
+STR→BL keeps the skip-target valid **only because BL is also 4 bytes**. Record this as a constraint
+comment at the patcher: single-instruction patches only (never grow or shrink the patched insn count).
 
 - [ ] **Step 2: The patcher (called on the Mach handler thread — §2g-safe by construction)**
 
@@ -1601,15 +1764,22 @@ extern "C" bool ppc_jit_backpatch_mmio(uint32_t *site, const A64MemAccess *acc)
 	mmio_sites[n_mmio_sites].site = site;
 	mmio_sites[n_mmio_sites].orig_insn = *site;
 	__atomic_add_fetch(&n_mmio_sites, 1, __ATOMIC_RELEASE);     // dispatch scans <= n
+	// (rev 2 N1) single-instruction patch only: STR/LDR/B → BL keeps any nearby CBZ +8
+	// skip-target valid because all are 4 bytes. Never change the patched insn count.
 	jit_cache_begin_write();        // pthread_jit_write_protect_np is PER-THREAD: ok here
 	site[0] = bl;
 	if (nop_rev) site[1] = 0xD503201F;                          // NOP the REV
-	jit_cache_end_write(site, nop_rev ? 8 : 4);                 // includes sys_icache_invalidate
-	jit_cache_begin_write_restore_exec();                       // see note below
+	jit_cache_end_write(site, nop_rev ? 8 : 4);                 // restores W^X + sys_icache_invalidate
 	return true;
 }
 ```
-Note: check what `jit_cache_begin_write`/`end_write` actually do (jit-target-cache.hpp:35–50) — `end_write` already re-protects + invalidates; drop the bogus restore line if so (it is `pthread_jit_write_protect_np(1)` inside `end_write`). Safety argument to keep as a comment: the only thread that executes JIT code is the emul thread, and it is Mach-suspended **at exactly this site** while we patch; the handler thread's write-protect toggle is per-thread; after `sys_icache_invalidate` the resumed thread re-fetches the BL. Also note: `lwarx`/`stwcx.` sites lose reservation semantics if patched — acceptable (no S3 consumer uses atomics on device space), and the cold path has the same property; leave a comment.
+`jit_cache_end_write` already re-protects (W^X / `pthread_jit_write_protect_np(1)`) **and** invalidates
+the icache (`sys_icache_invalidate`) — there is no `jit_cache_begin_write_restore_exec()` symbol; do not
+add one (rev 2 M1). Safety argument to keep as a comment: the only thread that executes JIT code is the
+emul thread, and it is Mach-suspended **at exactly this site** while we patch; the handler thread's
+write-protect toggle is per-thread; after `sys_icache_invalidate` the resumed thread re-fetches the BL.
+Also note: `lwarx`/`stwcx.` sites lose reservation semantics if patched — acceptable (no S3 consumer uses
+atomics on device space), and the cold path has the same property; leave a comment.
 
 - [ ] **Step 3: Standalone thunk self-test (before any boot)**
 
@@ -1623,11 +1793,13 @@ Add a temporary `SS_MMIO_THUNK_SELFTEST=1` block at the end of `ppc_jit_aarch64_
 		   architectural value lands in w1. fprintf PASS/FAIL and exit(0/1). */
 	}
 ```
-Implement it fully (emit block with the existing emitters, call through a function pointer with x0 = guest addr and x19 = 0 — the thunk path never dereferences x19). Run:
+Implement it fully (emit block with the existing emitters, call through a function pointer with x0 = guest addr and x19 = 0 — the thunk path never dereferences x19). **Also cross-check the two NZCV encodings here** (rev 2 NZCV): assert `emit_mrs_nzcv(9) == 0xD53B4209` and `emit_msr_nzcv(9) == 0xD51B4209` against a `clang -c` reference of `mrs x9, nzcv` / `msr nzcv, x9` (they were not in the prework's 18-helper cross-check). Run:
 ```bash
 cd SheepShaver && SS_MMIO_BUS=1 SS_MMIO_THUNK_SELFTEST=1 ./SheepShaver --help 2>&1 | grep THUNK
 ```
 Hmm — `--help` may not reach JIT init; if not, run the selftest via the harness path instead: `SS_MMIO_BUS=1 SS_MMIO_THUNK_SELFTEST=1 SS_TEST_HEX=60000000 SS_TEST_JIT=1 make test-opcodes` (JIT init runs before the vector). Expected: `THUNK-SELFTEST: PASS`.
+
+(Close the `#ifdef SS_MMIO_BACKPATCH` from Step 1 after the selftest block — every Task 9 addition is inside that guard.)
 
 - [ ] **Step 4: Gates**
 
@@ -1635,6 +1807,13 @@ Hmm — `--help` may not reach JIT init; if not, run the selftest via the harnes
 cd SheepShaver && make build-ss && make test-jit && make -C rom-harness bench BENCH_QUIET=1
 ```
 Expected: 350/350; bench unchanged vs a pre-task baseline (`make bench BARGS=--save-baseline=/tmp/m1-pre9.txt` before starting, `--compare` after — the JIT fast path gained zero instructions).
+
+**Also gate the standalone rom-harness build (rev 2 finding C4):**
+```bash
+make -C SheepShaver/rom-harness          # must still compile + link (no SS_MMIO_BACKPATCH define)
+```
+Expected: clean build (the `#ifdef SS_MMIO_BACKPATCH` guard keeps Task 9's additions out of this
+standalone compile of `ppc-jit.cpp`). The `make bench BENCH_QUIET=1` above must also run.
 
 - [ ] **Step 5: Commit** — `feat(jit+machine): M1 MMIO backpatch - hot fault sites become direct bus calls via generic thunk`
 
@@ -1774,6 +1953,48 @@ Assert, from `/tmp/m1-accept.log` (the atexit `[MMIO]` dump + run lines):
 ## Self-review record (kept per writing-plans skill)
 
 - **Spec coverage vs M1 DoD row:** three-path dispatch ✓ (T6/T7); decoder + S2 gotchas as unit tests ✓ (T4); endianness contract ✓ (T6 inject raw BE / T9 architectural-after-NOP-REV); interpreter profile-gating + bench proof ✓ (T7 S4); explicit host entry points ✓ (T7); region kinds in API ✓ (T1); backpatch in scope ✓ (T9); fault-rate logging + idle hook ✓ (T1/T12); §2g locking ✓ (T1/T6/T9); SCC ✓ (T2); VIA timer/IFR + Cuda loud stub ✓ (T3); minimal DEC tick ✓ (T8); consumer (a) demoted — covered only as the SS_MMIO_BUS named config existing (T5), no STM acceptance per the plan's 2026-06-10 demotion note; consumer (b) acceptance with register-traffic + fault-budget asserts ✓ (T12); SS_JIT_VERIFY exclusion ✓ (T5 hard-incompat); patch retirement + un-patched-init assert ✓ (T10/T12); 16 KB granularity note ✓ (container reservation is page-aligned; sub-page regions are logical).
-- **Known sharp edges flagged to implementers:** thunk encoding immediates (T9 Step 1 explicitly distrusts the sketch and demands helper-emitters + selftest); `sigsegv_info_t` member names (T6 Step 1 says mirror the real struct); guest-addr conversion idiom in sigsegv_handler (T6 Step 3 says follow the existing idiom); `--help`-may-not-reach-JIT-init fallback (T9 Step 3).
+- **Known sharp edges flagged to implementers:** thunk encodings now point to the verified
+  `m1-task9-thunk-encodings.md` + `spikes/m1-thunk-prework/thunk_ref.c` (rev 2 — no longer re-derived);
+  the two NZCV encodings are the one remaining un-cross-checked pair (verified in the T9 Step 3 selftest);
+  `sigsegv_get_thread_state` must lazy-fetch (T6 Step 1, rev 2 C1); guest-addr conversion in
+  sigsegv_handler uses the visible `VMBaseDiff` directly (T6 Step 3); `--help`-may-not-reach-JIT-init
+  fallback (T9 Step 3); `SS_TEST_HEX` exits before bus init so it cannot smoke the bus (T6 Step 4, rev 2 C2).
 - **Type consistency:** `MMIOBusRead/Write(addr, size, value)` signatures uniform across T1/T6/T7/T9; `A64MemAccess` fields consistent; `MachineUsesMMIOBus` used in T5 only (T10 deliberately uses `MachineProfileIsNewWorld` — reasoned in-line).
+
+## Rev 2 corrections (red-team round 3, 2026-06-10)
+
+Folded in from an adversarial code-verified review (round 3) + two recon dossiers
+(`m1-task6-recon.md`, `m1-task9-thunk-encodings.md`). All applied to Tasks 5–9 before execution:
+
+- **C1** (T6 Step 1b) — `sigsegv_get_thread_state` must lazily `mach_get_thread_state` before returning
+  `&SIP->thr_state` (arm64 enters the handler with `has_thr_state == false`; raw return = uninitialized
+  storage corrupting the writeback). Also: live handler is glue (`sheepshaver_glue.cpp:919`) only —
+  `main_unix.cpp:2275` is `#if !EMULATED_PPC` dead code. MMIO dispatch inserts at glue :929; conversion
+  `gaddr = (uint32)((uintptr)addr - VMBaseDiff)`; enum/decl insertion points recorded.
+- **C2** (T6 Step 4 / T7 Step 5) — `SS_TEST_HEX` exits `main()` at :1162 before bus bring-up, so the
+  planned smoke is a false positive. Replaced with a `test_mmio_machfault.cpp` standalone unit test;
+  T7 Step 5 reframed as build/regression gates only (no bus-exercise claim).
+- **C3** (T9 Step 1) — `emit32` writes through `jit_code_ptr` (uninitialized at init); added
+  `jit_code_ptr = jit_cache_wp` / `mmio_thunk_entry = jit_code_ptr` before and `jit_cache_wp = jit_code_ptr`
+  + `jit_cache_end_write(...)` after.
+- **C4** (T9) — `ppc-jit.cpp` is compiled standalone by `rom-harness/Makefile`; all T9 additions gated
+  behind `#ifdef SS_MMIO_BACKPATCH` (defined only in the emulator build's Makefile.in DEFS). Added a
+  rom-harness build+bench gate to T9 Step 4; weak-symbol consequence noted at T6 Step 2.
+- **M1** (T9 Step 2) — deleted the non-existent `jit_cache_begin_write_restore_exec()` line;
+  `jit_cache_end_write` already restores W^X + invalidates icache.
+- **M2** (T7 Step 1) — vm.hpp accessor edits shown with literal per-width values (1/2/4/8), not a
+  hardcoded 4; `_1_reversed` are `#define` aliases (no edit); `_2/_4_reversed` use `__builtin_bswap16/32`.
+- **T9-encodings** (T9 Step 1) — replaced the hand-packed sketch with a pointer to the verified
+  `m1-task9-thunk-encodings.md`; frame = 640 (SUB #624 + fp/lr push), `str x28` = `0xf90073fc`
+  (sketch's `0xf90070fc` was base=x7, WRONG), `mov x0,sp` = ADD-alias `0x910003E0`; port helpers from
+  `thunk_ref.c` rather than re-deriving.
+- **NZCV** (T9 Step 1 + N1) — thunk must `MRS x9,NZCV`/`MSR NZCV,x9` (= `0xD53B4209`/`0xD51B4209`,
+  verify in selftest) around the BLR to preserve lazy CR0 / live flags. N1: the `stwcx.` `CBZ +8`
+  skip-target stays valid only because BL is also 4 bytes — single-instruction patches only.
+- **Task 5 additions** — `test_mmio_machfault` recipe + `.gitignore` + `test:` target entry;
+  `mmio_machfault.cpp` stub already created in T5 Step 2; `-DSS_MMIO_BACKPATCH` wiring (C4).
+
+Could-not-apply-cleanly: none. (C2's "Task 7 Step 5" clause: Step 5 contained no "bus exercised by
+harness" claim to strip — added a one-line clarification there instead, and the actual false-pass
+smoke that needed replacing was in Task 6 Step 4, which was rewritten.)
 

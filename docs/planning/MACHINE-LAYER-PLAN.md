@@ -1,7 +1,8 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
 > **Status:** 🟢 Approved architecture (rev 3) — implementation not started · **Created:** 2026-06-10
-> · **Updated:** 2026-06-10 (rev 2 + rev 3: incorporated two rounds of adversarial code-review findings — see §8)
+> · **Updated:** 2026-06-10 (rev 2 + rev 3: two rounds of adversarial code-review findings — §8;
+> plus §9 holistic success assessment with re-scoring triggers)
 > **Decision (2026-06-10):** Stop extending the ROM-patching/paravirtualization approach toward
 > NewWorld and Mac OS 9.2.x one bug at a time. Instead, build the thing SheepShaver never had:
 > a **real machine-model layer** — MMIO bus, virtual clock, device models, interrupt/exception
@@ -467,3 +468,65 @@ The structural ones, for the record:
     `.ndrv`; M7 would debug a black screen → M5 aperture + blit.
 21. **Honesty gaps:** interpreter range-check cost on the frozen profile (gating + bench
     proof) and the non-redistributable-assets posture for `e2e-newworld` → §2b, §5.6.
+
+## 9. Holistic assessment — chances of success (2026-06-10, pre-implementation)
+
+A calibration record, written before any code, to be re-scored as milestones land. Three
+nested bets:
+
+| Bet | Definition | Estimate | Why |
+|---|---|---|---|
+| **Platform** | SheepShaver gains a real machine layer (bus, clock, devices, exception model) as permanent, tested components | **~90%** | Every milestone independently shippable; paravirtual frozen as a floor; even M0–M2 alone leaves the codebase structurally better than the patch-pile. Downside bounded by design. |
+| **Capability** | Mac OS 9.2.2 boots to Finder on the fidelity profile (M7) | **~60–65%** in ~2–4 months focused effort | Dragged down by M3 and M6 (below), not by the device models. |
+| **Vision** | Full-stack platform: power management, Metal video (M8+) | unscoreable | Strictly downstream of the capability bet; prerequisites (aperture regions, idle hooks, device-tree video node) are baked into the architecture rather than blocked by it. |
+
+### Where the risk actually lives (ranked by expected pain)
+
+1. **M3 (interrupt/exception, XL) — the make-or-break.** MSR/SRR/`rfi`, the vector-page
+   collision, replacing nested-execute, in shared CPU files. Could eat a month. The saving
+   grace: the **direct-entry option is a designed, honest version of the mechanism that
+   already works today** — M3's floor is not "fail" but "ship a cleaner version of the
+   current architecture with real device sources." That floor is what holds the capability
+   estimate at 60+ rather than lower.
+2. **M6 (inherited Path A walls).** DR Emulator handoff + shim triage: a known grind with a
+   known map. No architecture saves this — it's RE labor; motivation, not engineering, is the
+   limiting reagent.
+3. **The unknown 9.2 gate (spike S1).** What the 0x7E24 probe checks is genuinely unknown —
+   but this is uncertainty about *which path* (native 9.0.1 / newer family ROM / 4-byte
+   bypass), not *whether a path exists*.
+
+The things that *look* scary — MMIO decoding, Mach exceptions, device models — are
+well-understood engineering with spikes, contracts, and oracles attached.
+
+### The meta-signal
+
+**21 substantive findings before a line of code.** Read both ways: (a) the review process
+works — two rounds of code-verified, plan-changing findings absorbed without the skeleton
+breaking is evidence the skeleton is right; (b) this domain is **hostile** — reviews 3 and 4
+will be delivered by reality, and the project's own history (the VIA/SCC identity
+flip-flopping twice, rev 1's "sigsegv already decodes" assumption, the session-5 STUCK-PC
+retraction) shows a high error rate on untested beliefs. The plan's main defense is that it
+systematically converts beliefs into experiments (S1–S3, the M3 vector-base experiment, QEMU
+conformance) before building on them.
+
+### What success most depends on
+
+1. **Run spikes S1–S3 before anything else** (~a week, de-risks the two biggest bets; S1 can
+   reshape M7's endgame for zero code).
+2. **Honor the stop-rule at M3.** If the vector-base experiment fails and direct-entry also
+   bogs down: ship the M3 floor and reassess — don't tunnel.
+3. **Resist the old failure mode.** The single most likely cause of failure is reverting to
+   bug-chase mode mid-milestone (fixing whatever the boot hits next instead of finishing the
+   component). The milestone DoDs (register-traffic assertions, patch-retirement lists,
+   fault-rate budgets) are shaped specifically to resist that; trust them.
+
+### Bottom line
+
+Architecture sound; reviews made it honest; downside structurally capped (worst case:
+today's working emulator unchanged, plus reusable components and a much better map); upside
+is the project's stated reason to exist. The expected outcome is not binary — most futures
+land on "machine layer partially built, every piece permanently useful, 9.2 reached by one
+of three documented paths."
+
+**Re-scoring triggers:** after spikes S1–S3 (adjust M1 scope + M7 path), after the M3
+vector-base experiment (adjust the capability estimate), and at any stop-rule invocation.

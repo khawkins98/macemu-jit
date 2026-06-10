@@ -1203,8 +1203,14 @@ static void sched_pump_kick(void)
 static void *sched_pump_main(void *)
 {
 	// (rev 2 I3) Residual latency note: a timer added between process_timers()
-	// returning and the predicate check below is caught by sched_pump_kicked; the
-	// 10ms cap additionally bounds any CLOCK_REALTIME step (NTP) distortion.
+	// returning and the predicate check below is caught by sched_pump_kicked.
+	// (rev 3) The 10ms cap bounds the intended SLICE, not wall-clock-step
+	// distortion: timedwait targets an absolute CLOCK_REALTIME deadline, so a
+	// backward NTP step can stretch ONE wait by the step size; a kick or the
+	// shifted timeout recovers. Also: process_timers() samples time_now before
+	// running callbacks, so the returned slice can overshoot the true next
+	// deadline by the callbacks' duration - both bounded in practice by the cap
+	// and by the lazy backstops (VIA timer_poll, VirtClockReadDEC).
 	const uint64_t CAP_NS = 10000000ull;   // 10 ms re-check cap (idle floor)
 	for (;;) {
 		uint64_t slice = g_event_sched->process_timers();
@@ -1227,6 +1233,12 @@ static void *sched_pump_main(void *)
 
 static void sched_pump_stop(void)   // atexit: stop callbacks before the [VCLK] dump
 {
+	// (rev 3) Hazard note: this can run from the sigsegv-handler crash path
+	// (sheepshaver_glue enter_mon -> QuitEmulator -> exit). The join completes
+	// because machine-layer locks are held only for bounded handler bodies; if a
+	// third wedged thread ever held a region lock or the timer-queue mutex at
+	// crash time, this join would hang the crash diagnostics - bounded-join
+	// hardening is an M3 item.
 	if (!sched_pump_started) return;
 	pthread_mutex_lock(&sched_pump_mtx);
 	sched_pump_quit = true;
@@ -1243,9 +1255,20 @@ static void sched_pump_stop(void)   // atexit: stop callbacks before the [VCLK] 
 // condition. Generation-guarded inside VirtClockDECExpire - stale events no-op.
 static void vclk_dec_arm(void *, uint64_t ns_until_expiry, uint32_t gen)
 {
-	if (g_event_sched)
-		g_event_sched->add_oneshot_timer(ns_until_expiry,
+	if (g_event_sched) {
+		// (rev 3) Cancel the previous generation's one-shot first: the guest's
+		// normal pattern is "rewrite DEC every interrupt", and without the cancel
+		// every mtspr DEC leaks a dead queue entry until its deadline (heap churn
+		// + a pointless pump wake each). The gen guard in VirtClockDECExpire makes
+		// the scheduler's cancel/callback race (event_sched.h S10) harmless.
+		// CPU-thread-only context (called from VirtClockWriteDEC), so the static
+		// has a single writer.
+		static uint32_t last_dec_timer = 0;
+		if (last_dec_timer)
+			g_event_sched->cancel_timer(last_dec_timer);
+		last_dec_timer = g_event_sched->add_oneshot_timer(ns_until_expiry,
 		                                 [gen]() { VirtClockDECExpire(&g_virt_clock, gen); });
+	}
 }
 
 static void vclk_dump_stats_atexit(void) { VirtClockDumpStats(&g_virt_clock, stderr); }

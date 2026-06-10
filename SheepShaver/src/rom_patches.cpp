@@ -737,8 +737,16 @@ bool PatchROM(void)
 		tp[0]  = htonl(0x3FE068FFu);  // lis  r31, 0x68ff
 		tp[1]  = htonl(0x63FFF000u);  // ori  r31, r31, 0xf000  → r31=0x68fff000 (ECB)
 		tp[2]  = htonl(0x3FC05046u);  // lis  r30, 0x5046       → r30=0x50460000 (mirror)
-		tp[3]  = htonl(0x3FA05046u);  // lis  r29, 0x5046
-		tp[4]  = htonl(0x63BDE000u);  // ori  r29, r29, 0xe000  → r29=0x5046e000 (dispatch)
+		// M6a Wave 1 (M6A-DR-HANDOFF-ANALYSIS.md §0/§4): r29 is the DR dispatcher's
+		// opcode-table base — handler = (r29 & 0xFFF80007) | (opcode<<3) at mirror
+		// 0x5046e9dc.  The old seed 0x5046e000 was the probe-verified smoking gun:
+		// its implied 512KB base 0x50400000 has no table (mirror NK/emulator code),
+		// so the first 68k opcode (0x4efa) dispatched into the Thud console help
+		// printer (0x504277d0).  Correct base = LA_DispatchTable = ROMBase+0x480000
+		// — the dump-verified MIRROR dispatch table (131072/131072 slots populated;
+		// its relative branches keep execution inside the 0x46xxxx mirror emulator).
+		tp[3]  = htonl(0x3FA05048u);  // lis  r29, 0x5048
+		tp[4]  = htonl(0x63BD0000u);  // ori  r29, r29, 0x0000  → r29=0x50480000 (LA_DispatchTable)
 		// 68k vector fixups: nanokernel wrote guest[0]/[4] using its own
 		// virtual addresses (0x97xxxxxx).  Cold-start at 5046e9b4 reads
 		// guest[0]=SSP, guest[4]=PC as flat addresses — must be valid.
@@ -748,14 +756,44 @@ bool PatchROM(void)
 		tp[8]  = htonl(0x901C0004u);  // stw  r0, 4(r28)        guest[4] = 68k reset PC
 		tp[9]  = htonl(0x3C000010u);  // lis  r0, 0x0010        → r0=0x00100000 (1MB)
 		tp[10] = htonl(0x901C0000u);  // stw  r0, 0(r28)        guest[0] = 68k initial SSP
-		tp[11] = htonl(0x48044DF8u);  // b    +0x44df8          → 0x5046e964 (cold-start)
+
+		// M6a Wave 1, UserModeMSR transition (memo §5.2; plan rev 2 findings 1+5).
+		// The unpatched ROM's jump68k dispatch tail does mtsrr0/mtsrr1/rfi with
+		// UserModeMSR = [KDP-0x964] = 0x0000D032 (EE=1, PR=1); the Path-A redirect
+		// dropped the mtsrr1, and this trampoline path performed NO MSR transition
+		// at all — post-M3a (real stored MSR) the 68k world otherwise runs with the
+		// NK's EE=0 MSR and the deferral machinery holds interrupts forever.
+		// Site choice (rev 2 finding 5, preferred): trampoline-side GUEST
+		// instructions `lwz r0,-0x964(r1); mtmsr r0` — r1 is still KDP here (the
+		// cold-start only overwrites r1 from guest[0] later), [KDP-0x964] is seeded
+		// 0xd032 by the glue [NW-TRAMP] block, and the architectural mtmsr rides
+		// execute_mtmsr's EE 0→1 edge re-raise (M3a Task 3) — a host-side seed
+		// would bypass that re-raise.  The 222KB zero run leaves ample patch-word
+		// budget (14 insns vs 12).
+		// Env-gated SS_M6A_USER_MSR=1, DEFAULT OFF (rev 2 finding 1): EE=1 during
+		// 68k execution routes the first DEC delivery through unverified NK
+		// save/restore plumbing; Boot A (off) = clean stall capture, Boot B (on) =
+		// rung-2 recon.  When OFF the trampoline is byte-identical to the
+		// no-MSR-write layout (12 insns, same branch word).
+		const bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
+		uint32 b_idx = 11;
+		if (user_msr) {
+			tp[11] = htonl(0x8001F69Cu);  // lwz  r0, -0x964(r1)    r0 = UserModeMSR (0xd032)
+			tp[12] = htonl(0x7C000124u);  // mtmsr r0               EE=1/PR=1 (EE-edge re-raise)
+			b_idx = 13;
+		}
+		// b → mirror cold-start 0x5046e964 (offset computed from the b's own slot)
+		tp[b_idx] = htonl(0x48000000u |
+		                  ((0x46e964u - (tramp_offset + b_idx * 4)) & 0x03FFFFFCu));
 
 		*tbl0 = htonl(0x4BFBB280u);  // table[0] → trampoline
 
 		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "
-		        "(12 insns), table[0] → trampoline → cold-start\n", tramp_offset);
+		        "(%u insns), table[0] → trampoline → cold-start\n",
+		        tramp_offset, (unsigned)(b_idx + 1));
 		fprintf(stderr, "[NW-TRAMP] fixup: r31=0x68fff000 r30=0x50460000 "
-		        "r29=0x5046e000 guest[4]=0x5000002a guest[0]=0x00100000\n");
+		        "r29=0x50480000 guest[4]=0x5000002a guest[0]=0x00100000 "
+		        "user-msr=%s\n", user_msr ? "ON (SS_M6A_USER_MSR)" : "off");
 	};
 	PatchROM_NW_trampoline();
 

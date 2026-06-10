@@ -1924,9 +1924,24 @@ void init_emul_ppc(void)
 		const uint32 ecb = kdp + 0x1000;
 		WriteMacInt32(kdp + 0x65c, ecb);          // ECB ptr → EmulatorData at KDP+0x1000
 		WriteMacInt32(kdp + 0x660, 0);
+		// M6a Wave 1 rev-2 finding 6 NOTE (do NOT change in Wave 1): [KDP+0x5a4]
+		// (=0x5036d218, 68k code base, seeded above) and [KDP+0x5f0/+0x5f4]
+		// (=0x50366080, primary EMUL_RETURN) are DORMANT cross-world constants —
+		// PRIMARY-world values in a mirror-world boot, on routes probe-verified
+		// never to execute today (the jump68k dispatch tail / patched entry).
+		// Left intentionally so rung 2 (ongoing-entry contract) doesn't trip on a
+		// silent Wave-1 change; reconcile them when their routes go live
+		// (M6A-DR-HANDOFF-ANALYSIS.md §3 rows "[KDP+0x5a4]" / "[KDP+0x65c]…+0x5f0").
 		WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);  // EMUL_RETURN handler
 		WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);
-		WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x380000);  // opcode dispatch table
+		// M6a Wave 1 (memo §3 row "[KDP+0x648]"; plan rev 2 finding 7): this field
+		// is architecturally the entry-VECTOR table, not the opcode dispatch table —
+		// the skipped NK writer (0x503107fc) computes LA_EmulatorCode + [ConfigInfo
+		// +0x84] = ROMBase+0x460000+0xe8c0.  The old seed ROMBase+0x380000 was wrong
+		// on both identity (opcode table) and world (primary, in a mirror boot).
+		// Mirror entry-vector table = ROMBase+0x46e8c0 (table[0] = the [NW-TRAMP]
+		// redirect target, probe-verified entered).
+		WriteMacInt32(kdp + 0x648, (uint32)ROMBase + 0x46e8c0);  // entry-vector table (mirror)
 		WriteMacInt32(kdp - 0x964, 0x0000d032);                  // UserModeMSR
 
 		// 68k exception vectors: SP=0 (diagnostic), reset PC, and rte stubs for 2..63.
@@ -1936,9 +1951,9 @@ void init_emul_ppc(void)
 		const uint32 rte_addr = (uint32)ROMBase + 0x3196;
 		for (int vec = 2; vec < 64; vec++)
 			WriteMacInt32(vec * 4, rte_addr);
-		fprintf(stderr, "[NW-TRAMP] ECB=%08x +0x648(dispatch)=%08x +0x5f0(emul_ret)=%08x "
+		fprintf(stderr, "[NW-TRAMP] ECB=%08x +0x648(entry-vectors)=%08x +0x5f0(emul_ret)=%08x "
 		        "guest[4](68k-reset)=%08x\n",
-		        ecb, (uint32)ROMBase + 0x380000,
+		        ecb, (uint32)ROMBase + 0x46e8c0,
 		        (uint32)ROMBase + 0x366080, reset_68k);
 
 		// ECB pre-population: the nanokernel scheduler context-switches to the
@@ -1952,9 +1967,20 @@ void init_emul_ppc(void)
 		// (not KDP+0x1000). ECB "base" for the restore is at +0x100 from ecb.
 		const uint32 ctx = ecb + 0x100;
 		memset(Mac2HostAddr(ecb), 0, 0x2000);
-		WriteMacInt32(ctx + 0xfc, (uint32)ROMBase + 0x36f900);  // dispatch → ongoing entry
+		// M6a Wave 1 (memo §3 row "ECB ctx+0xfc/+0x1ec", §4 mirror option; plan rev 2
+		// finding 4): mirror-world values — the old ROMBase+0x36f900/+0x380000 were
+		// PRIMARY-world constants in a MIRROR-world boot (region 0x50360000 never
+		// compiles; the live kernel/emulator run from the 0x504xxxxx mirror).
+		//   ctx+0xfc  := ROMBase+0x46f900  (mirror ongoing entry)
+		//   ctx+0x1ec := ROMBase+0x480000  (saved r29 = mirror LA_DispatchTable)
+		// Rev-2 NOTE: these are COLD-BOOT seeds only — the NK's interrupt save
+		// dynamically overwrites them (stw r10,0xfc(r6) etc., the scheduler's
+		// [r6+0xfc]/+0x13c..0x16c save/restore convention, memo §2.4) once the
+		// first real round-trip happens; the rung-2 ongoing-entry contract owns
+		// their steady-state values.
+		WriteMacInt32(ctx + 0xfc, (uint32)ROMBase + 0x46f900);  // dispatch → ongoing entry (mirror)
 		WriteMacInt32(ctx + 0x1c4, reset_68k);   // saved r24 = 68k reset PC
-		WriteMacInt32(ctx + 0x1ec, (uint32)ROMBase + 0x380000);  // saved r29 = dispatch table
+		WriteMacInt32(ctx + 0x1ec, (uint32)ROMBase + 0x480000);  // saved r29 = mirror dispatch table
 
 		// Build 0x97-entry 68k opcode handler table at ECB+0x7fc.
 		// Each entry = halfword from ROM+0x36dc42 OR'd with page base.
@@ -1968,8 +1994,8 @@ void init_emul_ppc(void)
 		WriteMacInt32(XLM_KERNEL_DATA, kdp);
 		fprintf(stderr, "[NW-TRAMP] ECB pre-populated: dispatch=%08x r24=%08x r29=%08x "
 		        "table[0x97] at ECB+0x7fc, XLM_KERNEL_DATA=%08x\n",
-		        (uint32)ROMBase + 0x36f900, reset_68k,
-		        (uint32)ROMBase + 0x380000, kdp);
+		        (uint32)ROMBase + 0x46f900, reset_68k,
+		        (uint32)ROMBase + 0x480000, kdp);
 
 		// PATH B DIAGNOSTIC (SS_NW_SYNTH_ENTRY) — may be removable.
 		// Skips the nanokernel and enters DR Emulator directly. Dead end

@@ -411,3 +411,30 @@ writer-skip interaction are attributed only circumstantially. The mechanism core
 dispatch-table geometry, the three-value contract conflict, the probe-verified r29, the
 designed-console identification, and the scheduler anatomy — is as solid as static+probe
 analysis gets without the rung-1 boot.
+
+---
+
+## Wave 1 results (2026-06-11, plan `2026-06-10-m6a-wave1-dr-dispatch.md`)
+
+**Rung 1 verdict: the dispatch repair WORKS — the 68k world runs.**
+
+- **Boot A (MSR off, the stall capture):** zero visits at the console help-text printer
+  `0x504277d0` (was: every boot); first-compiles across the ENTIRE mirror handler table —
+  regions 0x50480000/0x50490000/0x504a0000 (the 0x4efa slot itself at pc=0x504a77d0
+  executed as code, correctly)/0x504b/0x504d/0x504e/0x504f — real 68k opcodes executing
+  through the mirror emulator within 0.01s. **The next wall, captured:** SIGSEGV at guest
+  `pc=0x50466ee0` (mirror emulator internals), `ea=0xffffaad0`, with `r1=0x25f8` (a live
+  68k stack) — the 68k boot code dereferences garbage, the signature of the **patch_68k
+  shim desert** (zero shims installed on 9.0.1): Wave 2's first target. Crash telemetry:
+  `mtspr_dec=4, dec_expiries=1, pending=1 (EE never rose, correctly deferred)`, SCC
+  counters 0 (the boot died long before the console path — consistent).
+- **Boot B (`SS_M6A_USER_MSR=1`, the A/B recon):** dies fast at guest pc=0x50429b40 (the
+  fixup trampoline) with no successful deliveries — the red-team rev-2 finding-1
+  prediction verbatim: EE=1 routes the pending DEC through the unverified
+  interrupt-save/scheduler-restore/always-cold-table[0] plumbing. The gate stays
+  default-OFF; the ongoing-entry contract (rung 2) owns this.
+
+Wave 2 scope confirmed: (1) identify + port the boot-path shim(s) behind pc=0x50466ee0 /
+ea=0xffffaad0 (PATCH-68K-SHIM-INVENTORY + HANDOFF obstacle map); (2) the ongoing-entry
+contract (un-blocks SS_M6A_USER_MSR + live interrupts in the 68k world); (3) io_poll NOP
+retirement. The heartbeat now carries `mmio=S:N/V:N` (PROBE-5 unblocked).

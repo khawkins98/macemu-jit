@@ -26,6 +26,7 @@
 #include "cpu/ppc/ppc-cpu.hpp"
 #ifdef SHEEPSHAVER
 #include "machine_profile.h"   /* M3a Task 4: newworld gate in check_spcflags */
+#include "mmio_bus.h"          /* M6a Wave 1: MMIO region counters on the heartbeat */
 #else
 #include "basic-kernel.hpp"
 #endif
@@ -54,6 +55,31 @@ extern uint8 *ROMBaseHost;
 #include <cstddef>
 #include <unordered_map>
 #include <mach/mach_time.h>
+
+/* M6a Wave 1 telemetry (M6A-DR-HANDOFF-ANALYSIS.md §5.5a / [PROBE-5]): MMIO
+ * region read counters on the heartbeat.  SIGTERM/alarm boot-killers skip the
+ * atexit MMIO stats dump (verified), so the per-region counts ride the periodic
+ * [HB] line instead — same NULL-suffix idiom as exc= (newworld-gated by the
+ * caller; paravirtual heartbeat lines stay byte-identical).  Appends
+ * " mmio=S:<scc reads>/V:<via reads>" to buf; no-op when the bus is inactive. */
+static void hb_append_mmio_suffix(char *buf, size_t buflen)
+{
+	if (!mmio_bus_active)
+		return;
+	char nm[32]; uint32_t base, size; MMIORegionStats st;
+	uint64_t scc_reads = 0, via_reads = 0;
+	bool found = false;
+	for (int i = 0; MMIOBusGetStats(i, nm, &base, &size, &st); i++) {
+		if (strcmp(nm, "scc8530") == 0) { scc_reads = st.reads; found = true; }
+		else if (strcmp(nm, "via6522") == 0) { via_reads = st.reads; found = true; }
+	}
+	if (!found)
+		return;
+	size_t n = strlen(buf);
+	if (n < buflen)
+		snprintf(buf + n, buflen - n, " mmio=S:%llu/V:%llu",
+		         (unsigned long long)scc_reads, (unsigned long long)via_reads);
+}
 
 // B1 execution-weighted profiler: per-PC block execution counts.
 // Lightweight: one hash-map increment per block dispatch. Guarded by
@@ -2198,14 +2224,16 @@ void powerpc_cpu::execute(uint32 entry)
 								static hb_state hb;
 								/* M3a Task 4: [EXC] DEC-delivery counters ride the heartbeat
 								 * (rev 2 M5: SIGALRM boot-killers skip atexit dumps). Newworld
-								 * only — paravirtual heartbeat lines stay byte-identical. */
-								char excbuf[80]; excbuf[0] = 0;
+								 * only — paravirtual heartbeat lines stay byte-identical.
+								 * M6a Wave 1: + MMIO region read counts (memo §5.5a). */
+								char excbuf[160]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
 									uint64_t exc[3];
 									SheepExcStats(exc);
 									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu",
 									         (unsigned long long)exc[0], (unsigned long long)exc[1],
 									         (unsigned long long)exc[2]);
+									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
 								        compiled, rgn_jit_blocks, rgn_jit_to_interp,
@@ -2390,14 +2418,16 @@ void powerpc_cpu::execute(uint32 entry)
 							{
 								static hb_state hb;
 								/* M3a Task 4: [EXC] counters on the heartbeat (see JIT-mode
-								 * call site above). Newworld only. */
-								char excbuf[80]; excbuf[0] = 0;
+								 * call site above). Newworld only.
+								 * M6a Wave 1: + MMIO region read counts (memo §5.5a). */
+								char excbuf[160]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
 									uint64_t exc[3];
 									SheepExcStats(exc);
 									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu",
 									         (unsigned long long)exc[0], (unsigned long long)exc[1],
 									         (unsigned long long)exc[2]);
+									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, false, now, interp_block_count,
 								        0, rgn_interp_blocks, rgn_interp_to_jit,

@@ -1,6 +1,6 @@
 # Implementation Backlog — JIT & Emulation Improvements
 
-> **Status:** 🟡 Active · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Status:** 🟡 Active · **Created:** 2026-06-02 · **Updated:** 2026-06-10
 > **Why this doc exists:** Source-of-truth work list distilled from the research corpus — Tiers A (correctness) / B (cheap) / C (strategic) / D (diagnostics).
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
@@ -129,6 +129,26 @@ working tree on 2026-06-02 and will drift.
   update paths are simplified vs the interpreter's `record_fpscr`/`record_cr1` flow.
 - **Why it matters:** latent correctness debt in FP-control-heavy workloads even though Finder
   boots. Compare the native paths against `ppc-execute.cpp`'s `record_fpscr`/`record_cr1`.
+
+### A8. Audit spcflags reader memory-ordering (audit, not a known bug)
+*From the 2026-06-10 fork-ecosystem sweep — cross-check against [Cronocide/macemu](https://github.com/Cronocide/macemu)'s independent AArch64 attempt. See [`docs/FORK-ECOSYSTEM.md`](../../../FORK-ECOSYSTEM.md) Action #2.*
+
+- **File:** `SheepShaver/src/kpx_cpu/src/cpu/spcflags.hpp`
+- **Question (not a confirmed defect):** the reader methods (`empty()`, `test()`, `get()`) use
+  `memory_order_relaxed`; writers already use `memory_order_release` on a `std::atomic<uint32>`.
+  Cronocide's fork independently hit weak-memory races in this exact area and chose **ACQUIRE**
+  on the same readers (their commit [`ad80ac80`](https://github.com/Cronocide/macemu/commit/ad80ac805bf0935e156684f69ed123a85af44ea2)
+  switched to `ldar`-based acquire loads + `stlr` unlocks).
+- **What to verify:** for every consumer — especially `check_spcflags` consuming
+  `SPCFLAG_CPU_HANDLE_INTERRUPT` — does the reader rely on *seeing memory published by the
+  setter thread* (e.g. a request struct written before the flag is set)? If yes, that reader must
+  be `memory_order_acquire`; if the flag is a pure standalone bit with no associated payload,
+  `relaxed` is correct and no change is needed.
+- **Why it matters:** ARM is a weak-memory target; a too-weak reader is a rare, load-bearing,
+  hard-to-reproduce bug. Cheap to settle by inspection. This repo already solved the *core*
+  spcflags race (release writers + atomics); this is only closing the reader-side question.
+- **Verify:** reasoning + `make test-opcodes` score 100; no behavior change expected if readers
+  are already correct.
 
 ---
 

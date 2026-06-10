@@ -1,7 +1,41 @@
 # macemu Fork Ecosystem Survey
 
-_Last surveyed: 2026-06-09. Covers the kanjitalk755/macemu and cebix/macemu fork networks,
-focusing on changes that may be relevant to this macOS arm64 port._
+_Last full survey: 2026-06-09. **Delta refresh: 2026-06-10** (action queue, completeness
+sweep, freshness re-check, status reconciliation — see [Survey method & refresh](#survey-method--refresh)).
+Covers the kanjitalk755/macemu and cebix/macemu fork networks, focusing on changes that may
+be relevant to this macOS arm64 port._
+
+**Baseline:** all "N commits ahead" counts are measured against `kanjitalk755/macemu` `master`
+tip **2026-06-06** unless noted. **Related docs (division of labor):**
+- [`UPSTREAM-LINEAGE-SYNC.md`](UPSTREAM-LINEAGE-SYNC.md) — the *vertical* inheritance line
+  (cebix→kanjitalk→rcarmo→us), content-diff method, and what's already in-tree. **That doc is
+  the source of truth for "what's integrated"**; this doc surveys the *lateral* sibling forks.
+- [`planning/sheepshaver-research/EMULATOR-RESEARCH-LEADS.md`](planning/sheepshaver-research/EMULATOR-RESEARCH-LEADS.md)
+  — non-macemu PPC JITs (Dolphin et al.); the natural neighbor for JIT-architecture leads.
+- [`planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md`](planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md)
+  — where *code* tasks surfaced here get tracked (a fork survey is not a code tracker).
+
+---
+
+## Next actions (prioritized queue)
+
+Distilled from the catalog below — the few items actually worth doing, vs. the long tail of
+"noted." Effort: **S** surgical / **M** moderate / **L** large idea-mine. Re-derived 2026-06-10.
+
+| # | Action | Source | Effort | Why now | Status |
+|---|--------|--------|:------:|---------|--------|
+| 1 | **Recon sgtbilge's SDL3 + Xcode-26/macOS-26 build shims** (`overrides/macos_util.h`, `sysdeps.h`, SDL3 wiring) — compare against ours; harvest build-plumbing ideas, *not* a merge | [sgtbilge/macemu](https://github.com/sgtbilge/macemu) | M | Only other *live* SheepShaver-on-Apple-Silicon-SDL3 effort; targets macOS 26 Tahoe (ahead of our build target) | ❓ new |
+| 2 | **Audit spcflags reader memory-ordering** — is `memory_order_relaxed` sufficient for `check_spcflags` readers, or should they be `acquire`? (Cronocide independently chose ACQUIRE on the same readers) | Cronocide cross-check → [backlog](planning/sheepshaver-research/research/IMPLEMENTATION-BACKLOG.md) | S | Narrow correctness question on a weak-memory target; cheap to settle | ❓ tracked |
+| 3 | **Verify-by-content (not rebase)** that eyeonpower contiguous-alloc + AndrewNile bulk-mem add anything over our existing `ram_rom_areas_contiguous` path | [eyeonpower](https://github.com/eyeonpower/macemu) / [AndrewNile](https://github.com/AndrewNile/macemu) | S | Both merged upstream; our path is a *different, older* mechanism (`b3b5db54`) — confirm no gap | ❓ |
+| 4 | **Mine audiocontrol-org `script_hook.cpp`** (xdotool-style KEY/CLICK/TYPE/SCREENSHOT host automation) for E2E-harness ideas | [audiocontrol-org](https://github.com/audiocontrol-org/macemu) | M | New since survey; aligns with our E2E/VNC automation work | ❓ |
+| — | **Watch-only** (dormant or divergent; revisit on refresh): zydeco/rootless (macOS-native build, 1yr stale), sirmick/`phoenix-mac-planning` (Unicorn/UAE rework), mihaip (browser/Emscripten), robxnano (meson/qt6/prefs) | various | — | No new work in last month; drifting from upstream | ❓ |
+
+> **Already done (do not re-open):** VDE networking and the SDL3 `UnlockTexture` blit-removal
+> are **cleanly integrated** with cited commits — see [Integrated so far](#integrated-so-far).
+> All four flagged low-level items (VDE, contiguous alloc, bulk mem, SDL3 texture fix) have
+> **merged into kanjitalk755 upstream**. Of those: VDE + SDL3 = integrated; contiguous-alloc
+> *capability* exists in-tree via an older mechanism (`b3b5db54`, not eyeonpower's 2025 code);
+> AndrewNile bulk-mem is **not** confirmed in-tree (→ Action #3 verify-by-content).
 
 ---
 
@@ -26,6 +60,8 @@ Upstream merge: kanjitalk755/macemu@e2a210ef
 | Our commit | Source | Upstream |
 |------------|--------|----------|
 | [`c661ee90`](https://github.com/khawkins98/macemu-jit/commit/c661ee90c7bec1c14b4ce7df8e7af87e77a1e01c) — keyboard grab tracks mouse grab state | [robxnano keyboard-grab branch](https://github.com/robxnano/macemu/tree/keyboard-grab) | [kanjitalk755@e2a210ef](https://github.com/kanjitalk755/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037) |
+| [`166050d7`](https://github.com/khawkins98/macemu-jit/commit/166050d7) — VDE bridge networking exposed as UI option | [quentinmit VDE work](https://github.com/quentinmit/macemu/commit/06d8bc02631b14a023ca29b1bd85bb1c129755db) | [kanjitalk755@06d8bc02 (PR #298, merged 2026-04-19)](https://github.com/kanjitalk755/macemu/commit/06d8bc02631b14a023ca29b1bd85bb1c129755db) |
+| [`dda61521`](https://github.com/khawkins98/macemu-jit/commit/dda61521) — SDL3 default backend + `UnlockTexture` blit-removal | [amcchord SDL3 fix](https://github.com/amcchord/macemu/commit/e596e21583e488d8997f71e3b8509eb51792977e) | [kanjitalk755@e596e215](https://github.com/kanjitalk755/macemu/commit/e596e21583e488d8997f71e3b8509eb51792977e) |
 
 ---
 
@@ -79,18 +115,20 @@ sections below it contain commit-level detail.
 |--------|---------|
 | ❓ | **Pending** — spotted, not yet investigated or decided |
 | ✅ | **Integrated** — cherry-picked into this repo (see [Integrated so far](#integrated-so-far)) |
+| ⬆ | **Upstreamed** — merged into `kanjitalk755/macemu` master; reach it via the vertical sync line ([UPSTREAM-LINEAGE-SYNC](UPSTREAM-LINEAGE-SYNC.md)), not a lateral cherry-pick |
 | ❌ | **Rejected** — reviewed and decided not to integrate (reason noted inline) |
 
 ### At-a-glance: what each fork is trying to do
 
 | Fork | Primary goal / theme | What it's really trying to do | Status |
 |------|----------------------|-------------------------------|--------|
-| [MatthiasWM/kanjitalk_macemu](https://github.com/MatthiasWM/kanjitalk_macemu) | macOS linker fix | Keep kanjitalk's Unix build working on Darwin by avoiding `--export-dynamic` on macOS. | ❓ |
-| [eyeonpower/macemu](https://github.com/eyeonpower/macemu) / [amcchord/macemu](https://github.com/amcchord/macemu) | memory layout + SDL3 fixes | Stabilize BasiliskII/SDL paths on newer hosts with contiguous allocation and SDL3 fixes. | ❓ |
-| [AndrewNile/macemu](https://github.com/AndrewNile/macemu) | larger VM allocation refactor | Rework memory acquisition more broadly than eyeonpower's BasiliskII-only patch. | ❓ |
+| [sgtbilge/macemu](https://github.com/sgtbilge/macemu) | SheepShaver macOS 26 / Xcode 26 / SDL3 Apple Silicon build | Get SheepShaver building on macOS 26 (Tahoe) + Xcode 26 with SDL3 via an `overrides/` shim layer (interpreter/kpx_cpu path, not JIT). | ❓ new |
+| [MatthiasWM/kanjitalk_macemu](https://github.com/MatthiasWM/kanjitalk_macemu) | macOS linker fix | Keep kanjitalk's Unix build working on Darwin by avoiding `--export-dynamic` on macOS. | ⬆ |
+| [eyeonpower/macemu](https://github.com/eyeonpower/macemu) / [amcchord/macemu](https://github.com/amcchord/macemu) | memory layout + SDL3 fixes | Stabilize BasiliskII/SDL paths on newer hosts with contiguous allocation and SDL3 fixes. | ⬆ alloc / ✅ SDL3 |
+| [AndrewNile/macemu](https://github.com/AndrewNile/macemu) | larger VM allocation refactor | Rework memory acquisition more broadly than eyeonpower's BasiliskII-only patch. | ⬆ |
 | [Cronocide/macemu](https://github.com/Cronocide/macemu) | parallel SheepShaver ARM64 JIT bring-up | Add an AArch64 JIT backend and patch resulting freezes/crashes in upstream SheepShaver. | ❓ |
 | [zydeco/macemu](https://github.com/zydeco/macemu) | macOS-native rootless/Xcode build | Make BasiliskII feel like a native macOS app: rootless desktop windows, Xcode/Homebrew fixes, static deps. | ❓ |
-| [quentinmit/macemu](https://github.com/quentinmit/macemu) | VDE networking | Make SheepShaver networking usable with VDE and persistent pref-driven configuration. | ❓ |
+| [quentinmit/macemu](https://github.com/quentinmit/macemu) | VDE networking | Make SheepShaver networking usable with VDE and persistent pref-driven configuration. | ✅ (also ⬆ upstream PR #298) |
 | [audiocontrol-org/macemu](https://github.com/audiocontrol-org/macemu) | networked SCSI bridge lab | Drive external hardware / OS 9 workflows via a `scsi2pi` backend, Docker automation, and deep device-manager tracing. | ❓ |
 | [sirmick/macemu](https://github.com/sirmick/macemu) | Apple Silicon headless/browser streaming | Replace SDL-centric UI assumptions with IPC video and built-in web streaming. | ❓ |
 | [mihaip/macemu](https://github.com/mihaip/macemu) | browser/Emscripten port (Infinite Mac) | Turn BasiliskII/SheepShaver into browser-delivered emulators and polish web-specific UX/media paths. | ❓ |
@@ -114,15 +152,29 @@ sections below it contain commit-level detail.
 
 ## 🔴 High Priority — macOS arm64 / build / memory / JIT
 
+### [sgtbilge/macemu](https://github.com/sgtbilge/macemu) — SheepShaver on macOS 26 (Tahoe) + Xcode 26 + SDL3, Apple Silicon
+- **Status**: ❓ new (found in the 2026-06-10 completeness sweep — was not in the original survey)
+- **Branch**: `master` — 1 ahead / 19 behind kanjitalk755 (single squashed, AI-assisted commit [`e3faca1ad`](https://github.com/sgtbilge/macemu/commit/e3faca1ad))
+- The **closest sibling to this repo's core goal**: SheepShaver on Apple Silicon with SDL3. Adds a
+  `SheepShaver_Xcode26.2.xcodeproj`, an `overrides/macos_util.h` shim (+379), and edits across
+  `kpx_cpu` (ppc-cpu, sheepshaver_glue, nvmemfun), `sysdeps.h` (+58), `video_sdl3.cpp`,
+  `main_unix.cpp` (+256). Ships an `AGENTS.md` declaring the focus: *"Apple Silicon, modern
+  macOS/Xcode, SDL3."*
+- **Important distinction**: this is the **interpreter / kpx_cpu path + build plumbing**, *not* a
+  PPC→ARM64 JIT, and it targets **macOS 26 Tahoe / Xcode 26** — possibly ahead of our current build
+  target. The value is **reconnaissance** (build shims, SDL3 wiring, the `overrides/` approach to
+  modern-macOS portability), not a merge. The single commit bundles a generated `build_log.txt`
+  and deletes old `.pbxproj`s, so the diff needs filtering. → Action #1.
+
 ### [MatthiasWM/kanjitalk_macemu](https://github.com/MatthiasWM/kanjitalk_macemu) — `--export-dynamic` macOS linker fix
-- **Status**: ❓
+- **Status**: ⬆ Upstreamed (PR #296) — reach via the vertical sync line; verify present in our `configure.ac`
 - **Commit**: [`964e8127d6c1`](https://github.com/MatthiasWM/kanjitalk_macemu/commit/964e8127d6c1d584edf4d19fa4ad248b6ebe6d7d) (2026-03-25)
 - **Merged**: into kanjitalk755 as [PR #296](https://github.com/kanjitalk755/macemu/pull/296) on 2026-03-26
 - Fix: conditionally adds `--export-dynamic` only on non-Darwin hosts (macOS linker rejects it)
 - Applies to both `BasiliskII/src/Unix/configure.ac` and `SheepShaver/src/Unix/configure.ac`
 
 ### [eyeonpower/macemu](https://github.com/eyeonpower/macemu) / [amcchord/macemu](https://github.com/amcchord/macemu) — contiguous RAM/ROM/scratch allocation (BasiliskII)
-- **Status**: ❓
+- **Status**: ⬆ Upstreamed (`2d388f76` merged into kanjitalk755; eyeonpower master now 0-ahead). **Caveat (verified 2026-06-10):** our tree already does contiguous RAM+ROM alloc via `ram_rom_areas_contiguous` in `main_unix.cpp`, but that path traces to an *older* Michael Schmitt patch (`b3b5db54`), **not** this 2025 work. Action #3: verify-by-content whether the newer approach adds anything before assuming parity.
 - **Commit**: [`2d388f768246`](https://github.com/eyeonpower/macemu/commit/2d388f768246180aa4263c5c50d511fa13488f55) (2025-12-27)
   - Also present in [amcchord @ `2d388f768246`](https://github.com/amcchord/macemu/commit/2d388f768246180aa4263c5c50d511fa13488f55)
 - Allocates RAM, ROM, and scratch memory as one contiguous block in `BasiliskII/src/Unix/main_unix.cpp`
@@ -130,7 +182,7 @@ sections below it contain commit-level detail.
 - Small, surgical patch; easy to audit
 
 ### [AndrewNile/macemu](https://github.com/AndrewNile/macemu) — bulk memory acquisition (SheepShaver + `vm_alloc`)
-- **Status**: ❓
+- **Status**: ⬆ Upstreamed (`94a9f6cc` is now an ancestor of kanjitalk755 master). **Not** confirmed present in our tree by content (no `vm_alloc.cpp`/`vm.hpp` bulk-acquire signal as of 2026-06-10) — folded into Action #3's verify-by-content.
 - **Commit**: [`94a9f6cc229f`](https://github.com/AndrewNile/macemu/commit/94a9f6cc229f6436b60850484e681f770c0f0080) (2025-07-19)
 - "Acquire memory in bulk" — touches `BasiliskII/src/CrossPlatform/vm_alloc.cpp`,
   `SheepShaver/src/Unix/main_unix.cpp`, `SheepShaver/src/Unix/sysdeps.h`, Windows glue,
@@ -145,13 +197,24 @@ sections below it contain commit-level detail.
   - [`ad80ac805bf0`](https://github.com/Cronocide/macemu/commit/ad80ac805bf0935e156684f69ed123a85af44ea2) (2026-03-19) — fix freezes and crashes
 - This is the most directly relevant "someone else also tried ARM64 SheepShaver JIT" fork in the kanjitalk tree
 - Files touched include `ppc-jit.cpp`, `ppc-cpu.cpp`, `vm.hpp`, AArch64 dyngen headers, `jit-cache.*`, and `configure.ac`
-- Likely useful as a **parallel portability/design reference**, even if this repo's hand-written ARM64 JIT has moved further
+- **Deep-dive verdict (2026-06-10): study-only — opposite architecture.** Cronocide *retargets
+  the legacy kpx_cpu/dyngen micro-op generator* to AArch64 (the `dyngen.c +571`, `jit/aarch64/`
+  dyngen headers, `ppc-jit.cpp` only `+53/-1` — the hand-written core is untouched). This repo
+  deliberately **disables dyngen** (`ENABLE_DYNGEN=0`) and writes ARM64 directly. Their effort is
+  ~3 commits, **aarch64-Linux** (no MAP_JIT/W^X/NATMEM), block-chaining disabled, no confirmed
+  boot. Nothing in their codegen is borrowable (different machine, behind us).
+- **One narrow cross-check fell out** → Action #2: Cronocide's "fix freezes and crashes"
+  (`ad80ac80`) is all weak-memory-ordering fixes; they chose **ACQUIRE** on the spcflags readers
+  (`test()`/`empty()`/`get()`) where this repo uses **`memory_order_relaxed`**
+  (`SheepShaver/src/kpx_cpu/src/cpu/spcflags.hpp`). This repo already solved the core spcflags
+  race with `std::atomic` + release writers; the open question is only whether `relaxed` readers
+  are sufficient for `check_spcflags`. Tracked in IMPLEMENTATION-BACKLOG (audit, not a known bug).
 
 ### [amcchord/macemu](https://github.com/amcchord/macemu) — SDL3 `UnlockTexture` fix
-- **Status**: ❓
+- **Status**: ✅ Integrated as [`dda61521`](https://github.com/khawkins98/macemu-jit/commit/dda61521) (cited in `SheepShaver/src/SDL/video_sdl3.cpp:945`); also ⬆ upstream.
 - **Commit**: [`e596e21583e4`](https://github.com/amcchord/macemu/commit/e596e21583e488d8997f71e3b8509eb51792977e) (2026-01-31)
 - "SDL3: Fixed so that blit is not required in `SDL_UnlockTexture()`"
-- We use SDL3 by default for SheepShaver, so this is still worth checking against our SDL3 path
+- We use SDL3 by default for SheepShaver — backported with the SDL3-default switch.
 
 ### [zydeco/macemu](https://github.com/zydeco/macemu) — macOS aarch64 static link + Xcode build
 - **Status**: ❓
@@ -168,7 +231,7 @@ sections below it contain commit-level detail.
 ## 🟠 Medium-High Priority — networking / alternative host-guest plumbing
 
 ### [quentinmit/macemu](https://github.com/quentinmit/macemu) — VDE support for SheepShaver
-- **Status**: ❓
+- **Status**: ✅ Integrated as [`166050d7`](https://github.com/khawkins98/macemu-jit/commit/166050d7); also ⬆ merged upstream (PR #298, 2026-04-19 — `ss-vde` now 0-ahead). Any further VDE polish should come from current kanjitalk755 master, not this fork.
 - **Commit**: [`06d8bc02631b`](https://github.com/quentinmit/macemu/commit/06d8bc02631b14a023ca29b1bd85bb1c129755db) (2026-05-06)
 - Fixes and extends VDE support in SheepShaver:
   - packets now have correct length (no trailing garbage)
@@ -189,6 +252,9 @@ sections below it contain commit-level detail.
   - [`b42d0fe2b3a8`](https://github.com/audiocontrol-org/macemu/commit/b42d0fe2b3a850fd76b5e3303ade797a838ef50b) — add `--enable-scsi-s2p`
   - [`441b6e103d63`](https://github.com/audiocontrol-org/macemu/commit/441b6e103d63746ee79f4fcc7fbd41c01f12cb79) / [`a87648371cef`](https://github.com/audiocontrol-org/macemu/commit/a87648371ceff45fae29663b7b7290c8e5d806a7) — Docker automation for booting/testing OS 9 with the bridge
 - `os9-minimal` goes much further: Device Manager / Mixed Mode / ROM patch investigation, MESA II probing, and documentation-heavy tracing
+- **New since survey (2026-06-10):** `feature/scsi-network-bridge` active to 2026-04-03 — added a native
+  `script_hook.cpp` automation layer (xdotool-style KEY/CLICK/TYPE/SCREENSHOT, auto-dismiss Disk
+  First Aid). Directly relevant to **our E2E/VNC harness** automation → Action #4.
 - Not directly VDE-related, but very interesting as an **alternative host↔guest I/O strategy** and as an example of emulator-assisted automation work
 
 ---
@@ -196,8 +262,8 @@ sections below it contain commit-level detail.
 ## 🟡 Medium Priority — display / input / UI / browser-facing work
 
 ### [sirmick/macemu](https://github.com/sirmick/macemu) (= [realhidden/macemu](https://github.com/realhidden/macemu)) — IPC video + web streaming for Apple Silicon
-- **Status**: ❓
-- **Branches**: [`master`](https://github.com/sirmick/macemu/tree/master) / [`tutorial-m1-mac`](https://github.com/sirmick/macemu/tree/tutorial-m1-mac) (2025-12 to 2026-01)
+- **Status**: ❓ watch-only — **flagged branch moved (2026-06-10):** `tutorial-m1-mac` is gone, replaced by [`phoenix-mac-planning`](https://github.com/sirmick/macemu/tree/phoenix-mac-planning) (307 ahead / 20 behind), a larger rework adding Unicorn/UAE backend selection + cruft removal. `master` inactive since 2026-01-08.
+- **Branches**: [`master`](https://github.com/sirmick/macemu/tree/master) / `phoenix-mac-planning` (was `tutorial-m1-mac`, now removed)
 - Adds a full **web-streaming video backend** for SheepShaver:
   - IPC-based video capture piped to a built-in HTTP server
   - codecs: AV1 (SVT-AV1), WebP, unreliable DataChannel/WebRTC-style low-latency path
@@ -377,6 +443,11 @@ sections below it contain commit-level detail.
   - [`5cedcccfe1e7`](https://github.com/DMJC/macemu/commit/5cedcccfe1e71824fbc310bdab3db3daddf140c6) — GTK3 prefs controls for ADB joystick prefs
 - Niche, but useful if game-controller support ever matters
 
+### [markymark5127/macemu](https://github.com/markymark5127/macemu) — host battery status → guest (BasiliskII)
+- **Status**: ❓ new (2026-06-10 sweep) — **low relevance**
+- ~3 unique commits ([`1dc1dddf8`](https://github.com/markymark5127/macemu/commit/1dc1dddf8), [`2a1532993`](https://github.com/markymark5127/macemu/commit/2a1532993)) on top of the shared `rickyzhang82` AARCH64 lineage; pipes host battery status into the guest (`prefs_items.cpp`, `main_unix.cpp` "Update battery status from host")
+- BasiliskII-only host-integration feature; no macOS-arm64 / JIT / SheepShaver / SDL3 angle. Noted for completeness only.
+
 ---
 
 ## Forks checked and found low-relevance / mostly mirror-like
@@ -423,9 +494,13 @@ sections below it contain commit-level detail.
 
 ## Quick-reference: best second-look forks
 
+> For the **prioritized, effort-tagged version** of this, see [Next actions](#next-actions-prioritized-queue)
+> at the top. The table below is the broader watchlist.
+
 | Fork | Why re-open it |
 |------|-----------------|
-| [Cronocide/macemu](https://github.com/Cronocide/macemu) | Parallel AArch64 SheepShaver JIT bring-up — closest conceptual neighbor to this repo's core work |
+| [sgtbilge/macemu](https://github.com/sgtbilge/macemu) | **Closest sibling to our goal** — SheepShaver on macOS 26/Xcode 26/SDL3, Apple Silicon (build-plumbing recon) |
+| [Cronocide/macemu](https://github.com/Cronocide/macemu) | Parallel AArch64 SheepShaver JIT — but *dyngen-retarget*, Linux-only, behind us: **study-only** (spcflags cross-check aside) |
 | [zydeco/macemu](https://github.com/zydeco/macemu) | Best macOS-native/rootless/Xcode branch family outside the kanjitalk tree |
 | [quentinmit/macemu](https://github.com/quentinmit/macemu) | Directly relevant VDE quality-of-life fixes |
 | [audiocontrol-org/macemu](https://github.com/audiocontrol-org/macemu) | Most interesting alternative host↔guest I/O / automation direction |
@@ -437,3 +512,48 @@ sections below it contain commit-level detail.
 | [SegHaxx/macemu-flatpak](https://github.com/SegHaxx/macemu-flatpak) | Best packaging/distribution idea mine in the cebix tree: XDG, Flatpak, 64-bit cleanup, legacy-backend removal |
 | [jsdf/macemu](https://github.com/jsdf/macemu) | Historical root of the browser/Emscripten line |
 | [uyjulian/macemu](https://github.com/uyjulian/macemu) | Experimental BasiliskII/macOS simplification + ARAnyM JIT archaeology |
+
+---
+
+## Survey method & refresh
+
+So this survey can be **re-run and falsified** rather than trusted as a frozen snapshot.
+
+**Baseline.** Counts are vs `kanjitalk755/macemu` `master`. Pin the tip when refreshing:
+```bash
+gh api repos/kanjitalk755/macemu --jq '.pushed_at'   # was 2026-06-06 at this refresh
+```
+
+**How forks were enumerated (completeness sweep):**
+```bash
+# All forks of both parents (forks-of-forks do NOT appear here):
+gh api --paginate repos/kanjitalk755/macemu/forks --jq '.[]|"\(.full_name)\t\(.pushed_at)\t\(.size)"'
+gh api --paginate repos/cebix/macemu/forks       --jq '.[]|"\(.full_name)\t\(.pushed_at)\t\(.size)"'
+# For each uncovered, 2024+, non-mirror candidate, measure real divergence:
+gh api repos/kanjitalk755/macemu/compare/master...OWNER:macemu:BRANCH --jq '{ahead:.ahead_by,behind:.behind_by}'
+# Inspect intent without cloning:
+gh api 'repos/OWNER/macemu/commits?sha=BRANCH' --jq '.[].commit.message'
+gh api repos/OWNER/macemu/commits/SHA --jq '.files[]|{filename,additions,deletions,status}'
+```
+Triage bar: ignore 0-ahead mirrors, README/translation-only deltas, committed binaries, and
+anything already covered. The 2026-06-09 baseline covered ~62 owners; the 2026-06-10 sweep over
+~80 kanjitalk + ~120 cebix forks surfaced exactly one on-target miss (sgtbilge) and one footnote
+(markymark5127).
+
+**Coverage boundary (what was *not* swept).** Forks-of-forks of the *other* active children
+(zydeco, sirmick, audiocontrol-org, robxnano) were not deep-swept — only `rcarmo/macemu-jit` and
+`mihaip/macemu` children were spot-checked (low yield: one was our own repo, one a literal mirror).
+A future refresh wanting exhaustiveness should sweep those children's fork lists too.
+
+**When to refresh.** This is a delta-check, not a from-scratch rebuild: (a) when planning a new
+capability that matches a fork's theme (networking, display, build-system), re-check that fork's
+branch list + ahead/behind; (b) opportunistically every ~1–2 months; (c) whenever the
+[Next actions](#next-actions-prioritized-queue) queue empties. On each refresh, bump the
+"Delta refresh" date in the header, re-pin the baseline tip, and reconcile statuses against
+[UPSTREAM-LINEAGE-SYNC](UPSTREAM-LINEAGE-SYNC.md) (the integrated-vs-pending source of truth) so
+the two ledgers don't drift again.
+
+**Provenance note.** Several active forks are AI-assisted (sgtbilge, markymark5127, Cronocide's
+fix commit, jonassvatos's `claude/*` branches). Per the [attribution policy](#attribution-policy),
+cherry-picks must cite source; additionally, **read imported diffs before integrating** — AI-authored
+fork commits often bundle generated artifacts (build logs, `.pbxproj` churn) and need filtering.

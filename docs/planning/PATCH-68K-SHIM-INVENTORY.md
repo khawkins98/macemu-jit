@@ -1,5 +1,13 @@
 # patch_68k() HLE Shim Inventory
 
+> **⚠️ Path A artifact (2026-06-10).** This inventory was built for the NewWorld ROM port
+> (Path A), which manually ported each `find_rom_data` pattern to the 9.0.1 parcels ROM.
+> Path A is superseded by the **[Machine Layer](MACHINE-LAYER-PLAN.md)**, which takes a
+> different approach: proper device models + MMIO bus rather than pattern-by-pattern HLE
+> shimming. This inventory may still be useful if individual `patch_68k()` patterns need
+> attention for the Machine Layer's ROM-patch audit (`docs/planning/sheepshaver-research/`),
+> but it is no longer driving active work.
+
 **Source:** `SheepShaver/src/rom_patches.cpp`, function `patch_68k()` (approx. line 1588–2491)
 
 **Generated:** 2026-06-08 by read-only analysis of the source + `rom-patch-sizing.py` run against:

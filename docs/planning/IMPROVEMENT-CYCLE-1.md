@@ -1,7 +1,12 @@
 # SheepShaver ARM64 JIT — Improvement Cycle 1 (2026-06-04)
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-04
+> **Status:** ⏸ Stale — absorbed into later work · **Created:** 2026-06-04 · **Updated:** 2026-06-10
 > **Why this doc exists:** Sequencing plan for improvement cycle 1 — the current round of JIT correctness + perf work.
+>
+> **⚠️ Note (2026-06-10):** This cycle's correctness items (carry-chain, AltiVec, FP) were
+> completed through sessions 5–8. The OS-ceiling work (item group 3) is now driven by the
+> **[Machine Layer](MACHINE-LAYER-PLAN.md)** rather than this cycle plan. Perf items from
+> the **[Optimization Plan](OPTIMIZATION-PLAN.md)** remain the reference for JIT perf work.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 

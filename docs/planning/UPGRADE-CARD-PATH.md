@@ -1,10 +1,14 @@
 # The Upgrade Card Path — Mac OS 9.2 on the 1.1 ROM
 
-> **⚠️ SUPERSEDED as strategy (2026-06-10) by [`MACHINE-LAYER-PLAN.md`](MACHINE-LAYER-PLAN.md)** —
-> the dual-profile Machine Layer architecture. This doc's gate-bypass + SCC-stall findings remain
-> active tactical inputs (the SCC stall is Machine Layer milestone M1's first consumer).
+> **⚠️ CLOSED — dead end (2026-06-10).** Superseded by [`MACHINE-LAYER-PLAN.md`](MACHINE-LAYER-PLAN.md).
+> The 1.1 ROM is structurally incompatible with Mac OS 9.2.1: (1) the CFM boot fragment
+> audit fails (missing DebugLib/InterfaceLib/etc. — Spike S1), and (2) the Memory Manager
+> heap mismatch corrupts the A-line vector at guest `$28` (confirmed in both JIT and
+> interpreter). Gate-bypass findings and the DSAT/boot-resource methodology remain useful
+> reference for other System file versions. The SCC device model built for M1 was informed
+> by the serial polling stall discovered here.
 >
-> **Status:** 🟡 Gates bypassed, post-splash stall under investigation ·
+> **Status:** 🔴 Closed — structural dead end ·
 > **Created:** 2026-06-09 · **Updated:** 2026-06-10
 >
 > **Key finding:** The 1.1 ROM is actually **NewWorld (type 5)**, not OldWorld. The "upgrade

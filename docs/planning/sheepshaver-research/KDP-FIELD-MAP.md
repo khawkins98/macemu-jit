@@ -1,5 +1,9 @@
 # KDP (Kernel Data Page) Field Map
 
+> **Research reference (2026-06-10).** Originally built for Path A (NW trampoline).
+> Still actively useful — the **[Machine Layer](../MACHINE-LAYER-PLAN.md)** hits KDP
+> fields during nanokernel boot (e.g. the KDP+0x6b4 ceiling fix in `d8932203`).
+
 The NanoKernel's per-CPU data structure, addressed via SPRG0 (= r1 in kernel code).
 Fields at positive offsets from KDP base. Source: `Init.s`, `Reset.s`, `Emulate.s`,
 `Defines.s` from elliotnunn/NanoKernel disassembly, plus reverse-engineering of the

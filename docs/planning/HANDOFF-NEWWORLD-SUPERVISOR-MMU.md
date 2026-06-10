@@ -1,15 +1,18 @@
 # Handoff: New World supervisor-stack fidelity (the PPC MMU / page-table work)
 
-> **Status:** ⏸ **Parked** (2026-06-09) — superseded along with Path B by the **Machine Layer**
-> architecture (2026-06-10): see [`MACHINE-LAYER-PLAN.md`](MACHINE-LAYER-PLAN.md), the active plan.
-> This doc's §2.7 hybrid insight and §3 rung-ladder are absorbed there as components (§2c);
-> §2.8 obstacle map remains the per-wall reference.
-> **Why parked:** Path A's obstacle map (§2.8) shows diminishing forcing-function ROI — remaining
-> work shifts from general PPC bugs to ROM-specific byte-pattern grinding. The 1.1 ROM is proven
-> infrastructure; the Upgrade Card approach builds targeted "enabler" shims on top of it instead
-> of porting the NewWorld nanokernel. All Path A scaffolding is preserved (env-gated on
-> `SS_NW_TRAMPOLINE`) and can be resumed if Experiment 1 shows the Upgrade Card path isn't viable.
-> · **Created:** 2026-06-08 · **Updated:** 2026-06-09
+> **Status:** ⏸ **Parked** (2026-06-09) — superseded by the **[Machine Layer](MACHINE-LAYER-PLAN.md)**
+> (M0+M1 complete as of 2026-06-10). The Machine Layer absorbed this doc's §2.7 hybrid
+> insight and §3 rung-ladder as components (ML §2c); §2.8 obstacle map remains the
+> per-wall reference for nanokernel boot issues.
+>
+> **History:** Path A (this doc) was parked when its obstacle map showed diminishing ROI.
+> The Upgrade Card (Path B) was tried next and **closed as a dead end** — the 1.1 ROM is
+> structurally incompatible with 9.2.1 (CFM fragment gap + A-line vector corruption; see
+> [`UPGRADE-CARD-PATH.md`](UPGRADE-CARD-PATH.md) §2.7-2.8). The Machine Layer supersedes
+> both: proper device models (MMIO bus, SCC 8530, VIA 6522) with the 9.0.1 ROM. The
+> nanokernel now reaches the MMU/SR wall at 0x50326050 — further than Path A ever got.
+> Path A scaffolding is cataloged in [`DEPRECATED-SCAFFOLDING-INVENTORY.md`](DEPRECATED-SCAFFOLDING-INVENTORY.md).
+> · **Created:** 2026-06-08 · **Updated:** 2026-06-10
 > _Markers: ✅ done · 🟡 in progress · ⏸ deferred · ☐ todo._
 
 ---

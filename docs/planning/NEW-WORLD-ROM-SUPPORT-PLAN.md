@@ -1,6 +1,15 @@
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
-> **Status:** 🟡 Phase 2 — 68k init debugging · **Path B (SS_NW_SYNTH_ENTRY) partially working:** DR Emulator cold-start dispatch enters the 68k decode loop (~950K blocks/s, no crash), but 68k PC (r24) goes non-deterministic within the first few hundred instructions — a control-transfer 68k handler (JMP/JSR/RTS/BRA.L) dereferences a guest-memory pointer containing a physical address (0xE000xxxx) that doesn't exist in SheepShaver's flat address model. **ROOT CAUSE FOUND (2026-06-08):** the crash is NOT a JIT/register/MMU bug — it's the expected consequence of missing `patch_68k()` HLE shims. The parcels ROM's 68k init at 0xAD7C is a machine-init module dispatch (new code, not present in 1.1), which jumps to a data header at 0x502FD140 (F-line trap) → uninitialized exception vector → cascading exceptions to address 0. The fix IS the Phase 2 `patch_68k()` HLE porting work. · **Created:** 2026-06-03 · **Updated:** 2026-06-08
+> **⚠️ SUPERSEDED (2026-06-10).** This was "Path A" — manually porting the 9.0.1 ROM's
+> patch requirements onto SheepShaver's existing HLE infrastructure. Parked 2026-06-09
+> (diminishing ROI at the obstacle map in HANDOFF §2.8), then fully superseded by the
+> **[Machine Layer](MACHINE-LAYER-PLAN.md)** architecture which takes the 9.0.1 ROM but
+> builds proper device models underneath it instead of shimming. The Machine Layer's M0
+> and M1 milestones are complete; the nanokernel now boots further than Path A ever reached.
+> This doc is retained as historical reference — the Phase 0 parcel analysis and Phase 2
+> root-cause findings informed the Machine Layer design.
+>
+> **Status:** ⏸ Superseded · **Created:** 2026-06-03 · **Updated:** 2026-06-10
 > **Why this doc exists:** Support New World (parcels/CHRP) ROMs and break the Mac OS 9.0.4 ceiling. Drafted after getting 9.0.4 booting via the 1.1 ROM and building the `rom-inspect` tool.
 >
 > **Phase 0 RESULT (2026-06-07) — and it's PHASE 2, not Phase 1.** Ran the env-gated `find_rom_data`

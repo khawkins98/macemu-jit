@@ -1,7 +1,12 @@
 # Tactical Bug Fix & Feature Plan
 
-> **Status:** 🟡 Active · **Created:** 2026-06-08 · **Updated:** 2026-06-08
+> **Status:** ⏸ Partially superseded · **Created:** 2026-06-08 · **Updated:** 2026-06-10
 > **Why this doc exists:** Compiled tactical bug fix suggestions and strategic optimizations for immediate and mid-term focus.
+>
+> **⚠️ Note (2026-06-10):** Pillar 1 ("Break the OS Ceiling: jump68k handoff") is superseded
+> by the **[Machine Layer](MACHINE-LAYER-PLAN.md)** — the 9.0.1 ROM now boots via proper
+> device models (M0+M1 complete), not HLE shim porting. Pillars 2–5 (CopyBits HLE,
+> BasiliskII build, perf optimization, documentation) remain independently valid.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 
 This document aligns prioritized tactical fixes with the project's five core strategic recommendations.

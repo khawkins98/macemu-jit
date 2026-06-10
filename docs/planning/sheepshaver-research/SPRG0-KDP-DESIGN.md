@@ -1,5 +1,10 @@
 # New World NanoKernel boot-time supervisor environment — DESIGN for SheepShaver
 
+> **⚠️ Path A research artifact (2026-06-10).** This design was for the manual NW trampoline
+> approach. The **[Machine Layer](../MACHINE-LAYER-PLAN.md)** now handles supervisor state
+> setup through the machine-profile module. The KDP field analysis and nanokernel boot
+> sequence documentation remain useful reference for the Machine Layer's MMU work.
+
 Scope: exactly what host-side state SheepShaver must construct before/at entry to the
 parcels (Mac OS ROM 9.0.1) nanokernel so the first spinlock-acquire stops deadlocking.
 

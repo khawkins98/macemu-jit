@@ -1853,6 +1853,16 @@ void init_emul_ppc(void)
 		        irp_base, irp_base + 0xDF0, (uint32)RAMBase, ram_size_bytes);
 
 		ppc_cpu->sprg_reg(0) = kdp;
+		// M3a (Boot-A root cause): the cold MSR fiction 0xf072 claims EE=1 from the
+		// first instruction, so the first DEC expiry delivered into NK COLD-INIT
+		// (all registers zero, LR=0 -> the handler's r7-flag blr exit jumped to 0).
+		// Architecturally reset MSR has EE=0; the OS enables interrupts when ready.
+		// Seed the newworld boot MSR as the fiction MINUS EE (0x7072): delivery
+		// defers (deferred_ee telemetry) until the NK genuinely raises EE, at which
+		// point the Task-3 EE-edge re-raise delivers at the correct moment.
+		// Paravirtual keeps 0xf072 (cold value in init_registers, untouched).
+		ppc_cpu->msr_reg() = 0x7072;
+		fprintf(stderr, "[EXC] boot MSR seeded 0x7072 (EE=0 until the NK enables interrupts)\n");
 		memset(Mac2HostAddr(kdp - 0x1000), 0, 0x1000);
 		WriteMacInt32(kdp - 4, kdp);
 		WriteMacInt32(kdp - 0x20, irp_base);  // [KDP-0x20] = IRP base

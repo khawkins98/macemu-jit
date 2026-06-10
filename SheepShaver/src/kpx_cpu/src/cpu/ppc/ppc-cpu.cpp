@@ -1045,6 +1045,15 @@ void powerpc_cpu::init_registers()
 	ctr() = 0;
 	pc() = 0;
 	for (int i = 0; i < 4; i++) regs().sprg[i] = 0;	// SPRG0-3 must start clean (uninit -> divergence)
+	// Wave 0: zero the pre-existing uninitialized trailing supervisor fields (malloc-
+	// garbage cold-state bug — the regs struct comes from raw operator new). Also
+	// initialize the new sr[16]/msr fields appended last.
+	regs().sdr1 = 0;
+	for (int i = 0; i < 16; i++) regs().bat[i] = 0;
+	regs().srr0 = 0;
+	regs().srr1 = 0;
+	for (int i = 0; i < 16; i++) regs().sr[i] = 0;
+	regs().msr = 0xf072;	// Cold value: byte-identical to old mfmsr hardcode (0xf072).
 }
 
 void powerpc_cpu::init_flight_recorder()

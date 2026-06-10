@@ -363,6 +363,12 @@ enum powerpc_instruction {
 	PPC_I(VUPKLSB),
 	PPC_I(VUPKLSH),
 	PPC_I(VXOR),
+	// Wave 0: SR/MSR stored-state ops (previously execute_illegal; alphabetical)
+	PPC_I(MFSR),
+	PPC_I(MFSRIN),
+	PPC_I(MTMSR),
+	PPC_I(MTSR),
+	PPC_I(MTSRIN),
 	PPC_I(MAX) // Total number of instruction types
 };
 

@@ -2708,15 +2708,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			return true;
 		}
 
-		case 595: /* mfsr — move from segment register (supervisor, treat as NOP returning 0) */
-		{	int hD = ra_store(rd); a64_movz(hD, 0, 0); return true; }
-		case 659: /* mfsrin — same */
-		{	int hD = ra_store(rd); a64_movz(hD, 0, 0); return true; }
-
-		case 83: /* mfmsr rD — match interpreter (execute_mfmsr returns 0xf072).
-		         * Previously returned 0, diverging from the interpreter; that
-		         * divergence is a latent correctness bug independent of AltiVec. */
-		{	int hD = ra_store(rd); emit_load_imm32(hD, 0xf072); return true; }
+		case 595: /* mfsr — Wave 0: SR/MSR are stored state now — single-source through
+		           * the interpreter; the old native constants (0 / 0xf072) equal the
+		           * interpreter's cold values, so paravirtual is byte-identical. */
+		return false;
+		case 659: /* mfsrin — same (fall back to interpreter) */
+		return false;
+		case 83: /* mfmsr — same (fall back to interpreter; cold value 0xf072 preserved) */
+		return false;
 		case 310: /* eciwx rD,rA,rB — external control in word: NOP */
 			return true;
 		case 438: /* ecowx rS,rA,rB — external control out word: NOP */

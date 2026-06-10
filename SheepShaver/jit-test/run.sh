@@ -1774,6 +1774,19 @@ T_av_vsum2sws_neg="3C60C000 60630000 90610600 3C60C000 60630000 90610604 3C60C00
 TEST_ORDER+=(av_vsum2sws_neg)
 # --- repro for the confirmed vspltb/vsplth JIT bug (NOT in TEST_ORDER) ---
 
+# --- Wave 0: SR/MSR stored-state round-trip vectors (Task 1, M5-MMU-SR-WALL-ANALYSIS) ---
+# mtmsr->mfmsr: lis r3,0x1234; ori r3,r3,0x5678 (r3=0x12345678); mtmsr r3; mfmsr r5
+# r5 must equal r3 (0x12345678) to prove the stored-state round-trip works.
+# Uses different source (r3) and dest (r5) registers so the REGDUMP can't vacuously pass.
+T_sr_mtmsr_mfmsr="3C601234 60635678 7C600124 7CA000A6"
+TEST_ORDER+=(sr_mtmsr_mfmsr)
+
+# mtsrin->mfsrin: lis r3,0xDEAD; ori r3,r3,0xBEEF (r3=0xDEADBEEF, value to store);
+# lis r4,0x7000 (r4=0x70000000, r4>>28=7 -> SR[7]); mtsrin r3,r4; mfsrin r5,r4
+# r5 must equal r3 (0xDEADBEEF) to prove SR write/read-back works.
+T_sr_mtsrin_mfsrin="3C60DEAD 6063BEEF 3C807000 7C6021E4 7CA02526"
+TEST_ORDER+=(sr_mtsrin_mfsrin)
+
 # ==== QUARANTINE: confirmed JIT divergences awaiting a fix (ROADMAP A2) ========
 # Run but do NOT count toward pass/fail/score — KNOWN-FAIL repros of a confirmed
 # divergence. When a fix lands they flip xfail→xpass and the harness says "promote".

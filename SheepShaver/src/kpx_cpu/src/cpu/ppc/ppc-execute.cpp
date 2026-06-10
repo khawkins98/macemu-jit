@@ -1276,7 +1276,52 @@ void powerpc_cpu::execute_mffs(uint32 opcode)
 
 void powerpc_cpu::execute_mfmsr(uint32 opcode)
 {
-	operand_RD::set(this, opcode, 0xf072);
+	// Wave 0: return stored MSR (cold value 0xf072 = byte-identical to old hardcode).
+	operand_RD::set(this, opcode, regs().msr);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtmsr(uint32 opcode)
+{
+	// Wave 0: store MSR (previously silently dropped via execute_illegal).
+	// Replicate the SS_LOG_ILLEGAL mtmsr/MSR[VEC] telemetry from execute_illegal
+	// (:167-171) — live AltiVec-probe diagnostic; must not be orphaned.
+	uint32 rs = rS_field::extract(opcode);
+	uint32 val = gpr(rs);
+	regs().msr = val;
+	if (getenv("SS_LOG_ILLEGAL") && *getenv("SS_LOG_ILLEGAL") &&
+	    *getenv("SS_LOG_ILLEGAL") != '0') {
+		fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsr pc=%08x op=%08x rS=r%u val=%08x MSR[VEC]=%s\n",
+		        pc(), opcode, rs, val, (val & 0x02000000) ? "SET" : "clear");
+	}
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsr(uint32 opcode)
+{
+	// Wave 0: store to segment register SR[n] (previously silently dropped).
+	regs().sr[SR_field::extract(opcode)] = gpr(rS_field::extract(opcode));
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsrin(uint32 opcode)
+{
+	// Wave 0: store to SR indexed by high 4 bits of rB (previously silently dropped).
+	regs().sr[gpr(rB_field::extract(opcode)) >> 28] = gpr(rS_field::extract(opcode));
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mfsr(uint32 opcode)
+{
+	// Wave 0: return stored SR[n] (previously returned 0 from JIT / garbage from interp).
+	operand_RD::set(this, opcode, regs().sr[SR_field::extract(opcode)]);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mfsrin(uint32 opcode)
+{
+	// Wave 0: return stored SR indexed by high 4 bits of rB (previously returned 0).
+	operand_RD::set(this, opcode, regs().sr[gpr(rB_field::extract(opcode)) >> 28]);
 	increment_pc(4);
 }
 

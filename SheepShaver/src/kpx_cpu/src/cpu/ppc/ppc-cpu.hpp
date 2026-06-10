@@ -310,6 +310,11 @@ public:
 	// emulation in init_emul_ppc). i in [0,3].
 	uint32 & sprg_reg(int i) { return regs().sprg[i]; }
 	uint32 & sdr1_reg() { return regs().sdr1; }
+	uint32 & bat_reg(int i) { return regs().bat[i]; }
+	uint32 & srr0_reg() { return regs().srr0; }
+	uint32 & srr1_reg() { return regs().srr1; }
+	uint32 & sr_reg(int i) { return regs().sr[i]; }   // Wave 0
+	uint32 & msr_reg() { return regs().msr; }          // Wave 0
 
 	// Set syscall callback
 	void set_syscall_callback(syscall_fn fn) { execute_do_syscall = fn; }
@@ -449,6 +454,11 @@ private:
 	template< class Rc >
 	void execute_mffs(uint32 opcode);
 	void execute_mfmsr(uint32 opcode);
+	void execute_mtmsr(uint32 opcode);   // Wave 0: SR/MSR stored state
+	void execute_mtsr(uint32 opcode);
+	void execute_mtsrin(uint32 opcode);
+	void execute_mfsr(uint32 opcode);
+	void execute_mfsrin(uint32 opcode);
 	template< class SPR >
 	void execute_mfspr(uint32 opcode);
 	template< class TBR >

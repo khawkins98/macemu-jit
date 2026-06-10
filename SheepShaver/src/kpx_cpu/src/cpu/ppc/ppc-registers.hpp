@@ -268,6 +268,15 @@ struct powerpc_registers
 								// address ranges, then uses those logical addresses for page tables/free lists.
 	uint32 srr0;				// SRR0 (SPR 26) — Save/Restore Register 0 (exception return PC).
 	uint32 srr1;				// SRR1 (SPR 27) — Save/Restore Register 1 (exception return MSR).
+	uint32 sr[16];				// Segment registers SR0-15 (mtsr/mtsrin/mfsr/mfsrin). Previously
+								// dropped via execute_illegal; the NK's MMU/segment-fault service
+								// routines (ROM 0x325c00-0x326160) write an SR and READ IT BACK
+								// (mfsrin after mtsrin) - dropped writes made that read garbage.
+								// Stored state only: nothing consults SRs for translation (V=P).
+	uint32 msr;					// MSR. Previously absent (mfmsr hardcoded 0xf072, mtmsr dropped).
+								// Stored state only in Wave 0 - MSR[DR/EE] semantics land in M3a.
+								// COLD VALUE MUST BE 0xf072 (init in powerpc_cpu init/reset) so
+								// mfmsr-before-any-mtmsr is byte-identical to the old hardcode.
 };
 
 #endif /* PPC_REGISTERS_H */

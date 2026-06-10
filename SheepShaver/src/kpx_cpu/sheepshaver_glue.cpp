@@ -196,6 +196,21 @@ public:
 	// entry. spcflags() is protected on the base; expose a public reset here.
 	void reset_spcflags_for_test() { spcflags().init(); }
 
+	// Batch opcode-test helper: reset the trailing supervisor block (sprg/sdr1/bat/
+	// srr0/srr1/sr/msr) between vectors. Without this, batch and legacy REGDUMPs
+	// diverge for any vector reading state a previous vector wrote (the legacy path
+	// gets a fresh process = fresh init_registers; batch reuses the CPU object).
+	// Wave 0: extended to cover the new sr[16]/msr fields.
+	void reset_supervisor_for_test() {
+		for (int i = 0; i < 4; i++) sprg_reg(i) = 0;
+		sdr1_reg() = 0;
+		for (int i = 0; i < 16; i++) bat_reg(i) = 0;
+		srr0_reg() = 0;
+		srr1_reg() = 0;
+		for (int i = 0; i < 16; i++) sr_reg(i) = 0;
+		msr_reg() = 0xf072;
+	}
+
 	// Batch opcode-test helper: zero the floating-point and AltiVec state that a
 	// freshly-constructed CPU starts with (FPR=0/FPSCR=0 from init_registers, VR=0/
 	// vrsave=0 from the zero-initialized allocation) but that the caller's per-vector
@@ -1285,8 +1300,9 @@ have_ram:
 	if (s_in_batch && s_session_cpu) {
 		cpu = s_session_cpu;
 		cpu->invalidate_cache();          /* clear interp block + decode cache */
-		cpu->reset_fp_vec_for_test();     /* FPR/VR/FPSCR/vrsave back to fresh-CPU state */
-		cpu->reset_spcflags_for_test();   /* AFTER invalidate_cache (which sets a flag) */
+		cpu->reset_fp_vec_for_test();       /* FPR/VR/FPSCR/vrsave back to fresh-CPU state */
+		cpu->reset_spcflags_for_test();     /* AFTER invalidate_cache (which sets a flag) */
+		cpu->reset_supervisor_for_test();   /* Wave 0: sprg/sdr1/bat/srr0/srr1/sr/msr */
 	} else {
 		cpu = new sheepshaver_cpu();
 		if (s_in_batch)

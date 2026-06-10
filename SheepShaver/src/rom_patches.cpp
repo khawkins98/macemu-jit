@@ -1344,19 +1344,32 @@ static bool patch_nanokernel_boot(void)
 		if (g_rom_904_lenient) {
 			// Parcels I/O poll patches (needed for both redirect and diagnostic paths):
 			// the nanokernel polls VIA/CUDA status registers that don't exist in emulation.
+			// M6a Wave 2 (ROM-PATCH-AUDIT: io_poll_beq RETIRE@M6a-Wave2):
+			// M6A-DR-HANDOFF-ANALYSIS.md §5.3 — on the newworld fidelity profile the M1
+			// SCC model answers Tx-ready polls honestly; NOPping the beq prevents polls
+			// from ever reaching the device model, contradicting the machine layer's
+			// premise.  Paravirtual profile keeps the NOP patches unchanged.
+			// Search always runs (verifies targets); byte-patching gated on !newworld.
 			{
 				static const uint32 io_poll_beq_offsets[] = {
 					0x326504, 0x3266f4, 0x326864, 0x326968, 0x326b60
 				};
-				int patched = 0;
+				int found = 0, patched = 0;
 				for (unsigned i = 0; i < sizeof(io_poll_beq_offsets)/sizeof(io_poll_beq_offsets[0]); i++) {
 					uint32 *p = (uint32 *)(ROMBaseHost + io_poll_beq_offsets[i]);
 					if (ntohl(*p) == 0x4182fff4) {  // beq $-0xC
-						*p = htonl(0x60000000);     // nop
-						patched++;
+						found++;
+						if (!MachineProfileIsNewWorld()) {
+							*p = htonl(0x60000000); // nop
+							patched++;
+						}
 					}
 				}
-				fprintf(stderr, "[ROMPATCH] parcels: patched %d/5 I/O poll loops (VIA/CUDA ready-wait)\n", patched);
+				if (MachineProfileIsNewWorld())
+					fprintf(stderr, "[M6a] io_poll_beq ROM patches retired (newworld profile): "
+					        "M1 SCC answers polls honestly — %d/5 beq targets confirmed\n", found);
+				else
+					fprintf(stderr, "[ROMPATCH] parcels: patched %d/5 I/O poll loops (VIA/CUDA ready-wait)\n", patched);
 			}
 
 			// Path A: find the parcels rfi block and redirect via mtctr/bctr

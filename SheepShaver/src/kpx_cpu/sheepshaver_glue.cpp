@@ -1891,76 +1891,50 @@ void HandleInterrupt(powerpc_registers *r)
 	// Interrupt action depends on current run mode
 	switch (ReadMacInt32(XLM_RUN_MODE)) {
 	case MODE_68K:
-		// 68k emulator active, trigger 68k interrupt level 1
-		WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
-		{
+		// 68k emulator active, trigger 68k interrupt level 1.
+		// M3a rev-2 F3/M2: on NewWorld, WriteMacInt16(KDP+0x67c, 1) and the CR-mask
+		// injection are paravirtual fake-delivery machinery; they corrupt live guest
+		// CR / KDP interrupt level mid-NK-execution. Fenced on newworld
+		// (plan 2026-06-10-machine-layer-m3a.md rev 2).
+		if (!MachineProfileIsNewWorld()) {
+			WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
 			uint32 cr_mask = ReadMacInt32(KERNEL_DATA_BASE + 0x674);
 			if (cr_mask != 0)
 				r->cr.set(r->cr.get() | cr_mask);
-			// Always tick Ticks on every VBL — PPC nanokernel spin-waits
-			// (0x5031040c, 0x50313d34, etc.) poll Ticks directly; CR injection
-			// only helps the 68k emulator dispatch path. Real hardware increments
-			// Ticks on every VBL regardless. Safe: the 68k interrupt handler also
-			// increments Ticks, but only after the nanokernel hands off — these
-			// early-boot spin-waits never reach that handoff, so no double-count.
-			WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
 		}
-		// NewWorld: MODE_NATIVE is dead (ppc_excp_tbl/m68k_excp_tbl absent in
-		// 9.0.1+ ROMs), so the MODE_NATIVE interrupt injection above never fires.
-		// The nanokernel's idle/yield loop at 0x5032751c polls only serial — it
-		// needs a PPC exception to break out and dispatch tasks. Inject here,
-		// reusing the same entry point and guard as the MODE_NATIVE path.
-		{
-			static const bool nw_tramp = (ROMType == ROMTYPE_NEWWORLD && MachineProfileIsNewWorld());
-			static int nw_tick = 0;
-			static bool nw_inject_logged = false;
-			if (nw_tramp) {
-				nw_tick++;
-				if (nw_tick == 50) {
-					fprintf(stderr, "[NW-INT] tick 50 reached, pc=%08x r1=%08x — injection enabled\n",
-					        (uint32)r->pc, (uint32)r->gpr[1]);
-				}
-				if (nw_tick >= 50) {
-					uint32 cur_pc = (uint32)r->pc;
-					WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
-					WriteMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc,
-								  ReadMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc)
-								  | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
-					DisableInterrupt();
-					if (!nw_inject_logged) {
-						uint8 ready_flag = ReadMacInt8(KERNEL_DATA_BASE - 0x118);
-						fprintf(stderr, "[NW-INT] first injection: pc=%08x sp=%08x "
-						        "KDP-0x118=%02x r7=%08x\n",
-						        cur_pc, (uint32)r->gpr[1],
-						        ready_flag, (uint32)r->gpr[7]);
-						nw_inject_logged = true;
-					}
-					ppc_cpu->interrupt(ROMBase + 0x312b1c);
-				}
-			}
-		}
+		// Always tick Ticks on every VBL — PPC nanokernel spin-waits
+		// (0x5031040c, 0x50313d34, etc.) poll Ticks directly; CR injection
+		// only helps the 68k emulator dispatch path. Real hardware increments
+		// Ticks on every VBL regardless. Safe: the 68k interrupt handler also
+		// increments Ticks, but only after the nanokernel hands off — these
+		// early-boot spin-waits never reach that handoff, so no double-count.
+		WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
+		// [NW-INT] tick-50 injection deleted (M3a): real DEC delivery via the exception core replaces it (plan 2026-06-10-machine-layer-m3a.md Task 4).
 		break;
     
 #if INTERRUPTS_IN_NATIVE_MODE
 	case MODE_NATIVE:
-		// Dead for NewWorld (9.x) ROMs: the ppc_excp_tbl/m68k_excp_tbl ROM
-		// patches that toggle XLM_RUN_MODE to/from MODE_NATIVE are absent
-		// in 9.0.1+ ROMs. XLM_RUN_MODE stays MODE_68K permanently.
-		// 68k emulator inactive, in nanokernel?
-		if (r->gpr[1] != KernelDataAddr) {
+		// M3a: on newworld, this arm does nothing — stale static entry (0x312b1c),
+		// nested-execute path; M3a delivers via the exception core instead
+		// (plan 2026-06-10-machine-layer-m3a.md Task 4). XLM_RUN_MODE stays MODE_68K
+		// on newworld anyway (M3A-ENTRY-TABLE.md finding 3) — this fence is insurance.
+		if (!MachineProfileIsNewWorld()) {
+			// 68k emulator inactive, in nanokernel?
+			if (r->gpr[1] != KernelDataAddr) {
 
-			// Prepare for 68k interrupt level 1
-			WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
-			WriteMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc,
-						  ReadMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc)
-						  | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
-      
-			// Execute nanokernel interrupt routine (this will activate the 68k emulator)
-			DisableInterrupt();
-			if (ROMType == ROMTYPE_NEWWORLD)
-				ppc_cpu->interrupt(ROMBase + 0x312b1c);
-			else
-				ppc_cpu->interrupt(ROMBase + 0x312a3c);
+				// Prepare for 68k interrupt level 1
+				WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
+				WriteMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc,
+							  ReadMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc)
+							  | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
+
+				// Execute nanokernel interrupt routine (this will activate the 68k emulator)
+				DisableInterrupt();
+				if (ROMType == ROMTYPE_NEWWORLD)
+					ppc_cpu->interrupt(ROMBase + 0x312b1c);
+				else
+					ppc_cpu->interrupt(ROMBase + 0x312a3c);
+			}
 		}
 		break;
 #endif

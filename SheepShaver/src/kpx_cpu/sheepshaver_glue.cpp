@@ -643,7 +643,20 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	cr().set((gpr(11) & 0x0fff0000) | (get_cr() & ~0x0fff0000));
 
 	// Enter nanokernel
+	if (ROMType == ROMTYPE_NEWWORLD) {
+		static int nw_int_count = 0;
+		if (nw_int_count < 5)
+			fprintf(stderr, "[NW-INT] enter handler @%08x, r1=%08x r6=%08x r10(ret)=%08x\n",
+			        entry, (uint32)gpr(1), (uint32)gpr(6), (uint32)gpr(10));
+		nw_int_count++;
+	}
 	execute(entry);
+	if (ROMType == ROMTYPE_NEWWORLD) {
+		static int nw_ret_count = 0;
+		if (nw_ret_count < 5)
+			fprintf(stderr, "[NW-INT] returned from handler, resuming pc=%08x\n", saved_pc);
+		nw_ret_count++;
+	}
 
 	// Restore program counters and branch registers
 	pc() = saved_pc;
@@ -1437,26 +1450,28 @@ void init_emul_ppc(void)
 		const uint32 emul_code_base = (uint32)ROMBase + 0x36d218;
 		WriteMacInt32(kdp + 0x5a0, kdp);             // context ptr = KDP (same as SPRG0)
 		WriteMacInt32(kdp + 0x5a4, emul_code_base);  // 68k code base (primary ROM)
-		// [KDP-0x900] = VIA base address. The nanokernel's SchIdleTask
-		// (0x5032751c) polls VIA IFR via this pointer; if null, check_work
-		// returns -1 and the idle loop spins forever. The Thud console
-		// (0x3263fc) also checks it: non-zero → VIA I/O; zero → skip.
-		// Allocate a fake VIA page so both paths work (reads/writes hit
-		// mapped memory; no real VIA behavior, but no hang either).
-		const uint32 fake_via_addr = kmem_base - 0x1000;
-		if (vm_acquire_fixed(Mac2HostAddr(fake_via_addr), 0x1000) == 0) {
-			memset(Mac2HostAddr(fake_via_addr), 0, 0x1000);
-			uint8 *via = (uint8 *)Mac2HostAddr(fake_via_addr);
-			via[2] = 0x01;   // VIA IFR: bit 0 = timer 1 interrupt pending
-			via[6] = 0x42;   // VIA T1C-L: plausible counter value
-			WriteMacInt32(kdp - 0x900, fake_via_addr);
-			fprintf(stderr, "[NW-TRAMP] fake VIA at %08x, [KDP-0x900]=%08x\n",
-			        fake_via_addr, fake_via_addr);
-		} else {
-			fprintf(stderr, "[NW-TRAMP] WARNING: fake VIA alloc failed at %08x, "
-			        "idle loop will spin\n", fake_via_addr);
-			WriteMacInt32(kdp - 0x900, 0);
-		}
+		// [KDP-0x900] = SCC (serial controller) base address.
+		// The nanokernel's check_work (0x50326880) reads SCC RR0 via this
+		// pointer; if null, returns -1 immediately (no serial hardware).
+		// Non-null: check_work does BAT3-setup, reads RR0 byte 2, checks
+		// bit 0 ("Rx char available"). If set, reads data byte 6.
+		//
+		// WARNING: setting byte 2 bit 0 = 1 causes the nanokernel's idle/yield
+		// primitive (0x503272e0 → idle loop at 0x5032751c) to fall through to
+		// the character-processing path (0x50327540 → Thud debug console),
+		// endlessly consuming phantom characters. Setting byte 2 = 0 with
+		// a non-null base causes check_work's timeout loop (0x50326548) to
+		// self-modify scc[2], creating phantom "char available" state.
+		// Setting the base to 0 is safest — check_work returns -1 immediately.
+		//
+		// The register access pattern (alternating reg#/data writes at
+		// offsets 2 and 6) matches a Zilog SCC (8530), not a VIA 6522.
+		// Leave [KDP-0x900] = 0 (no SCC hardware). check_work returns -1
+		// immediately when the SCC base is null — no BAT setup, no polling,
+		// no risk of the nanokernel's own SCC register writes creating
+		// phantom "char available" state on fake memory.
+		WriteMacInt32(kdp - 0x900, 0);
+		fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0 (no SCC — check_work returns -1)\n");
 		fprintf(stderr, "[NW-TRAMP] dispatch: +0x5a0(ctx)=%08x, +0x5a4(code_base)=%08x, "
 		        "entry=%08x\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);
@@ -1663,10 +1678,47 @@ void HandleInterrupt(powerpc_registers *r)
 			// early-boot spin-waits never reach that handoff, so no double-count.
 			WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
 		}
+		// NewWorld: MODE_NATIVE is dead (ppc_excp_tbl/m68k_excp_tbl absent in
+		// 9.0.1+ ROMs), so the MODE_NATIVE interrupt injection above never fires.
+		// The nanokernel's idle/yield loop at 0x5032751c polls only serial — it
+		// needs a PPC exception to break out and dispatch tasks. Inject here,
+		// reusing the same entry point and guard as the MODE_NATIVE path.
+		{
+			static const bool nw_tramp = (ROMType == ROMTYPE_NEWWORLD && getenv("SS_NW_TRAMPOLINE"));
+			static int nw_tick = 0;
+			static bool nw_inject_logged = false;
+			if (nw_tramp) {
+				nw_tick++;
+				if (nw_tick == 50) {
+					fprintf(stderr, "[NW-INT] tick 50 reached, pc=%08x r1=%08x — injection enabled\n",
+					        (uint32)r->pc, (uint32)r->gpr[1]);
+				}
+				if (nw_tick >= 50) {
+					uint32 cur_pc = (uint32)r->pc;
+					WriteMacInt16(ReadMacInt32(KERNEL_DATA_BASE + 0x67c), 1);
+					WriteMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc,
+								  ReadMacInt32(ReadMacInt32(KERNEL_DATA_BASE + 0x658) + 0xdc)
+								  | ReadMacInt32(KERNEL_DATA_BASE + 0x674));
+					DisableInterrupt();
+					if (!nw_inject_logged) {
+						uint8 ready_flag = ReadMacInt8(KERNEL_DATA_BASE - 0x118);
+						fprintf(stderr, "[NW-INT] first injection: pc=%08x sp=%08x "
+						        "KDP-0x118=%02x r7=%08x\n",
+						        cur_pc, (uint32)r->gpr[1],
+						        ready_flag, (uint32)r->gpr[7]);
+						nw_inject_logged = true;
+					}
+					ppc_cpu->interrupt(ROMBase + 0x312b1c);
+				}
+			}
+		}
 		break;
     
 #if INTERRUPTS_IN_NATIVE_MODE
 	case MODE_NATIVE:
+		// Dead for NewWorld (9.x) ROMs: the ppc_excp_tbl/m68k_excp_tbl ROM
+		// patches that toggle XLM_RUN_MODE to/from MODE_NATIVE are absent
+		// in 9.0.1+ ROMs. XLM_RUN_MODE stays MODE_68K permanently.
 		// 68k emulator inactive, in nanokernel?
 		if (r->gpr[1] != KernelDataAddr) {
 

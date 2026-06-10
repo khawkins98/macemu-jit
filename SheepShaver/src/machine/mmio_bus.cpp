@@ -108,6 +108,16 @@ void MMIOBusWrite(uint32_t addr, unsigned size, uint64_t value)
 	pthread_mutex_unlock(&r->lock);
 }
 
+bool MMIOBusWithRegion(uint32_t addr, void (*fn)(void *), void *opaque)
+{
+	int i = MMIOBusLookup(addr);
+	if (i < 0) return false;
+	pthread_mutex_lock(&regions[i].lock);
+	fn(opaque);
+	pthread_mutex_unlock(&regions[i].lock);
+	return true;
+}
+
 void MMIOBusCountJITFault(uint32_t addr)
 {
 	int i = MMIOBusLookup(addr);

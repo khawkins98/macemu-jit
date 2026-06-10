@@ -62,6 +62,12 @@ extern void mmio_mac2host_abort(uint32_t addr);
 // Returns region index or -1.
 extern int MMIOBusLookup(uint32_t addr);
 
+// Run fn(opaque) while holding the lock of the region owning addr (M2: scheduler
+// callbacks mutating device state - MACHINE-LAYER-PLAN §2g rule 1). Returns false
+// (fn not called) if no region owns addr. Lock-order rule: fn may take the
+// scheduler queue mutex (device -> queue), never the reverse.
+extern bool MMIOBusWithRegion(uint32_t addr, void (*fn)(void *), void *opaque);
+
 // Telemetry: per-region atomic counters.
 struct MMIORegionStats {
 	uint64_t reads, writes, jit_faults, backpatches, idle_sleeps;

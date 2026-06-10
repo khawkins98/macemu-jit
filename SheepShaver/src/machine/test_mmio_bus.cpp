@@ -82,6 +82,14 @@ int main()
 	CHECK(r_inner >= 0);
 	CHECK(MMIOBusGetStats(r_inner, name, &base, &size, &st) && strcmp(name, "inner") == 0);
 
+	// M2: run a callback under the owning region's lock (scheduler callbacks).
+	static uint32_t with_region_called;
+	struct WR { static void fn(void *op) { with_region_called = *(uint32_t *)op + 1; } };
+	uint32_t token = 41;
+	CHECK(MMIOBusWithRegion(0xF3012002, WR::fn, &token));
+	CHECK(with_region_called == 42);
+	CHECK(!MMIOBusWithRegion(0xF2000000, WR::fn, &token));   // no owning region
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

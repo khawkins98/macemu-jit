@@ -64,6 +64,17 @@ Decisions made 2026-06-10 (with Ken):
    verification investment) and adopting QEMU as substrate (TCG replaces our JIT — the
    project's reason to exist). Both are demoted to supporting roles: DingusPPC = device-model
    donor, QEMU = behavioral oracle.
+
+   *Identity check — this is NOT a QEMU fork with JIT ambitions.* QEMU's posture is full LLE
+   (every device real, guest opaque, softmmu, TCG). SheepShaver's posture — which we keep —
+   is a paravirtualized OS runtime (HLE video/disk/network/FS, identity-mapped memory, our
+   JIT, first-class host integration). The Machine Layer adds a **thin LLE crust at the
+   firmware boundary only**: one SCC, a VIA timer surface, a PIC, NVRAM, a clock, honest
+   exception delivery — perhaps 2–3% of a QEMU-style machine model, fenced to exactly the
+   registers the ROM provably probes (machine-description §4). Everything above the firmware
+   stays paravirtual, permanently (§2f). **Anti-drift rule: the day a milestone proposes
+   modeling hardware the ROM doesn't probe, the answer is no — that's rebuilding QEMU,
+   badly; use QEMU (we do — as the oracle).**
 5. **(rev 2) The fidelity profile models exactly ONE machine: Core99-class (Power Mac G3
    B&W/G4 era — KeyLargo MacIO + OpenPIC), the machine QEMU `mac99` and DingusPPC both model
    well and the 9.0.1 ROM targets.** The 1.1 ROM expects Heathrow/Paddington-class hardware —

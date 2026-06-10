@@ -764,12 +764,14 @@ bool PatchROM(void)
 		// at all — post-M3a (real stored MSR) the 68k world otherwise runs with the
 		// NK's EE=0 MSR and the deferral machinery holds interrupts forever.
 		// Site choice (rev 2 finding 5, preferred): trampoline-side GUEST
-		// instructions `lwz r0,-0x964(r1); mtmsr r0` — r1 is still KDP here (the
-		// cold-start only overwrites r1 from guest[0] later), [KDP-0x964] is seeded
-		// 0xd032 by the glue [NW-TRAMP] block, and the architectural mtmsr rides
-		// execute_mtmsr's EE 0→1 edge re-raise (M3a Task 3) — a host-side seed
-		// would bypass that re-raise.  The 222KB zero run leaves ample patch-word
-		// budget (14 insns vs 12).
+		// instructions, with the architectural mtmsr riding execute_mtmsr's EE 0→1
+		// edge re-raise (M3a Task 3) — a host-side seed would bypass that re-raise.
+		// (M6A-ONGOING-ENTRY-DESIGN correction: the original `lwz r0,-0x964(r1)`
+		// assumed r1=KDP, but table[0] arrives with the CONTEXT-RESTORED register
+		// file — r1=0 at cold boot — and the lwz faulted at guest 0-0x964
+		// (Boot B's actual death, ea=0x...fffff69c; delivered_dec was 0: interrupt
+		// plumbing was never reached). UserModeMSR is loaded r1-independently via
+		// immediates instead.)  The 222KB zero run leaves ample patch-word budget.
 		// Env-gated SS_M6A_USER_MSR=1, DEFAULT OFF (rev 2 finding 1): EE=1 during
 		// 68k execution routes the first DEC delivery through unverified NK
 		// save/restore plumbing; Boot A (off) = clean stall capture, Boot B (on) =
@@ -778,9 +780,10 @@ bool PatchROM(void)
 		const bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
 		uint32 b_idx = 11;
 		if (user_msr) {
-			tp[11] = htonl(0x8001F69Cu);  // lwz  r0, -0x964(r1)    r0 = UserModeMSR (0xd032)
-			tp[12] = htonl(0x7C000124u);  // mtmsr r0               EE=1/PR=1 (EE-edge re-raise)
-			b_idx = 13;
+			tp[11] = htonl(0x3C000000u);  // lis  r0, 0             r1-independent immediate load
+			tp[12] = htonl(0x6000D032u);  // ori  r0, r0, 0xd032    r0 = UserModeMSR (EE=1, PR=1)
+			tp[13] = htonl(0x7C000124u);  // mtmsr r0               (EE-edge re-raise fires)
+			b_idx = 14;
 		}
 		// b → mirror cold-start 0x5046e964 (offset computed from the b's own slot)
 		tp[b_idx] = htonl(0x48000000u |

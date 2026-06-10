@@ -1684,7 +1684,7 @@ void HandleInterrupt(powerpc_registers *r)
 		// needs a PPC exception to break out and dispatch tasks. Inject here,
 		// reusing the same entry point and guard as the MODE_NATIVE path.
 		{
-			static const bool nw_tramp = (ROMType == ROMTYPE_NEWWORLD && getenv("SS_NW_TRAMPOLINE"));
+			static const bool nw_tramp = (ROMType == ROMTYPE_NEWWORLD && MachineProfileIsNewWorld());
 			static int nw_tick = 0;
 			static bool nw_inject_logged = false;
 			if (nw_tramp) {

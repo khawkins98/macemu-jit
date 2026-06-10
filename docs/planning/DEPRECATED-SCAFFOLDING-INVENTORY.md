@@ -22,6 +22,18 @@ Paths A and B left env-gated scaffolding across ~5 files. None of it runs unless
 set the env vars. The Machine Layer is a clean-sheet approach that doesn't depend on
 any of it.
 
+> **⚠️ M0 behavior change to reconcile (2026-06-10):** since Machine Layer M0,
+> `SS_NW_TRAMPOLINE=1` is a **deprecated alias for `SS_MACHINE=newworld`** (warning at
+> startup) — it now selects the full fidelity profile, which **also disables the legacy
+> PC-keyed serial-skip hacks and `ignoresegv`** (MACHINE-LAYER-PLAN §2b). Old Path A
+> diagnostic boots therefore behave slightly differently than pre-M0: an unexpected
+> fault aborts loudly instead of being skipped. There is deliberately no profile
+> combination reproducing the exact pre-M0 mix (paravirtual skips + NW scaffolding);
+> if a Path A resumption ever needs it, reconcile by checking out `pre-machine-layer`
+> or splitting the scaffolding gate from the profile. All `getenv("SS_NW_*")` reads now
+> route through `machine_profile.{h,cpp}` (only the legacy mapping and one value-read
+> remain raw).
+
 ---
 
 ## 1. Remove when Machine Layer lands

@@ -1845,8 +1845,7 @@ static bool patch_68k(void)
 		lp = (uint32 *)(ROMBaseHost + base - 0x14);
 		lp[0x00 >> 2] = htonl(ADDR_MAP_PATCH_SPACE - (base - 0x14));
 		{
-			const char *nw = getenv("SS_NW_MODEL");
-			if (nw && *nw && *nw != '0') {
+			if (MachineEnvFlag("SS_NW_MODEL")) {
 				lp[0x10 >> 2] = htonl(0xcc009611);	// BoxFlag byte = 0x96 → $0CB2:$0CB3 = 0x0196 = 406
 				lp[0x60 >> 2] = htonl(0x00000196);	// gestaltMachineType = 406
 				fprintf(stderr, "[NW-MODEL] UniversalInfo BoxFlag=0x96 + gestaltMachineType=406\n");

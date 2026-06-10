@@ -606,6 +606,25 @@ and the boot-critical command subset (RTC, PRAM, ADB autopoll, power-down).
 Estimated M3 scope contribution for the Cuda layer: **M** (200–400 lines, 20–30 unit
 test cases), on top of M2.
 
+**ADB scope DECISION (2026-06-10, with Ken):** M3b implements a **minimal ADB stub** —
+just enough to satisfy the boot-time ADB device scan (Talk R3 responses for a keyboard +
+mouse at the default addresses, autopoll register plumbing) so the Cuda command table and
+SR protocol are fully real but input still flows through the existing paravirtual/HLE
+event path (ADB_interrupt / SDL). **The full implementation — host keyboard/mouse input
+delivered over ADB-through-Cuda (real autopoll packets driving the guest's ADB stack) —
+is deliberately deferred**, to be picked up when the fidelity profile needs guest-visible
+input (likely alongside M7 or the first interactive fidelity boot). Requirements for the
+future pick-up, so the seam stays clean:
+1. The M3b ADB stub must live behind a narrow interface (`adb_stub.{h,cpp}` or
+   equivalent) with the device-address table and Talk/Listen dispatch separated from the
+   Cuda SR state machine — the full version replaces the stub behind the same interface.
+2. The Cuda side must not assume "no unsolicited packets": autopoll timing hooks
+   (M2 scheduler one-shots) are wired but fire into the stub's empty queue.
+3. Donor references for the full version: DingusPPC `devices/common/adb/*` @
+   `92bb6d10549529f9f4031a85c2bc136149535bdc` and QEMU `hw/input/adb*.c` @
+   `de5d8bfd6105d3dd3ae668df9762df244a6d1506`.
+4. Track the deferred item in ROADMAP (M8+/platform features) when M3b lands.
+
 ### 7.3 Summary table
 
 | Component | Approach | Prerequisite | Estimated LOC | Risk |

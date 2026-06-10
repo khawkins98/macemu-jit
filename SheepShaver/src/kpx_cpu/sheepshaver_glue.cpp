@@ -1087,6 +1087,10 @@ static bool ss_parse_hex_words(const char *hex, uint32 *out, size_t max, size_t 
 	return n > 0;
 }
 
+/* SS_SEED_MEM guest-memory poke knob (defined in ppc-cpu.cpp). */
+extern void ss_seed_mem_apply_immediate(void);
+extern void ss_seed_mem_check_pc(uint32_t pc);
+
 /* Batch session state (see ss_run_opcode_test). In batch mode the test RAM, the
  * CPU object, and the JIT code cache are created ONCE and reused across all
  * vectors — reset per vector rather than re-allocated. This is mandatory, not just
@@ -1355,6 +1359,10 @@ have_ram:
 							jit_ok = false;
 							break;
 						}
+						/* SS_SEED_MEM (PC-triggered): mirror the execute()-loop JIT
+						 * block-entry hook here, since the harness drives the JIT
+						 * directly (bypassing execute()). Fires seeds at this block PC. */
+						ss_seed_mem_check_pc(cur);
 						ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
 						fn(cpu->regs_for_jit());
 					}
@@ -1733,6 +1741,10 @@ void init_emul_ppc(void)
 			        ReadMacInt32(0), ReadMacInt32(4));
 		}
 
+		/* SS_SEED_MEM (immediate form): apply the no-PC seeds now — the natural
+		 * "post-init" point, after the nanokernel trampoline has populated the KDP /
+		 * ECB. The PC-triggered form fires later at its target block entry. */
+		ss_seed_mem_apply_immediate();
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 

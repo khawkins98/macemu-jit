@@ -180,6 +180,114 @@ static int parse_probes(const char *env) {
 	return count;
 }
 
+// ---------------------------------------------------------------------------
+// SS_SEED_MEM: no-recompile guest-memory poke knob (developer aid). Mirrors the
+// SS_PROBE_PC style. Two forms:
+//   SS_SEED_MEM=0xADDR=0xVAL[;...]         immediate: applied once at the
+//                                          NW-trampoline-end "post-init" point
+//                                          (ss_seed_mem_apply_immediate).
+//   SS_SEED_MEM=0xPC:0xADDR=0xVAL[;...]    PC-triggered: applied at the FIRST
+//                                          block-entry visit of 0xPC, paralleling
+//                                          the SS_PROBE_PC block-entry hook.
+// Each seed is a single 32-bit write. MMIO-range addresses are refused (like the
+// probe). Up to SEED_MAX entries. Born from the NK spike where a KDP field had to
+// be re-seeded AFTER the nanokernel zeroed it — the PC form does that with no
+// rebuild. NOTE: like SS_PROBE_PC, the block-entry hook lives only in the JIT
+// dispatch path, so the PC-triggered form fires in JIT execution (boot + the
+// SS_TEST_JIT harness loop), not in pure interpreter execution. The immediate form
+// fires at NW-trampoline-end, which a boot reaches but the SS_TEST_HEX harness does
+// not.
+struct seed_entry {
+	bool     has_pc;   // true => PC-triggered; false => immediate
+	uint32_t pc;       // trigger PC (valid when has_pc)
+	uint32_t addr;     // guest address to write
+	uint32_t val;      // 32-bit value to write
+	bool     fired;    // one-shot: applied already
+};
+#define SEED_MAX 16
+static seed_entry s_seeds[SEED_MAX];
+static int s_seed_count = -1;   // -1 = not yet parsed
+
+static int parse_seeds(const char *env) {
+	if (!env || !*env) return 0;
+	char *buf = strdup(env);
+	int count = 0;
+	char *saveptr = NULL;
+	char *tok = strtok_r(buf, ";", &saveptr);
+	while (tok && count < SEED_MAX) {
+		while (*tok == ' ') tok++;
+		// Each token is "ADDR=VAL" or "PC:ADDR=VAL".
+		char *eq = strchr(tok, '=');
+		if (!eq) { tok = strtok_r(NULL, ";", &saveptr); continue; }
+		*eq = '\0';
+		const char *valstr = eq + 1;
+		seed_entry *s = &s_seeds[count];
+		s->fired = false;
+		s->val = (uint32_t)strtoul(valstr, NULL, 16);
+		char *colon = strchr(tok, ':');
+		if (colon) {
+			*colon = '\0';
+			s->has_pc = true;
+			s->pc   = (uint32_t)strtoul(tok, NULL, 16);
+			s->addr = (uint32_t)strtoul(colon + 1, NULL, 16);
+		} else {
+			s->has_pc = false;
+			s->pc   = 0;
+			s->addr = (uint32_t)strtoul(tok, NULL, 16);
+		}
+		count++;
+		tok = strtok_r(NULL, ";", &saveptr);
+	}
+	free(buf);
+	return count;
+}
+
+static void seed_apply(seed_entry *s) {
+	if (s->fired) return;
+	s->fired = true;
+	if (vm_is_mmio(s->addr)) {
+		fprintf(stderr, "[SEED] addr=0x%08x val=0x%08x REFUSED (MMIO range)\n",
+		        s->addr, s->val);
+		fflush(stderr);
+		return;
+	}
+	vm_write_memory_4(s->addr, s->val);
+	if (s->has_pc)
+		fprintf(stderr, "[SEED] pc=0x%08x addr=0x%08x val=0x%08x applied\n",
+		        s->pc, s->addr, s->val);
+	else
+		fprintf(stderr, "[SEED] pc=immediate addr=0x%08x val=0x%08x applied\n",
+		        s->addr, s->val);
+	fflush(stderr);
+}
+
+static inline void ss_seed_mem_ensure_parsed() {
+	if (__builtin_expect(s_seed_count < 0, false)) {
+		s_seed_count = parse_seeds(getenv("SS_SEED_MEM"));
+		if (s_seed_count > 0)
+			fprintf(stderr, "[SEED] parsed %d seed(s) from SS_SEED_MEM\n", s_seed_count);
+	}
+}
+
+// Immediate seeds (no PC): apply once at the post-init point. Non-static: called
+// from the NW-trampoline-end in sheepshaver_glue.cpp.
+void ss_seed_mem_apply_immediate(void) {
+	ss_seed_mem_ensure_parsed();
+	if (s_seed_count <= 0) return;
+	for (int i = 0; i < s_seed_count; i++)
+		if (!s_seeds[i].has_pc) seed_apply(&s_seeds[i]);
+}
+
+// PC-triggered seeds: apply on the first block-entry visit of `pc`. Non-static:
+// called from the JIT block-entry hooks here and the SS_TEST_JIT harness loop.
+void ss_seed_mem_check_pc(uint32_t pc) {
+	ss_seed_mem_ensure_parsed();
+	if (__builtin_expect(s_seed_count <= 0, true)) return;
+	for (int i = 0; i < s_seed_count; i++)
+		if (s_seeds[i].has_pc && !s_seeds[i].fired && s_seeds[i].pc == pc)
+			seed_apply(&s_seeds[i]);
+}
+
 // Instruction mix: aggregate execution counts by primary opcode
 extern "C" void jit_profile_opcode_mix_json(char *buf, int bufsz) {
 	if (!jit_profile_enabled || jit_profile_counts.empty()) {
@@ -1637,6 +1745,11 @@ void powerpc_cpu::execute(uint32 entry)
 								if (jit_verify_n_insns == 0)
 									jit_verify_n_insns = jblk.n_insns; /* freshly compiled */
 							}
+						// SS_SEED_MEM (PC-triggered): apply seeds at this block entry.
+						// Inline-guarded like SS_PROBE_PC so it is ~0 cost on the hot
+						// dispatch path when no seeds are set (-1 -> parse once -> 0 forever).
+						if (__builtin_expect(s_seed_count != 0, false))
+							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
 						// SS_PROBE_PC: dump registers/memory at specified block-entry PCs.
 						// Parsed once; up to PROBE_MAX compares per block when active.
 						{
@@ -2142,6 +2255,11 @@ void powerpc_cpu::execute(uint32 entry)
 							memcpy(&jit_verify_pre_state, regs_ptr(), sizeof(powerpc_registers));
 							jit_verify_n_insns = ppc_jit_aarch64_lookup_n_insns(jit_block_start_pc);
 						}
+						// SS_SEED_MEM (PC-triggered): apply seeds at this block entry.
+						// Inline-guarded like SS_PROBE_PC so it is ~0 cost on the hot
+						// dispatch path when no seeds are set (-1 -> parse once -> 0 forever).
+						if (__builtin_expect(s_seed_count != 0, false))
+							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
 						if (__builtin_expect(s_probe_count > 0, false)) {
 							uint32_t bpc = (uint32_t)jit_block_start_pc;
 							for (int pi = 0; pi < s_probe_count; pi++) {

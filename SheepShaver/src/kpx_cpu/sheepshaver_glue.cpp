@@ -682,7 +682,9 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static int nw_int_count = 0;
 		if (nw_int_count < 5)
-			fprintf(stderr, "[NW-INT] enter handler @%08x, r1=%08x r6=%08x r10(ret)=%08x\n",
+			// (retagged from [NW-INT] in M3a - that mechanism is deleted; this is the
+			// legacy nested-execute interrupt() entry, paravirtual-reachable via MODE_NATIVE)
+			fprintf(stderr, "[NK-ENTER] enter handler @%08x, r1=%08x r6=%08x r10(ret)=%08x\n",
 			        entry, (uint32)gpr(1), (uint32)gpr(6), (uint32)gpr(10));
 		nw_int_count++;
 	}
@@ -690,7 +692,7 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		static int nw_ret_count = 0;
 		if (nw_ret_count < 5)
-			fprintf(stderr, "[NW-INT] returned from handler, resuming pc=%08x\n", saved_pc);
+			fprintf(stderr, "[NK-ENTER] returned from handler, resuming pc=%08x\n", saved_pc);
 		nw_ret_count++;
 	}
 

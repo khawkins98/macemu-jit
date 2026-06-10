@@ -19,12 +19,19 @@ int main()
 	/* --- Test 2: Entry MSR transform (ExcEnter output .msr) --- */
 	{
 		ExcEntryTable tbl = { 0x504268a0u, 0x50312cb0u };
-		/* 0xFFFFFFFF -> ~EXC_MSR_CLEAR_MASK: catches over- AND under-clearing + ME/IP preservation */
+		/* 0xFFFFFFFF -> LITERAL 0xFFFB10CD: catches over- AND under-clearing + ME/IP
+		 * preservation. MUST be a literal, not ~EXC_MSR_CLEAR_MASK - the macro-relative
+		 * form is tautological (a one-bit mask typo passes by construction; a dropped-SE
+		 * mutant survived the suite until this was pinned - quality-review finding). */
 		ExcTransition t = ExcEnter(0x00001000u, 0xFFFFFFFFu, EXC_DECREMENTER, &tbl);
-		CHECK(t.msr == (~EXC_MSR_CLEAR_MASK & 0xFFFFFFFFu));  /* 0xFFFB10CD */
+		CHECK(t.msr == 0xFFFB10CDu);
 		/* 0xf072 -> 0x1040 (hand-derived above: the boot-real transform) */
 		ExcTransition t2 = ExcEnter(0x00001000u, 0xf072u, EXC_DECREMENTER, &tbl);
 		CHECK(t2.msr == 0x1040u);
+		/* FE0|SE|BE|FE1 cluster (0x0F00): all in the clear mask AND in the RFI mask, so
+		 * round-trip tests cannot distinguish wrongly-preserved from cleared - pin here. */
+		ExcTransition t3 = ExcEnter(0x00001000u, 0x0F00u, EXC_DECREMENTER, &tbl);
+		CHECK(t3.msr == 0u);
 	}
 
 	/* --- Test 3: SRR1 = cur_msr & EXC_SRR1_KEEP_MASK --- */

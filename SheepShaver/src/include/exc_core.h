@@ -17,12 +17,14 @@
  *                      IP=0x40 (KEEP), IR=0x20, DR=0x10, RI=0x2.
  *
  *  EXC_SRR1_KEEP_MASK  SRR1 captures only the low 16 bits of the pre-exception MSR;
- *                      upper bits (including POW) are architecturally not preserved.
+ *                      upper bits (including POW) are not preserved through SRR1 for
+ *                      these classes (reserved-zero on this silicon; POW loss by design).
  *
  *  EXC_RFI_MSR_MASK    rfi restores these bits from SRR1; remaining bits come from
- *                      the handler's MSR. Compare with EXC_MSR_CLEAR_MASK: note that
- *                      0xFF73 != 0xEF32 — RI (0x2) and some other bits differ; use
- *                      the correct mask for the correct direction.
+ *                      the handler's MSR. Compare with EXC_MSR_CLEAR_MASK low half:
+ *                      XOR = 0x1041 = ME|IP|LE — rfi RESTORES ME/IP/LE from SRR1
+ *                      while entry PRESERVES ME/IP; use the correct mask for the
+ *                      correct direction.
  *
  *  POW: architecturally lost on rfi. POW is cleared on entry (in EXC_MSR_CLEAR_MASK)
  *  and sits above the 16-bit SRR1 window (EXC_SRR1_KEEP_MASK = 0xFFFF), so it is

@@ -279,22 +279,23 @@ rather than `atexit` because `SIGALRM` from the `perl alarm` wrapper skips `atex
 ```
 [EXC] DEC delivered #N: restart=PPPPPPPP srr1=SSSSSSSS msr=MMMMMMMM -> entry=EEEEEEEE
 ```
-Emitted to stderr on each successful delivery. Fields: `restart` = block-start PC (the
-not-yet-executed restart address stored in SRR0); `srr1` = composed SRR1 (msr & 0x0000FFFF);
-`msr` = new guest MSR after the exception-entry transform; `entry` = guest handler PC.
+Emitted to stderr on the **first 5 deliveries only** (capped; the heartbeat `exc=` field
+is the ongoing counter). Fields: `restart` = block-start PC (the not-yet-executed restart
+address stored in SRR0); `srr1` = composed SRR1 (msr & 0x0000FFFF); `msr` = new guest MSR
+after the exception-entry transform; `entry` = guest handler PC.
 
 ```
-[EXC] FATAL: DEC entry unresolved (SS_EXC_ENTRY not set); halting
+[EXC] FATAL: DEC delivery with unresolved interrupt entry (restart=PPPPPPPP msr=MMMMMMMM) - check SS_EXC_ENTRY
 ```
-Emitted and aborted if the entry table's interrupt_entry is `EXC_PC_UNRESOLVED` when a
-delivery is attempted. Use `SS_EXC_ENTRY` to override without a rebuild.
+(Verbatim grep-able string.) Emitted and aborted if the entry table's interrupt_entry is
+unresolved when a delivery is attempted. Use `SS_EXC_ENTRY` to override without a rebuild.
 
 ```
-[EXC] FATAL: sc entry unresolved — abort; srr0=PPPPPPPP lr=LLLLLLLL r1=RRRRRRRR
+[EXC] FATAL: sc at pc=PPPPPPPP with unresolved syscall entry (SRR0=SSSSSSSS SRR1=TTTTTTTT msr=MMMMMMMM lr=LLLLLLLL r1=RRRRRRRR) - set SS_EXC_ENTRY or SS_EXC_SC=legacy
 ```
-Emitted and aborted when `execute_syscall` fires on the newworld profile and
-`syscall_entry == 0` (default: no sc entry resolved in Task 0). Use `SS_EXC_SC=legacy`
-to fall back to the old behavior without a rebuild.
+(Verbatim grep-able string.) Emitted and aborted when `execute_syscall` fires on the
+newworld profile and `syscall_entry == 0` (default: no sc entry resolved in Task 0).
+`SS_EXC_SC=legacy` falls back to the old no-op behavior without a rebuild.
 
 ### M3a exception-delivery env vars
 

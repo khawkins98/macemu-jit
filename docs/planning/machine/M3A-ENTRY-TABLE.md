@@ -85,6 +85,17 @@ delivery when EE permits, and deferral (with correct re-raise) when EE is masked
 past the console (M6 PPC→68k handoff + M3b external-source wiring). Recorded explicitly
 as a carry-forward, not a regression.
 
+**Carry-forward additions (final-review follow-ups, 2026-06-10):**
+1. The depth-deferral branch (`execute_depth != 1` -> deferred_depth) is **live-untested**
+   (every boot shows `deferred_depth=0`); M3b's deliverability harness vector is its first
+   real exercise.
+2. **Post-close spike:** a disk-attached Mac OS 9 boot (with AND without
+   `SS_ROM_SKIP_JUMP68K`) parks at the SAME console spin (comp=781, identical signature)
+   - the console parking is NOT a diskless artifact; the frontier is the NK
+   handoff/initial-task gap (couples to M6), not external interrupts. Full analysis:
+   `M5A-BOOT-HANDOFF-ANALYSIS.md` (in progress). M3b must not be scoped on the assumption
+   that external-interrupt wiring alone advances the boot.
+
 **Planned debug knob dropped:** `SS_EXC_FORCE` (deliver once ignoring EE) was in the plan
 but never implemented — the deferral evidence (exc=0/1/0 telemetry) came for free from the
 heartbeat, making the knob moot. Noted as dropped.

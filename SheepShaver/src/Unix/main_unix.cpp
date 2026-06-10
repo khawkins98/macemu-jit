@@ -1197,8 +1197,10 @@ int main(int argc, char **argv)
 		}
 	}
 #endif
-	/* Early opcode test mode: bypass all SheepShaver init if SS_TEST_HEX is set */
-	if (getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) {
+	/* Early opcode test mode: bypass all SheepShaver init for the opcode harness.
+	 * SS_TEST_HEX = single vector; SS_TEST_HEX_FILE = batch (all vectors, one process). */
+	if ((getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) ||
+	    (getenv("SS_TEST_HEX_FILE") && *getenv("SS_TEST_HEX_FILE"))) {
 		extern bool ss_run_opcode_test(void);
 		ss_run_opcode_test();
 		return 0;

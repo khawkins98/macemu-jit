@@ -127,6 +127,96 @@ fi
 # for the aarch64 JIT codegen. It does not affect the default Linux usage.
 SS_HARNESS_MODE="${SS_HARNESS_MODE:-interp}"
 
+# SS_HARNESS_BATCH=1 runs ALL vectors in ONE emulator process per mode (via the
+# binary's SS_TEST_HEX_FILE batch path) instead of spawning a fresh process per
+# vector per mode (~700 launches -> 2). The default (unset/0) is byte-identical to
+# the historical per-vector path. The scoring/diff logic and METRIC output are the
+# same in both; only HOW the REGDUMPs are produced differs.
+#
+# Per-vector ISOLATION DELTA (important): the binary's batch path allocates fresh
+# test RAM, a fresh CPU, and (for JIT runs) a fresh JIT code-cache init/exit for
+# EACH vector inside the one process, so per-vector REGISTER and MEMORY state is
+# fully reset between vectors — exactly as if each ran in its own process. What is
+# NOT reset is process-global state that the real emulator also keeps warm across
+# blocks (e.g. atexit handlers); this is acceptable and matches how the emulator
+# actually runs. The equivalence is proven by diffing per-vector REGDUMP content
+# legacy-vs-batch (see docs / the harness README), not just the score.
+SS_HARNESS_BATCH="${SS_HARNESS_BATCH:-0}"
+
+# Generous batch timeout: ONE process runs all vectors, so the per-vector 15s
+# ss_timeout above would kill it partway through. Mirror ss_timeout's portable
+# fallback chain (timeout -> gtimeout -> perl) with a whole-suite budget.
+if command -v timeout >/dev/null 2>&1; then
+    ss_timeout_batch() { timeout -k 10s 600s "$@"; }
+elif command -v gtimeout >/dev/null 2>&1; then
+    ss_timeout_batch() { gtimeout -k 10s 600s "$@"; }
+else
+    ss_timeout_batch() {
+        perl -e '
+            my $kill = 600; my $hard = 10;
+            my $pid = fork();
+            if ($pid == 0) { exec @ARGV or die "exec: $!"; }
+            my $done = 0;
+            local $SIG{ALRM} = sub {
+                if (!$done) { kill "TERM", $pid; alarm $hard; $done = 1; }
+                else { kill "KILL", $pid; }
+            };
+            alarm $kill;
+            waitpid($pid, 0);
+            alarm 0;
+        ' -- "$@"
+    }
+fi
+
+# run_batch <jit|interp> <outdir> <name...>
+#   Writes one "name<TAB>hex" line per vector, runs the emulator ONCE over the
+#   whole list via SS_TEST_HEX_FILE, then splits the combined stderr into
+#   per-vector REGDUMP files <outdir>/<name>.txt using the "=== VECTOR name ==="
+#   frame markers the binary emits. The resulting files are byte-for-byte the same
+#   REGDUMP lines run_ppc_test would have written, so the scoring loop is identical.
+run_batch() {
+    local want_jit="$1"; shift
+    local outdir="$1"; shift
+    mkdir -p "$outdir"
+    local td="$RUN_DIR/batch-${want_jit}-$$-$RANDOM"
+    mkdir -p "$td"
+    cat > "$td/prefs" <<EOF
+nogui true
+nosound true
+nocdrom true
+noclipconversion true
+ramsize 16777216
+EOF
+    local vecfile="$td/vectors.txt"
+    : > "$vecfile"
+    local n hx
+    for n in "$@"; do
+        eval "hx=\"\${T_${n}}\""
+        printf '%s\t%s\n' "$n" "$hx" >> "$vecfile"
+    done
+
+    pkill -f "SheepShaver --config $td/prefs" 2>/dev/null || true
+
+    local jit_env=""
+    [ "$want_jit" = "jit" ] && jit_env="1"
+
+    SDL_VIDEODRIVER=x11 DISPLAY=:99 HOME="$td" \
+      SS_TEST_HEX_FILE="$vecfile" \
+      SS_TEST_DUMP=1 \
+      SS_TEST_JIT="$jit_env" \
+      ss_timeout_batch "$BIN" --config "$td/prefs" \
+      > "$td/emu.log" 2>&1 || true
+
+    # Split combined output into per-vector REGDUMP files by frame marker. The
+    # current vector is the marker's 3rd field; each vector emits exactly one
+    # REGDUMP. A vector that crashed/produced no REGDUMP leaves no file -> the
+    # scoring loop's [ -s out ] check fails it, same as a missing REGDUMP legacy.
+    awk -v dir="$outdir" '
+        /^=== VECTOR / { cur=$3; next }
+        /^REGDUMP:/    { if (cur != "") print > (dir "/" cur ".txt") }
+    ' "$td/emu.log"
+}
+
 # ---- Test runner -------------------------------------------------------------
 # run_ppc_test <name> <hex> <outfile> [jit]
 #   The optional 4th argument, when "jit", sets SS_TEST_JIT=1 so the run drives
@@ -1763,12 +1853,32 @@ fi
 if [ "$infra_fail" = "1" ]; then echo "METRIC infra_fail=1"; echo "ABORT: harness integrity check failed before running any vector" >&2; exit 1; fi
 echo "METRIC infra_fail=0"
 
+# Batch mode: produce all per-vector REGDUMPs up front with ONE process per mode.
+# B_DIR1 holds the reference set, B_DIR2 the comparison set; the scoring loop then
+# just diffs the pre-split files (no per-vector process launch).
+if [ "$SS_HARNESS_BATCH" = "1" ]; then
+    echo "HARNESS batch=1 (one process per mode)" >&2
+    if [ "$SS_HARNESS_MODE" = "jit" ]; then
+        B_DIR1="$RUN_DIR/batch-interp-out"; B_DIR2="$RUN_DIR/batch-jit-out"
+        run_batch interp "$B_DIR1" "${TEST_ORDER[@]}"   # interpreter (reference)
+        run_batch jit    "$B_DIR2" "${TEST_ORDER[@]}"   # JIT
+    else
+        B_DIR1="$RUN_DIR/batch-interp1-out"; B_DIR2="$RUN_DIR/batch-interp2-out"
+        run_batch interp "$B_DIR1" "${TEST_ORDER[@]}"   # determinism run 1
+        run_batch interp "$B_DIR2" "${TEST_ORDER[@]}"   # determinism run 2
+    fi
+fi
+
 for name in "${TEST_ORDER[@]}"; do
     eval "hex=\"\${T_${name}}\""
     out1="$RUN_DIR/${name}-run1.txt"
     out2="$RUN_DIR/${name}-run2.txt"
 
-    if [ "$SS_HARNESS_MODE" = "jit" ]; then
+    if [ "$SS_HARNESS_BATCH" = "1" ]; then
+        # Pre-split per-vector REGDUMP files from the batch runs above.
+        out1="$B_DIR1/${name}.txt"
+        out2="$B_DIR2/${name}.txt"
+    elif [ "$SS_HARNESS_MODE" = "jit" ]; then
         # Equivalence: interpreter REGDUMP (reference) vs JIT REGDUMP.
         run_ppc_test "$name" "$hex" "$out1"           # interpreter (reference)
         run_ppc_test "${name}_jit" "$hex" "$out2" jit # JIT
@@ -1835,4 +1945,11 @@ echo "METRIC fail=$FAIL"
 echo "METRIC total=$TOTAL"
 echo "METRIC score=$SCORE"
 
-rm -rf "$RUN_DIR"
+# SS_HARNESS_KEEP=1 preserves the per-vector REGDUMP files under $RUN_DIR for
+# debugging / equivalence auditing (e.g. diffing legacy-vs-batch output). Default
+# behavior cleans up exactly as before.
+if [ -z "${SS_HARNESS_KEEP:-}" ]; then
+    rm -rf "$RUN_DIR"
+else
+    echo "HARNESS kept run dir: $RUN_DIR" >&2
+fi

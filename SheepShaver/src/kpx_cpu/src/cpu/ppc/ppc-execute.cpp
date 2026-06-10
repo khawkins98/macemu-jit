@@ -176,8 +176,9 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 		}
 	}
 
-	/* In opcode test mode, illegal instruction = clean exit */
-	if (getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) {
+	/* In opcode test mode, illegal instruction = clean exit (single or batch) */
+	if ((getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) ||
+	    (getenv("SS_TEST_HEX_FILE") && *getenv("SS_TEST_HEX_FILE"))) {
 		spcflags().set(SPCFLAG_CPU_EXEC_RETURN);
 		return;
 	}

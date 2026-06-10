@@ -189,6 +189,25 @@ public:
 
 	// Direct access to register state for JIT
 	// powerpc_cpu::_regs is at a known offset from 'this'; regs are 16-byte aligned within
+	// Batch opcode-test helper: clear all special CPU flags between vectors so a
+	// prior vector's SPCFLAG_*_EXEC_RETURN (set by the exec-return sentinel /
+	// illegal handler / invalidate_cache) does not make the next execute() bail at
+	// entry. spcflags() is protected on the base; expose a public reset here.
+	void reset_spcflags_for_test() { spcflags().init(); }
+
+	// Batch opcode-test helper: zero the floating-point and AltiVec state that a
+	// freshly-constructed CPU starts with (FPR=0/FPSCR=0 from init_registers, VR=0/
+	// vrsave=0 from the zero-initialized allocation) but that the caller's per-vector
+	// GPR/CR/XER/LR/CTR setup does NOT touch. The REGDUMP includes FPR and VR (and
+	// FPSCR drives FP rounding), so without this, FP/vector results bleed across
+	// vectors and batch output diverges from the legacy one-process-per-vector path.
+	// (init_registers()/regs() are private on the base; use the public accessors.)
+	void reset_fp_vec_for_test() {
+		for (int i = 0; i < 32; i++) { fpr_dw(i) = 0; vr(i).j[0] = 0; vr(i).j[1] = 0; }
+		fpscr() = 0;
+		vrsave() = 0;
+	}
+
 	void *regs_for_jit() {
 		// Same calculation as regs_ptr() but accessible from public scope
 		char *base = (char *)this;
@@ -1068,9 +1087,42 @@ static bool ss_parse_hex_words(const char *hex, uint32 *out, size_t max, size_t 
 	return n > 0;
 }
 
-bool ss_run_opcode_test(void)
+/* Batch session state (see ss_run_opcode_test). In batch mode the test RAM, the
+ * CPU object, and the JIT code cache are created ONCE and reused across all
+ * vectors — reset per vector rather than re-allocated. This is mandatory, not just
+ * an optimization: per-vector teardown/setup (new sheepshaver_cpu -> vm_acquire of
+ * a fresh decode cache, plus repeated JIT init/exit) accumulates global state
+ * (vm_acquire's monotonic next_address bump allocator never reclaims released
+ * regions) that crashes the process after a few hundred iterations. Reusing the
+ * objects and resetting REGISTER/MEMORY/cache state per vector gives true
+ * per-vector isolation (proven by diffing legacy-vs-batch REGDUMPs) without the
+ * accumulation. Single-vector mode (s_in_batch == false) keeps allocating and
+ * freeing everything per call exactly as before — byte-identical output. */
+static bool               s_in_batch          = false;
+static sheepshaver_cpu   *s_session_cpu       = NULL;
+static uint8             *s_session_ram        = NULL;
+static bool               s_session_jit_inited = false;
+static const size_t       SS_TEST_RAM_SIZE     = 16 * 1024 * 1024;
+
+/* Tear down whatever the batch session allocated. Called once after the batch
+ * loop finishes. No-op outside batch mode. */
+static void ss_test_session_end(void)
 {
-	const char *hex = getenv("SS_TEST_HEX");
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	if (s_session_jit_inited) { ppc_jit_aarch64_exit(); s_session_jit_inited = false; }
+#endif
+	if (s_session_cpu) { delete s_session_cpu; s_session_cpu = NULL; ppc_cpu = NULL; }
+	if (s_session_ram) { munmap(s_session_ram, SS_TEST_RAM_SIZE); s_session_ram = NULL; }
+}
+
+/* Run a single opcode test vector (hex = space/comma/semicolon-separated 32-bit
+ * PPC words). In single-vector mode this is fully self-contained: maps fresh test
+ * RAM at a fixed guest address, creates a fresh CPU, executes (interp or JIT per
+ * SS_TEST_JIT), emits the REGDUMP, then tears everything down. In batch mode
+ * (s_in_batch) it reuses the persistent session resources and resets per-vector
+ * state instead — see ss_test_session_end and the batch note in jit-test/run.sh. */
+static bool ss_run_one_vector(const char *hex)
+{
 	if (!(hex && *hex))
 		return false;
 
@@ -1081,7 +1133,7 @@ bool ss_run_opcode_test(void)
 		return true;
 	}
 
-	const size_t test_ram_size = 16 * 1024 * 1024;
+	const size_t test_ram_size = SS_TEST_RAM_SIZE;
 
 	/* Guest (Mac) base address of the test RAM. The interpreter translates
 	   guest -> host via vm_do_get_real_address(); see how the two addressing
@@ -1089,6 +1141,19 @@ bool ss_run_opcode_test(void)
 	   boot path uses for RAMBase (RAM_BASE in main_unix.cpp). */
 	const uint32 test_base = 0x10000000UL;
 	uint8 *test_ram = NULL;
+
+	/* Batch: reuse the session RAM mapping (zeroed below) instead of remapping. */
+	if (s_in_batch && s_session_ram) {
+		test_ram = s_session_ram;
+#if REAL_ADDRESSING
+		RAMBase = (uint32)(uintptr_t)test_ram;
+#else
+		RAMBase = test_base;
+#endif
+		RAMBaseHost = test_ram;
+		RAMSize = test_ram_size;
+		goto have_ram;
+	}
 
 #if REAL_ADDRESSING
 	/* REAL_ADDRESSING: guest address == host address (as uint32), so the
@@ -1121,26 +1186,36 @@ bool ss_run_opcode_test(void)
 	   high host address NATMEM_OFFSET + test_base, exactly like the working
 	   main boot path (main_unix.cpp: vm_mac_acquire_fixed(RAM_BASE, ...)).
 	   No PROT_EXEC: the interpreter never executes from guest RAM directly,
-	   and the JIT uses its own MAP_JIT code cache. */
-	uint8 *test_host = Mac2HostAddr(test_base);
-	test_ram = (uint8 *)mmap(
-		(void *)test_host, test_ram_size,
-		PROT_READ | PROT_WRITE,
-		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-		-1, 0);
-	if (test_ram == MAP_FAILED || test_ram != test_host) {
-		fprintf(stderr, "SS_TEST: cannot map test RAM at %p (guest 0x%08x): %s\n",
-			(void *)test_host, test_base, strerror(errno));
-		if (test_ram != MAP_FAILED) munmap(test_ram, test_ram_size);
-		return true;
+	   and the JIT uses its own MAP_JIT code cache.
+	   (Braced so test_host's scope ends before the have_ram label — a goto may
+	   not jump over a variable initialization that is still in scope.) */
+	{
+		uint8 *test_host = Mac2HostAddr(test_base);
+		test_ram = (uint8 *)mmap(
+			(void *)test_host, test_ram_size,
+			PROT_READ | PROT_WRITE,
+			MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			-1, 0);
+		if (test_ram == MAP_FAILED || test_ram != test_host) {
+			fprintf(stderr, "SS_TEST: cannot map test RAM at %p (guest 0x%08x): %s\n",
+				(void *)test_host, test_base, strerror(errno));
+			if (test_ram != MAP_FAILED) munmap(test_ram, test_ram_size);
+			return true;
+		}
 	}
 	/* RAMBase is the guest address; RAMBaseHost is the host pointer. */
 	RAMBase = test_base;
 #endif
 
-	memset(test_ram, 0, test_ram_size);
 	RAMBaseHost = test_ram;
 	RAMSize = test_ram_size;
+	if (s_in_batch)
+		s_session_ram = test_ram;   /* first batch vector: remember for reuse */
+
+have_ram:
+	/* Always start each vector from zeroed RAM (fresh mapping is already zero;
+	   a reused session mapping must be re-cleared so prior vectors don't bleed). */
+	memset(test_ram, 0, test_ram_size);
 
 	const uint32 code_offset = 0x4000;
 	const uint32 stack_offset = test_ram_size - 0x4000;
@@ -1194,8 +1269,19 @@ bool ss_run_opcode_test(void)
 	}
 #endif
 
-	/* Create CPU */
-	sheepshaver_cpu *cpu = new sheepshaver_cpu();
+	/* Create CPU (batch: reuse the session CPU, resetting its caches + spcflags so
+	   the same guest PC recompiles fresh and no execute-return flag bleeds over). */
+	sheepshaver_cpu *cpu;
+	if (s_in_batch && s_session_cpu) {
+		cpu = s_session_cpu;
+		cpu->invalidate_cache();          /* clear interp block + decode cache */
+		cpu->reset_fp_vec_for_test();     /* FPR/VR/FPSCR/vrsave back to fresh-CPU state */
+		cpu->reset_spcflags_for_test();   /* AFTER invalidate_cache (which sets a flag) */
+	} else {
+		cpu = new sheepshaver_cpu();
+		if (s_in_batch)
+			s_session_cpu = cpu;
+	}
 	ppc_cpu = cpu;
 
 	for (int i = 0; i < 32; i++)
@@ -1225,7 +1311,20 @@ bool ss_run_opcode_test(void)
 	{
 		const char *use_jit = getenv("SS_TEST_JIT");
 		if (use_jit && *use_jit && strcmp(use_jit, "0") != 0) {
-			if (ppc_jit_aarch64_init(1024)) {
+			/* Batch: init the JIT once for the session, then flush (reset the code
+			   cache to base) per vector so the same guest PC recompiles fresh.
+			   Single: init/exit around this one vector as before. */
+			bool jit_ready;
+			if (s_in_batch) {
+				if (!s_session_jit_inited)
+					s_session_jit_inited = ppc_jit_aarch64_init(1024);
+				else
+					ppc_jit_aarch64_flush();
+				jit_ready = s_session_jit_inited;
+			} else {
+				jit_ready = ppc_jit_aarch64_init(1024);
+			}
+			if (jit_ready) {
 				ppc_jit_block jblk;
 				if (ppc_jit_aarch64_compile(test_addr, test_ram, test_ram_size, &jblk)) {
 					fprintf(stderr, "SS_TEST_JIT: compiled %d PPC insns -> %zu bytes native (complete=%d)\n",
@@ -1260,14 +1359,14 @@ bool ss_run_opcode_test(void)
 						fn(cpu->regs_for_jit());
 					}
 					fprintf(stderr, "SS_TEST_JIT: native execution complete\n");
-					ppc_jit_aarch64_exit();
+					if (!s_in_batch) ppc_jit_aarch64_exit();
 					if (jit_ok)
 						goto regdump;
 					/* Fall through to interpreter to complete from current PC. */
 					cpu->execute((uint32)cpu->get_register(powerpc_registers::PC).i);
 					goto regdump;
 				}
-				ppc_jit_aarch64_exit();
+				if (!s_in_batch) ppc_jit_aarch64_exit();
 			}
 			fprintf(stderr, "SS_TEST_JIT: fallback to interpreter\n");
 		}
@@ -1304,10 +1403,71 @@ regdump:
 		fprintf(stderr, "\n");
 	}
 
-	delete cpu;
-	ppc_cpu = NULL;
-	munmap(test_ram, test_ram_size);
+	/* Batch keeps the CPU + RAM alive for the next vector (torn down once by
+	   ss_test_session_end). Single mode frees everything here, as before. */
+	if (!s_in_batch) {
+		delete cpu;
+		ppc_cpu = NULL;
+		munmap(test_ram, test_ram_size);
+	}
 	return true;
+}
+
+/*
+ *  Opcode test entry point. Two modes:
+ *
+ *   - Single (SS_TEST_HEX=...): runs one vector. Output is byte-identical to the
+ *     historical path (just the REGDUMP line).
+ *
+ *   - Batch (SS_TEST_HEX_FILE=/path): runs ALL vectors in ONE process. The file
+ *     is one vector per line, "name<TAB>hexwords". Each vector is preceded by a
+ *     "=== VECTOR name ===" frame marker on stderr so the harness can split the
+ *     combined output, then runs through ss_run_one_vector() against the persistent
+ *     session resources (one CPU, one RAM mapping, one JIT cache), with per-vector
+ *     RAM zero + register reset + cache invalidate/flush giving full per-vector
+ *     register/memory isolation. This collapses the harness from ~700 process
+ *     launches to 2 — see ss_run_one_vector / ss_test_session_end.
+ */
+bool ss_run_opcode_test(void)
+{
+	const char *file = getenv("SS_TEST_HEX_FILE");
+	if (file && *file) {
+		FILE *f = fopen(file, "r");
+		if (!f) {
+			fprintf(stderr, "SS_TEST_HEX_FILE: cannot open %s: %s\n", file, strerror(errno));
+			return true;
+		}
+		s_in_batch = true;
+		char line[8192];
+		while (fgets(line, sizeof(line), f)) {
+			/* Strip trailing newline / CR */
+			size_t len = strlen(line);
+			while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+				line[--len] = '\0';
+			if (len == 0) continue;
+			/* Split "name<TAB>hex". Tolerate spaces around the tab. */
+			char *tab = strchr(line, '\t');
+			if (!tab) continue;        /* malformed line: skip */
+			*tab = '\0';
+			char *name = line;
+			char *hex = tab + 1;
+			while (*name == ' ') name++;
+			while (*hex == ' ' || *hex == '\t') hex++;
+			fprintf(stderr, "=== VECTOR %s ===\n", name);
+			fflush(stderr);
+			ss_run_one_vector(hex);
+			fflush(stderr);
+		}
+		fclose(f);
+		ss_test_session_end();
+		s_in_batch = false;
+		return true;
+	}
+
+	const char *hex = getenv("SS_TEST_HEX");
+	if (!(hex && *hex))
+		return false;
+	return ss_run_one_vector(hex);
 }
 void init_emul_ppc(void)
 {

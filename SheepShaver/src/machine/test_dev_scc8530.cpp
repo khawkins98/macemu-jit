@@ -64,6 +64,54 @@ int main()
 	CHECK(SCCRead(&scc, BASE + 6, 1) == 0 && SCCRead(&scc, BASE + 4, 1) == 0);
 	CHECK(scc.rr0_polls > 0);
 
+	// --- SCCInjectRx: Rx queue injection ---
+	SCCReset(&scc, BASE);
+
+	// Inject 2 bytes on ch A; RR0 bit0 must be 1 immediately.
+	SCCInjectRx(&scc, SCC_CH_A, 'H');
+	SCCInjectRx(&scc, SCC_CH_A, 'i');
+	uint8_t rr0_rx = ctlr_a();
+	CHECK((rr0_rx & 0x01) == 0x01);           // bit0: Rx character available
+	CHECK((rr0_rx & 0x04) == 0x04);           // bit2: Tx buffer empty still set
+	CHECK(!SCCReadIsIdle(&scc, BASE + 2, rr0_rx)); // NOT idle when char waiting
+
+	// Pop first byte via data read (+6 = ch A data).
+	uint8_t b0 = (uint8_t)SCCRead(&scc, BASE + 6, 1);
+	CHECK(b0 == 'H');
+	CHECK(scc.rx_consumed == 1);
+
+	// Second byte still queued: RR0 bit0 still 1.
+	CHECK((ctlr_a() & 0x01) == 0x01);
+
+	// Pop second byte.
+	uint8_t b1 = (uint8_t)SCCRead(&scc, BASE + 6, 1);
+	CHECK(b1 == 'i');
+
+	// Queue now empty: RR0 bit0 = 0 again; data read returns 0.
+	uint8_t rr0_empty = ctlr_a();
+	CHECK((rr0_empty & 0x01) == 0x00);
+	CHECK(SCCReadIsIdle(&scc, BASE + 2, rr0_empty));
+	CHECK(SCCRead(&scc, BASE + 6, 1) == 0);
+	CHECK(scc.rx_injected == 2 && scc.rx_consumed == 2);
+
+	// Queue-full drop: fill to SCC_RX_QUEUE_MAX, then one more is dropped.
+	SCCReset(&scc, BASE);
+	for (int i = 0; i < SCC_RX_QUEUE_MAX; i++) SCCInjectRx(&scc, SCC_CH_A, (uint8_t)i);
+	CHECK(scc.rx_count[SCC_CH_A] == SCC_RX_QUEUE_MAX);
+	SCCInjectRx(&scc, SCC_CH_A, 0xFF);       // should drop
+	CHECK(scc.rx_dropped == 1);
+	CHECK(scc.rx_count[SCC_CH_A] == SCC_RX_QUEUE_MAX);
+
+	// Ch B is independent: injecting on B does not affect ch A's queue.
+	SCCReset(&scc, BASE);
+	SCCInjectRx(&scc, SCC_CH_B, 'X');
+	CHECK((ctlr_a() & 0x01) == 0x00);        // ch A still empty
+	CHECK(scc.rx_count[SCC_CH_B] == 1);
+	// Ch B data read (+4 = ch B data) pops the byte.
+	uint8_t bx = (uint8_t)SCCRead(&scc, BASE + 4, 1);
+	CHECK(bx == 'X');
+	CHECK(scc.rx_count[SCC_CH_B] == 0);
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

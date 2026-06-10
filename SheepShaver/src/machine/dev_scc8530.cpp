@@ -19,11 +19,25 @@ static int decode_ch(uint32_t off, bool *is_data)
 	return (off & 2) ? SCC_CH_A : SCC_CH_B;
 }
 
+void SCCInjectRx(SCC8530 *s, int ch, uint8_t byte)
+{
+	// Caller holds the MMIOBus region lock.  No malloc, no stdio.
+	if (s->rx_count[ch] >= SCC_RX_QUEUE_MAX) {
+		s->rx_dropped++;
+		return;
+	}
+	uint8_t tail = (s->rx_head[ch] + s->rx_count[ch]) % SCC_RX_QUEUE_MAX;
+	s->rx_queue[ch][tail] = byte;
+	s->rx_count[ch]++;
+	s->rx_injected++;
+}
+
 static uint8_t read_rr(SCC8530 *s, int ch, uint8_t rr)
 {
 	switch (rr) {
-	case 0:  return 0x04;                  // bit2 Tx Buffer Empty=1; bit0 Rx avail=0 (no source)
-	case 1:  return 0x01;                  // bit0 All Sent=1; bits4-6 errors=0
+	case 0:  return 0x04 | (s->rx_count[ch] > 0 ? 0x01 : 0x00);
+	                               // bit2 Tx Buffer Empty=1; bit0 Rx avail = queue non-empty
+	case 1:  return 0x01;          // bit0 All Sent=1; bits4-6 errors=0
 	default: return s->wr[ch][rr & 15];    // stored state read-back (fence: nothing else probed)
 	}
 }
@@ -33,8 +47,17 @@ uint64_t SCCRead(void *opaque, uint32_t addr, unsigned size)
 	SCC8530 *s = (SCC8530 *)opaque;
 	(void)size;   // consumers are byte-wide; wider reads replicate the byte in the low bits
 	bool is_data; int ch = decode_ch(addr - s->base, &is_data);
-	if (is_data)
-		return 0;                          // Rx FIFO empty in M1
+	if (is_data) {
+		// Pop from Rx queue if available; return 0 if empty (same as before).
+		if (s->rx_count[ch] > 0) {
+			uint8_t v = s->rx_queue[ch][s->rx_head[ch]];
+			s->rx_head[ch] = (s->rx_head[ch] + 1) % SCC_RX_QUEUE_MAX;
+			s->rx_count[ch]--;
+			s->rx_consumed++;
+			return v;
+		}
+		return 0;
+	}
 	uint8_t ptr = s->reg_ptr[ch];
 	s->reg_ptr[ch] = 0;                    // any control access resets the pointer
 	if (ptr == 0) s->rr0_polls++;

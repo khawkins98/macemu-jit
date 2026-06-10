@@ -93,6 +93,7 @@
 #include <sys/param.h>
 #include <signal.h>
 #include <string>
+#include <vector>
 
 #include "sysdeps.h"
 #include "main.h"
@@ -1752,6 +1753,74 @@ int main(int argc, char **argv)
 		VIABindScheduler(&via, g_event_sched, MMIOBusWithRegion);
 		atexit(mmio_dump_stats_atexit);
 		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000, scc 0xF3012000, via 0xF3016000\n");
+
+		// SS_SCC_RX_INJECT=DELAY_S:HEXBYTES — debug/demo Rx injection into SCC ch A.
+		// Format: unsigned decimal seconds, colon, then hex byte pairs (no separator).
+		// Example: SS_SCC_RX_INJECT=10:0D  (inject CR after 10 s)
+		// Example: SS_SCC_RX_INJECT=5:77 20  (inject 'w' ' ' after 5 s — spaces ignored)
+		// Bytes are injected under the SCC region lock (same contract as SCCRead/SCCWrite).
+		// Runs only inside MachineUsesMMIOBus() — paravirtual builds never reach this block.
+		{
+			const char *inject_env = getenv("SS_SCC_RX_INJECT");
+			if (inject_env && inject_env[0]) {
+				// Parse DELAY_S:HEXBYTES
+				char *colon = const_cast<char *>(strchr(inject_env, ':'));
+				if (colon && colon != inject_env) {
+					unsigned delay_s = (unsigned)strtoul(inject_env, NULL, 10);
+					// Parse hex bytes (skip whitespace/colons after the first colon)
+					std::vector<uint8_t> inject_bytes;
+					const char *p = colon + 1;
+					while (*p) {
+						while (*p == ' ' || *p == '\t') p++; // skip whitespace
+						if (!*p) break;
+						// expect two hex digits
+						char hi = *p++, lo = 0;
+						while (*p == ' ' || *p == '\t') p++;
+						if (*p) lo = *p++;
+						else lo = '0';
+						auto hexval = [](char c) -> int {
+							if (c >= '0' && c <= '9') return c - '0';
+							if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+							if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+							return 0;
+						};
+						inject_bytes.push_back((uint8_t)((hexval(hi) << 4) | hexval(lo)));
+					}
+					if (!inject_bytes.empty()) {
+						// Capture bytes by value into the lambda; g_event_sched is stable.
+						struct InjCtx { SCC8530 *scc; uint8_t byte; };
+						static auto inject_one = [](void *opaque) {
+							InjCtx *ctx = (InjCtx *)opaque;
+							SCCInjectRx(ctx->scc, SCC_CH_A, ctx->byte);
+						};
+						size_t n = inject_bytes.size();
+						uint64_t delay_ns = (uint64_t)delay_s * 1000000000ull;
+						// Shared mutable state captured by the lambda must outlive the timer.
+						// Allocate on heap; the lambda owns it (one-shot, no cancel needed).
+						std::vector<uint8_t> *bytes_heap = new std::vector<uint8_t>(inject_bytes);
+						SCC8530 *scc_ptr = &scc;
+						g_event_sched->add_oneshot_timer(delay_ns, [scc_ptr, bytes_heap]() {
+							InjCtx ctx;
+							ctx.scc = scc_ptr;
+							for (uint8_t b : *bytes_heap) {
+								ctx.byte = b;
+								MMIOBusWithRegion(0xF3012002, inject_one, &ctx);
+							}
+							fprintf(stderr, "[SCC-INJECT] %zu byte(s) injected into ch A Rx\n",
+							        bytes_heap->size());
+							delete bytes_heap;
+						});
+						fprintf(stderr, "[SCC-INJECT] armed: %zu byte(s) at T+%us\n", n, delay_s);
+					} else {
+						fprintf(stderr, "[SCC-INJECT] warning: no bytes parsed from SS_SCC_RX_INJECT='%s'\n",
+						        inject_env);
+					}
+				} else {
+					fprintf(stderr, "[SCC-INJECT] warning: SS_SCC_RX_INJECT format must be DELAY_S:HEXBYTES (got '%s')\n",
+					        inject_env);
+				}
+			}
+		}
 
 		// SS_JIT_VERIFY replays blocks; device reads are side-effecting (clear-on-read,
 		// FIFO-pop) and must never be double-executed (MACHINE-LAYER-PLAN §2b). Hard incompat.

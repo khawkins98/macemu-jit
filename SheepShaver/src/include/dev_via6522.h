@@ -35,6 +35,10 @@ struct VIA6522 {
 	uint64_t cuda_touches;
 	bool     cuda_warned;
 	const char *cuda_warn_what;
+	// M6a Wave 2 #4 diagnostic: per-register read histogram (reg index 0..15).
+	// Bumped in VIARead (runs under the bus region lock; plain increments are
+	// race-free there). Identifies WHICH register a guest poll loop hammers.
+	uint64_t reg_reads[16];
 };
 
 extern void VIAReset(VIA6522 *v, uint32_t base,
@@ -53,5 +57,31 @@ extern void VIABindScheduler(VIA6522 *v, EventScheduler *sched,
 // forbidden (MACHINE-LAYER-PLAN §2g) — the warning is only latched there and must
 // be emitted by a safe thread (e.g. the emul thread / stats dump at exit).
 extern const char *VIATakePendingWarning(VIA6522 *v);
+
+// --- M6a Wave 2 #4: read-histogram diagnostics ---------------------------------
+// Design (§2g-safe): VIARead only bumps plain counters under the bus lock — no
+// stdio, no malloc (it can run on the Mach exception-handler thread). Emission
+// happens elsewhere, on safe threads:
+//   - full histogram: mmio_dump_stats_atexit (main_unix) prints "[VIA] reads: ..."
+//     via VIAFormatReadHistogram;
+//   - alarm-killed boots skip atexit, so the heartbeat also carries the top-2
+//     registers: prod registers its instance once (VIARegisterDiagInstance) and
+//     the heartbeat thread calls VIAFormatTopReads. The heartbeat reads the
+//     counters WITHOUT the lock — aligned 64-bit loads are single-copy-atomic on
+//     AArch64, so the worst case is a slightly stale count (benign for telemetry).
+// Both formatters snprintf into a caller buffer (no FILE* — not stdio-locked).
+
+// Format all nonzero entries as "ORB=N ORA=N ... IFR=N IER=N". Returns chars
+// written (0 if no reads yet). Safe from any thread (see note above).
+extern size_t VIAFormatReadHistogram(const VIA6522 *v, char *buf, size_t buflen);
+
+// Register the prod VIA instance for heartbeat telemetry (call once at bus
+// bring-up). Unit tests may also use it; last registration wins.
+extern void VIARegisterDiagInstance(VIA6522 *v);
+
+// Format the top-2 most-read registers of the registered instance as
+// "(IFR=N,T2CL=M)" (one entry if only one is nonzero). Returns chars written;
+// 0 when no instance is registered or no reads happened.
+extern size_t VIAFormatTopReads(char *buf, size_t buflen);
 
 #endif

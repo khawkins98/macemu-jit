@@ -26,6 +26,7 @@
 
 #include "dev_via6522.h"
 #include "event_sched.h"
+#include <stdio.h>    // snprintf only (buffer formatting — no FILE* I/O; §2g note in header)
 #include <string.h>
 
 // Register indices (reg N accessed at base + N*0x200).
@@ -66,6 +67,51 @@ const char *VIATakePendingWarning(VIA6522 *v)
 	const char *w = v->cuda_warn_what;
 	v->cuda_warn_what = 0;
 	return w;
+}
+
+// --- M6a Wave 2 #4: read-histogram diagnostics (design rationale in the header) ---
+static const char *via_reg_names[16] = {
+	"ORB", "ORA", "DDRB", "DDRA", "T1CL", "T1CH", "T1LL", "T1LH",
+	"T2CL", "T2CH", "SR", "ACR", "PCR", "IFR", "IER", "ORAnh"
+};
+
+size_t VIAFormatReadHistogram(const VIA6522 *v, char *buf, size_t buflen)
+{
+	size_t n = 0;
+	for (int i = 0; i < 16 && n < buflen; i++) {
+		if (!v->reg_reads[i]) continue;
+		n += (size_t)snprintf(buf + n, buflen - n, "%s%s=%llu", n ? " " : "",
+		                      via_reg_names[i], (unsigned long long)v->reg_reads[i]);
+	}
+	return n;
+}
+
+static VIA6522 *g_diag_via;   // heartbeat telemetry instance (prod bring-up registers it)
+
+void VIARegisterDiagInstance(VIA6522 *v)
+{
+	g_diag_via = v;
+}
+
+size_t VIAFormatTopReads(char *buf, size_t buflen)
+{
+	VIA6522 *v = g_diag_via;
+	if (!v) return 0;
+	// Unlocked aligned 64-bit loads (single-copy-atomic on AArch64; header note).
+	int top1 = -1, top2 = -1;
+	for (int i = 0; i < 16; i++) {
+		uint64_t c = v->reg_reads[i];
+		if (!c) continue;
+		if (top1 < 0 || c > v->reg_reads[top1]) { top2 = top1; top1 = i; }
+		else if (top2 < 0 || c > v->reg_reads[top2]) { top2 = i; }
+	}
+	if (top1 < 0) return 0;
+	if (top2 < 0)
+		return (size_t)snprintf(buf, buflen, "(%s=%llu)", via_reg_names[top1],
+		                        (unsigned long long)v->reg_reads[top1]);
+	return (size_t)snprintf(buf, buflen, "(%s=%llu,%s=%llu)",
+	                        via_reg_names[top1], (unsigned long long)v->reg_reads[top1],
+	                        via_reg_names[top2], (unsigned long long)v->reg_reads[top2]);
 }
 
 static inline uint64_t via_ticks_to_ns(uint64_t ticks)
@@ -153,7 +199,9 @@ uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
 {
 	VIA6522 *v = (VIA6522 *)opaque;
 	(void)size;   // consumers are byte-wide; wider reads return the low byte
-	switch (((addr - v->base) >> 9) & 0xF) {
+	unsigned reg = ((addr - v->base) >> 9) & 0xF;
+	v->reg_reads[reg]++;   // M6a Wave 2 #4: read histogram (under the bus lock)
+	switch (reg) {
 	case R_ORB:       return v->orb;
 	case R_ORA:
 	case R_ORA_NH:    return v->ora;

@@ -2080,10 +2080,26 @@ static bool patch_68k(void)
 	}
 
 	// Don't initialize VIA (via Universal)
+	// M6a Wave 2 #4 (ROM-PATCH-AUDIT via_init cluster, was RETIRE@M3): retired
+	// early on the fidelity profile. The audit's SPIKE-S3 note anticipated exactly
+	// this trigger — "if the boot-time VIA init matters, the via_init cluster moves
+	// to RETIRE@M1" — and the 68k boot's ~135k reads/s VIA poll spin demonstrates
+	// it now matters: the spin may depend on init-programmed VIA state these skip
+	// patches prevent from ever being written. The recon (M6A-WAVE2-SHIM-RECON.md
+	// queue #4) verified the init's register offsets all land inside the via6522
+	// model region (base 0xf3016000, +0x2000). Paravirtual keeps the skips.
+	// Same idiom as scc_init: searches still run (find/skip telemetry stays
+	// consistent), only the patching is gated.
+	if (MachineProfileIsNewWorld()) {
+		fprintf(stderr, "[M6a] via_init/via_init2/via_init3 ROM patches retired (newworld profile): "
+		        "guest boot-time VIA init will run against the via6522 model\n");
+	}
 	static const uint8 via_init_dat[] = {0x08, 0x00, 0x00, 0x02, 0x67, 0x00, 0x00, 0x2c, 0x24, 0x68, 0x00, 0x08};
 	base = find_rom_data(0xe000, 0x15000, via_init_dat, sizeof(via_init_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
-	if (base) {
+	if (MachineProfileIsNewWorld()) {
+	// retired ([M6a] line above)
+	} else if (base) {
 	D(bug("via_init %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base + 4);
 	*wp = htons(0x6000);			// bra
@@ -2092,7 +2108,9 @@ static bool patch_68k(void)
 	static const uint8 via_init2_dat[] = {0x24, 0x68, 0x00, 0x08, 0x00, 0x12, 0x00, 0x30, 0x4e, 0x71};
 	base = find_rom_data(0xa000, 0x10000, via_init2_dat, sizeof(via_init2_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
-	if (base) {
+	if (MachineProfileIsNewWorld()) {
+	// retired ([M6a] line above)
+	} else if (base) {
 	D(bug("via_init2 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(0x4ed6);			// jmp	(a6)
@@ -2101,7 +2119,9 @@ static bool patch_68k(void)
 	static const uint8 via_init3_dat[] = {0x22, 0x68, 0x00, 0x08, 0x28, 0x3c, 0x20, 0x00, 0x01, 0x00};
 	base = find_rom_data(0xa000, 0x10000, via_init3_dat, sizeof(via_init3_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
-	if (base) {
+	if (MachineProfileIsNewWorld()) {
+	// retired ([M6a] line above)
+	} else if (base) {
 	D(bug("via_init3 %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp = htons(0x4ed6);			// jmp	(a6)
@@ -2570,10 +2590,17 @@ static bool patch_68k(void)
 	}
 
 	// Don't poke VIA in InitTimeMgr (via 0x298)
+	// M6a Wave 2 #4 (ROM-PATCH-AUDIT time_via_dat, was RETIRE@M3): retired with
+	// the via_init cluster. The audit row flagged "possible early retirement if
+	// the VIA timer/IFR surface proves sufficient" — the M2 clock + scheduler VIA
+	// timers (T1/T2 state machines, eager IFR latch) are live, so InitTimeMgr's
+	// VIA pokes now reach the model. Paravirtual keeps the early-return patch.
 	static const uint8 time_via_dat[] = {0x40, 0xe7, 0x00, 0x7c, 0x07, 0x00, 0x28, 0x78, 0x01, 0xd4, 0x43, 0xec, 0x10, 0x00};
 	base = find_rom_data(0x30000, 0x40000, time_via_dat, sizeof(time_via_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
-	if (base) {
+	if (MachineProfileIsNewWorld()) {
+	fprintf(stderr, "[M6a] time_via ROM patch retired (newworld profile): InitTimeMgr VIA calibration reaches the M2 timer model\n");
+	} else if (base) {
 	D(bug("time_via %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
 	*wp++ = htons(0x4cdf);			// movem.l	(sp)+,d0-d5/a0-a4
@@ -2609,6 +2636,11 @@ static bool patch_68k(void)
 	} else fprintf(stderr, "[ROMPATCH] SKIP ext_cache2 (absent in parcels)\n");
 
 	// Don't install Time Manager task for 60Hz interrupt (Enable60HzInts, via 0x2b8)
+	// M6a Wave 2 #4: deliberately NOT retired on the newworld profile (stays
+	// RETIRE@M3 per ROM-PATCH-AUDIT tm_task_dat). Its retirement needs M3b's real
+	// delivery chain (VIA timer -> PIC -> CPU exception) to replace the host's
+	// injected 60 Hz ticks; removing the host injection now would break
+	// paravirtual-pattern timing with nothing delivering the interrupts.
 	if (ROMType == ROMTYPE_NEWWORLD || ROMType == ROMTYPE_GOSSAMER) {
 		static const uint8 tm_task_dat[] = {0x30, 0x3c, 0x4e, 0x2b, 0xa9, 0xc9};
 		base = find_rom_data(0x2a0, 0x320, tm_task_dat, sizeof(tm_task_dat));

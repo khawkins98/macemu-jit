@@ -27,6 +27,7 @@
 #ifdef SHEEPSHAVER
 #include "machine_profile.h"   /* M3a Task 4: newworld gate in check_spcflags */
 #include "mmio_bus.h"          /* M6a Wave 1: MMIO region counters on the heartbeat */
+#include "dev_via6522.h"       /* M6a Wave 2 #4: top-2 VIA read registers on the heartbeat */
 #else
 #include "basic-kernel.hpp"
 #endif
@@ -79,6 +80,16 @@ static void hb_append_mmio_suffix(char *buf, size_t buflen)
 	if (n < buflen)
 		snprintf(buf + n, buflen - n, " mmio=S:%llu/V:%llu",
 		         (unsigned long long)scc_reads, (unsigned long long)via_reads);
+	/* M6a Wave 2 #4: WHICH VIA registers a poll loop hammers — top-2 histogram
+	 * entries, e.g. " mmio=S:0/V:8123456(IFR=8000000,T2CL=123456)". Unlocked
+	 * counter loads (single-copy-atomic on AArch64; see dev_via6522.h note).
+	 * Alarm-killed boots skip the atexit [VIA] reads dump, so this rides the
+	 * periodic [HB] line instead. Empty when no VIA reads happened. */
+	if (via_reads) {
+		n = strlen(buf);
+		if (n < buflen)
+			VIAFormatTopReads(buf + n, buflen - n);
+	}
 }
 
 // B1 execution-weighted profiler: per-PC block execution counts.

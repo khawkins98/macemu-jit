@@ -1357,6 +1357,11 @@ static void mmio_dump_stats_atexit(void)
 	if (cuda_warn)
 		fprintf(stderr, "[MMIO] via6522: Cuda-protocol register touched (%s) - "
 		        "loud stub only until M3 (MACHINE-LAYER-PLAN M3)\n", cuda_warn);
+	// M6a Wave 2 #4: per-register VIA read histogram — identifies WHICH register
+	// a guest poll loop hammers (the heartbeat's mmio=V: count is per-region only).
+	char via_hist[256];
+	if (VIAFormatReadHistogram(&via, via_hist, sizeof(via_hist)))
+		fprintf(stderr, "[VIA] reads: %s\n", via_hist);
 }
 
 // ---
@@ -1808,6 +1813,9 @@ int main(int argc, char **argv)
 		// the lazy backstop). Must be after region registration: expiry callbacks
 		// run under the region lock via MMIOBusWithRegion.
 		VIABindScheduler(&via, g_event_sched, MMIOBusWithRegion);
+		// M6a Wave 2 #4: alarm-killed boots skip atexit, so the heartbeat carries
+		// the top-2 read registers too (hb_append_mmio_suffix -> VIAFormatTopReads).
+		VIARegisterDiagInstance(&via);
 		atexit(mmio_dump_stats_atexit);
 		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000 (%s), scc 0xF3012000, via 0xF3016000\n",
 		        mmio_strict ? "strict fence: abort on unmodeled" : "absent-device stub");

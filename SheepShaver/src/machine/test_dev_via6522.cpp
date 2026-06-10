@@ -6,6 +6,7 @@
 #include "event_sched.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 static int n_pass = 0;
 #define CHECK(cond) do { assert(cond); n_pass++; } while (0)
@@ -126,6 +127,22 @@ int main()
 	fake_ticks += 0x20;                    // deadline passed, NO intervening read
 	wr(0x1a00, 0x20);                      // blind write-1-clear: settles then clears
 	CHECK((rd(0x1a00) & 0x20) == 0);       // flag must NOT be resurrected by the poll
+
+	// --- M6a Wave 2 #4: per-register read histogram ---
+	VIAReset(&via, BASE, fake_clock, 0);   // reset clears reg_reads
+	CHECK(via.reg_reads[13] == 0);
+	(void)rd(0x1a00); (void)rd(0x1a00); (void)rd(0x1a00);   // IFR (reg 13) x3
+	(void)rd(0x1000);                                       // T2CL (reg 8) x1
+	CHECK(via.reg_reads[13] == 3);
+	CHECK(via.reg_reads[8] == 1);
+	char hist[256];
+	CHECK(VIAFormatReadHistogram(&via, hist, sizeof(hist)) > 0);
+	CHECK(strcmp(hist, "T2CL=1 IFR=3") == 0);   // nonzero entries, register order
+	char top[64];
+	CHECK(VIAFormatTopReads(top, sizeof(top)) == 0);  // not registered yet
+	VIARegisterDiagInstance(&via);
+	CHECK(VIAFormatTopReads(top, sizeof(top)) > 0);
+	CHECK(strcmp(top, "(IFR=3,T2CL=1)") == 0);        // top-2, descending
 
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;

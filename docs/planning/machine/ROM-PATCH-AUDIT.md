@@ -36,9 +36,9 @@ All rows are in `patch_68k()` unless noted. "Line" = `rom_patches.cpp` as of mac
 | `mdec_dat` (in `patch_nanokernel()`) | 1642–1655 | Stops the nanokernel from programming the real decrementer (`li r31,0` + NOPs the `mtdec` path) — DEC never ticks under guest control. | **✅ RETIRED@M2 (gate)** (commit `47a82c78`) | M2 ✅ — gate landed: profile check at the patch site skips it on the newworld profile (same idiom as M1's `scc_init` retirement). **Honest scope:** the `mdec_dat` pattern is present in the 1.1/OldWorld NK (ROM offset 0x312c24) but **absent from the 9.0.1 parcels ROM** (byte-verified — the patch was ALWAYS lenient-skipped on the 9.0.1 boot; every prior 9.0.1 run emits `[ROMPATCH] SKIP mdec`). The gate is therefore live for 1.1-ROM newworld only; the 9.0.1 fidelity boot exercises the M2 clock seams directly (not the retirement gate). `1.1-ROM newworld probe 2026-06-10: the [M2] retirement line fired (gate live-verified; the un-patched NK DEC code is now reachable); guest DEC-traffic counters unobserved (run alarm-killed before any dump) — 1.1 traffic verification carried forward` |
 | `powermac_id_dat` | 1817–1831 | Replaces the read of the machine-ID register at `0x5FFFFFFC` with `move.l #0x3020,d0` (fake PowerMac 9500 ID). | KEEP | — (machine identity is profile *configuration*, not a device; if a fidelity milestone ever serves `0x5FFFxxxx` through the bus, revisit at M5) |
 | `univ_info_dat` + AddrMap construct | 1834–1897 | Rewrites UniversalInfo to PowerMac 9500 values and builds the AddrMap table (`0xF3016000`→VIA, `0xF3012000`→SCC, …) the 68k side uses to locate devices. | KEEP | — (this *is* the device-address contract the M1 bus must serve — SPIKE-S3 §3 cross-checks it; retiring it would un-define where the device models live) |
-| `via_init_dat` | 1900–1907 | Branches over the guest's VIA init (via Universal) so boot never programs VIA registers. | RETIRE@M3 | M3 (full VIA/Cuda model). **SPIKE-S3 dependency, see note below table.** |
-| `via_init2_dat` | 1909–1916 | Turns the second VIA-init entry into `jmp (a6)` (immediate return). | RETIRE@M3 | M3 (same cluster) |
-| `via_init3_dat` | 1918–1925 | Turns the third VIA-init entry into `jmp (a6)` (immediate return). | RETIRE@M3 | M3 (same cluster) |
+| `via_init_dat` | 1900–1907 | Branches over the guest's VIA init (via Universal) so boot never programs VIA registers. | **✅ RETIRED@M6a-Wave2 (gate)** — `MachineProfileIsNewWorld()` check at the site skips patching on the fidelity profile (combined `[M6a] via_init/via_init2/via_init3 ROM patches retired` line); paravirtual keeps the skip. **Trigger: exactly the one the SPIKE-S3 note below anticipated** — the 68k boot spins polling the VIA at ~135k reads/s (heartbeat `mmio=V` climbing linearly, 8M+ reads in 60 s), i.e. boot-time VIA init demonstrably matters: the spin may depend on init-programmed state the skip prevented. Recon (M6A-WAVE2-SHIM-RECON queue #4) verified the init's register offsets all land inside the via6522 model region (base 0xf3016000, +0x2000). A per-register read histogram (`reg_reads[16]` in dev_via6522 → atexit `[VIA] reads:` line + heartbeat top-2 suffix `V:N(IFR=…,T2CL=…)`) landed alongside to identify WHICH register the loop polls. | M6a Wave 2 ✅ |
+| `via_init2_dat` | 1909–1916 | Turns the second VIA-init entry into `jmp (a6)` (immediate return). | **✅ RETIRED@M6a-Wave2 (gate)** — same gate/trigger as `via_init_dat` (cluster retired together). | M6a Wave 2 ✅ |
+| `via_init3_dat` | 1918–1925 | Turns the third VIA-init entry into `jmp (a6)` (immediate return). | **✅ RETIRED@M6a-Wave2 (gate)** — same gate/trigger as `via_init_dat` (cluster retired together). | M6a Wave 2 ✅ |
 | `run_diags_dat` (NW 1929–1948 / other 1950–1959) | 1928–1960 | Skips RunDiags (hardware self-test) and instead loads the BootGlobs pointer directly into a6 (`lea RAMBase+RAMSize-0x1c,a6`). | KEEP | — (diags probe physical memory/devices wholesale; no planned milestone models that, and the BootGlobs substitute is required for boot on any profile) |
 | `nvram1_dat` | 1963–1971 | Replaces the NVRAM/XPRAM read routine with `M68K_EMUL_OP_XPRAM1` + RTS (host-file-backed XPRAM HLE). | REPLACE@M4 | M4 (full partitioned 8 KB NVRAM behind the bus) |
 | `nvram2_dat`–`nvram7_dat` (NW branch) | 1973–2038 | NewWorld NVRAM cluster: read/write/multi-byte ops → `EMUL_OP_XPRAM2/3`, `EMUL_OP_NVRAM3`; NOPs a format check (`nvram5`); stubs NVRAM-clear (`nvram6`); RTS-out the exit path (`nvram7`). | REPLACE@M4 | M4 |
@@ -51,10 +51,10 @@ All rows are in `patch_68k()` unless noted. "Line" = `rom_patches.cpp` as of mac
 | `gc_mask2_dat` | 2288–2316 | NOPs the longer GC interrupt-mask write sequences (5–11 sites depending on ROMType). OldWorld-only. | RETIRE@M3 | M3 (same) |
 | `cuda_init_dat` | 2320–2333 | NOPs 7 words of the Cuda init (VIA shift-register / handshake setup, via 0x274) — guest never brings up Cuda. | RETIRE@M3 | M3 (full Cuda: timers via M2 scheduler, ADB, RTC). **Loud-stub tension:** in M1 Cuda is deliberately a *loud stub* — if this patch were retired at M1, the un-patched init's shift-register traffic hits the stub and aborts/log-spams every boot. The patch must stay until M3 even though the VIA it programs arrives (partially) at M1. |
 | `cpu_speed_dat` (×2 occurrences) | 2336–2354 | Replaces GetCPUSpeed (via 0x27a) with `move.l #configured-MHz,d0` + RTS. | KEEP | — (reports configured `CPUClockSpeed`; identity/config, no device behind it) |
-| `time_via_dat` | 2357–2366 | Early-returns the InitTimeMgr routine that pokes VIA timer registers — Time Manager never calibrates against VIA T1/T2. | RETIRE@M3 | M3 (timers need the M2 scheduler + full VIA). *Possible early retirement at M1* if the M1 VIA timer/IFR surface proves sufficient — same SPIKE-S3 note as the via_init cluster. |
+| `time_via_dat` | 2357–2366 | Early-returns the InitTimeMgr routine that pokes VIA timer registers — Time Manager never calibrates against VIA T1/T2. | **✅ RETIRED@M6a-Wave2 (gate)** — the row's own *"possible early retirement … if the VIA timer/IFR surface proves sufficient"* condition is met: the M2 clock + scheduler VIA timers (T1/T2 state machines, eager IFR latch) are live. `MachineProfileIsNewWorld()` gate at the site (`[M6a] time_via ROM patch retired` line); paravirtual keeps the early-return. Retired together with the via_init cluster. | M6a Wave 2 ✅ |
 | `open_firmware_dat` | 2370–2383 | Replaces a read of the OF/Name-Registry pointer at `0xFF800000` with `#0xdeadbeef` and NOPs the FE03 opcode that would jump through it. | RETIRE@M5 | M5 (trampoline handoff publishes the real device tree / OF properties; until then nothing answers at `0xFF800000`) |
 | `ext_cache2_dat` | 2386–2393 | RTS-out the second EnableExtCache routine (via 0x2b2). | KEEP | — (same reasoning as `ext_cache_dat`'s cache half) |
-| `tm_task_dat` (NW/Gossamer 2397–2409 / other 2410–2421) | 2396–2421 | NOPs the installation of the 60 Hz Time Manager interrupt task (Enable60HzInts, via 0x2b8) — paravirtual injects 60 Hz ticks from the host instead. | RETIRE@M3 | M3 (real delivery: VIA timer → PIC → CPU exception replaces host injection) |
+| `tm_task_dat` (NW/Gossamer 2397–2409 / other 2410–2421) | 2396–2421 | NOPs the installation of the 60 Hz Time Manager interrupt task (Enable60HzInts, via 0x2b8) — paravirtual injects 60 Hz ticks from the host instead. | RETIRE@M3 — **deliberately NOT retired at M6a Wave 2** (when the via_init cluster + time_via_dat went): its retirement needs M3b's *real delivery* (VIA timer → PIC → CPU exception) to replace the host-injected 60 Hz ticks; removing host injection now would break paravirtual-pattern timing with nothing delivering the interrupts. | M3 (real delivery: VIA timer → PIC → CPU exception replaces host injection) |
 
 ### SPIKE-S3 dependency note (VIA cluster)
 
@@ -69,6 +69,15 @@ doesn't matter to the T2-timeout path; if it does, the via_init cluster (and `ti
 move to RETIRE@M1.** Record the outcome here when M1 lands.
 
 **M1 outcome (2026-06-10):** the acceptance boot terminated before any VIA (or SCC) traffic — the 9.0.1 diagnostic boot crashes at the pre-existing NK boot ceiling (pc=0x503123fc, page-descriptor build loop) before the monitor/idle phase, with SCC/VIA region counters zero on both baseline and accept runs. The boot-time VIA init question is **UNRESOLVED at M1**; dispositions unchanged (RETIRE@M3). Revisit when a boot reaches the monitor/idle phase.
+
+**M6a Wave 2 outcome (2026-06-11): the anticipated trigger fired.** Once the 68k boot got
+past the earlier walls, it spins polling the VIA at ~135k reads/s (heartbeat `mmio=V`
+climbing linearly; 8M+ reads in 60 s) — boot-time VIA state now demonstrably matters
+territory, so per this note's own escape clause the **via_init cluster + `time_via_dat`
+moved to RETIRED@M6a-Wave2** (gates at the patch sites; rows above updated). `tm_task_dat`
+stays RETIRE@M3 (needs M3b real delivery — see its row). A per-register VIA read histogram
+(atexit `[VIA] reads:` + heartbeat top-2 `V:N(IFR=…,…)`) shipped with the retirement to
+identify which register(s) the spin polls.
 
 ## patch_68k shims (referenced, not re-derived)
 
@@ -85,7 +94,8 @@ of all 84 `find_rom_data` patterns (concept, EMUL_OP, search range, 9.0.1-parcel
 | `adb_init_dat` | NOPs the wait in ADBInit (via 0x36c) — guest doesn't wait for ADB/Cuda to respond | Cuda/ADB | RETIRE@M3 | M3 (Cuda model answers ADB; until then the wait would spin on the M1 loud stub) |
 | `nvram1`–`nvram7`, `nvram4_loc`/`nvram5_loc` | NVRAM/XPRAM HLE EMUL_OP replacements | NVRAM | REPLACE@M4 | (main table above) |
 | `scc_init_caller_dat`/`scc_init_dat` | SCC init suppression | SCC | RETIRE@M1 | (main table above) |
-| `via_init`/`via_init2`/`via_init3`, `time_via_dat`, `tm_task_dat`, `cuda_init_dat`, `gc_mask`/`gc_mask2` | Boot-time device-init suppression | VIA/Cuda/GC | RETIRE@M3 | (main table above) |
+| `via_init`/`via_init2`/`via_init3`, `time_via_dat` | Boot-time VIA-init suppression | VIA | ✅ RETIRED@M6a-Wave2 | (main table above) |
+| `tm_task_dat`, `cuda_init_dat`, `gc_mask`/`gc_mask2` | Boot-time device-init suppression | VIA/Cuda/GC | RETIRE@M3 | (main table above) |
 
 Non-device shims (drivers, Resource Manager, scrap, memory sizing, gestalt, …) are
 deliberately out of scope here — see the inventory + M6.

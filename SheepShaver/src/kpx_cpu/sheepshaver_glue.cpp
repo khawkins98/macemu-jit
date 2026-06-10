@@ -1458,6 +1458,11 @@ void init_emul_ppc(void)
 		WriteMacInt32(kdp - 0x20, irp_base);  // [KDP-0x20] = IRP base
 		fprintf(stderr, "[NW-TRAMP] SPRG0=%08x, [SPRG0-4]=KDP=%08x, [KDP-0x20]=IRP=%08x\n",
 		        (uint32)kdp, (uint32)kdp, irp_base);
+		/* NB: the page-descriptor build-loop cap (KDP+0x6b4) cannot be seeded here —
+		 * the nanokernel cold-init zeroes the KDP region after init_emul_ppc, so any
+		 * value written now is clobbered before the loop reads it. The cap is forced
+		 * to the real page count via a ROM instruction patch instead; see the
+		 * "page-descriptor loop cap" patch in rom_patches.cpp (patch_nanokernel). */
 
 		/* P8: Dispatch fields for the 68k emulator handoff.
 		 * The parcels nanokernel's dispatch routine (0x503126b4) does:

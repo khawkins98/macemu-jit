@@ -1187,6 +1187,54 @@ static bool patch_nanokernel_boot(void)
 			*lp = htonl(0x4BFFB099);  // bl 0x5030d600 (disp = 0x30d600 - 0x312568 = -0x4F68)
 			fprintf(stderr, "[ROMPATCH] SPIKE: redirected bl at %06x → stub\n", base);
 		}
+
+		// Page-descriptor build-loop cap (KDP+0x6b4).
+		//
+		// The page-descriptor build loop at ROM 0x503123f4-0x312420 walks a
+		// stride-8 SegMap pointer array at KDP+0x78 and stores a PMDT descriptor
+		// through each pointer. Its trip count is set by a clamp at 0x503123a8:
+		//
+		//   r22 = r29 - r21                 ; natural span (kernel mem range)
+		//   cap = [KDP+0x6b4] << 2          ; 0x3123ac lwz r8,0x6b4(r1); 0x3123b0 slwi
+		//   if (r22 >= cap) r22 = cap - 4   ; 0x3123c4 blt / 0x3c8 addi r22,r8,-4
+		//   r22 >>= 2                       ; loop ~ (r22 >> 16) trips
+		//
+		// KDP+0x6b4 is left 0 by our (skipped/faked) cold-init, so cap=0 → the
+		// clamp forces r22 = -4 = 0xFFFFFFFC → ~16382 trips. The SegMap array is
+		// seeded with valid pointers only for its first entries; beyond them lie
+		// zeros and 0xFFFFFFFF poison (observed at KDP+0x340). The walk runs off
+		// the end and stores through r8=0xFFFFFFFF at 0x5031240c → SIGSEGV.
+		// Pre-M0 Path A "passed" this only because the paravirtual profile's
+		// `ignoresegv` silently skipped the faulting stores; the NewWorld profile
+		// aborts loudly (DEPRECATED-SCAFFOLDING-INVENTORY.md). Seeding KDP+0x6b4 at
+		// init_emul_ppc time fails (cold-init zeroes the KDP afterward), so we force
+		// the cap into the cap-read instruction itself: replace `lwz r8,0x6b4(r1)`
+		// (0x3123ac) with `lis r8, ceil(page_count/0x10000)`, i.e. the physical page
+		// count rounded up to 64K-page granularity (== page_count exactly for RAM
+		// that is a 256MB multiple). The clamp then bounds the loop to a couple of
+		// trips, well within the valid SegMap region, and the post-loop
+		// KDP+0x6a8/0x6ac accounting lets `ble 0x3124e4` proceed to the SegMap/PMDT
+		// stub + CreateAreasFromPageMap.
+		// Anchor: subf r22,r21,r29 / lwz r8,0x6b4(r1) / slwi r8,r8,2 (unique).
+		{
+			static const uint8 pdcap_dat[] = {
+				0x7e, 0xd5, 0xe8, 0x50,   // subf  r22, r21, r29
+				0x81, 0x01, 0x06, 0xb4,   // lwz   r8, 0x6b4(r1)   <- patch this word
+				0x55, 0x08, 0x10, 0x3a }; // slwi  r8, r8, 2
+			if ((base = find_rom_data(0x312000, 0x313000, pdcap_dat, sizeof(pdcap_dat))) != 0) {
+				const uint32 page_count = RAMSize / 4096;
+				const uint32 cap_hi = (page_count + 0xFFFF) >> 16;  // 64K-page units, rounded up
+				lp = (uint32 *)(ROMBaseHost + base + 4);            // the lwz r8,0x6b4(r1)
+				*lp = htonl(0x3D000000 | (cap_hi & 0xFFFF));        // lis r8, cap_hi
+				fprintf(stderr, "[ROMPATCH] parcels: page-descriptor loop cap forced — "
+				        "lwz r8,0x6b4(r1)@%06x → lis r8,%u (cap=%u pages for %u MB RAM); "
+				        "un-masks the 0x503123fc ceiling\n",
+				        base + 4, cap_hi, cap_hi << 16, (unsigned)(RAMSize >> 20));
+			} else {
+				fprintf(stderr, "[ROMPATCH] parcels: page-descriptor loop cap anchor NOT FOUND "
+				        "(0x503123fc ceiling will fault)\n");
+			}
+		}
 	}
 
 	// Don't load SRs and BATs.

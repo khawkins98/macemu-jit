@@ -597,6 +597,8 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 			if (d) awatch_dump_budget = atoi(d);
 		}
 		for (int w = 0; w < awatch_state; w++) {
+			// M1: device reads are side-effecting; tools must never touch them (§2b).
+			if (vm_is_mmio(awatch_addr[w])) continue;
 			uint32 now = vm_read_memory_4(awatch_addr[w]);
 			if (awatch_have_last[w] && now != awatch_last[w]) {
 				fprintf(stderr, "[WATCH] pc=%08x addr=%08x value=%08x  (was %08x record #%u type=%c block %08x->%08x sp=%08x r24=%08x)\n",
@@ -1667,10 +1669,15 @@ void powerpc_cpu::execute(uint32 entry)
 														        pe->fields[fi].value,
 														        (uint32_t)gpr(pe->fields[fi].value));
 													} else if (pe->fields[fi].type == PROBE_MEM) {
-														// No bounds check: unmapped address will SIGSEGV (developer tool)
-														uint32_t val = vm_read_memory_4(pe->fields[fi].value);
-														fprintf(stderr, " [0x%08x]=0x%08x",
-														        pe->fields[fi].value, val);
+														// M1: refuse side-effecting device reads (§2b).
+														if (vm_is_mmio(pe->fields[fi].value)) {
+															fprintf(stderr, " [0x%08x]=<MMIO-refused>", pe->fields[fi].value);
+														} else {
+															// No bounds check: unmapped address will SIGSEGV (developer tool)
+															uint32_t val = vm_read_memory_4(pe->fields[fi].value);
+															fprintf(stderr, " [0x%08x]=0x%08x",
+															        pe->fields[fi].value, val);
+														}
 													} else {
 														// PROBE_MEM_REG: [rN:SIZE] — dump SIZE bytes from address in gpr(N)
 														uint32_t base_addr = (uint32_t)gpr(pe->fields[fi].value);
@@ -1681,6 +1688,7 @@ void powerpc_cpu::execute(uint32 entry)
 														for (uint32_t wi = 0; wi < nwords; wi++) {
 															if ((wi & 7) == 0)
 																fprintf(stderr, "\n    +0x%04x:", wi * 4);
+															if (vm_is_mmio(base_addr + wi * 4)) { fprintf(stderr, " <refused>"); continue; }
 															uint32_t val = vm_read_memory_4(base_addr + wi * 4);
 															fprintf(stderr, " %08x", val);
 														}
@@ -2155,8 +2163,13 @@ void powerpc_cpu::execute(uint32 entry)
 											if (pe->fields[fi].type == PROBE_GPR)
 												fprintf(stderr, " r%u=0x%08x", pe->fields[fi].value, (uint32_t)gpr(pe->fields[fi].value));
 											else if (pe->fields[fi].type == PROBE_MEM) {
-												uint32_t val = vm_read_memory_4(pe->fields[fi].value);
-												fprintf(stderr, " [0x%08x]=0x%08x", pe->fields[fi].value, val);
+												// M1: refuse side-effecting device reads (§2b).
+												if (vm_is_mmio(pe->fields[fi].value))
+													fprintf(stderr, " [0x%08x]=<MMIO-refused>", pe->fields[fi].value);
+												else {
+													uint32_t val = vm_read_memory_4(pe->fields[fi].value);
+													fprintf(stderr, " [0x%08x]=0x%08x", pe->fields[fi].value, val);
+												}
 											} else {
 												// PROBE_MEM_REG: [rN:SIZE] — dump SIZE bytes from address in gpr(N)
 												uint32_t base_addr = (uint32_t)gpr(pe->fields[fi].value);
@@ -2167,6 +2180,7 @@ void powerpc_cpu::execute(uint32 entry)
 												for (uint32_t wi = 0; wi < nwords; wi++) {
 													if ((wi & 7) == 0)
 														fprintf(stderr, "\n    +0x%04x:", wi * 4);
+													if (vm_is_mmio(base_addr + wi * 4)) { fprintf(stderr, " <refused>"); continue; }
 													uint32_t val = vm_read_memory_4(base_addr + wi * 4);
 													fprintf(stderr, " %08x", val);
 												}

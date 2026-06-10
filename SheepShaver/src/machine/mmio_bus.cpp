@@ -73,6 +73,15 @@ static MMIORegion *lookup_or_die(uint32_t addr)
 	return &regions[i];
 }
 
+// Out-of-line abort for cpu_emulation.h's Mac2HostAddr guard (keeps stdio/stdlib
+// out of that widely-included header). Reached only on a contract violation.
+void mmio_mac2host_abort(uint32_t addr)
+{
+	fprintf(stderr, "[MMIO] FATAL: Mac2HostAddr(0x%08x) inside device space - "
+	        "use MMIOBusRead/Write\n", addr);
+	abort();
+}
+
 uint64_t MMIOBusRead(uint32_t addr, unsigned size)
 {
 	MMIORegion *r = lookup_or_die(addr);

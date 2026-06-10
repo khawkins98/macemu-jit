@@ -55,6 +55,9 @@ static inline bool MMIOBusInRange(uint32_t addr)
 extern uint64_t MMIOBusRead(uint32_t addr, unsigned size);
 extern void MMIOBusWrite(uint32_t addr, unsigned size, uint64_t value);
 
+// Out-of-line abort helper for cpu_emulation.h's Mac2HostAddr device-space guard.
+extern void mmio_mac2host_abort(uint32_t addr);
+
 // Lookup without dispatch (for tests and for the fault path's "is this ours" check).
 // Returns region index or -1.
 extern int MMIOBusLookup(uint32_t addr);

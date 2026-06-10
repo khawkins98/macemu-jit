@@ -994,6 +994,8 @@ static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
 	if (addr >= KERNEL_DATA2_BASE && end <= KERNEL_DATA2_BASE + KERNEL_AREA_SIZE) return true;
 	// New World Trampoline regions
 	if (MachineProfileIsNewWorld()) {
+		// Wave 0: extended Low Memory (0x0-0x100000) — NK low-physical descriptors
+		if (addr < 0x100000 && end <= 0x100000) return true;
 		const uint32_t kdp = KernelDataAddr;
 		const uint32_t sub_kdp_size = 0x8000;
 		const uint32_t shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64
@@ -1601,13 +1603,22 @@ int main(int argc, char **argv)
 #endif
 	if (!memory_mapped_from_zero) {
 #if !defined(PAGEZERO_HACK) && !defined(MEM_BULK)
-		// Create Low Memory area (0x0000..0x3000)
-		if (vm_mac_acquire_fixed(0, 0x3000) < 0) {
+		// Create Low Memory area. Wave 0 (M5-MMU-SR-WALL-ANALYSIS §6): on the
+		// newworld profile, extend it to cover the NK's low-physical descriptor
+		// region (~0x200a0 lwbrx/stwx probes, second access at +0x200b0, and the
+		// absolute lbz at 0x3f00) - real hardware backs this with the first 128KB
+		// of DRAM. Paravirtual keeps the historical 0x3000 (ignoresegv ate these
+		// accesses there; mapping them would change behavior). Single acquire:
+		// page-aligned start, page-size-agnostic, no Mach overlap hazard.
+		const uint32 lowmem_size = MachineProfileIsNewWorld() ? 0x100000 : 0x3000;
+		if (vm_mac_acquire_fixed(0, lowmem_size) < 0) {
 			sprintf(str, GetString(STR_LOW_MEM_MMAP_ERR), strerror(errno));
 			ErrorAlert(str);
 			goto quit;
 		}
 		lm_area_mapped = true;
+		if (MachineProfileIsNewWorld())
+			fprintf(stderr, "[WAVE0] low memory extended to 0x0-0x100000 (NK low-physical descriptors)\n");
 #endif
 #if REAL_ADDRESSING
 		// Allocate RAM at any address. Since ROM must be higher than RAM, allocate the RAM

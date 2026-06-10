@@ -17,7 +17,47 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-10 (latest) — Machine Layer day: pivot → architecture → spikes → M0 landed
+## 2026-06-10 (latest) — NK-boot ceiling root-caused; ignoresegv was masking a whole fault class
+
+### Path A's nanokernel progress was partly an ignoresegv illusion
+
+The M1 carry-forward ceiling (fidelity-profile boot dies at `pc=0x503123fc`,
+`ea=0xffffffff`) was root-caused by a post-M1 spike (2026-06-10, commit d8932203). The
+nanokernel page-descriptor build loop (ROM 0x3123a8–0x312424) reads its trip-count cap
+from `KDP+0x6b4`. That field is un-seeded, so the cap was 0, which clamps the loop to ~16k
+iterations. The stride-8 pointer walk at `KDP+0x80` overran the ~64 valid page-descriptor
+entries into `0xFFFFFFFF` poison at `KDP+0x340` → faulting `stw r30,0(r8)` at
+`0x5031240c`.
+
+**The critical finding:** under the pre-M0 paravirtual path, `ignoresegv` was silently
+skipping those faulting stores for the entire page-init stage. The trampoline-time seeding
+was byte-identical before and after M0 (DEC and `[KDP-0x900]` were both checked and ruled
+out as the seeding source). The fidelity profile's abort-loudly design (no ignoresegv on
+`machine newworld`) exposed the fault immediately — working exactly as intended.
+
+**Methodology rule — any pre-M0 "reached stage X" claim under ignoresegv needs
+re-verification on the fidelity profile.** Any un-seeded field that the paravirtual path
+never checked (because ignoresegv silently ate the fault) is a potential hidden wall.
+
+**Fix:** trampoline-time seeding of `KDP+0x6b4` gets clobbered by the NK's own cold-init
+zeroing. The correct fix is a ROM instruction patch (in `rom_patches.cpp`, gated on
+`g_rom_904_lenient` + newworld profile): `lwz r8,0x6b4(r1)` at ROM 0x3123ac is replaced
+with `lis r8,<ceil(phys_pages/0x10000)>` (cap=65536 pages for 256 MB RAM). Note: the fix
+commit's subject line says "in NW trampoline" — the actual fix lives in `rom_patches.cpp`.
+
+**New frontier:** boot now advances one full stage further, then SIGSEGV at
+`0x50326050–0x50326068` — `lwbrx` of hardcoded physical address `0x200a0` (below RAMBase)
+inside the NK's MMU/segment-fault handler (`mtdbatl/mtdbatu`, `mtsrin`, `mtmsr`
+translation-toggling, byte-reversed PTE accesses). This is the genuine SR/BAT/supervisor-
+environment wall — M3/M5 territory in the Machine Layer plan. The spike's stop-rule fired
+correctly: the wall is now documented and root-caused, but crossing it requires real
+exception-delivery infrastructure, not a one-liner.
+
+Probe logs for this investigation: `/tmp/nk-probe.out`, `/tmp/nk-run3.out` (ephemeral).
+
+---
+
+## 2026-06-10 — Machine Layer day: pivot → architecture → spikes → M0 landed
 
 The full arc in one day: strategic pivot (Path A/B → **Machine Layer**, `docs/planning/MACHINE-LAYER-PLAN.md`),
 2 adversarial review rounds (21 findings, §8), 3 de-risking spikes (`docs/planning/spikes/`), M0

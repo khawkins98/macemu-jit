@@ -11,6 +11,31 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-10
 
+### [SheepShaver] NK-boot ceiling root-caused + fixed (d8932203); new frontier is the 0x50326050 MMU/SR wall
+
+Post-M1 diagnostic spike (2026-06-10):
+
+- **Root cause of M1 carry-forward ceiling (pc=0x503123fc, ea=0xffffffff):** the nanokernel
+  page-descriptor build loop (ROM 0x3123a8–0x312424) reads its trip-count cap from `KDP+0x6b4`;
+  the field was un-seeded (=0), clamping the loop to ~16k iterations and driving the stride-8
+  pointer walk at `KDP+0x80` ~64 entries past the valid region into `0xFFFFFFFF` poison at
+  `KDP+0x340` → faulting `stw r30,0(r8)` at `0x5031240c`. The pre-M0 paravirtual path had
+  silently skipped these faults via `ignoresegv` for the entire page-init stage; the fidelity
+  profile's abort-loudly design exposed the fault immediately (working as intended). DEC and
+  `[KDP-0x900]` were both checked and ruled out as clobbering sources — the trampoline-time
+  seeding is byte-identical to pre-M0.
+- **Fix** (`d8932203`): ROM instruction patch in `rom_patches.cpp` (gated `g_rom_904_lenient` +
+  newworld profile): replaces `lwz r8,0x6b4(r1)` at ROM 0x3123ac with
+  `lis r8,<ceil(phys_pages/0x10000)>` (cap=65536 pages for 256 MB). Trampoline-time seeding is
+  ineffective because the NK cold-init zeroing clobbers it; the patch site fires after the zeroing
+  completes. (Commit subject says "in NW trampoline" — the fix is in `rom_patches.cpp`.)
+- **New frontier:** boot advances one full stage further before SIGSEGV at `0x50326050–0x50326068`
+  — `lwbrx` of hardcoded physical `0x200a0` (below RAMBase) inside the NK's MMU/segment-fault
+  handler (`mtdbatl/mtdbatu`, `mtsrin`, `mtmsr` translation toggling, byte-reversed PTE accesses).
+  This is the genuine SR/BAT/supervisor-environment wall — M3/M5 territory. Consumer-(b) live
+  acceptance remains blocked, now by a root-caused, documented hard wall instead of a mystery.
+- Probe logs: `/tmp/nk-probe.out`, `/tmp/nk-run3.out` (ephemeral).
+
 ### [SheepShaver] Machine Layer M1: MMIO bus + SCC 8530 + VIA timer/IFR surface + JIT backpatch
 
 - **MMIO bus core** (`7fa756c0`, `e369405a`) — region registry with trapped-MMIO and

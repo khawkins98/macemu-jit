@@ -1,0 +1,7 @@
+[BOOT] idle frontApp='Finder' modal=0 ticks=812 (13.5s)
+
+    Shutdown complete.
+
+PPC-JIT-A64: session 43s (0m42.6s)
+PPC-JIT-A64: blocks=254318 complete=254316 (100.0%)
+PPC-JIT-A64: hit=1768692 miss=21347 (98.8% coverage)

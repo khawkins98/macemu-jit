@@ -115,6 +115,9 @@
 #include "sigsegv.h"
 #include "sigregs.h"
 #include "rpc.h"
+#include "mmio_bus.h"
+#include "dev_scc8530.h"
+#include "dev_via6522.h"
 #if defined(__linux__) && defined(__aarch64__)
 #include <sys/personality.h>
 #endif
@@ -1139,6 +1142,31 @@ static void ss_rpc_init_server(void) {
 	}
 }
 
+// --- Machine Layer M1: MMIO bus helpers (MACHINE-LAYER-PLAN.md §2b; CORE99 §4 fence) ---
+
+// MacIO addresses with no device model yet: abort-loudly stubs (CORE99-MACHINE-DESCRIPTION §4 fence).
+static uint64_t mmio_stub_read(void *, uint32_t addr, unsigned size)
+{
+	fprintf(stderr, "[MMIO] FATAL: read%u from unmodeled MacIO address 0x%08x "
+	        "(CORE99-MACHINE-DESCRIPTION §4 fence)\n", size * 8, addr);
+	abort();
+}
+static void mmio_stub_write(void *, uint32_t addr, unsigned size, uint64_t v)
+{
+	fprintf(stderr, "[MMIO] FATAL: write%u of 0x%llx to unmodeled MacIO address 0x%08x\n",
+	        size * 8, (unsigned long long)v, addr);
+	abort();
+}
+// VIA clock: host microseconds -> VIA ticks (783360 Hz). GetTicks_usec() is the
+// emulator's existing monotonic source (timer.h / timer_unix.cpp).
+static uint64_t mmio_via_now_ticks(void *)
+{
+	return GetTicks_usec() * VIA_CLOCK_HZ / 1000000ull;
+}
+static void mmio_dump_stats_atexit(void) { MMIOBusDumpStats(stderr); }
+
+// ---
+
 int main(int argc, char **argv)
 {
 #if defined(__linux__) && defined(__aarch64__)
@@ -1510,6 +1538,50 @@ int main(int argc, char **argv)
 #endif
 	rom_area_mapped = true;
 	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
+
+	// Machine Layer M1: MMIO bus + device models (MACHINE-LAYER-PLAN.md §2b; CORE99 §1).
+	// Active on the newworld profile or the named third config SS_MMIO_BUS=1.
+	if (MachineUsesMMIOBus()) {
+		// Claim the MacIO container so no later mapping can land there. The region
+		// stays PROT_NONE forever: every access must Mach-fault into the bus.
+		void *want = (void *)(uintptr_t)(NATMEM_OFFSET + 0xF3000000ull);
+		void *got = mmap(want, 0x80000, PROT_NONE,
+		                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+		if (got != want) {
+			fprintf(stderr, "[MMIO] FATAL: cannot reserve MacIO container at %p (got %p)\n",
+			        want, got);
+			QuitEmulator();
+		}
+
+		static SCC8530 scc;
+		static VIA6522 via;
+		SCCReset(&scc, 0xF3012000);
+		VIAReset(&via, 0xF3016000, mmio_via_now_ticks, NULL);
+
+		static const MMIODevice macio_stub_dev =
+			{ "macio-stub", NULL, mmio_stub_read, mmio_stub_write, NULL };
+		static const MMIODevice scc_dev =
+			{ "scc8530", &scc, SCCRead, SCCWrite, SCCReadIsIdle };
+		static const MMIODevice via_dev =
+			{ "via6522", &via, VIARead, VIAWrite, NULL };
+
+		bool ok = MMIOBusRegister(0xF3000000, 0x80000, MMIO_TRAPPED, &macio_stub_dev)
+		       && MMIOBusRegister(0xF3012000, 0x1000, MMIO_TRAPPED, &scc_dev)
+		       && MMIOBusRegister(0xF3016000, 0x2000, MMIO_TRAPPED, &via_dev);
+		if (!ok) { fprintf(stderr, "[MMIO] FATAL: region registration failed\n"); QuitEmulator(); }
+		MMIOBusActivate();
+		atexit(mmio_dump_stats_atexit);
+		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000, scc 0xF3012000, via 0xF3016000\n");
+
+		// SS_JIT_VERIFY replays blocks; device reads are side-effecting (clear-on-read,
+		// FIFO-pop) and must never be double-executed (MACHINE-LAYER-PLAN §2b). Hard incompat.
+		const char *verify = getenv("SS_JIT_VERIFY");
+		if (verify && verify[0] && verify[0] != '0') {
+			fprintf(stderr, "[MMIO] FATAL: SS_JIT_VERIFY is incompatible with the MMIO bus "
+			        "(side-effecting device reads must not be replayed)\n");
+			QuitEmulator();
+		}
+	}
 
 	if (RAMBase > ROMBase) {
 		ErrorAlert(GetString(STR_RAM_HIGHER_THAN_ROM_ERR));
@@ -2305,8 +2377,12 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 	if (mac_fault) {
 
 		// Legacy PC-keyed skip hacks - PARAVIRTUAL ONLY (see sheepshaver_glue.cpp
-		// sigsegv handler; MACHINE-LAYER-PLAN.md section 2b).
-		if (!MachineProfileIsNewWorld()) {
+		// sigsegv handler; MACHINE-LAYER-PLAN.md section 2b). Also disabled on
+		// the SS_MMIO_BUS=1 named third config (MachineUsesMMIOBus()) to prevent
+		// these hacks from eating MMIO faults before bus dispatch.
+		// NOTE: this handler is #if !EMULATED_PPC and is dead code on macOS arm64
+		// (EMULATED_PPC=1); this change keeps Linux non-EMULATED_PPC builds correct.
+		if (!MachineUsesMMIOBus()) {
 			// "VM settings" during MacOS 8 installation
 			if (r->pc() == ROMBase + 0x488160 && r->gpr(20) == 0xf8000000) {
 				r->pc() += 4;
@@ -2473,8 +2549,10 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 		}
 
 		// Ignore illegal memory accesses? (paravirtual only - the newworld
-		// profile must abort loudly on unexpected faults)
-		if (!MachineProfileIsNewWorld() && PrefsFindBool("ignoresegv")) {
+		// profile and the SS_MMIO_BUS=1 third config must abort loudly on
+		// unexpected faults so no device access is silently swallowed).
+		// NOTE: dead code on macOS arm64 (EMULATED_PPC=1, #if !EMULATED_PPC).
+		if (!MachineUsesMMIOBus() && PrefsFindBool("ignoresegv")) {
 			if (addr_mode == MODE_U || addr_mode == MODE_UX)
 				r->gpr(ra) = addr;
 			if (transfer_type == TYPE_LOAD)

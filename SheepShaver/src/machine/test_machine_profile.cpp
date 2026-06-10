@@ -75,6 +75,21 @@ int main()
 	unsetenv("MP_TEST_FLAG");
 	CHECK(MachineEnvFlag("MP_TEST_FLAG") == false);
 
+	// --- MachineUsesMMIOBusParse (pure decision function) ---
+	// newworld profile => true, regardless of env
+	CHECK(MachineUsesMMIOBusParse(MACHINE_NEWWORLD, NULL)     == true);
+	CHECK(MachineUsesMMIOBusParse(MACHINE_NEWWORLD, "0")      == true);
+	CHECK(MachineUsesMMIOBusParse(MACHINE_NEWWORLD, "1")      == true);
+
+	// paravirtual + SS_MMIO_BUS=1 (named third config) => true
+	CHECK(MachineUsesMMIOBusParse(MACHINE_PARAVIRTUAL, "1")   == true);
+	CHECK(MachineUsesMMIOBusParse(MACHINE_PARAVIRTUAL, "yes") == true);
+
+	// paravirtual, no env or "0" => false
+	CHECK(MachineUsesMMIOBusParse(MACHINE_PARAVIRTUAL, NULL)  == false);
+	CHECK(MachineUsesMMIOBusParse(MACHINE_PARAVIRTUAL, "0")   == false);
+	CHECK(MachineUsesMMIOBusParse(MACHINE_PARAVIRTUAL, "")    == false);
+
 	printf(failures ? "RESULT: %d FAILURES\n" : "RESULT: ALL PASS\n", failures);
 	return failures ? 1 : 0;
 }

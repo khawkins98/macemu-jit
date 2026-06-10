@@ -27,6 +27,7 @@
 #include "rom_patches.h"
 #include "macos_util.h"
 #include "machine_profile.h"
+#include "mmio_bus.h"
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -941,10 +942,10 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	if (mac_fault) {
 
 		// Legacy PC-keyed skip hacks (installer probes, serial-driver device
-		// probes). PARAVIRTUAL ONLY: on the newworld fidelity profile these
-		// would silently eat MMIO accesses the bus must see
-		// (MACHINE-LAYER-PLAN.md section 2b).
-		if (!MachineProfileIsNewWorld()) {
+		// probes). PARAVIRTUAL ONLY: on the newworld fidelity profile and the
+		// SS_MMIO_BUS=1 named third config these would silently eat MMIO
+		// accesses the bus must see (MACHINE-LAYER-PLAN.md section 2b).
+		if (!MachineUsesMMIOBus()) {
 
 			// "VM settings" during MacOS 8 installation
 			if (pc == ROMBase + 0x488160 && cpu->gpr(20) == 0xf8000000)
@@ -976,9 +977,10 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
 
 		// Ignore all other faults, if requested. PARAVIRTUAL ONLY: on the
-		// newworld profile an unexpected fault must abort loudly, not be
-		// silently skipped (MACHINE-LAYER-PLAN.md section 2b / section 6).
-		if (!MachineProfileIsNewWorld() && PrefsFindBool("ignoresegv"))
+		// newworld profile and the SS_MMIO_BUS=1 named third config an
+		// unexpected fault must abort loudly, not be silently skipped
+		// (MACHINE-LAYER-PLAN.md section 2b / section 6).
+		if (!MachineUsesMMIOBus() && PrefsFindBool("ignoresegv"))
 			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
 	}
 #else

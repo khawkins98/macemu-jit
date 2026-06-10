@@ -19,7 +19,7 @@ GCR = @GCR@
 CFLAGS = @CFLAGS@
 CXXFLAGS = @CXXFLAGS@
 CPPFLAGS = @CPPFLAGS@ -I../include -I. -I../CrossPlatform -I../slirp
-DEFS = @DEFS@ -D_REENTRANT -DDATADIR=\"$(datadir)/$(APP)\"
+DEFS = @DEFS@ -D_REENTRANT -DDATADIR=\"$(datadir)/$(APP)\" -DSS_MMIO_BACKPATCH
 LDFLAGS = @LDFLAGS@
 LIBS = @LIBS@
 SYSSRCS = @SYSSRCS@
@@ -67,6 +67,8 @@ endif
 SRCS = ../main.cpp main_unix.cpp ../prefs.cpp ../prefs_items.cpp prefs_unix.cpp sys_unix.cpp \
     ../rom_patches.cpp ../rsrc_patches.cpp ../emul_op.cpp ../ui_introspect.cpp ../name_registry.cpp \
     ../machine/machine_profile.cpp \
+    ../machine/mmio_bus.cpp ../machine/dev_scc8530.cpp ../machine/dev_via6522.cpp \
+    ../machine/a64_mmio_decode.cpp ../machine/mmio_machfault.cpp \
     ../macos_util.cpp ../timer.cpp timer_unix.cpp ../xpram.cpp xpram_unix.cpp \
     ../adb.cpp ../sony.cpp ../disk.cpp ../cdrom.cpp ../scsi.cpp \
     ../gfxaccel.cpp ../video.cpp ../audio.cpp ../ether.cpp ../thunks.cpp \

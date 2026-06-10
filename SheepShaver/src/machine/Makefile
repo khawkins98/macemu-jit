@@ -27,6 +27,12 @@ test_dev_via6522: test_dev_via6522.cpp dev_via6522.cpp ../include/dev_via6522.h 
 test_a64_mmio_decode: test_a64_mmio_decode.cpp a64_mmio_decode.cpp ../include/a64_mmio_decode.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_a64_mmio_decode.cpp a64_mmio_decode.cpp
 
+# test_mmio_machfault: enabled in TESTS when Task 6 lands (test source arrives in Task 6 Step 4)
+test_mmio_machfault: test_mmio_machfault.cpp mmio_machfault.cpp mmio_bus.cpp a64_mmio_decode.cpp \
+    ../include/mmio_bus.h ../include/a64_mmio_decode.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_mmio_machfault.cpp mmio_machfault.cpp \
+	    mmio_bus.cpp a64_mmio_decode.cpp
+
 clean:
 	rm -f $(TESTS)
 	rm -rf $(addsuffix .dSYM,$(TESTS))

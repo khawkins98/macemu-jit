@@ -49,7 +49,7 @@ In `openpic.c` (SHA above), the `openpic_init` function contains:
 memory_region_init(&opp->mem, obj, "openpic", 0x40000);
 ```
 
-(Confirmed on line ~1434 of the fetched file; the function signature is `openpic_init`.)
+(Line 1498 of the 1639-line file; the function signature is `openpic_init`.)
 
 This is the region that `macio_newworld_realize` adds as a subregion at offset `+0x40000`
 from the MacIO BAR:
@@ -122,10 +122,11 @@ case OPENPIC_MODEL_KEYLARGO:
 ```
 
 `KEYLARGO_MAX_EXT`, `KEYLARGO_MAX_IRQ`, `KEYLARGO_IPI_IRQ`, `KEYLARGO_TMR_IRQ` are
-referenced here but defined in a header not directly accessible; they are likely in
-`hw/ppc/mac.h` or a local `openpic.c` define block. Their exact values were not
-retrievable in this fetch. **This does not affect the size answer** — the 0x40000 total
-region size is independent of these capacity constants.
+assigned at `openpic.c` lines 1570–1578 (SHA above) via constants defined in a header
+(`hw/ppc/mac.h` — the header was not accessible via GitHub raw at the fetched SHA).
+Their exact numeric values were not retrieved. **This does not affect the size answer** —
+the 0x40000 total region size is independent of these capacity constants, and the
+`case OPENPIC_MODEL_KEYLARGO:` branch is confirmed at line 1570.
 
 ### 1.4 What M3 must trap
 
@@ -467,7 +468,7 @@ M3-required minimum for a running 9.x system.
 ### 5.1 QEMU openpic.c profile
 
 GPL-2.0-or-later (QEMU project license). Size: the full `openpic.c` is approximately
-3500–4000 lines (the file covers multiple models: FSL MPIC 2.0, FSL MPIC 4.2, KeyLargo).
+1639 lines (the file covers multiple models: FSL MPIC 2.0, FSL MPIC 4.2, KeyLargo).
 The KeyLargo-specific paths are a small fraction — the model switch at realize time
 configures the capacity constants, but the register-access handlers (`openpic_glb_*`,
 `openpic_src_*`, `openpic_cpu_*`) are shared across all models.
@@ -515,7 +516,7 @@ per-CPU (IACK, EOI, TPR). Timer bank → abort-loudly stub. IPI → abort-loudly
 
 | Axis | Port QEMU openpic.c | Reimplement against spec |
 |---|---|---|
-| Implementation scope | Full openpic.c is ~3500 lines; KeyLargo code path is ~300–500 effective lines after stripping FSL paths | OpenPIC spec is public (Motorola MPC8240/MPC8245 OpenPIC manual); M3-relevant register set (§5.2) is ~20–30 registers; implementation ~200–400 lines |
+| Implementation scope | Full openpic.c is 1639 lines (fetched, exact); KeyLargo code path is ~300–500 effective lines after stripping FSL paths | OpenPIC spec is public (Motorola MPC8240/MPC8245 OpenPIC manual); M3-relevant register set (§5.2) is ~20–30 registers; implementation ~200–400 lines |
 | Fidelity risk | High fidelity — QEMU is tested against real hardware | Protocol compliance risk on edge cases; mitigated by QEMU as conformance oracle |
 | Locking fit | QEMU uses qemu-specific infrastructure (QOM, MemoryRegion); extracting the logic is non-trivial | Native to our model; follows per-device lock rule (§2g) |
 | License | GPL-2.0-or-later (QEMU) — combining with our GPLv2-or-later works | N/A |
@@ -525,7 +526,7 @@ per-CPU (IACK, EOI, TPR). Timer bank → abort-loudly stub. IPI → abort-loudly
 
 **Recommendation: reimplement against spec, using QEMU as conformance oracle.** The
 M3-required register surface is small (IACK/EOI/IVPR/IDR/FRR/GCR — ~20 registers
-effectively exercised). Porting QEMU's ~3500-line multi-model file would import QOM,
+effectively exercised). Porting QEMU's 1639-line multi-model file would import QOM,
 MemoryRegion, QEMU locking, and FSL MPIC paths that are dead weight for our use case.
 The OpenPIC spec is available; QEMU's source provides the behavioral oracle for
 conformance testing. This follows the same pattern as our M1 devices (SCC, VIA) — all
@@ -554,7 +555,7 @@ session may have it dirty. Apply these as a tracked edit when M3 is planned.
 > 6\. ~~**OpenPIC region size** — RESOLVED (2026-06-10; `M3-PIC-CUDA-DONOR-STUDY.md §1`).~~
 >    **Total span: `0x40000` bytes** (256 KB), authoritative in
 >    `openpic_init()`: `memory_region_init(&opp->mem, obj, "openpic", 0x40000)` (QEMU
->    `hw/intc/openpic.c` SHA `de5d8bfd…`, line ~1434).  M3 must register the bus trap at
+>    `hw/intc/openpic.c` SHA `de5d8bfd…`, line 1498 of 1639).  M3 must register the bus trap at
 >    `0xF3040000–0xF307FFFF` (MacIO+0x40000, span 0x40000). Sub-regions within the span:
 >    `glb` at 0x0 (size 0x10F0), `tmr` at 0x10F0 (size 0x220), `src` at 0x10000 (size
 >    0x2000 = 256 sources × 32 B), `cpu` at 0x20000. Large holes between sub-regions

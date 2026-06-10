@@ -38,7 +38,7 @@ static inline uint64_t tb_to_ns(const VirtClock *c, uint64_t tb)
 
 uint64_t VirtClockTB(VirtClock *c)
 {
-	return ns_to_tb(c, VirtClockNowNS(c)) + (uint64_t)c->tb_offset;
+	return ns_to_tb(c, VirtClockNowNS(c)) + c->tb_offset;
 }
 
 /* Consume the outstanding arm and latch the condition. (rev 2 finding C1)
@@ -84,7 +84,7 @@ void VirtClockWriteTBL(VirtClock *c, uint32_t v)
 	c->tb_writes++;
 	uint64_t cur = VirtClockTB(c);
 	uint64_t want = (cur & 0xFFFFFFFF00000000ull) | v;
-	c->tb_offset += (int64_t)(want - cur);
+	c->tb_offset += want - cur;            // arithmetic mod 2^64 (well-defined unsigned wrap)
 }
 
 void VirtClockWriteTBU(VirtClock *c, uint32_t v)
@@ -92,7 +92,7 @@ void VirtClockWriteTBU(VirtClock *c, uint32_t v)
 	c->tb_writes++;
 	uint64_t cur = VirtClockTB(c);
 	uint64_t want = ((uint64_t)v << 32) | (uint32_t)cur;
-	c->tb_offset += (int64_t)(want - cur);
+	c->tb_offset += want - cur;
 }
 
 void VirtClockDECExpire(VirtClock *c, uint32_t gen) { dec_fire(c, gen); }
@@ -109,12 +109,14 @@ void VirtClockClearDECPending(VirtClock *c)
 
 void VirtClockDumpStats(const VirtClock *c, FILE *f)
 {
+	// dec_expiries/dec_pending cross threads: relaxed atomic reads (the rest are
+	// CPU-thread counters; this is an at-exit/diagnostic dump).
 	fprintf(f, "[VCLK] tb_freq=%uHz mfspr_dec=%llu mtspr_dec=%llu tb_writes=%llu "
 	        "dec_expiries=%llu pending=%u\n",
 	        c->tb_freq_hz,
 	        (unsigned long long)c->mfspr_dec_reads,
 	        (unsigned long long)c->mtspr_dec_writes,
 	        (unsigned long long)c->tb_writes,
-	        (unsigned long long)c->dec_expiries,
-	        (unsigned)c->dec_pending);
+	        (unsigned long long)__atomic_load_n((uint64_t *)&c->dec_expiries, __ATOMIC_RELAXED),
+	        (unsigned)__atomic_load_n((uint32_t *)&c->dec_pending, __ATOMIC_RELAXED));
 }

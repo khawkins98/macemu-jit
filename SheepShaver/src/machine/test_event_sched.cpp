@@ -80,6 +80,21 @@ int main()
 	es.process_timers();
 	CHECK(imm == 1);
 
+	// --- cancel a SIBLING from inside a callback (the distinct remove_by_id path) ---
+	fired.clear();
+	uint32_t sib = es.add_oneshot_timer(20, [&]() { fired.push_back(2); });
+	es.add_oneshot_timer(10, [&]() { es.cancel_timer(sib); fired.push_back(1); });
+	fake_ns += 1000; es.process_timers();
+	CHECK(fired.size() == 1 && fired[0] == 1);   // sibling cancelled before its deadline scan
+
+	// --- same-deadline tiebreak: FIFO by insertion id (MyGtComparator) ---
+	fired.clear();
+	es.add_oneshot_timer(50, [&]() { fired.push_back(1); });
+	es.add_oneshot_timer(50, [&]() { fired.push_back(2); });
+	es.add_oneshot_timer(50, [&]() { fired.push_back(3); });
+	fake_ns += 50; es.process_timers();
+	CHECK(fired.size() == 3 && fired[0] == 1 && fired[1] == 2 && fired[2] == 3);
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

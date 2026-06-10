@@ -27,7 +27,7 @@ struct VirtClock {
 	uint64_t (*now_ns)(void *opaque);   // injected host monotonic nanoseconds
 	void    *opaque;
 	uint32_t tb_freq_hz;                // TB/DEC tick rate (TimebaseSpeed)
-	int64_t  tb_offset;                 // guest mttbl/mttbu adjustment (tb units)
+	uint64_t tb_offset;                 // guest mttbl/mttbu adjustment (tb units, arithmetic mod 2^64)
 
 	// DEC state (CPU-thread-owned)
 	uint32_t dec_set_value;             // last mtspr DEC value (0 = cold: free-run from 0)
@@ -54,7 +54,9 @@ extern void     VirtClockInit(VirtClock *c, uint32_t tb_freq_hz,
                               uint64_t (*now_ns)(void *), void *opaque);
 static inline bool VirtClockReady(const VirtClock *c) { return c->now_ns != 0; }
 
-extern uint64_t VirtClockNowNS(VirtClock *c);   // raw injected source (devices derive ticks)
+extern uint64_t VirtClockNowNS(VirtClock *c);   // any thread: raw injected source (devices derive ticks)
+// CPU THREAD ONLY (they touch the plain-field DEC/TB state — pump-side callers
+// must use VirtClockNowNS / VirtClockDECExpire instead):
 extern uint64_t VirtClockTB(VirtClock *c);      // 64-bit TB = ns*freq/1e9 + tb_offset
 extern uint32_t VirtClockReadDEC(VirtClock *c); // also performs the lazy expiry check
 extern void     VirtClockWriteDEC(VirtClock *c, uint32_t v);

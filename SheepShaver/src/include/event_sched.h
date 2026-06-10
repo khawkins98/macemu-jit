@@ -6,8 +6,10 @@
  *  GPL-3.0-or-later. Combined work is GPLv3 (DINGUSPPC-EVALUATION-PLAN.md).
  *  Adaptations for SheepShaver (marked [SS] below): class renamed TimerManager ->
  *  EventScheduler; singleton get_instance() removed (the machine layer owns the
- *  instance); loguru removed. Queue, ordering, re-arm and callback semantics are
- *  preserved verbatim. Time unit: nanoseconds from the injected source.
+ *  instance); loguru removed; unused NS_PER_* constants dropped with their
+ *  values inlined into the USECS/MSECS_TO_NSECS macros. Queue, ordering, re-arm
+ *  and callback semantics are preserved verbatim. Time unit: nanoseconds from
+ *  the injected source.
  *
  *  DingusPPC - The Experimental PowerPC Macintosh emulator
  *  Copyright (C) 2018-26 The DingusPPC Development Team (see their CREDITS.MD)

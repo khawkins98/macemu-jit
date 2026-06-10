@@ -1,10 +1,15 @@
 # Handoff: New World supervisor-stack fidelity (the PPC MMU / page-table work)
 
-> **Status:** 🟡 Active — hybrid approach (§2.7) · **Created:** 2026-06-08 · **Updated:** 2026-06-09
-> **Why this doc exists:** Hand a fresh agent the next phase of work — giving SheepShaver's PPC JIT a
-> consistent supervisor/MMU environment so the New World nanokernel boots further — AND, just as
-> importantly, the *rationale* so the agent doesn't bounce off the predictable "SheepShaver wasn't
-> built for this / run 9.2 some other way" objection.
+> **Status:** ⏸ **Parked** (2026-06-09) — superseded along with Path B by the **Machine Layer**
+> architecture (2026-06-10): see [`MACHINE-LAYER-PLAN.md`](MACHINE-LAYER-PLAN.md), the active plan.
+> This doc's §2.7 hybrid insight and §3 rung-ladder are absorbed there as components (§2c);
+> §2.8 obstacle map remains the per-wall reference.
+> **Why parked:** Path A's obstacle map (§2.8) shows diminishing forcing-function ROI — remaining
+> work shifts from general PPC bugs to ROM-specific byte-pattern grinding. The 1.1 ROM is proven
+> infrastructure; the Upgrade Card approach builds targeted "enabler" shims on top of it instead
+> of porting the NewWorld nanokernel. All Path A scaffolding is preserved (env-gated on
+> `SS_NW_TRAMPOLINE`) and can be resumed if Experiment 1 shows the Upgrade Card path isn't viable.
+> · **Created:** 2026-06-08 · **Updated:** 2026-06-09
 > _Markers: ✅ done · 🟡 in progress · ⏸ deferred · ☐ todo._
 
 ---
@@ -68,8 +73,9 @@ under our JIT — far further than ever before. The journey + the proven path:
 | SDR1/HTAB zeroing stall at `0x50311ff4` | **Three-part fix:** (a) real SDR1 register (`ppc-registers.hpp`+`ppc-execute.cpp`: `mfspr`/`mtspr SDR1` read/write); (b) trampoline allocates 64 KB HTAB at `0x68FE0000`, seeds `SDR1=0x68FE0000`; (c) ROM patcher skips `sdr1_read`+`pgtb_clear` patches for parcels (gated on `g_rom_904_lenient`) so the real `mfspr SDR1` + real zeroing loop execute against mapped memory. HTAB zeroing now completes in milliseconds. **General correctness fix** (SDR1 was silently wrong for all guests). | ✅ committed |
 | Page descriptor free-list empty (`0x50312250`) | **Three-part fix:** (a) Seed `[KDP-0x20]` = IRP base (`KDP - 0xA000 = 0x68FF4000`), with bank entries at `IRP+0xDF0/DF4`. (b) Skip `desc_create` ROM patch for NW path (it NOP'd the `stwu r31,4(r29)` that stores page descriptors). (c) Lower `KernelMemoryBase` to `sub_kdp_base - pgdesc_size` (256KB for descriptors growing UPWARD). **General fix**: `desc_create` skip gated on `g_rom_904_lenient`. Free list now correctly populated: r22=0x3FFFC (65536 pages), 568 blocks, 153M blocks/s. | ✅ verified |
 | CreateAreasFromPageMap wall (`0x5031f3b8`) | **Root cause: KDP+0x80 (SegMap pointers) corrupted during page-init loop** — correct value `0x68FFE920` written by NKInit SegMap copy, but overwritten to `0x0000FFFF` by an indirect store during page-init. **Spike fix**: PPC stub at ROM+0x30d600 writes minimal SegMap + PMDT data (one 256MB RAM area + sentinels for 16 segments) immediately before calling CreateAreasFromPageMap, bypassing the corruption by construction. Both `bl` call sites (0x3124e4 non-cr5, 0x312568 cr5 path) redirected. **Confirmed**: CreateAreasFromPageMap processes the data (PC 0x5031f530 = normal-area handler reached), boot advances 451→568 compiled blocks at 54M blocks/s. Env-gated on `SS_NW_TRAMPOLINE`. | ✅ spike verified |
-| Nanokernel idle loop at `0x5032751C` | Nanokernel completed all init and reached its idle loop: `lwz r1,0(0); addi r1,r1,1; stw r1,0(0); bl check_work; cmpwi r8,-1; bne done; b loop`. The `check_work` function at `0x50326880` reads `[KDP-0x900]` (VIA base address); if zero, returns -1 (no work). **Fix (2026-06-09):** fake VIA page at 0x68FAF000 stored in `KDP-0x900`, env-gated on `SS_NW_TRAMPOLINE`. Nanokernel exits idle, VIA interrupt handler runs, scheduler dispatch reaches DR Emulator. | ✅ spike verified |
-| **CURRENT WALL: DR Emulator entry (0x5046e8c0)** | Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror). DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from KDP+0x65c. All uninitialized → crash at guest PC 0x00000000. Root cause: `patch_68k` / `jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory problem — this is the PPC→68k emulator boundary, requiring 68k HLE shim infrastructure. **New approach (2026-06-09):** synthetic ECB stub — see §2.7. | 🟡 next |
+| Nanokernel idle/yield primitive at `0x5032751C` | Nanokernel completed all init and entered the **idle path of the yield primitive** at `0x503272e0` (107 callers: 106 via `crset cr1eq` = idle, 1 via `crclr cr1eq` = char-processing). The idle loop at `0x5032751C` spins calling `check_work` (`0x50326880`) which reads **SCC RR0** (not VIA IFR) via `[KDP-0x900]`; if null, returns -1. The loop also serves as the serial debug console (Thud) — when a character arrives, it falls through to char processing at `0x50327540`→`0x5032756c`. **Fix (2026-06-09):** set `[KDP-0x900]=0` (no SCC hardware) so check_work returns -1 immediately. Prior `scc[2]=0x01` caused infinite phantom character processing. **Remaining problem:** with SCC base=0 the idle loop spins forever — the nanokernel needs interrupt injection (`ppc_cpu->interrupt()`) to break out and dispatch tasks, but MODE_NATIVE is dead for NewWorld (see §1.7.1 #2). Env-gated on `SS_NW_TRAMPOLINE`. | 🟡 partial |
+| Interrupt injection gap (RESOLVED) | Tick-gated injection from HandleInterrupt MODE_68K path: after 50 ticks (~5s), calls `ppc_cpu->interrupt(ROMBase + 0x312b1c)`. Handler enters correctly, traverses interrupt prologue → scheduler (0x503242a8) → dispatch (0x503244cc → 0x50318000) → **idle task** at 0x50324f04. Idle task loops forever — **never reaches EXEC_RETURN trampoline** (0x5058f5c8). **Root cause (§1.7.2):** No boot task exists (jump68k was skipped), so scheduler dispatches idle task. The idle task's `sc` polling is dead (`sc` = `execute_illegal` no-op, PC += 8, skips `cmpwi r3,0`). With tasks registered, scheduler would dispatch them directly — idle loop never entered. Interrupt dispatch and scheduler work correctly. | ✅ verified |
+| DR Emulator entry (0x5046e8c0) — BLOCKED on interrupt injection | Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror). DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from KDP+0x65c. All uninitialized → crash at guest PC 0x00000000. Root cause: `patch_68k` / `jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory problem — this is the PPC→68k emulator boundary, requiring 68k HLE shim infrastructure. **New approach (2026-06-09):** synthetic ECB stub — see §2.7. | 🟡 blocked |
 
 **SDR1/HTAB wall (RESOLVED).** With the sub-KDP fix verified, the nanokernel hit the SDR1/HTAB
 wall at `0x50311ff4`: `mfspr SDR1` returned the `0xdead001f` sentinel → 524K faulting stores.
@@ -103,12 +109,29 @@ from the emulator (via `fwrite(Mac2HostAddr(rom_base), ...)`) and disassemble th
 analyzed the compressed file produced an entirely fabricated disassembly — plausible addresses and
 register names, but wrong instructions. This wasted a full investigation cycle.
 
-**Idle loop / VIA fix (2026-06-09).** After all init completes (568 unique compiled blocks, 54M
-blocks/s), the nanokernel enters its idle loop: increments a counter at guest address 0, calls
-`check_work` at `0x50326880` which reads `[KDP-0x900]` (VIA base address), and if zero returns -1
-and loops. **Fix:** a fake VIA page at 0x68FAF000 is stored in `KDP-0x900`, env-gated on
-`SS_NW_TRAMPOLINE`. With the fake VIA populated, the nanokernel exits idle, the VIA interrupt handler
-runs, and nanokernel dispatch at 0x503126b4 executes `rfi` into the **DR Emulator entry at 0x5046f900**.
+**Idle/yield + SCC fix (2026-06-09, corrected 2026-06-09).** After all init completes (568 unique
+compiled blocks, 54M blocks/s), the nanokernel enters the **idle path of the yield/scheduler
+primitive** at `0x503272e0` (107 callers: 106 via `crset cr1eq` = idle, 1 via `crclr cr1eq` =
+char-processing). The idle loop at `0x5032751C` spins calling `check_work` (`0x50326880`), which
+reads `[KDP-0x900]` — **an SCC (Zilog 8530) base address, NOT a VIA 6522** (the register access
+pattern at offsets 2/6 with alternating reg#/data writes matches SCC, not VIA). If null, returns -1
+(no serial hardware). The same loop doubles as the serial debug console (Thud) — when check_work
+returns a character, control falls through to `0x50327540` → `0x5032756c` for echo, line-editing,
+and command dispatch via `0x5032879c`.
+
+**Key correction:** the original fix set `scc[2]=0x01` (SCC RR0 bit 0 = Rx char available), which
+caused the nanokernel to enter the character-processing path at `0x50327540`, endlessly consuming
+phantom 'B' characters (from `scc[6]=0x42`). The hot PCs during this spin were all in check_work's
+BAT-setup/teardown code (`0x50426880`–`0x50426af8`, mirror addresses). **Fixed** by setting
+`[KDP-0x900]=0` (no SCC hardware at all), so check_work returns -1 immediately with no risk of
+self-modification (check_work's timeout loop at `0x50326548` writes to `scc[2]`, corrupting any
+initial zero byte on a non-null base).
+
+**Remaining problem:** with SCC base=0, the idle loop spins forever (check_work always returns -1).
+The nanokernel needs **interrupt injection** (`ppc_cpu->interrupt(ROMBase + 0x312b1c)`) to break out
+of the idle loop and dispatch tasks. The MODE_NATIVE code path in HandleInterrupt already has this
+call, but MODE_NATIVE is dead for NewWorld ROMs (§1.7.1 #2). See §1.7.1 #6 for the interrupt
+injection gap analysis.
 
 **The current wall (DR Emulator entry at 0x5046e8c0 / 0x5046f900).** The nanokernel's dispatch
 routine seeds SPRG0 (`KDP+0x5a0`), SRR0 (`KDP+0x5a4 + 0x26e8 = 0x5046f900`), and SRR1
@@ -234,9 +257,130 @@ or consistently fake SDR1/HTAB/SPRG0/segments) + the **device-tree** identity we
 
 *Fix the corruption root cause in page-init.* The "proper" fix, but: (a) the corruption is likely intentional nanokernel behaviour (page-init builds a free list that temporarily reuses KDP fields as scratch space); (b) the real Trampoline would repopulate SegMap data **after** page-init anyway; (c) our stub emulates exactly what the Trampoline would do.
 
-**Result.** The spike confirmed the hypothesis — CAFPM processed the stub's data (PC `0x5031f530`, the normal-area handler, was reached), boot advanced from **451 → 568 compiled blocks at 54M blocks/s**, and the nanokernel completed all init and entered its **idle loop at `0x5032751C`**. The idle loop wall was subsequently broken (fake VIA page at 0x68FAF000 in `KDP-0x900`) — the nanokernel now exits idle and dispatches to the **DR Emulator entry at 0x5046f900**. Current wall: DR Emulator low-memory globals uninitialized (see §1 table).
+**Result.** The spike confirmed the hypothesis — CAFPM processed the stub's data (PC `0x5031f530`, the normal-area handler, was reached), boot advanced from **451 → 568 compiled blocks at 54M blocks/s**, and the nanokernel completed all init and entered the **idle/yield primitive at `0x5032751C`** (see §1.7.1 #4 — it's both the scheduler idle loop and the Thud serial debug console poll). The SCC fix (`[KDP-0x900]=0`) prevents serial phantom chars but the idle loop now spins forever — the **interrupt injection gap** (§1.7.1 #6) is the actual remaining wall. Once resolved, the nanokernel will dispatch to the **DR Emulator entry at 0x5046f900**, where the next wall awaits (low-memory globals uninitialized — see §1 table).
 
 **Open question for a production implementation.** The spike uses a single minimal 256 MB RAM area. A full implementation should add **I/O region entries (type=`0xC00`)** for the VIA/CUDA address ranges and possibly separate entries for IRP/KDP/EDP/HTAB supervisor regions. The SegMap sentinel-writing loop at `0x503123f4` normally writes I/O sentinels; the spike's stub overwrites those. The stub is env-gated on `SS_NW_TRAMPOLINE` and does not affect the OldWorld path.
+
+### §1.7.2 Interrupt handler trace — nanokernel alive, idle task confirmed (2026-06-09)
+
+**Method.** Added a depth-2 PC trace to the `do_interpret` loop in `ppc-cpu.cpp` (the bare
+interpreter path used by nested `execute()` calls at depth > 1). All existing JIT diagnostics
+(probes, trace ring, heartbeat, block counters) are blind at depth > 1 — they only fire in
+the depth-1 JIT/decode-cache path. The trace logged 5000 PCs to `/tmp/htrace.log`.
+
+**Handler path (in order of execution):**
+1. **Interrupt prologue** at `0x50312b1c` — saves r17–r21, r13, XER, CTR, r2–r4 into context
+   block at `[r6+offset]`. Runs ~60 instructions (0x50312b1c–0x50312bd4).
+2. **Exception dispatch** at `0x50313ecc–0x50313f68` — the nanokernel exception dispatcher.
+3. **Handler body** at `0x50312bd8–0x50312dcc` — reads KDP fields, sets up scheduler context.
+4. **Scheduler dispatch** at `0x503242a8` — walks the task queue, finds no runnable task.
+5. **Check memory/context** at `0x503244cc → 0x50318000` — (the "no-task" path).
+6. **Idle task entry** at `0x50324f04` — loads ASCII strings into registers:
+   - r20/r21 = "idle"/"task" (0x69646c65/0x7461736b)
+   - r22–r27 = "Ren\x8e", "Alan", "Jim ", "Alex", "Derr", "ick " (developer credits)
+7. **Idle loop** at `0x50324f48–0x50325000` — register waterfall (shifts all regs down one
+   position), then `sc` (r0=0x2e, r3=0xc, r4=1) = intended check-for-work syscall. But `sc`
+   is a no-op in SheepShaver (see below), so r3 is unchanged (still 0 from init) and CR0
+   is stale (EQ from `cmpwi r31,0`). Loops forever. **104 iterations observed in 5000 PCs.**
+
+**Key observations:**
+- The `sc` instruction at `0x50324fd8` is a **complete no-op** in SheepShaver. In the
+  `#ifdef SHEEPSHAVER` path, `execute_syscall()` calls `execute_illegal()`, which — with the
+  default `ignoreillegal=true` pref — does `increment_pc(4); return;`. Then `execute_syscall`
+  itself does another `increment_pc(4)`. Total: **PC += 8**, skipping the `cmpwi r3, 0` at
+  `0x50324fdc` entirely. No registers (r3, CR0) are modified.
+- The `beq` at `0x50324fe0` therefore tests **stale CR0** from the earlier `cmpwi r31, 0`
+  (r31 is always 0 → CR0=EQ), so the branch is always taken → infinite loop.
+- The idle task never reaches `0x5058f5c8` (our EXEC_RETURN trampoline), confirming the
+  `execute()` call in `interrupt()` never returns.
+- The `twui r31, 5` at `0x50324fec` (task-dispatch trap) is never executed.
+
+**Root cause: `sc` is dead in SheepShaver.** On real hardware, `sc` vectors to the nanokernel's
+syscall handler, which checks for runnable tasks and returns a result in r3. SheepShaver uses
+EMUL_OP/NativeOp for its own syscall mechanism and treats the PPC `sc` instruction as illegal.
+The double `increment_pc(4)` is a **latent bug** in `execute_syscall` (it should either not call
+`execute_illegal` or not do its own increment), but fixing it alone won't help — `sc` still
+wouldn't execute the nanokernel's syscall handler.
+
+**Conclusion:** The nanokernel's interrupt dispatch, exception handling, scheduler, and idle
+task entry all work correctly — the nanokernel IS alive. The idle loop is a structural dead-end
+because `sc` is a no-op, not (only) because no tasks are registered. Even if `jump68k` were
+enabled and tasks registered, the `sc`-based polling mechanism cannot work in SheepShaver.
+The next step is **not** more interrupt work — it's the synthetic ECB/task-injection approach
+in §2.7, which bypasses the `sc` polling entirely.
+
+### §1.7.1 Corrections from static analysis + diagnostic boot (2026-06-09)
+
+Six findings from ROM disassembly, runtime probes, and code analysis that correct prior assumptions:
+
+1. **KDP fields populated (confirmed).** KDP+0x658, 0x674, 0x67c are all set by nanokernel init
+   at ROM 0x50310834/50/5c. These are the fields read by `HandleInterrupt` for MODE_68K interrupt
+   delivery. No fix needed — they work.
+
+2. **MODE_NATIVE permanently dead for NewWorld.** The `ppc_excp_tbl` and `m68k_excp_tbl` byte
+   patterns (which toggle `XLM_RUN_MODE` between MODE_68K and MODE_NATIVE) do not exist in the
+   9.0.1 ROM. With `SS_ROM_LENIENT=1`, both patches are skipped. `XLM_RUN_MODE` stays MODE_68K
+   permanently. **Implication:** the `HandleInterrupt` MODE_NATIVE path (which calls
+   `ppc_cpu->interrupt()`) is unreachable for NewWorld ROMs. All interrupt delivery goes through
+   the MODE_68K path (KDP field writes + Ticks increment).
+
+3. **KDP-0x900 is SCC, not VIA.** The register access pattern in `check_work` (alternating
+   reg#/data writes to the same base address at offsets 2 and 6, with `eieio` barriers) matches a
+   **Zilog SCC (8530)** serial controller, not a VIA 6522. Byte 2 = SCC RR0 (status register 0),
+   bit 0 = "Rx character available". Byte 6 = SCC data register. Code comments in
+   `sheepshaver_glue.cpp` corrected from "VIA" to "SCC".
+
+4. **0x5032751c is the idle path of the nanokernel yield/scheduler primitive.** The function at
+   `0x503272e0` has 107 callers: 106 via `crset cr1eq` (idle/yield — "nothing to do, poll serial"),
+   1 via `crclr cr1eq` (explicit char-processing, from `0x5032360c`). At `0x50327518`, `bne cr1`
+   branches to `0x50327540` (char path) when cr1eq is clear; the 106 idle callers fall through to
+   `0x5032751c`. The idle loop: increments a counter at address 0, calls `check_work`, loops if -1.
+   When a character arrives, it falls through to `0x50327540` → sets KDP+0xedc bit 1 → calls
+   `0x5032756c` (echo, line-editing, command dispatch via `0x5032879c` — the Thud debug console).
+   The prologue at `0x503272e0` performs a **full machine-state save** — all GPRs (via `stmw`), all
+   32 FPRs (after enabling FP via `ori r0,r0,0x2000; mtmsr; isync`), all 16 segment registers
+   (`mfsr 0..15`), XER, CTR, SPRGs, MSR, FPSCR — into KDP+0x700..0x8fc. A debug console does not
+   save FP and segment registers before polling a keystroke; a **context-switch/yield primitive**
+   does exactly this. Combined with the 106:1 caller split, idle/yield is the dominant role;
+   console is the secondary branch. The idle loop polls **only** serial — no decrementer, no timer,
+   no task queue check. The only way to break it in emulation (no SCC) is PPC exception injection.
+
+5. **Diagnostic boot result (runtime probe).** With `SS_PROBE_PC` at check_work entry
+   (0x50426880, mirror address), `[KDP-0x900]=0x68faf000` (SCC base populated). Hot PCs were
+   scattered across check_work (0x504268d4), BAT-setup (0x50426ae8–af8), and BAT-teardown
+   (0x50426580–5a4) — all mirror addresses. The nanokernel was spinning in check_work's SCC
+   polling path, reading our fake `scc[2]=0x01` (Rx char available) endlessly, with the
+   character-processing path at `0x50327540` calling check_work repeatedly. Setting
+   `[KDP-0x900]=0` (no SCC hardware) is the correct fix — check_work returns -1 immediately
+   with no risk of self-modification.
+
+   - With SCC base=0, the idle loop at 0x5032751c spins forever (check_work always returns -1).
+     Hot PC at 0x50427590 (mirror of 0x50327590, +116 bytes from 0x5032751c) confirms the spin
+     is in the idle loop itself, not in check_work internals.
+
+6. **Interrupt injection gap (RESOLVED — see §1.7.2).** Tick-gated injection added to
+   HandleInterrupt MODE_68K path: after 50 ticks (~5s), calls `ppc_cpu->interrupt(ROMBase +
+   0x312b1c)`. Handler enters correctly. Depth-2 interpreter trace (5000 PCs) confirmed the
+   full path: interrupt prologue → exception dispatch → scheduler at 0x503242a8 → idle task
+   at 0x50324f04. The idle task attempts to poll via `sc` (r0=0x2e), but **`sc` is a no-op
+   in SheepShaver** (treated as `execute_illegal` → double `increment_pc(4)` = PC += 8, no
+   register modification). The `cmpwi r3,0` after `sc` is skipped; the `beq` tests stale
+   CR0=EQ and always loops. **Never reaches EXEC_RETURN trampoline.**
+
+   **Resolved open questions from the original analysis:**
+   - "Does the handler dispatch a task or return to the idle loop?" → **Neither.** It dispatches
+     to the *idle task* (the scheduler's fallback when no real tasks exist). The idle task's
+     `sc`-based polling is dead (no-op), so it loops forever regardless of task state.
+   - "What event is the boot task waiting for?" → **No boot task exists** (jump68k was skipped).
+     With jump68k enabled, the scheduler at `0x503242a8` would find the task on its queue and
+     dispatch it directly — the idle loop would never be entered. The `sc` no-op is only relevant
+     for the idle case (no tasks). The interrupt dispatch mechanism is correct; the path forward
+     is getting tasks registered (§2.7 synthetic ECB + re-enabling jump68k).
+
+   **Key methodology finding:** nested `execute()` at depth > 1 runs in the bare interpreter
+   loop (`do_interpret` at ppc-cpu.cpp:2261) with **zero** instrumentation — no probes, no trace
+   ring, no JIT diagnostics, no heartbeat. The only way to observe what happens inside is a
+   temporary PC trace in the `do_interpret` loop itself.
 
 ---
 
@@ -335,7 +479,7 @@ machine model, but enough device registers to satisfy the ROM's probing.
 ### The reframe: most hardware is already neutralized
 
 The 84 `patch_68k` shims already NOP out Cuda init, SCC, GC interrupt mask, CPU-speed probes.
-The fake VIA page (§1 wall table) is the only genuine "device model" needed before DR Emulator.
+The fake SCC page (§1 wall table) is the only genuine "device model" needed before DR Emulator.
 **The actual wall is the PPC→68k handoff, not more hardware.**
 
 ### Approach: synthetic ECB stub (same technique as SegMap/PMDT spike)
@@ -420,6 +564,89 @@ didn't fully populate the dispatch table for NewWorld.
 fell to ~10 lines of existing code promotion — no byte-pattern work. New discipline: keep
 the forcing function running while walls fall cheaply (<1 day each). Re-evaluate when a
 wall requires multi-day ROM-specific RE with no general payoff.
+
+## 2.8 Obstacle map — from here to a booting OS 9 screen (2026-06-09)
+
+> **Purpose:** A clear-eyed assessment of every known wall between the current state (nanokernel alive,
+> DR Emulator entry reached but crashing) and a working Mac OS 9.x boot on the NewWorld ROM. Organized
+> by phase, with effort estimates and the forcing-function ROI for each.
+
+### Phase 1: PPC→68k handoff (current wall)
+
+**Status:** DR Emulator entry reached (§2.7.1), crashes on uninitialized ECB/dispatch table.
+
+| Task | Effort | ROI (general bugs?) | Detail |
+|---|---|---|---|
+| Synthetic ECB stub completion | S (hours–1d) | Low (ROM-specific) | §2.7.1 got DR Emulator to execute. Crash at `0x72bf0000` = `rfi` to uninitialized SRR0 from garbage ECB fields. Need to enumerate every memory read in the DR Emulator cold-start sequence (`SS_DUMP_ROM` + capstone) and populate the missing fields. Same spike technique as SegMap/PMDT. |
+| `patch_68k_emul()` dispatch table for NewWorld | S–M (1–3d) | Low-Med | The 68k trap dispatch table at ROM `0x36e600–0x36ea00` (twi→EMUL_OP branches) may live at different addresses in the parcels ROM. Without it, 68k traps crash instead of dispatching to host handlers. Need to find the parcels equivalent — may be at the same address (it's in a stable ROM region) or may need RE. |
+
+### Phase 2: 68k HLE shim porting (`patch_68k`)
+
+**Status:** `patch_68k` runs with `SS_ROM_LENIENT=1` (warnings, not aborts). 84 byte-pattern
+searches, of which 28 in-range, 31 relocated, 25 absent in 9.0.1.
+
+| Task | Effort | ROI | Detail |
+|---|---|---|---|
+| Verify 31 relocated patterns | M (3–7d) | Low (grind work) | Each pattern was found by whole-image fallback but the offset-relative patches (`found+N`) may land wrong. Example: `run_diags_dat` at offset 0xde (declared range 0x110–0x128), the `-6` patch write may hit the wrong instruction. Manual verification per pattern: disassemble at found offset, confirm the patch still makes semantic sense. |
+| RE 7 hard-abort absent patterns | M–L (5–10d) | Low-Med | `powermac_id_dat`, `nvram2–6_dat`, `timek_dat` — byte sequences rewritten between 1998 and 2001. Each needs: find the equivalent routine in the 9.0.1 ROM, determine if a shim is still needed (parcels may self-handle), write a new search pattern or skip-guard. The NVRAM cluster (5 patterns) may share a single rewrite. |
+| Triage remaining 18 soft-fail patterns | S (1–2d) | — | Already have lenient guards. Determine which are OldWorld-only (no action) vs genuinely needed for 9.0.1 boot (promote to the RE queue). |
+
+**Key insight:** Not all 84 patterns are needed for boot. The boot path exercises a subset —
+NVRAM read/write, VIA init, run-diagnostics skip, reset vector. Many patterns (Sony floppy,
+SCSI, serial) are runtime shims that only matter after the OS is up. **Phase 2 is incremental:
+fix patterns as boot hits them, not all 84 upfront.**
+
+### Phase 3: MMU fidelity (§3 rung ladder)
+
+**Status:** Rung 1 complete (real SDR1 + RAM-backed HTAB). Nanokernel builds page tables
+successfully. Unknown: whether any non-identity PTEs exist.
+
+| Task | Effort | ROI | Detail |
+|---|---|---|---|
+| Rung 2: SR/BAT as stored state | S (hours) | Med (general) | Like SPRG — store what `mtspr` writes, return it on `mfspr`. General correctness fix (currently returning stale/fake values). |
+| Rung 3: Pre-seed identity HTAB | M (2–3d) | Low-Med | Only if nanokernel or OS reads back PTEs and expects non-zero entries. Measure first (watchpoint on HTAB region). |
+| Rung 4: Shadow-arena / Dynamic-BAT | L (1–2w) | Med (if reached) | Only if data proves non-identity PTEs in a hot path. Fully designed in `MMU-WITHOUT-GUTTING-FLATMEM.md`. The 16 KB host-page vs 4 KB PPC-page tension is the hard part. |
+| Rung 5: Software TLB | XL (weeks) | High (if reached) | QEMU-style softmmu. Last resort. ~6–8 extra instructions per memory op. Probably never needed (classic Mac OS is morally V=P). |
+
+### Phase 4: OS 9.x compatibility (beyond the ROM)
+
+These walls only appear after the 68k OS starts executing (Phases 1–2 complete).
+
+| Task | Effort | ROI | Detail |
+|---|---|---|---|
+| Device-tree identity checks | S–M | Low | Mac OS 9.2 checks `model`/`compatible` in the Name Registry. `SS_NW_MODEL` probe was insufficient for 9.2.1. May need gestalt-based identity + nanokernel version fields. |
+| NVRAM expansion (nvram4–7) | S–M | Low-Med | NewWorld ROM has 7 NVRAM routines vs 3 in OldWorld. Mac OS 9.x stores preferences in the extended space. Unshimmed routines hit nonexistent hardware. |
+| AltiVec / processor feature detection | S | Med | 9.0.1 ROM targets G3/G4. `gestaltPowerPCFeatures` (`'ppcf'`) bit 0x10 = AltiVec. Already have `SS_FORCE_ALTIVEC=1` for the gestalt; may need deeper checks (PVR probe, vector instruction probe). |
+| 68k trap table layout differences | M | Low-Med | NewWorld ROM may have different 68k trap dispatch table offsets. If `patch_68k_emul()` writes to wrong addresses, every 68k trap crashes. Need to verify the dispatch table location in the parcels ROM. |
+| Open Firmware / Trampoline residue | ? | ? | The parcels ROM expects certain OF-initialized state (device tree, NVRAM partition map). SheepShaver fakes the Name Registry but may miss OF-specific structures. Unknown scope — may be zero (if the ROM re-initializes) or significant. |
+
+### Phase 5: Runtime (if we get there)
+
+| Task | Effort | ROI | Detail |
+|---|---|---|---|
+| NativeOp dispatch for 9.x managers | M–L | Med | The 60+ NativeOp selectors (video, ethernet, serial, resource mgmt) assume OldWorld calling conventions. NewWorld may pass arguments differently or expect different return conventions. Likely works mostly — test incrementally. |
+| Toolbox manager differences (9.x vs 8.x) | ? | ? | Mac OS 9.x has updated Memory Manager, File Manager, etc. Most run in 68k emulation (our HLE handles them). Unknown whether any 9.x-specific manager hits an unhandled code path. |
+
+### Effort summary
+
+| Phase | Estimate | Blocks on | Forcing-function ROI |
+|---|---|---|---|
+| 1 — PPC→68k handoff | 1–3 days | Nothing (current) | Low (ROM-specific), but unlocks Phase 2 |
+| 2 — patch_68k shims | 1–2 weeks (incremental) | Phase 1 | Low-Med per pattern, but high volume |
+| 3 — MMU fidelity | Hours (rung 2) to weeks (rung 4+) | Independent | Med-High (general PPC correctness) |
+| 4 — OS 9.x compat | Days–weeks | Phases 1+2 | Low (OS-specific) |
+| 5 — Runtime | Weeks+ | Phases 1–4 | Med (tests fresh JIT code paths) |
+
+**Total realistic estimate to reach a Mac OS 9 boot screen:** 3–6 weeks of focused work, assuming
+no surprises beyond the cataloged walls. The forcing-function ROI is front-loaded (Phases 1+3
+yield the most general bugs); Phase 2 is a grind with diminishing returns per pattern.
+
+**The `sc` double-increment bug** (§1.7.2) is worth fixing independently as a general correctness
+issue (`execute_syscall` calls `execute_illegal` which does `increment_pc(4)`, then does its own
+`increment_pc(4)` = net +8). However, fixing it alone won't enable the idle loop's `sc` polling —
+SheepShaver would still need a real PPC exception vector for `sc` to dispatch to the nanokernel's
+syscall handler, which is a much larger change. The synthetic task-injection approach (§2.7)
+bypasses this entirely.
 
 ---
 
@@ -551,9 +778,10 @@ again; confirm it advances. 7. Commit, update `CHANGELOG.md` + this doc + `NEW-W
 ```
 # /tmp/trace901.prefs points at the decoded-capable 9.0.1 ROM with nogui + no disk.
 cd SheepShaver
-SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1 SS_NW_TRAMPOLINE=1 SS_LOG_FIRST_BLOCKS=3000 \
+SS_ROM_LENIENT=1 SS_NW_TRAMPOLINE=1 SS_LOG_FIRST_BLOCKS=3000 \
   ./src/Unix/SheepShaver --config /tmp/trace901.prefs 2>/tmp/boot.log &
-# let it run ~30s; it wedges (does not reach the 68k OS — jump68k is diagnostically skipped).
+# let it run ~30s; it reaches DR Emulator entry then crashes (ECB stub incomplete).
+# Add SS_ROM_SKIP_JUMP68K=1 to skip jump68k entirely (isolates nanokernel-only behavior).
 ```
 Asset: `/Users/Shared/macemu/2001-12-19 - Mac OS ROM 9.0.1.rom`. Decode it to a flat image for offline
 disasm with `rom-inspect --dump`: `SheepShaver/rom-inspect/rom-inspect "<rom>" --dump /tmp/rom901.bin`.

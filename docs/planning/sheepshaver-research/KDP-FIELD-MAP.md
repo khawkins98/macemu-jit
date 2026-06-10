@@ -17,6 +17,14 @@ parcels 9.0.1 ROM's DR Emulator dispatch and 68k init path.
   (ROM+0x36e964), ECB init (ROM+0x36db94), decode loop (ROM+0x366080), interrupt
   check (ROM+0x36d114). Disassembled from `/tmp/rom_decompressed.bin`.
 
+> **Cross-ROM applicability (confirmed 2026-06-10):** This field map applies to both the
+> parcels 9.0.1 ROM and the 1998-07-21 v1.1 ROM. Both are ROMTYPE_NEWWORLD (type 5) and share
+> the same NanoKernel architecture — the nanokernel ID string in both is "NewWorld". The 1.1
+> ROM was previously misidentified as OldWorld; `rom_detect_type()` confirms it is NewWorld.
+> The Path A trampoline work (SegMap spike, VIA spike, IRP seeding, free-list fixes) advanced
+> the 1.1 ROM's NanoKernel boot to DR Emulator entry, confirming the KDP layout documented
+> here is correct for both ROMs.
+
 ## Table of Contents
 
 - [Master Field Inventory (0x000–0x920)](#master-field-inventory-0x0000x920)
@@ -42,7 +50,7 @@ parcels 9.0.1 ROM's DR Emulator dispatch and 68k init path.
 - [ECB (EmulatorData / EDP) Structure](#ecb-emulatordata--edp-structure-kdp0x1000)
 - [NEWWORLD-Specific KDP Fields (main.cpp)](#newworld-specific-kdp-fields-maincpp)
 - [Trampoline Seeding Summary (Path B)](#trampoline-seeding-summary-ss_nw_synth_entry-path)
-- [Wall Status](#wall-status-updated--2026-06-09)
+- [Wall Status](#wall-status-updated--2026-06-10)
 
 ---
 
@@ -572,7 +580,7 @@ the DR Emulator directly.
 
 ---
 
-## Wall Status (Updated -- 2026-06-09)
+## Wall Status (Updated -- 2026-06-10)
 
 ### Resolved (2026-06-08): Free-list / page-table subsystem
 
@@ -599,7 +607,7 @@ the DR Emulator directly.
    at 0x68FAF000, env-gated on `SS_NW_TRAMPOLINE`. Nanokernel exits idle, VIA interrupt handler runs,
    scheduler dispatch reaches DR Emulator.
 
-### Current wall (2026-06-09): DR Emulator entry (0x5046e8c0)
+### ⏸ PARKED (2026-06-09): Path A — DR Emulator entry (0x5046e8c0)
 
 Nanokernel dispatch at 0x503126b4 does `rfi` to DR Emulator entry at 0x5046f900 (ROM mirror).
 DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, context from
@@ -607,4 +615,9 @@ DR Emulator reads low-memory globals: ECB ptr from 0x2804, counter at 0x2818, co
 `jump68k` diagnostically skipped (`SS_ROM_SKIP_JUMP68K`). The NW ROM's jump68k signature differs
 from OldWorld (the 1.1 byte pattern is absent). **Character change**: no longer a supervisor-memory
 problem — this is the PPC->68k emulator boundary, requiring 68k HLE shim infrastructure.
-See HANDOFF-NEWWORLD-SUPERVISOR-MMU.md.
+See `HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` (full Path A state, obstacle map).
+
+**Path A is parked as of 2026-06-09.** Path B (Upgrade Card approach) is now the active
+strategy: run Mac OS 9.2 on the proven 1.1 ROM via targeted enabler shims. As of 2026-06-10,
+2 of 3 boot-time System file gates have been bypassed; a post-splash stall is under
+investigation. See `docs/planning/UPGRADE-CARD-PATH.md`.

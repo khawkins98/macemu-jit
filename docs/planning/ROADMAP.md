@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-08 (Aligned with 5 Strategic Pillars: jump68k, CopyBits HLE, B2 Interpreter, AltiVec Safety, Unified Verification)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-09 (D3 pivoted to Upgrade Card approach; Path A parked)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -29,7 +29,7 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 |-------|--------|-------|
 | **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
 | **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: New World ROM → 9.1/9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — active in **D3** (New World nanokernel boots 27→128 PCs; SPRG + fctiw fixes harvested; at the MMU wall). | 🟡 active |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to "Upgrade Card" approach** (2026-06-09): run 9.2 on the proven 1.1 ROM via targeted enabler shims rather than porting the NewWorld nanokernel. Path A (NW ROM port) parked after harvesting 4+ general bugs. | 🟡 active |
 | **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
@@ -806,40 +806,55 @@ modernization (`650d3a82`), `linux/sched.h` guard (`6787dce8`), etherhelpertool 
 rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 **Detail:** `docs/UPSTREAM-LINEAGE-SYNC.md` §6 / §6.1.
 
-## D3. 🟡 Break the Mac OS 9.0.4 ceiling — New World ROM as a JIT-correctness forcing-function (ACTIVE)
+## D3. 🟡 Break the Mac OS 9.0.4 ceiling — run Mac OS 9.2 (MACHINE LAYER 2026-06-10)
 
-> **Reframed 2026-06-08 (maintainer):** this is no longer "exploratory, deferred." The goal is
-> **hardening PPC/JIT correctness**; the New World ROM / 9.2 boot is the **forcing function** that drags
-> SheepShaver's thin supervisor-stack into the light. The boot is the oracle; the **bugs we fix are the
-> product** — already yielding general fixes (SPRG, fctiw). **▶ FRESH-AGENT HANDOFF:**
-> `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` (mission/why + state + MMU rung-ladder + setup).
+> **Re-pivoted 2026-06-10 (maintainer):** both prior paths are superseded by the **Machine
+> Layer** architecture — a designed NewWorld **fidelity machine profile** (MMIO bus, real device
+> models [SCC/VIA-Cuda/PIC/NVRAM/MacIO], supervisor environment) built strangler-fig beside the
+> frozen, green **paravirtual** profile. Path A (NW ROM port) and Path B (Upgrade Card identity
+> shims) both independently hit the same wall: SheepShaver has no machine model. Path B's SCC
+> post-splash stall is milestone M1's first consumer; Path A's rung-ladder/hybrid insights are
+> absorbed as components. DingusPPC = device-model donor (GPL; never PR upstream to them),
+> QEMU mac99 = behavioral oracle.
+>
+> **▶ PLANNING DOC:** `docs/planning/MACHINE-LAYER-PLAN.md` (architecture, milestones M0–M8, testing; rev 2 incorporates the adversarial code review — MMIO two-path dispatch, virtual clock, interrupt/exception big rock, Core99-only machine).
+> **▶ SUPERSEDED:** `docs/planning/UPGRADE-CARD-PATH.md` (Path B — gate bypass + SCC findings remain tactical inputs).
+> **▶ PARKED:** `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` (Path A state; §2.8 obstacle map still the per-wall reference).
 
-**Progress (2026-06-08):** the first wall (parcels-ROM `PatchROM`) is **largely cleared** — the `:715`
-CPU-detect block is skippable, lenient patching + SPRG/KDP Trampoline shim let the **parcels (9.0.1)
-nanokernel BOOT under the JIT, advancing 27 → 128 PCs** (env-gated diagnostic). Cross-ROM confirmed: the
-9.x family (9.0.1/9.1.1/9.6.1/9.8.1/10.2.1) shares one nanokernel (0.04% diff) → one fix covers them;
-9.0.4-G4 is a separate lineage. **General correctness harvested:** real **SPRG0-3 registers** (were
-dropped), **`fctiw` dynamic FPSCR[RN]** (test-jit 350/350). Source-verified key finding: the New World
-nanokernel **builds its own HTAB/SDR1/SPRG0** — SheepShaver's MMU stub silently *eats* those writes; the
-fix is "honor the writes / let cold-init run", not "fake Trampoline post-conditions".
+### Path A results (parked 2026-06-09)
 
-**Sub-KDP pool region mapped (2026-06-08):** the zeroing-loop stall at `0x50322990` was NOT an MMU/SDR1
-gap — it was a **memory-layout gap**: `KERNEL_AREA_SIZE=0x2000` doesn't cover the nanokernel's heap
-region at `KDP-0x7000` (`0x68FF7000`). Stores silently faulted (`ignoresegv` skipped them → pool data
-never initialized → garbage zeroing size → infinite loop). Fix: `vm_acquire_fixed` 32 KB below the
-shmem base, `SS_NW_TRAMPOLINE`-gated. Confirmed via SIGSEGV-handler instrumentation (10 faults → 0).
-**Pool init succeeds; advances to 29 unique PCs** in a new allocator/init loop (`0x50326440–0x503264c4`).
+Path A (NewWorld ROM port) ran the parcels 9.0.1 nanokernel under the JIT, advancing from 27 → 568
+compiled blocks. **General correctness bugs harvested:** real SPRG0–3 registers, `fctiw` dynamic
+FPSCR[RN] (test-jit 350/350), real SDR1 register, `sc` double-increment bug (identified). NW-specific
+scaffolding (trampoline, SegMap/PMDT spike, sub-KDP pool, HTAB allocation, SCC fix, interrupt injection)
+is env-gated on `SS_NW_TRAMPOLINE` and preserved. DR Emulator entry reached but crashes on uninitialized
+ECB fields. Full state + 5-phase obstacle map: `HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` §1 + §2.8.
 
-**Now at the third wall — allocator/init loop (29 PCs, `0x50326440` region).** The pool init completes,
-but the nanokernel loops in its initialization sequence. Not yet characterized — the exit condition
-needs disassembly + register dump. The **MMU rung-ladder** (handoff §3) remains the plan for when/if
-a real MMU gap surfaces — the sub-KDP fix proved this stall was simpler than theorized. Canonical
-options: `MMU-NANOKERNEL-MP-PLAN.md`; design memos `MMU-WITHOUT-GUTTING-FLATMEM.md` +
-`MMU-DEFERRAL-REDTEAM.md`; RE design `sheepshaver-research/SPRG0-KDP-DESIGN.md`.
+**Why parked:** the obstacle map shows the remaining Path A work shifts from general PPC bugs to
+ROM-specific byte-pattern porting (84 `patch_68k` shims, 25 absent in 9.0.1) — diminishing
+forcing-function ROI. The key insight: **we've been chipping away at bugs rather than implementing
+an architecture.** The Upgrade Card approach is architecture-first.
 
-Strategic forks (handoff §2.5/§2.6): ROM-port (current) vs synthetic-environment-on-1.1 vs "synthetic
-ROM" (not feasible — the Toolbox *is* Mac OS). Discipline: advance while each wall yields a *general*
-fix; never regress the 1.1 path (`make test-jit`=100 gate).
+### Upgrade Card approach (active)
+
+**Metaphor:** G3/G4 processor upgrade cards for older Macs kept the OldWorld ROM (motherboard
+firmware), presented an upgraded CPU identity, and ran Mac OS 9.x on machines that shipped with 7.x/8.x.
+Our 1.1 ROM is the "motherboard" — it boots 9.0.4 perfectly. The approach: characterize what
+Mac OS 9.2 additionally demands beyond 9.0.4, then build targeted "enabler" shims (minimal,
+env-gated, additive).
+
+**Two experiments before implementation:**
+
+1. **Path B probe (priority):** Boot 9.2.1 ISO on the 1.1 ROM, get past/around the model check
+   (`SS_NW_MODEL` was insufficient), systematically characterize every failing check. Success = short
+   list (3–5 fakes). Needs: 9.2.1 ISO, scratch disk, GUI session.
+
+2. **QEMU oracle (supporting):** Boot the 9.0.1 ROM under QEMU (`qemu-system-ppc`), capture
+   SDR1/HTAB/SPRG/KDP state at key checkpoints. Validates our supervisor fakes against a known-good
+   reference. Lower priority than Experiment 1.
+
+**Planning doc:** `docs/planning/UPGRADE-CARD-PATH.md`. Discipline: no implementation until
+Experiment 1 reports. Gate: `make test-jit`=100 (never regress the 1.1 path).
 
 ### D3-DX. 🟡 Workflow improvement: NW ROM testing ergonomics
 

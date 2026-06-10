@@ -17,7 +17,124 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-09 part 2 (latest) — DR Emulator entry wall falls; stop-rule revised
+## 2026-06-10 (latest) — System file gate anatomy; DSAT; binary search on disk; SCC stall identified
+
+### Post-splash stall is SCC hardware polling in ROM serial init
+
+SS_PROBE_PC at the HOT-PC (0x50484038) revealed the 68k PC stabilizes at 0x500cc998 — ROM
+code polling the SCC (Serial Communications Controller). Key register state at stall:
+
+| Register | Value | Meaning |
+|----------|-------|---------|
+| r24 | 0x500cc998 | 68k PC (ROM offset 0xcc998) |
+| r18 | 0xF3016000 | SCC channel A hardware address |
+| r19 | 0xF3012000 | SCC channel B hardware address |
+| r29 | 0x50484038 | DR handler table address |
+| r30 | 0x50460000 | DR code base |
+| r31 | 0x68FFF000 | ECB |
+
+68k code at 0x500cc998: `btst.b #$11, d7; beq.b $500cc9c0` — tests SCC status, loops back.
+Also `btst.b #$0, $2(a3)` at 0x500cc99c reads the SCC status register directly.
+
+The stall is System 9.2.1's serial initialization polling SCC hardware that SheepShaver
+doesn't fully emulate. The v1.1 ROM's serial init code was adequate for 9.0.4 but 9.2.1's
+init sequence hits a polling path that never returns.
+
+**ISO discriminator confirms ROM-structural**: both HD and ISO boot stall at the same SCC
+polling point (identical HOT-PC, identical register state). The stall is not disk-related.
+
+Options: improve SCC emulation in serial.cpp, patch ROM serial init at 0x500cc998, or
+intercept the SCC I/O address in the memory map.
+
+### Gate 2a ($66 at 0x03CA) fires on CD boot but NOT HD boot
+
+ISO boot revealed a 4th gate: `btst #2,$0B20; beq.s +6; moveq #$66,d0; _SysError` at
+boot id=3 offset 0x03CA. On HD boot the bit test passes (bit is clear, gate does not fire).
+On CD boot the bit is set and the gate fires, displaying the $66 "won't work on this model"
+dialog. This makes the full gate count FOUR for CD boot, THREE for HD boot.
+
+### Mac OS 9.2.1 has THREE boot-time compatibility gates, not two (HD); FOUR for CD
+
+Previous entry (2026-06-09) identified two barriers. The actual anatomy of the System file's
+`boot` resource id=3 (55,048 bytes of 68k code, the main startup sequence) reveals three
+distinct gates — all in the same resource, all using `_SysError` (A9C9 trap):
+
+| Gate | Error code | DSAT text | boot id=3 offset | Mechanism |
+|------|-----------|-----------|-------------------|-----------|
+| 1 | (installer) | — | — | CFM launch-time check in Installer app (not in System) |
+| 2 | $63 | "The System file on this startup disk may be damaged" | 0x0404 | `jsr` to subroutine at ~0x7E24, test result, `moveq #$63,d0; _SysError` |
+| 3 | $76 | "...only functions on the original media, not if copied to another drive" | 0x70a4 | `tst.b; bne.s +10; moveq #$76,d0; _SysError` |
+
+Gates 2 and 3 are independent — each fires regardless of the other. NOP-ing both (4 bytes
+total on disk: replace A9C9 with 4E71 at each offset) lets boot proceed to the Mac OS 9.2
+splash screen. A post-splash stall remains (separate issue — likely deeper ROM/System init
+mismatch).
+
+The DSAT error-code-to-text mapping was the key breakthrough: once we parsed the DSAT
+resource header, we could identify $76 as the "original media" code and confirm it has
+exactly one call site in boot id=3. Previous attempts failed because we were binary-searching
+A9C9 calls by _offset_ without knowing which _error code_ to target.
+
+**Note on error $63:** the DSAT text for $63 is "System file may be damaged," NOT the
+"won't work on this Macintosh model" text (which is error $66). The actual dialog shown
+uses $63 but displays as a model rejection. This may mean the dialog text is overridden by
+the subroutine at ~0x7E24 before _SysError renders it, or the DSAT lookup has a fallback.
+The empirical observation is clear: NOP at 0x0404 suppresses the model-rejection dialog.
+
+### DSAT (Deep System Alert Table) resource format
+
+DSAT id=0 in the System file maps `_SysError` error codes to dialog text. Format:
+
+```
+Bytes 0-1:    uint16 count (number of header entries)
+Bytes 2+:     header entries, 14 bytes each:
+                uint16  error_code
+                12 bytes  {unknown fields, includes a b1XX text-marker ref}
+After header: text entries, each:
+                uint16  marker (0xb1XX)
+                6 bytes  display params (length, coordinates?)
+                variable-length text (null-terminated, '/' = line break)
+```
+
+The header's `b1XX` field links to the matching text entry. Parsing: iterate header entries,
+extract (error_code, b1XX marker), then scan text section for matching markers.
+
+Error codes found in the 9.2.1 DSAT (22 entries):
+$7fff=default ("Sorry, a system error occurred"), $63, $66, $68, $69, $74, $76, $78, plus
+14 more. Full mapping in `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md`.
+
+### Binary search methodology for disk-level patching
+
+Finding which A9C9 call triggers a specific dialog required a multi-step approach:
+
+1. **NOP all A9C9 on entire disk** (1354 instances) → confirms dialog is mediated by A9C9
+2. **Restore by resource** — selectively restore A9C9 bytes in specific boot resources to
+   narrow which resource contains the trigger
+3. **Catalog error codes** — disassemble the `moveq #$NN,d0` preceding each A9C9 to build
+   an (offset → error_code) map
+4. **Parse DSAT** — find which error code maps to the target dialog text
+5. **NOP the specific site(s)** with that error code
+
+Pitfall: step 3 alone wasn't enough because some A9C9 calls use dynamic error codes (table
+lookups via `move.b (a0,d0.w),d0` — see boot id=3 offset 0x5d5c). The DSAT parse (step 4)
+was necessary to close the loop.
+
+Pitfall: HFS disks contain MULTIPLE copies of each resource (allocation artifacts). Only the
+"live" copy matters. The live boot id=3 starts at disk offset 0x18f39748 on pathB_upgrade.dsk.
+Other copies at different offsets have different internal layouts and patching them has no effect.
+
+### The post-splash stall is SCC serial polling (identified)
+
+After bypassing both gates, boot shows the Mac OS 9.2 splash (Happy Mac + "Mac OS 9.2") but
+stalls in a tight loop (~2M blocks/s, no new compilations, HOT-PC at 0x50484038). SS_PROBE_PC
+revealed the 68k PC at 0x500cc998 — ROM serial init code polling SCC hardware at 0xF3012000
+(channel B) and 0xF3016000 (channel A). The stall is NOT gate-related (persists with ALL A9C9
+NOP'd) and NOT disk-related (identical on HD and ISO boot). It's SCC emulation incomplete for
+9.2.1's serial init requirements.
+
+---
+
+## 2026-06-09 part 2 — DR Emulator entry wall falls; stop-rule revised
 
 **The DR Emulator entry wall fell to a TRIVIAL fix**: promoting 4 existing KDP field writes
 from a nested diagnostic guard (`SS_NW_SYNTH_ENTRY`) to the outer `SS_NW_TRAMPOLINE` block.
@@ -3183,3 +3300,140 @@ remaining pixel/sum-across families and any future AltiVec codegen:
 indistinguishable and a wrong impl passes. The earlier reverted attempt used non-saturating
 positives and got a false PASS. Recipe in `gen-altivec-vectors.py` (`packop`/`packwop`), full
 write-up in [[the ALTIVEC-SHIFT-ROTATE-BUGS doc]].
+
+---
+
+## Session 11 — Experiment 1: Mac OS 9.2.1 on the 1.1 ROM (2026-06-09)
+
+### The 1.1 ROM is NewWorld, not OldWorld
+
+**Critical finding:** The file `1998-07-21 - Mac OS ROM 1.1.rom` is detected by
+`rom_detect_type()` as **ROMTYPE_NEWWORLD (type 5)**, not ROMTYPE_GOSSAMER (type 4).
+The nanokernel ID string at ROM offset `ROM_NANOKERNEL_ID_OFFSET` matches `"NewWorld"`.
+
+This means the "Upgrade Card" metaphor (keep OldWorld ROM, shim CPU identity) was based on
+a misunderstanding: we already HAVE a NewWorld ROM. The 1.1 ROM IS a NewWorld Mac OS ROM
+file — version 1.1, circa 1998, from the first generation of NewWorld machines (iMac G3).
+All CLAUDE.md references to this as "OldWorld" were incorrect. The "OldWorld" label likely
+conflated the ROM file format (NewWorld CHRP/parcels) with the hardware generation the file
+was designed for.
+
+**Impact on strategy:** The "upgrade card" framing doesn't describe what we're doing. Real
+G3→G4 upgrade cards didn't bypass ROM version checks — they upgraded the CPU on machines
+that already had sufficient ROMs. Our real situation is: we have a **1998 NewWorld ROM** (v1.1)
+trying to boot a **2001 System** (9.2.1). The gap is ROM version/vintage, not ROM type.
+
+### gestaltMachineType patch — no effect
+
+Patched UniversalInfo offset 0x60 from 0x3d to 0x196 (406) in the NEWWORLD branch of
+`rom_patches.cpp` (line ~1856), gated on `SS_NW_MODEL`. Confirmed the patch fires via
+`[NW-MODEL] UniversalInfo gestaltMachineType patched to 406 (0x196)` in stderr. The boot
+stall is byte-identical: same 10,169 compiled blocks, same DR Emulator hot PCs, same
+dialog: "This startup disk will not work on this Macintosh model."
+
+**Why it doesn't help:** On NewWorld, ALL machines report gestaltMachineType=406. It's the
+universal NewWorld value, documented as "informational only." The 9.2.1 System file's
+compatibility check doesn't discriminate on this field — 406 is what every NewWorld machine
+already returns.
+
+### device-tree model/compatible — no effect (earlier finding, confirmed)
+
+`SS_NW_MODEL=1` injects `model=PowerMac3,1` + `compatible` into the Name Registry device
+tree (name_registry.cpp lines 94–120). Also no effect on the "will not work" dialog.
+
+### The check is in the System file, not the ROM
+
+The error string "This startup disk will not work on this Macintosh model" was found in the
+System file on the disk image (multiple copies at offsets 0x653c417, 0x11d49217, 0x18fcf8c4),
+NOT in the ROM dump. It is NOT in the 4MB ROM image at all.
+
+The dialog is drawn by 68k code running through the DR Emulator — the hot PCs during the
+stall (0x504a51c0 at 58.7%, 0x504b37d0 at 40.5%) are DR Emulator dispatch table entries,
+confirmed by disassembly (lbz/b and addi/b patterns = 68k opcode dispatch). The System has
+progressed through nanokernel init, Toolbox init (QuickDraw, Window Manager, Dialog Manager
+all working), and is spinning in a modal dialog event loop.
+
+### The check runs AFTER Toolbox init
+
+The error dialog is a standard Mac alert — rendered by Dialog Manager over a gray desktop.
+This means the check happens during System startup, AFTER the basic Toolbox is initialized,
+but BEFORE extensions load or the Finder starts. The code that performs the check is likely
+in the System file's `INIT` or boot-sequence resource, not in the ROM.
+
+### What the check probably tests
+
+The gibbly/BoxFlag mechanism (System 7.1–7.5 era) is retired by Mac OS 8.0. The 9.2.1
+System file likely checks for:
+- **ROM file version** — the "Mac OS ROM" file has a version resource; version 1.1 may be
+  below 9.2.1's minimum
+- **ROM feature flags** — specific capabilities (parcels, Toolbox exports) present in later
+  ROM versions but absent in v1.1
+- **Nanokernel version** — a version field in the Kernel Data Page (KDP)
+- **Some other ROM characteristic** that differs between the 1998 v1.1 ROM and the 2000+ ROMs
+  that shipped alongside Mac OS 9.x
+
+The wack0/universal-tbxi-patchset solves the OPPOSITE problem (old OS on new ROM) and
+is not applicable.
+
+### Experiment 1 outcome: blocked, needs deeper RE
+
+The "upgrade card" approach of patching identity fields (gestaltMachineType, device-tree
+model/compatible) cannot satisfy the 9.2.1 compatibility check. The check probes for
+ROM environment characteristics that the 1998 v1.1 ROM lacks.
+
+**Catch-22:** The 9.2.1 Installer app also refuses to run ("This program cannot run on
+your computer") — even from Mac OS 9.0.4, which boots fine on this ROM. So we can't
+use the normal install/upgrade path to get 9.2.1 onto the disk.
+
+**Experiment assets:**
+- Prefs: `/tmp/exp_921_on_11.prefs` (HD boot from pathB_upgrade.dsk, 1.1 ROM)
+- Disk: `/Users/Shared/macemu/pathB_upgrade.dsk` (9.0.4 installed, 9.2.1 System Folder
+  contents swapped in)
+- Logs: `/tmp/exp_pathB_mach406.log`, `/tmp/jit_diag.20260609-202443.52394.log`
+
+### Wrong-branch patch debugging (meta-lesson)
+
+The initial gestaltMachineType patch was placed in the **GOSSAMER branch** (line ~1885) of
+the UniversalInfo patching code, because CLAUDE.md labeled the 1.1 ROM as "OldWorld."
+The diagnostic `fprintf` confirming the patch never appeared. Adding a ROM-type diagnostic
+print (`[ROMPATCH] ROM type detected: 5 (NewWorld)`) revealed the ROM routes through the
+NEWWORLD branch instead. Moving the patch to the NEWWORLD branch (line ~1853) made it fire.
+
+**Lesson:** Don't trust documentation labels about ROM types — verify with `rom_detect_type()`
+output. A "Mac OS ROM 1.1" file is not the same thing as a "1.1 OldWorld ROM."
+
+### Real upgrade cards did NOT bypass OS version gates
+
+Research into real G3→G4 upgrade cards (Sonnet, NewerTech, XLR8) shows they **never** shipped
+OS version enablers. Their software extensions handled CPU-specific concerns only: AltiVec
+activation, clock speed reporting, NVRAM patches. The Mac OS 9.2 installer rejected machines
+based on **ROM type/machine model**, not CPU. A G4 in a beige G3 didn't change the machine's
+ROM type or Gestalt ID.
+
+The tool that actually enabled Mac OS 9.2 on unsupported (OldWorld) machines was **OS 9 Helper**
+— a community hack that patched **3 resources in the installer** to remove the machine-model
+whitelist. It was pure installer surgery, independent of any hardware upgrade. Once installed,
+9.2.x ran fine on OldWorld hardware.
+
+**Max OS by ROM type:**
+- OldWorld (beige G3, 9500, etc.): officially Mac OS 9.1; 9.2.x via OS 9 Helper hack
+- NewWorld (B&W G3, iMac G3, etc.): Mac OS 9.2.2 natively, no hack needed
+
+The B&W G3 (PowerMac1,1) runs 9.2.2 natively — it's NewWorld. No upgrade card needed.
+
+**Impact:** The "upgrade card" metaphor is doubly broken: (1) our ROM is already NewWorld,
+and (2) real upgrade cards didn't solve OS compatibility anyway. The real parallel is
+OS 9 Helper's installer-patch approach — bypass the check, not fake the identity.
+
+### Two barriers, not one
+
+The 9.2.1 compatibility check has TWO separate gates:
+1. **The installer** ("This program cannot run on your computer") — refuses to launch even
+   from Mac OS 9.0.4 on the 1.1 ROM. This is a CFM/launch-time check in the installer app.
+2. **The System file** ("This startup disk will not work on this Macintosh model") — rejects
+   the machine at early boot when we manually copy 9.2.1 System Folder contents. This is
+   68k code in the System file, running after Toolbox init.
+
+OS 9 Helper patched the **installer** gate (gate 1). But we bypassed gate 1 by manually
+copying the System Folder. We're stuck at gate 2 — the System file's own boot-time check,
+which is a different code path from the installer check.

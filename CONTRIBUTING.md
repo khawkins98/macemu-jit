@@ -2,6 +2,21 @@
 
 Guide for humans and AI agents working on the SheepShaver/BasiliskII AArch64 JIT.
 
+## Start here (orientation)
+
+This is the macOS Apple Silicon (arm64) port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit),
+adding an AArch64 JIT that translates PowerPC/68K → native ARM64. Two emulators live here, but only one
+works on macOS arm64 today:
+
+- **SheepShaver** (PowerPC) — **builds and boots Mac OS 8.6/9 to the Finder desktop** with the full native
+  JIT. This is where the work is.
+- **BasiliskII** (68K) — **does not currently build on macOS arm64** (JIT backend unported). See
+  `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`.
+
+Current pass/fail and boot status lives in `JIT-STATUS.md`; what's next lives in `docs/planning/ROADMAP.md`.
+To build and run SheepShaver, follow the **Build** section in `README.md` (autogen → configure → `make build`).
+The rest of this guide is *how to work here* — gates, conventions, and where the deep docs are.
+
 ## Before You Start
 
 1. Read `CLAUDE.md` — build commands, test commands, asset locations, architecture overview
@@ -55,6 +70,27 @@ section is the discovery index, not a second copy of the details.
 a batch run that omitted the FP/VR reset between vectors still passed `score=100` because
 both modes shared the same stale-state bug — score-only equivalence is vacuous when both
 sides share a defect. See `LEARNINGS.md` (2026-06-10) and the jit-test README.
+
+## Gate matrix (which test to run when)
+
+These are the gates a change must pass. Run them from the directory shown. The per-change
+checklists below say *which* gates a given change touches; this table is the menu.
+
+| Gate | Command (from) | Gates / proves | When | Reference |
+|------|----------------|----------------|------|-----------|
+| **JIT codegen** | `make test-jit` (`SheepShaver/`) | Interp-vs-JIT REGDUMP diff, score=100 — the real codegen gate, catches encoding bugs | After **any** `ppc-jit.cpp` change | `SheepShaver/jit-test/README.md`; count via `make harness-count` |
+| └ inner loop | `SS_HARNESS_BATCH=1 make test-jit` | Same contract, ~3s vs ~32s (one process per mode) | Development loop; run plain `make test-jit` once per task/commit as authoritative | See **Fast iteration loop** above |
+| **Interp determinism** | `make test-opcodes` (`SheepShaver/`) | Interpreter is deterministic only — does **NOT** exercise the JIT | Rarely on its own; `test-jit` is the codegen gate | `SheepShaver/jit-test/README.md` |
+| **Machine-layer unit tests** | `make -C SheepShaver/src/machine test` | Standalone machine layer (profile, MMIO bus, devices, clock, sched) — no emulator build needed | After any `src/machine/` change | `docs/planning/MACHINE-LAYER-PLAN.md` |
+| **E2E offline tests** | `make e2e-test` (`SheepShaver/`) | ~79 harness unit tests, no emulator / GUI / assets — safe anywhere, ~2s | After E2E toolkit (`SheepShaver/e2e/`) changes | `SheepShaver/e2e/README.md` |
+| **E2E smoke (live)** | `make e2e` (`SheepShaver/`) | System-level: boot ISO → shutdown → clean exit. Needs a GUI session + assets (isolated config) | System-level changes (boot, shutdown, prefs) | `SheepShaver/e2e/README.md` |
+| **Microbench** | `make bench` (`SheepShaver/rom-harness/`) | ns/insn for codegen kernels — boot-free A/B (`--save-baseline` / `--compare`) | Codegen perf changes | See **Benchmarking** below; `SheepShaver/rom-harness/README.md` |
+| **ROM harness** | `make test-rom` (`SheepShaver/`) | Standalone headless JIT exerciser against a real OldWorld ROM | Broad JIT coverage check | `SheepShaver/rom-harness/README.md` |
+
+From the repo root, `make test` / `make test-jit` delegate to the SheepShaver harness.
+The live gates (`make e2e`, boots) open the shared SDL window — **only one emulator instance can
+run at a time** (see **Key Invariants** below); the harnesses (`test-jit`, `rom-harness`) do **not**
+boot, so they never collide with a running instance or a parallel worktree.
 
 ## Commit Style
 

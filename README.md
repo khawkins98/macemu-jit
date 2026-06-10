@@ -168,7 +168,7 @@ This is the **tracked map** of the project's docs (for both humans and AI agents
 if present, is a fuller working index — but it is gitignored, so the canonical map is here._
 
 **Start here** (orientation for contributors & agents):
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to work in this repo: commit style, the documentation lifecycle, attribution.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — **the developer entry point**: orientation, build pointer, the gate matrix (which test to run when), commit/CHANGELOG conventions, the documentation lifecycle, attribution.
 - [`LEARNINGS.md`](LEARNINGS.md) — non-obvious findings; read these at the start of a session.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — JIT structure (both emulators) + the macOS arm64 constraints.
 - [`docs/planning/ROADMAP.md`](docs/planning/ROADMAP.md) — outstanding work, arranged + tracked ("what's next").

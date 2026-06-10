@@ -76,6 +76,14 @@ build: build-ss build-rom-harness
 # See docs/superpowers/specs/2026-06-03-build-ss-macos-fix-design.md.
 UNAME_S := $(shell uname -s)
 
+# Faster rebuilds (optional, per-checkout): wire ccache into the autoconf build by
+# re-running configure once with the compiler drivers wrapped, then build as usual:
+#   cd src/Unix && CC="ccache gcc" CXX="ccache g++" ./configure \
+#       --enable-sdl-video --enable-sdl-audio --enable-jit --without-gtk --without-x \
+#       --without-esd --with-vdeplug CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib
+# configure re-adds -std=gnu23 itself; verify "CC = ccache gcc -std=gnu23" in the
+# generated Makefile. `brew install ccache` first. This is per-checkout config state
+# (not committed); a clean-tree rebuild drops from ~6s to ~0.5s once the cache is warm.
 ifeq ($(UNAME_S),Darwin)
 build-ss:
 	@echo "=== Building SheepShaver (macOS: autoconf build owns the JIT) ==="

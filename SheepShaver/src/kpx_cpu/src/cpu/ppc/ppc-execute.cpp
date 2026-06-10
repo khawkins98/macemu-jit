@@ -1128,7 +1128,6 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 			const char *e = getenv("SS_EXC_SC");
 			return e && e[0] == 'l';  /* "legacy" prefix */
 		}();
-		extern ExcEntryTable g_exc_entry_table;
 		ExcTransition t = ExcEnter(pc(), regs().msr, EXC_SC, &g_exc_entry_table);
 		if (t.pc == EXC_PC_UNRESOLVED) {
 			if (sc_legacy_mode) {
@@ -1137,8 +1136,8 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 				return;
 			}
 			fprintf(stderr, "[EXC] FATAL: sc at pc=%08x with unresolved syscall entry "
-			        "(SRR0=%08x SRR1=%08x msr=%08x) - set SS_EXC_ENTRY or SS_EXC_SC=legacy\n",
-			        pc(), t.srr0, t.srr1, regs().msr);
+			        "(SRR0=%08x SRR1=%08x msr=%08x lr=%08x r1=%08x) - set SS_EXC_ENTRY or SS_EXC_SC=legacy\n",
+			        pc(), t.srr0, t.srr1, regs().msr, lr(), gpr(1));
 			abort();
 		}
 		regs().srr0 = t.srr0;

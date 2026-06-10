@@ -785,6 +785,14 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	// Compute the architectural transition from the PRE-exception MSR (the shim
 	// below never touches msr, so ordering vs the KDP writes is free).
 	ExcTransition t = ExcEnter(restart_pc, msr_reg(), EXC_DECREMENTER, &g_exc_entry_table);
+	if (t.pc == EXC_PC_UNRESOLVED) {
+		// (quality-review I1) Misuse hardening: SS_EXC_ENTRY=0 / unparsable would
+		// otherwise wild-jump AFTER the latch clear + KDP mutation. Symmetric with
+		// the sc path's guard.
+		fprintf(stderr, "[EXC] FATAL: DEC delivery with unresolved interrupt entry "
+		        "(restart=%08x msr=%08x) - check SS_EXC_ENTRY\n", restart_pc, msr_reg());
+		abort();
+	}
 
 	// SS_EXC_BARE=1: the bounded direct-entry experiment — skip the KDP ABI shim
 	// entirely, apply only the architectural transition. Resolved once.

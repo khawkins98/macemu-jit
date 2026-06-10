@@ -112,4 +112,13 @@ extern void ExcRfi(uint32_t srr0, uint32_t srr1, uint32_t cur_msr,
  */
 static inline int ExcDeliverable(uint32_t msr) { return (msr & 0x8000u) != 0; }
 
+/*
+ * The emulator's resolved entry table (defined in sheepshaver_glue.cpp, filled
+ * at newworld init from M3A-ENTRY-TABLE.md / SS_EXC_ENTRY). Declaration lives
+ * here so consumers (ppc-execute.cpp, the delivery hook) share one typed decl
+ * (quality-review M3: no function-scope externs). Declaration-only: the pure
+ * module itself never references it — standalone tests stay link-clean.
+ */
+extern ExcEntryTable g_exc_entry_table;
+
 #endif /* EXC_CORE_H */

@@ -94,12 +94,18 @@ static void timer_poll(VIA6522 *v, bool t1)
 }
 
 // Live count for RUNNING; 0 otherwise (fence: no S3 consumer reads after expiry).
+// Samples now_ticks() exactly ONCE: deciding (fire?) and computing (count) from
+// separate clock reads is a TOCTOU — time advancing between them makes
+// cnt - dt underflow to 0xFFFF near expiry (guest sees the counter jump UP).
 static uint16_t timer_count_now(VIA6522 *v, bool t1)
 {
-	timer_poll(v, t1);
-	if ((t1 ? v->t1_state : v->t2_state) != VIA_TIMER_RUNNING) return 0;
+	uint8_t state = t1 ? v->t1_state : v->t2_state;
+	if (state != VIA_TIMER_RUNNING) return 0;
 	uint64_t dt = v->now_ticks(v->clock_opaque) - (t1 ? v->t1_load_time : v->t2_load_time);
-	return (uint16_t)((t1 ? v->t1_count : v->t2_count) - (uint16_t)dt);
+	uint16_t cnt = t1 ? v->t1_count : v->t2_count;
+	if (dt > cnt) { timer_fire(v, t1); return 0; }
+	if (dt == cnt) return 0;            // counter at 0, fires next tick (N7)
+	return (uint16_t)(cnt - dt);
 }
 
 // Compute live IFR value: poll lazy timers, merge latched bits, apply bit7 master.
@@ -210,7 +216,13 @@ void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 	case R_PCR:       v->pcr = b; break;
 	case R_IFR:
 		// N8: write-1-to-clear clears flags ONLY; a RUNNING timer keeps running
-		// (its eventual RUNNING->FIRED still latches once), a FIRED one stays consumed.
+		// (its eventual RUNNING->FIRED still latches once), a FIRED one stays
+		// consumed. But first settle any deadline that already passed (the flag
+		// must exist before it can be cleared; without this, a blind clear is
+		// "resurrected" by the next poll — on hardware the flag was set at the
+		// deadline, so that clear is permanent).
+		if (b & IFR_T1) timer_poll(v, true);
+		if (b & IFR_T2) timer_poll(v, false);
 		v->ifr_latched &= ~(b & 0x7F);
 		break;
 	case R_IER:

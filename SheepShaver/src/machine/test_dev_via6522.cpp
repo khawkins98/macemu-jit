@@ -12,6 +12,7 @@ static int n_pass = 0;
 
 static uint64_t fake_ticks = 0;                       // VIA ticks (783360 Hz)
 static uint64_t fake_clock(void *) { return fake_ticks; }
+static uint64_t stepping_clock(void *) { return fake_ticks++; }  // +1 tick per read (TOCTOU probe)
 static uint64_t fake_sched_ns() {                     // scheduler sees the same instant in ns
 	return (uint64_t)((unsigned __int128)fake_ticks * 1000000000u / VIA_CLOCK_HZ);
 }
@@ -99,6 +100,32 @@ int main()
 	es.process_timers();                   // gen-G event fires -> must be ignored
 	CHECK(via.t2_state == VIA_TIMER_RUNNING);
 	CHECK((rd(0x1a00) & 0x20) == 0);
+
+	// --- Fix-1 boundary: T2CL read at exactly dt == N returns 0x00, not 0xFFxx ---
+	// (lazy/unbound config so the pump can't interfere; drain the eager section's
+	// queued one-shot first - its lambda holds &via, whose binding the reset nulls)
+	es.cancel_all_timers();
+	VIAReset(&via, BASE, fake_clock, 0);
+	wr(0x1000, 0x30); wr(0x1200, 0x00);   // T2 = 0x0030
+	fake_ticks += 0x30;                    // dt == N exactly: counter at 0, not fired (N7)
+	CHECK(rd(0x1000) == 0x00);
+	CHECK(via.t2_state == VIA_TIMER_RUNNING);
+
+	// --- Fix-1 TOCTOU discriminator: clock that ADVANCES BETWEEN READS (rev 3 Q1).
+	// The frozen-clock boundary check above passes even against the pre-fix
+	// two-read code; this one fails pre-fix (returns 0xFF) and passes fixed. ---
+	VIAReset(&via, BASE, stepping_clock, 0);
+	wr(0x1000, 0x30); wr(0x1200, 0x00);   // arm consumes one read for load_time
+	fake_ticks += 0x2F;                    // the count-read itself lands at dt == 0x30
+	CHECK(rd(0x1000) == 0x00);             // pre-fix: 0xFF (second read pushed dt past cnt)
+	CHECK(via.t2_state == VIA_TIMER_RUNNING);
+	VIAReset(&via, BASE, fake_clock, 0);   // restore the frozen clock for what follows
+
+	// --- Fix-2: blind IFR clear across an un-polled deadline stays clear ---
+	wr(0x1000, 0x10); wr(0x1200, 0x00);   // T2 = 0x0010
+	fake_ticks += 0x20;                    // deadline passed, NO intervening read
+	wr(0x1a00, 0x20);                      // blind write-1-clear: settles then clears
+	CHECK((rd(0x1a00) & 0x20) == 0);       // flag must NOT be resurrected by the poll
 
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;

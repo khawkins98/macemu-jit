@@ -1623,6 +1623,17 @@ build defines it (Makefile.in DEFS, see Task 5 Step 2); the rom-harness build do
 compiles and links cleanly, and the weak symbols in `mmio_machfault.cpp` stay absent → fault path
 cold-only there.
 
+**CRITICAL precondition (created by Task 6's landed implementation):** Task 6 ships `ppc_jit_pc_in_cache`
+/ `ppc_jit_backpatch_mmio` as **weak no-op default definitions** in `mmio_machfault.cpp` (Mach-O cannot
+resolve a fully-undefined `weak`/`weak_import` symbol to NULL at static link, so the plan's
+"declaration-only" approach failed to link — both the standalone test and `build-ss`). Therefore Task 9
+**must define both as plain non-weak `extern "C"`** functions (NOT `weak`) with **exact matching
+signatures** — `bool ppc_jit_pc_in_cache(const void *host_pc)` and
+`bool ppc_jit_backpatch_mmio(uint32_t *site, const A64MemAccess *acc)` (so `#include "a64_mmio_decode.h"`
+is required). A strong definition overrides the weak stub; two competing **weak** definitions let the
+linker pick the no-op stub by order, silently killing backpatch (a perf regression invisible to test-jit
+— it surfaces only as `backpatches=0` in the bus telemetry under load).
+
 S2 measured ~8.5 µs/fault (~10⁴× a mapped access): the fault path is discovery-only; hot sites must
 become direct bus calls. Design (validated by the Task-0 facts): **x30 is dead mid-block** ⇒ a `BL` at
 any access site is safe; **EA is always in w0 (RTMP0)**; guest GPRs live in callee-saved x21–x28 (safe

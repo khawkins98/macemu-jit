@@ -928,6 +928,21 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 
 	const uintptr addr = (uintptr)sigsegv_get_fault_address(sip);
 
+	// Machine Layer M1: MMIO bus dispatch (MACHINE-LAYER-PLAN.md section 2b, JIT
+	// path). Must run BEFORE any legacy skip (and before the ROM-write check
+	// below) so no device-space access is silently eaten. Inactive on the
+	// paravirtual default (predicted-untaken branch).
+	if (mmio_bus_active) {
+		uint32 gaddr = (uint32)((uintptr)addr - VMBaseDiff);   // host -> guest
+		if (MMIOBusInRange(gaddr)) {
+			void *ts = sigsegv_get_thread_state(sip);
+			if (ts && MMIOMachFaultDispatch(gaddr, ts))
+				return SIGSEGV_RETURN_STATE_MODIFIED;
+			fprintf(stderr, "[MMIO] FATAL: in-range fault not serviced (gaddr=0x%08x)\n", gaddr);
+			return SIGSEGV_RETURN_FAILURE;
+		}
+	}
+
 #if HAVE_SIGSEGV_SKIP_INSTRUCTION
 	// Ignore writes to ROM
 	if ((addr - (uintptr)ROMBaseHost) < ROM_SIZE)

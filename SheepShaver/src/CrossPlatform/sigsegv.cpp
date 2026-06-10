@@ -2637,6 +2637,25 @@ static void mach_set_thread_state(sigsegv_info_t *SIP)
 										 SIP->thr_state_count);
 	MACH_CHECK_ERROR(thread_set_state, krc);
 }
+
+// Mach path only: raw ARM_THREAD_STATE64 of the faulting thread (mutable in
+// place; written back by handle_badaccess when the handler returns
+// SIGSEGV_RETURN_STATE_MODIFIED). Lazily fetches the thread state on first call,
+// mirroring the SKIP branch in handle_badaccess: on arm64 the user handler is
+// entered with has_thr_state == false (the pre-fetch block is x86_64-only), so a
+// raw &SIP->thr_state would otherwise hand back uninitialized storage and corrupt
+// the writeback. Returns NULL on non-Mach/non-arm64 builds.
+void *sigsegv_get_thread_state(sigsegv_info_t *SIP)
+{
+#if defined(_STRUCT_ARM_THREAD_STATE64)
+	if (!SIP->has_thr_state)
+		mach_get_thread_state(SIP);   // sets thr_state + thr_state_count + has_thr_state
+	return &SIP->thr_state;
+#else
+	(void)SIP;
+	return NULL;
+#endif
+}
 #endif
 
 // Return the address of the invalid memory reference
@@ -2806,6 +2825,14 @@ static bool handle_badaccess(SIGSEGV_FAULT_HANDLER_ARGLIST_1)
 			return true;
 		}
 		break;
+#endif
+#ifdef HAVE_MACH_EXCEPTIONS
+	case SIGSEGV_RETURN_STATE_MODIFIED:
+		// Handler mutated thread state in sip->thr_state in place (e.g. MMIO
+		// fault dispatch: register injection + PC advance via
+		// sigsegv_get_thread_state). Write it back WITHOUT the instruction skip.
+		mach_set_thread_state(SIP);
+		return true;
 #endif
 	case SIGSEGV_RETURN_FAILURE:
 		// We can't do anything with the fault_address, dump state?

@@ -42,10 +42,26 @@ inject → resume works first-try, identically from MAP_JIT pages, zero entitlem
 ~10^4× a mapped access: a MHz-rate poll through the fault path is unusable — hot MMIO sites must be
 JIT-backpatched to direct bus calls.
 
-### SS_TEST_HEX bypasses init — don't use test-opcodes to verify startup logs
+### SS_TEST_HEX bypasses init — don't use test-opcodes to verify startup logs; also masks MMIO false-passes
 The SS_TEST_HEX early-exit returns before PrefsInit, so `make test-opcodes` can never show startup
 lines like [MACHINE]. Verify init-time behavior with a <6s isolated-config run
 (`perl -e 'alarm 6; exec ...'` — plain `timeout` is not on this box).
+
+**M1 extension:** SS_TEST_HEX also bypasses MMIO bus registration, so any test vector whose
+opcode happens to store/load at a device-range address (0xF3xxxxxx) will NOT fault into the bus —
+it will either hit unmapped memory (Mach-fault eaten by sigsegv) or, on paravirtual, never reach
+bus code at all. A vector that "passes" under `make test-jit` with an MMIO-range operand proves
+nothing about the bus dispatch path. Bus correctness requires a proper boot path or an isolated
+bus unit test — not a single-opcode harness run.
+
+### Mach-O strong-overrides-weak-symbol pattern for standalone JIT unit tests (M1)
+`test_mmio_machfault.cpp` needed the JIT's generic thunk pointer
+(`g_mmio_backpatch_thunk`) without linking the full JIT. The solution: declare it `__attribute__((weak))`
+in the emulator build (the no-op default) and provide a `__attribute__((visibility("default")))` strong
+definition in the test binary. Clang/ld64 resolves strong over weak at link time — the test binary
+gets its own definition, the emulator binary gets the real thunk. Rule: **weak stubs + strong test
+overrides** is the correct pattern for any JIT-internal state a unit test needs to observe without
+linking the full codegen engine. Do NOT use `extern` declarations that require linking the real object.
 
 ### M0 behavior change: SS_NW_TRAMPOLINE=1 now implies the fidelity profile
 The deprecated alias selects `machine newworld`, which ALSO disables the legacy serial-skip hacks

@@ -68,6 +68,7 @@ SRCS = ../main.cpp main_unix.cpp ../prefs.cpp ../prefs_items.cpp prefs_unix.cpp 
     ../rom_patches.cpp ../rsrc_patches.cpp ../emul_op.cpp ../ui_introspect.cpp ../name_registry.cpp \
     ../machine/machine_profile.cpp \
     ../machine/virt_clock.cpp ../machine/event_sched.cpp \
+    ../machine/exc_core.cpp \
     ../machine/mmio_bus.cpp ../machine/dev_scc8530.cpp ../machine/dev_via6522.cpp \
     ../machine/a64_mmio_decode.cpp ../machine/mmio_machfault.cpp \
     ../macos_util.cpp ../timer.cpp timer_unix.cpp ../xpram.cpp xpram_unix.cpp \

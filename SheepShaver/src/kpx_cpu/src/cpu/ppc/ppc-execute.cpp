@@ -42,6 +42,7 @@
 #include "prefs.h"
 #include "machine_profile.h"
 #include "virt_clock.h"
+#include "exc_core.h"
 #endif
 
 #if ENABLE_MON
@@ -1118,6 +1119,35 @@ void powerpc_cpu::execute_fp_round(uint32 opcode)
 void powerpc_cpu::execute_syscall(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
+	if (MachineProfileIsNewWorld()) {
+		/* M3a Task 3: sc as a real PPC exception on the newworld profile.
+		 * CFLOW_TRAP ensures this handler owns the PC absolutely — no increment_pc
+		 * after return (the decoded block ends at sc; the JIT already falls back).
+		 * SS_EXC_SC=legacy restores the legacy no-op for diagnostics (no rebuild needed). */
+		static const bool sc_legacy_mode = []() -> bool {
+			const char *e = getenv("SS_EXC_SC");
+			return e && e[0] == 'l';  /* "legacy" prefix */
+		}();
+		extern ExcEntryTable g_exc_entry_table;
+		ExcTransition t = ExcEnter(pc(), regs().msr, EXC_SC, &g_exc_entry_table);
+		if (t.pc == EXC_PC_UNRESOLVED) {
+			if (sc_legacy_mode) {
+				execute_illegal(opcode);
+				increment_pc(4);
+				return;
+			}
+			fprintf(stderr, "[EXC] FATAL: sc at pc=%08x with unresolved syscall entry "
+			        "(SRR0=%08x SRR1=%08x msr=%08x) - set SS_EXC_ENTRY or SS_EXC_SC=legacy\n",
+			        pc(), t.srr0, t.srr1, regs().msr);
+			abort();
+		}
+		regs().srr0 = t.srr0;
+		regs().srr1 = t.srr1;
+		regs().msr  = t.msr;
+		pc()        = t.pc;
+		return;  /* NO increment_pc — PC set absolutely */
+	}
+	/* paravirtual: byte-identical legacy */
 	execute_illegal(opcode);
 #else
 	cr().set_so(0, execute_do_syscall && !execute_do_syscall(this));
@@ -1276,6 +1306,12 @@ void powerpc_cpu::execute_mffs(uint32 opcode)
 	increment_pc(4);
 }
 
+/* Forward declaration — ss_vclk_active is defined below near the SPR handlers.
+ * Needed by execute_mtmsr (EE-edge re-raise, M3a Task 3). */
+#ifdef SHEEPSHAVER
+static inline bool ss_vclk_active(void);
+#endif
+
 void powerpc_cpu::execute_mfmsr(uint32 opcode)
 {
 	// Wave 0: return stored MSR (cold value 0xf072 = byte-identical to old hardcode).
@@ -1290,12 +1326,24 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 	// (:167-171) — live AltiVec-probe diagnostic; must not be orphaned.
 	uint32 rs = rS_field::extract(opcode);
 	uint32 val = gpr(rs);
+#ifdef SHEEPSHAVER
+	uint32 old_msr = regs().msr;
+#endif
 	regs().msr = val;
 	if (getenv("SS_LOG_ILLEGAL") && *getenv("SS_LOG_ILLEGAL") &&
 	    *getenv("SS_LOG_ILLEGAL") != '0') {
 		fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsr pc=%08x op=%08x rS=r%u val=%08x MSR[VEC]=%s\n",
 		        pc(), opcode, rs, val, (val & 0x02000000) ? "SET" : "clear");
 	}
+#ifdef SHEEPSHAVER
+	/* M3a Task 3 / rev 2 F2: EE 0→1 edge re-raise on newworld.
+	 * mtmsr is interpreter-only (JIT falls back), so it always ends JIT blocks —
+	 * the re-poll happens naturally right after increment_pc returns. */
+	if (MachineProfileIsNewWorld() &&
+	    !(old_msr & 0x8000u) && (val & 0x8000u) &&
+	    ss_vclk_active() && VirtClockDECPending(&g_virt_clock))
+		trigger_interrupt();
+#endif
 	increment_pc(4);
 }
 
@@ -1576,6 +1624,24 @@ void powerpc_cpu::execute_isync(uint32 opcode)
 
 void powerpc_cpu::execute_rfi(uint32 opcode)
 {
+#ifdef SHEEPSHAVER
+	if (MachineProfileIsNewWorld()) {
+		/* M3a Task 3: full OEA rfi restore (pc + MSR) on newworld profile.
+		 * rev 2 F2 / EE-edge re-raise: if EE transitions 0→1, re-deliver any pending DEC
+		 * (the 60 Hz re-trigger safety net does NOT exist on the newworld diagnostic boot —
+		 * confirmed by M3A-ENTRY-TABLE.md; the EE-edge raise is load-bearing). */
+		uint32 old_msr = regs().msr;
+		uint32 new_pc, new_msr;
+		ExcRfi(regs().srr0, regs().srr1, old_msr, &new_pc, &new_msr);
+		regs().msr = new_msr;
+		pc()       = new_pc;
+		if (!(old_msr & 0x8000u) && (new_msr & 0x8000u) &&
+		    ss_vclk_active() && VirtClockDECPending(&g_virt_clock))
+			trigger_interrupt();
+		return;
+	}
+#endif
+	/* paravirtual / non-SHEEPSHAVER: byte-identical legacy */
 	pc() = regs().srr0;
 }
 

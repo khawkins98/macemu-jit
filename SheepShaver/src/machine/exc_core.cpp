@@ -16,7 +16,7 @@ ExcTransition ExcEnter(uint32_t cur_pc_restart, uint32_t cur_msr,
 
 	/* SRR0: DEC/EXT save the restart PC verbatim (not-yet-executed block start).
 	 * SC saves pc+4: the instruction after the sc (the sc itself is cur_pc_restart). */
-	t.srr0 = (cls == EXC_SYSCALL) ? cur_pc_restart + 4u : cur_pc_restart;
+	t.srr0 = (cls == EXC_SC) ? cur_pc_restart + 4u : cur_pc_restart;
 
 	/* SRR1: capture only the low 16 bits of the pre-exception MSR. */
 	t.srr1 = cur_msr & EXC_SRR1_KEEP_MASK;
@@ -27,7 +27,7 @@ ExcTransition ExcEnter(uint32_t cur_pc_restart, uint32_t cur_msr,
 
 	/* Dispatch target: DEC and EXT share interrupt_entry; SC uses syscall_entry.
 	 * 0 in the table entry -> EXC_PC_UNRESOLVED (caller handles via SS_EXC_SC knob). */
-	uint32_t entry = (cls == EXC_SYSCALL) ? tbl->syscall_entry : tbl->interrupt_entry;
+	uint32_t entry = (cls == EXC_SC) ? tbl->syscall_entry : tbl->interrupt_entry;
 	t.pc = entry ? entry : EXC_PC_UNRESOLVED;
 
 	return t;

@@ -56,7 +56,8 @@
 enum ExcClass {
 	EXC_DECREMENTER,   /* DEC expiry — vector 0x900 */
 	EXC_EXTERNAL,      /* external interrupt — vector 0x500 */
-	EXC_SYSCALL        /* sc instruction — vector 0xC00 */
+	EXC_SC             /* sc instruction — vector 0xC00 (EXC_SYSCALL avoided: conflicts with
+	                    * macOS SDK <mach/exception_types.h> macro of the same name) */
 };
 
 /* Entry table: resolved handler PCs. 0 = unresolved (ExcEnter returns EXC_PC_UNRESOLVED). */

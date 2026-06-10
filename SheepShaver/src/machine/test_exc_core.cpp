@@ -52,7 +52,7 @@ int main()
 		ExcTransition te = ExcEnter(restart, 0xf072u, EXC_EXTERNAL, &tbl);
 		CHECK(te.srr0 == restart);
 		uint32_t sc_addr = 0x50312250u;
-		ExcTransition ts = ExcEnter(sc_addr, 0xf072u, EXC_SYSCALL, &tbl);
+		ExcTransition ts = ExcEnter(sc_addr, 0xf072u, EXC_SC, &tbl);
 		CHECK(ts.srr0 == sc_addr + 4u);
 	}
 
@@ -63,11 +63,11 @@ int main()
 		CHECK(td.pc == tbl.interrupt_entry);
 		ExcTransition te = ExcEnter(0x00001000u, 0xf072u, EXC_EXTERNAL, &tbl);
 		CHECK(te.pc == tbl.interrupt_entry);
-		ExcTransition ts = ExcEnter(0x00001000u, 0xf072u, EXC_SYSCALL, &tbl);
+		ExcTransition ts = ExcEnter(0x00001000u, 0xf072u, EXC_SC, &tbl);
 		CHECK(ts.pc == tbl.syscall_entry);
 		/* Zero syscall entry -> EXC_PC_UNRESOLVED */
 		ExcEntryTable tbl0 = { 0x504268a0u, 0u };
-		ExcTransition tu = ExcEnter(0x00001000u, 0xf072u, EXC_SYSCALL, &tbl0);
+		ExcTransition tu = ExcEnter(0x00001000u, 0xf072u, EXC_SC, &tbl0);
 		CHECK(tu.pc == EXC_PC_UNRESOLVED);
 	}
 

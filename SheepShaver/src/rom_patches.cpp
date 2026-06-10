@@ -757,6 +757,41 @@ bool PatchROM(void)
 		tp[9]  = htonl(0x3C000010u);  // lis  r0, 0x0010        → r0=0x00100000 (1MB)
 		tp[10] = htonl(0x901C0000u);  // stw  r0, 0(r28)        guest[0] = 68k initial SSP
 
+		// M6a Wave 2 (M6A-WAVE2-SHIM-RECON.md §2 + §3 rows 1-2): guest-side
+		// re-assertion of the Wave-2 seeds.  Both are seeded host-side in
+		// init_emul_ppc ([NW-TRAMP] glue cluster), but live in regions the NK
+		// cold-init wipes — the Wave-1 crash dump PROVES glue-time vector writes
+		// don't survive ([0x2C]=0 at the F-line fault, memo §1.3, despite glue's
+		// rte-stub loop seeding vectors 2..63).  The trampoline runs at table[0]
+		// dispatch — after NK init, before the 68k cold start — so stores here
+		// stick.  r0/r28 are existing trampoline scratch; r28 is restored to 0
+		// afterwards (cold-start register contract unchanged).
+		//
+		// (1) 68k exception vectors 0x10 (illegal) / 0x28 (A-line) / 0x2C (F-line)
+		//     → dedicated `bra.s *` stop stubs at 0x50429c00/10/20 (written below
+		//     in the same zero run), memo §2 "exception-vector quick-win": a
+		//     vectored exception parks at a unique probe-able PC instead of
+		//     sliding through address 0 (memo §1.3 slide).
+		tp[11] = htonl(0x3C005042u);  // lis  r0, 0x5042
+		tp[12] = htonl(0x60009C00u);  // ori  r0, r0, 0x9c00    → r0=0x50429c00 (illegal stub)
+		tp[13] = htonl(0x901C0010u);  // stw  r0, 0x10(r28)     guest[0x10] = illegal vector
+		tp[14] = htonl(0x3C005042u);  // lis  r0, 0x5042
+		tp[15] = htonl(0x60009C10u);  // ori  r0, r0, 0x9c10    → r0=0x50429c10 (A-line stub)
+		tp[16] = htonl(0x901C0028u);  // stw  r0, 0x28(r28)     guest[0x28] = A-line vector
+		tp[17] = htonl(0x3C005042u);  // lis  r0, 0x5042
+		tp[18] = htonl(0x60009C20u);  // ori  r0, r0, 0x9c20    → r0=0x50429c20 (F-line stub)
+		tp[19] = htonl(0x901C002Cu);  // stw  r0, 0x2c(r28)     guest[0x2C] = F-line vector
+		// (2) [KDP+0xfd0] = 'Hnfo' hardware-info record @0x68ff4f00 (memo §2
+		//     Option A).  The record BODY lives in the sub-KDP pool (host-seeded
+		//     in glue, not wiped); only this KDP-page pointer needs guest-side
+		//     re-assertion (cf. the KDP+0x6b4 cap clobber precedent).
+		tp[20] = htonl(0x3F8068FFu);  // lis  r28, 0x68ff
+		tp[21] = htonl(0x639CEFD0u);  // ori  r28, r28, 0xefd0  → r28=0x68ffefd0 (KDP+0xfd0)
+		tp[22] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
+		tp[23] = htonl(0x60004F00u);  // ori  r0, r0, 0x4f00    → r0=0x68ff4f00 ('Hnfo' record)
+		tp[24] = htonl(0x901C0000u);  // stw  r0, 0(r28)        [KDP+0xfd0] = record
+		tp[25] = htonl(0x3B800000u);  // li   r28, 0            (restore trampoline invariant)
+
 		// M6a Wave 1, UserModeMSR transition (memo §5.2; plan rev 2 findings 1+5).
 		// The unpatched ROM's jump68k dispatch tail does mtsrr0/mtsrr1/rfi with
 		// UserModeMSR = [KDP-0x964] = 0x0000D032 (EE=1, PR=1); the Path-A redirect
@@ -776,14 +811,14 @@ bool PatchROM(void)
 		// 68k execution routes the first DEC delivery through unverified NK
 		// save/restore plumbing; Boot A (off) = clean stall capture, Boot B (on) =
 		// rung-2 recon.  When OFF the trampoline is byte-identical to the
-		// no-MSR-write layout (12 insns, same branch word).
+		// no-MSR-write layout (27 insns since Wave 2, same branch word).
 		const bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
-		uint32 b_idx = 11;
+		uint32 b_idx = 26;
 		if (user_msr) {
-			tp[11] = htonl(0x3C000000u);  // lis  r0, 0             r1-independent immediate load
-			tp[12] = htonl(0x6000D032u);  // ori  r0, r0, 0xd032    r0 = UserModeMSR (EE=1, PR=1)
-			tp[13] = htonl(0x7C000124u);  // mtmsr r0               (EE-edge re-raise fires)
-			b_idx = 14;
+			tp[26] = htonl(0x3C000000u);  // lis  r0, 0             r1-independent immediate load
+			tp[27] = htonl(0x6000D032u);  // ori  r0, r0, 0xd032    r0 = UserModeMSR (EE=1, PR=1)
+			tp[28] = htonl(0x7C000124u);  // mtmsr r0               (EE-edge re-raise fires)
+			b_idx = 29;
 		}
 		// b → mirror cold-start 0x5046e964 (offset computed from the b's own slot)
 		tp[b_idx] = htonl(0x48000000u |
@@ -791,12 +826,31 @@ bool PatchROM(void)
 
 		*tbl0 = htonl(0x4BFBB280u);  // table[0] → trampoline
 
+		// M6a Wave 2 item #2 (M6A-WAVE2-SHIM-RECON.md §2 quick-win): the 68k
+		// "diagnosable stop" stubs the vectors above point at — one `bra.s *`
+		// (0x60FE) self-loop per vector, 0x10 apart in the same mirror zero run,
+		// safely past the trampoline code (ends ≤ ROM+0x429bb8):
+		//   0x50429c00  illegal-instruction stop (vector offset 0x10)
+		//   0x50429c10  A-line stop              (vector offset 0x28)
+		//   0x50429c20  F-line stop              (vector offset 0x2C)
+		// A vectored 68k exception parks the world at one of these unique PCs,
+		// probe-able via SS_PROBE_PC, instead of the memo §1.3 PC=0 slide.
+		const uint32 stub_offset = 0x429c00;
+		uint16 *sp = (uint16 *)(ROMBaseHost + stub_offset);
+		sp[0x00 / 2] = htons(0x60FE);  // bra.s *  (illegal stop)
+		sp[0x10 / 2] = htons(0x60FE);  // bra.s *  (A-line stop)
+		sp[0x20 / 2] = htons(0x60FE);  // bra.s *  (F-line stop)
+
 		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "
 		        "(%u insns), table[0] → trampoline → cold-start\n",
 		        tramp_offset, (unsigned)(b_idx + 1));
 		fprintf(stderr, "[NW-TRAMP] fixup: r31=0x68fff000 r30=0x50460000 "
 		        "r29=0x50480000 guest[4]=0x5000002a guest[0]=0x00100000 "
 		        "user-msr=%s\n", user_msr ? "ON (SS_M6A_USER_MSR)" : "off");
+		fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
+		        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
+		        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "
+		        "re-asserted guest-side\n");
 	};
 	PatchROM_NW_trampoline();
 

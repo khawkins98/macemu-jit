@@ -1852,6 +1852,47 @@ void init_emul_ppc(void)
 		fprintf(stderr, "[NW-TRAMP] IRP=%08x, bank0@%08x=[%08x..+%08x)\n",
 		        irp_base, irp_base + 0xDF0, (uint32)RAMBase, ram_size_bytes);
 
+		/* M6a Wave 2 item #1 (M6A-WAVE2-SHIM-RECON.md §2 Option A, §3 row 1):
+		 * seed the NK hardware-info record ('Hnfo') behind [KDP+0xfd0] so the ROM's
+		 * 68k machine detect (0x5000afb4: move.l ([$68ffefd0],$70),d0 / cmpi.l
+		 * #'Hnfo' / move.w ([$68ffefd0],$76),d0 — byte-verified in the raw parcels
+		 * image) takes the data-driven table-match path (0xAB86, record list @0xE15C,
+		 * id 0x3035 = [0xE1DC]) and the raw machine-probe dispatcher at ROM+0xAD7C —
+		 * which jumps into AddrMap DATA and F-line-faults (memo §1.2/§1.3) — is
+		 * never reached.
+		 *
+		 * Placement: record at IRP+0xf00 = 0x68ff4f00, in the mapped+zeroed sub-KDP
+		 * pool (clear of the NKSystemInfo block at +0x000..0x120, the IRP bank table
+		 * at +0xDF0..0xEBC, and the NK pool free-list at KDP-0x7000). This address
+		 * ALSO satisfies the PPC-side sibling check [[KDP-0x20]+0xf70] == 'Hnfo'
+		 * (memo §2.4 item 4 / §6.5 same-record hypothesis: [KDP+0xfd0] =
+		 * [KDP-0x20]+0xf00 puts the +0x70 tag at IRP+0xf70) for free.
+		 *
+		 * Record layout (memo §2 Option A + §6.4):
+		 *   +0x08  pointer to a writable scratch record — the copy-out at ROM+0xAC20
+		 *          (movea.l ([$68ffefd0],$8),a0; byte-verified) writes scratch
+		 *          fields +0x10..+0x16
+		 *   +0x70  'Hnfo' tag (0x486e666f)
+		 *   +0x76  machine id WORD = 0x3035 (the id the universal_info patch's
+		 *          synthesized record carries; present in the parcels record table
+		 *          at 0xE1DC)
+		 *   rest   zero (pool pre-zeroed above)
+		 * Scratch record at 0x68ff5000 (next pool page, zeroed, no other users).
+		 *
+		 * NOTE: the [KDP+0xfd0] POINTER lives in the KDP page, which NK cold-init
+		 * partially wipes (cf. the KDP+0x6b4 cap clobber, comment below) — the
+		 * table[0] trampoline (rom_patches.cpp, PatchROM_NW_trampoline) re-asserts
+		 * it GUEST-SIDE after NK init; the record body here is the durable part. */
+		const uint32 hnfo_rec     = irp_base + 0xf00;   // 0x68ff4f00
+		const uint32 hnfo_scratch = irp_base + 0x1000;  // 0x68ff5000
+		WriteMacInt32(hnfo_rec + 0x08, hnfo_scratch);   // writable scratch (0xAC20 copy-out)
+		WriteMacInt32(hnfo_rec + 0x70, 0x486e666f);     // 'Hnfo' tag
+		WriteMacInt16(hnfo_rec + 0x76, 0x3035);         // machine id (memo: [0xE1DC])
+		WriteMacInt32(kdp + 0xfd0, hnfo_rec);           // [KDP+0xfd0] → record
+		fprintf(stderr, "[NW-TRAMP] W2 'Hnfo' record @%08x ([KDP+0xfd0]), id=0x3035, "
+		        "scratch=%08x (machine-detect data path, memo §2 Option A)\n",
+		        hnfo_rec, hnfo_scratch);
+
 		ppc_cpu->sprg_reg(0) = kdp;
 		// M3a (Boot-A root cause): the cold MSR fiction 0xf072 claims EE=1 from the
 		// first instruction, so the first DEC expiry delivered into NK COLD-INIT
@@ -1951,6 +1992,26 @@ void init_emul_ppc(void)
 		const uint32 rte_addr = (uint32)ROMBase + 0x3196;
 		for (int vec = 2; vec < 64; vec++)
 			WriteMacInt32(vec * 4, rte_addr);
+		/* M6a Wave 2 item #2 (M6A-WAVE2-SHIM-RECON.md §2 "exception-vector
+		 * quick-win", §3 row 2): vectors 0x10 (illegal) / 0x28 (A-line) / 0x2C
+		 * (F-line) get DEDICATED diagnosable-stop stubs — one `bra.s *` self-loop
+		 * each, planted by PatchROM_NW_trampoline in the mirror zero run at
+		 * 0x50429c00/10/20 — so a vectored exception parks at a unique probe-able
+		 * PC instead of the shared rte stub (or, pre-fix, the PC=0 slide of the
+		 * Wave-1 crash, memo §1.3).
+		 * NOTE (re-verified in Wave 2): these glue-time low-memory writes are
+		 * WIPED before the 68k world starts — the Wave-1 crash dump shows
+		 * [0x2C]=0 despite the rte loop above. The writes that actually survive
+		 * are the guest-side stores in the table[0] trampoline (rom_patches.cpp),
+		 * which re-assert these three vectors after NK init; seeded here too for
+		 * symmetry and for any pre-NK consumer. */
+		WriteMacInt32(0x10, (uint32)ROMBase + 0x429c00);  // illegal-instruction stop
+		WriteMacInt32(0x28, (uint32)ROMBase + 0x429c10);  // A-line stop
+		WriteMacInt32(0x2C, (uint32)ROMBase + 0x429c20);  // F-line stop
+		fprintf(stderr, "[NW-TRAMP] W2 68k vector stop stubs: [0x10]=%08x "
+		        "[0x28]=%08x [0x2c]=%08x (bra.s * self-loops)\n",
+		        (uint32)ROMBase + 0x429c00, (uint32)ROMBase + 0x429c10,
+		        (uint32)ROMBase + 0x429c20);
 		fprintf(stderr, "[NW-TRAMP] ECB=%08x +0x648(entry-vectors)=%08x +0x5f0(emul_ret)=%08x "
 		        "guest[4](68k-reset)=%08x\n",
 		        ecb, (uint32)ROMBase + 0x46e8c0,

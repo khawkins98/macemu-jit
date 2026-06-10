@@ -20,9 +20,11 @@
 - **PARAVIRTUAL-ONLY** — applies only on the paravirtual profile by nature (skip on newworld from M0)
 
 Milestone owners (MACHINE-LAYER-PLAN §3): M1 = MMIO bus + SCC 8530 + VIA timer/IFR
-surface (Cuda loud stub), M2 = virtual clock (TB/DEC), M3 = interrupt/exception
-architecture + PIC + full VIA/Cuda, M4 = NVRAM + MacIO, M5 = supervisor environment +
-trampoline (publishes device tree), M6 = PPC→68k handoff + shim triage.
+surface (Cuda loud stub), M2 = virtual clock (TB/DEC), M3a = exception core + DEC delivery
+(**complete 2026-06-10; no patches retired in M3a — all RETIRE@M3 rows below are M3b work**),
+M3b = OpenPIC + Cuda/ADB + external-source wiring + patch retirements (the RETIRE@M3 cluster),
+M4 = NVRAM + MacIO, M5 = supervisor environment + trampoline (publishes device tree),
+M6 = PPC→68k handoff + shim triage.
 
 ## PatchROM / patch_nanokernel / patch_68k device-neutralizing patches
 

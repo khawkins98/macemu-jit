@@ -17,7 +17,62 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-10 (latest) — Wave 0 crossed the MMU/SR wall; the live 9.0.1 NK is RELOCATED (static ROM dump useless there)
+## 2026-06-10 (latest) — M3a: cold-MSR-fiction lesson; NK exception-exit ABI; Thud-console reframe; chained-block probe gap
+
+Four non-obvious findings from M3a implementation and acceptance:
+
+### 1. Stored-state fictions can stay harmless for years until a NEW consumer makes one bit load-bearing
+
+The cold MSR value `0xf072` is a legacy fiction that predates M3a by years. It has always been
+stored and returned verbatim. The fiction was harmless as long as no code acted on its bits. M3a
+wired real semantics to `MSR[EE]` — at which point the fiction's EE=1 became load-bearing: the very
+first DEC expiry delivered into NK cold-init (all registers zero, LR=0), which crashed.
+
+**Rule:** whenever you wire real semantics to a stored-state field that previously only went
+through store-the-write/return-the-read, audit all cold/reset values that supply that field. A
+fiction that was harmless for years can become a boot-killer the moment a consumer is added. The
+fix here was EE=0 at cold start (architecturally correct; EE=1 was never architecturally valid at
+reset). The lesson generalizes to MSR, SRR0/SRR1, CR, and any other "we store it but don't use it"
+field being promoted.
+
+### 2. The NK exception exit is flag-multiplexed; LR is live state at delivery
+
+The nanokernel exception handler exits via a `blr` whose target is determined by an r7-flag test
+in the prologue. LR is live state at the point of delivery — the handler reads it during setup and
+routes the return accordingly. Two consequences for M3a:
+
+- The restart PC must be stored in r10/r12 (the KDP shim ABI's honest fields), NOT derived from LR
+  at delivery time. The old `interrupt()` used a static trampoline address; M3a stores the real
+  block-start PC.
+- When delivery fires with LR=0 (cold-init, where the NK hasn't set up any meaningful LR yet),
+  the handler still executes correctly — it reprogrammed DEC (`mtspr_dec 3→4`) and exited. The
+  crash came from `blr` with LR=0, not from the handler itself. The EE=0 seed fix prevents delivery
+  in that window entirely.
+
+### 3. The "idle loop" at the boot frontier is an interactive debugger — inject a character to wake it
+
+The NK Thud debug console (SPIKE-S3 §2.5) is not a spin-wait for a timer; it is a
+**character-input loop** whose designed wake is a byte arriving on the SCC serial port. EE stays
+honestly masked at the prompt. The same behavior occurs with and without `SS_ROM_SKIP_JUMP68K`.
+On a diskless, System-less diagnostic boot, the console is plausibly the NK's designed end state.
+
+`SS_SCC_RX_INJECT=25:0D` is now the correct tool: inject a CR at T+25s, observe the console
+wake, and watch the JIT compile counter advance (781→791 in the acceptance run). This is not
+a workaround — it is the architecturally correct stimulus. The "idle loop wakes via timer" framing
+was incorrect; the correct framing is "interactive debugger wakes via serial input."
+
+### 4. Probes at chained zero-page blocks don't trip — chaining skips the dispatcher entry point
+
+`SS_PROBE_PC` fires at the block-entry dispatcher, not at arbitrary instruction boundaries.
+DR-emulator blocks that are chained together bypass the dispatcher entirely for their interior
+edges. If you place a probe PC at a block that is reliably reached only via chaining, the probe
+may never fire even though the code is executing. Verify by placing the probe at the first block
+in the chain (one that always enters from the dispatcher), or disable chaining (`SS_JIT_NO_CHAIN=1`)
+to force all blocks through the dispatcher.
+
+---
+
+## 2026-06-10 — Wave 0 crossed the MMU/SR wall; the live 9.0.1 NK is RELOCATED (static ROM dump useless there)
 
 The 0x50326050 wall fell to stored state + a mapping (SR0-15 + MSR + low-mem 0x0–0x100000;
 `b27aa6de`/`54a5d04a`) — no MMU emulation needed; identity confirmed by probe (EA = flat
@@ -34,10 +89,11 @@ The 0x50326050 wall fell to stored state + a mapping (SR0-15 + MSR + low-mem 0x0
    does nothing under JIT, and the differential harness can't see it (both engines agreed
    pre-fix). Rule: when promoting a dropped/stubbed op to stored state, grep ppc-jit.cpp
    for a native case FIRST.
-3. **The boot frontier now sits exactly at M3's acceptance criterion**: the NK idle loop
-   polling our real SCC 8530 through the backpatched bus (~1–2M iter/s — only possible via
-   backpatch; raw fault path caps at ~0.12M/s), waiting for interrupt delivery that doesn't
-   exist yet. M1's consumer-(b) carry-forward is live; M3a delivers the wake-up.
+3. **The boot frontier sat exactly at M3's acceptance criterion (now closed — M3a ✅)**: the NK
+   idle loop polling our real SCC 8530 through the backpatched bus (~1–2M iter/s — only possible
+   via backpatch; raw fault path caps at ~0.12M/s), awaited interrupt delivery. M3a delivered it:
+   first real PPC exception fired; end-to-end demo (SS_SCC_RX_INJECT CR → JIT comp 781→791).
+   M1's consumer-(b) carry-forward is closed.
 
 ## 2026-06-10 — Batch harness: score-only equivalence passes vacuously when both modes share a bug
 
@@ -58,7 +114,7 @@ not score equivalence. Score equivalence is necessary but not sufficient.
 
 ---
 
-## 2026-06-10 (latest) — NK-boot ceiling root-caused; ignoresegv was masking a whole fault class
+## 2026-06-10 — NK-boot ceiling root-caused; ignoresegv was masking a whole fault class
 
 ### Path A's nanokernel progress was partly an ignoresegv illusion
 

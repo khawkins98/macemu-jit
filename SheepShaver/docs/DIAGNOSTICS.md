@@ -218,7 +218,7 @@ On clean shutdown (or atexit), the virtual clock emits one stats line to stderr:
 | `mtspr_dec` | Count of `mtspr DEC` writes honoured by the virtual clock |
 | `tb_writes` | Count of `mttbl`/`mttbu` writes |
 | `dec_expiries` | Count of DEC-expiry condition latches (eager from scheduler or lazy from read-side) |
-| `pending` | 1 if the DEC condition was still latched at exit (M3 will consume this) |
+| `pending` | 1 if the DEC condition was still latched at exit (consumed by M3a's delivery hook) |
 
 **Paravirtual profile note:** `SS_SYNTH_DEC=1` on the paravirtual profile keeps the profile inert (no scheduler thread starts, no pump loop runs); the `[VCLK]` exit dump is NOT emitted in that case because the clock module is not initialized. Use the newworld profile to observe `[VCLK]` output.
 

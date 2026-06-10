@@ -312,7 +312,7 @@ high confidence; the *sufficiency* is a one-boot measurement away.
    the §5-nuance predicted); probe at 0x50325f68 shows saved SR == programmed SR ==
    `0x20000000`. Rung 2 + mapping was sufficient; **rung 3/4 stays deferred** (REDTEAM
    verdict stands).
-3. **New frontier — and it is M3's acceptance target:** the boot advances ~1 MB of ROM into
+3. **New frontier — was M3's acceptance target (now M3a ✅ closed — see M3A-ENTRY-TABLE.md Task 7):** the boot advances ~1 MB of ROM into
    the **runtime-staged (parcels-relocated) NK** and settles in a tight spin at
    0x50426884–0x50426b1c (~15M blocks/s, comp frozen). Probe-dumped live code words decode to
    the **`check_work` SCC poll** (SPIKE-S3 §2.1 shape, relocated): `ori r30,r31,0x10; mtmsr`

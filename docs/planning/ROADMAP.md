@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-10 (D3 pivoted to Machine Layer; M0 + M1 + M2 complete — M1 live acceptance PARTIAL (NK boot ceiling); M2 implementation complete + gates green; acceptance `9.0.1 boot: NK native DEC programming reached the clock (mtspr_dec=3); unchanged 0x50326068 wall; mfspr_dec=0 (no DEC reads pre-wall — check_work lies beyond the ceiling); 1.1-ROM probe: retirement gate fired live`)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-10 (D3 pivoted to Machine Layer; M0 + M1 + M2 + **M3a complete** — first real PPC exception delivered; both delivery directions verified; end-to-end demo: SS_SCC_RX_INJECT CR → 10 new compiled blocks; next: M3b)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -29,7 +29,7 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 |-------|--------|-------|
 | **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
 | **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ (live acceptance PARTIAL — NK boot ceiling). M2 ✅ implementation complete + gates green (virtual clock + event scheduler + VIA timer state machine; acceptance `9.0.1 boot: NK native DEC programming reached the clock (mtspr_dec=3); unchanged 0x50326068 wall; mfspr_dec=0 (no DEC reads pre-wall — check_work lies beyond the ceiling); 1.1-ROM probe: retirement gate fired live`). | 🟡 active |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ M2 ✅ **M3a ✅** (real PPC exception model: exc_core, sc/rfi real semantics, DEC delivery hook, first real exception delivered, end-to-end demo with SS_SCC_RX_INJECT). **Next: M3b** (OpenPIC + Cuda/ADB + external-source wiring + SDL_PumpEvents relocation + patch retirements + deliverability harness vector + nested-execute path completion). | 🟡 active |
 | **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
@@ -818,9 +818,21 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > QEMU mac99 = behavioral oracle.
 >
 > **▶ PLANNING DOC:** `docs/planning/MACHINE-LAYER-PLAN.md` (architecture, milestones M0–M8, testing; rev 4).
-> **Progress:** spikes S1–S3 ✅ (gates pass natively on 9.0.1 ROM; Mach fault-decode proven ~8.5µs;
-> r18=VIA/r19=SCC) · **M0 ✅ landed 2026-06-10** (machine pref + profile module, SS_NW_* consolidated,
-> CORE99 machine description + ROM-patch audit; test-jit 350/350, e2e PASS) · **M1 ✅ complete 2026-06-10** (MMIO bus + SCC 8530 + VIA timer/IFR + JIT backpatch; test-jit 350/350 + 6 unit binaries ALL PASS + THUNK-SELFTEST PASS; paravirtual e2e PASS. **Live acceptance PARTIAL** — bus activation/KDP wiring/scc_init retirement verified; consumer-(b) `check_work` live SCC poll blocked by the pre-existing NK boot ceiling at pc=0x503123fc — carried forward to when the fidelity boot resumes, M3/M5) · **M2 ✅ implementation complete + gates green 2026-06-10** (virtual clock TB/DEC + DingusPPC event scheduler port + VIA timer state machine N6/N7/N8; machine suite 8/8, test-jit 350/350, e2e-test 122/122; `SS_SYNTH_DEC` absorbed; acceptance `9.0.1 diagnostic boot 2026-06-10: mtspr_dec=3 / mfspr_dec=0 / tb_writes=0 / dec_expiries=0; boot dies at the unchanged pre-existing 0x50326050–68 MMU/SR wall (ea=0x200a0), identical in baseline (SS_SYNTH_DEC=0) and acceptance runs — DEC is not load-bearing pre-wall on the current path; the S3 §2.4 check_work DEC consumer (0x50326520+) lies beyond the ceiling, so mfspr-DEC live coverage carries forward with it (unit-level: the check_work deadline-math simulation in test_virt_clock)`) · **next: M3** (interrupt & exception architecture + PIC + VIA/Cuda).
+> **Progress:** spikes S1–S3 ✅ · M0 ✅ · M1 ✅ · M2 ✅ · **M3a ✅ 2026-06-10**: exc_core
+> (OEA masks; ExcEnter/ExcRfi/ExcDeliverable; machine suite 9/9; 25 anti-vacuity checks); sc →
+> CFLOW_TRAP; sc/rfi real semantics on newworld; EE-edge re-raise; DEC delivery hook (KDP shim,
+> execute_depth gate, in-place poll); [NW-INT] deleted; HandleInterrupt fenced;
+> cold-MSR EE=0 fix (0xf072→0x7072 at newworld trampoline); SCC Rx FIFO + SS_SCC_RX_INJECT.
+> **First real PPC exception ever**: `[EXC] DEC delivered #1: restart=50429b40 srr1=0000f072
+> msr=00001040 -> entry=50412b1c`. Both delivery directions verified (deliver when EE permits;
+> defer exc=0/1/0 when not). **End-to-end demo**: SS_SCC_RX_INJECT CR at T+25s → JIT comp
+> 781→791 (10 new blocks) — M2 scheduler → M1 bus/backpatch → SCC Rx → check_work → console.
+> M1 Rx-path carry-forward closed. Gates throughout: batch+legacy test-jit 353/353 score=100;
+> machine 9/9 (scc 37); e2e PASS; paravirtual byte-identical.
+> **▶ next: M3b** (OpenPIC + Cuda minimal ADB stub [see M3-PIC-CUDA-DONOR-STUDY §7.2] +
+> external-source wiring + SDL_PumpEvents relocation + tm_task/via_int/cuda_init/via_init
+> retirements + RTC + deliverability harness vector + nested-execute path completion +
+> boot-past-console question [couples to M6]).
 > Retreat point: tag **`pre-machine-layer`** (=46e497d8). The 1.1-ROM/9.2.1 path is **closed**
 > (A-line vector corruption root cause + CFM fragment audit — not fixable by device models).
 > **▶ SUPERSEDED:** `docs/planning/UPGRADE-CARD-PATH.md` (Path B — gate bypass + SCC findings remain tactical inputs).

@@ -11,6 +11,72 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-10
 
+### [SheepShaver] Machine Layer M3a: exception core + DEC delivery (`3a3d5380`–`a2dd1ff8`)
+
+M3a implements the first half of MACHINE-LAYER-PLAN §2d — a real PPC OEA exception model on the
+newworld profile — and delivers the first real PPC exception ever fired by this emulator.
+
+**`exc_core` pure module** (`d3abf130`, `d6ae4b74`) — `ExcEnter` (SRR0 capture + sc +4 ownership;
+SRR1 = msr & 0x0000FFFF; MSR cleared of POW/EE/PR/FP/FE0/SE/BE/FE1/IR/DR/RI via
+`EXC_MSR_CLEAR_MASK=0x0004EF32`; entry from table or `EXC_PC_UNRESOLVED`), `ExcRfi` (MSR =
+(SRR1 & 0xFF73) | (MSR & ~0xFF73); PC = SRR0 & ~3), `ExcDeliverable` (MSR[EE]). Anti-vacuity test
+suite (25 checks): all-ones/complement inputs; ExcEnter(0xf072)→MSR 0x1040, SRR1 0xf072 (honest
+composition equals the legacy fiction byte-for-byte); round-trips incl. the documented POW-loss case.
+`EXC_SYSCALL` renamed `EXC_SC` (macOS SDK `<mach/exception_types.h>` collision).
+
+**Glue fences** (`7d30c73c`) — `[NW-INT]` tick-50 injection deleted (was already newworld-gated;
+real delivery replaces it). `HandleInterrupt` MODE_68K arm: fake-delivery machinery
+(`WriteMacInt16(KDP+0x67c,1)` + CR-mask injection through `interrupt_copy`) fenced off on newworld
+(would corrupt live guest state). MODE_NATIVE arm fenced on newworld entirely (stale static entry).
+Paravirtual body byte-identical. Gates: test-jit 353/353.
+
+**sc + rfi real semantics** (`d2b43d17`) — `sc` reclassified `CFLOW_TRAP` (was CFLOW_NORMAL; an
+absolute-PC sc inside a decoded interpreter block would execute stale continuations). `execute_syscall`
+on newworld: `ExcEnter` absolute-PC, no `increment_pc` (kills the double-increment class structurally);
+unresolved → `SS_EXC_SC=abort|legacy`. `execute_rfi` on newworld: `ExcRfi` full MSR restore.
+EE 0→1 edge re-raise at `mtmsr` and `rfi` (load-bearing: the 60 Hz net is dead on this boot —
+`XLM_IRQ_NEST=0xFFFFFFFF`, Task 0 finding 3). `Makefile.in SRCS += exc_core.cpp`. Gates: 353/353,
+machine 9/9.
+
+**DEC delivery hook** (`3b4c05ff`, `6a6b37c6`) — `check_spcflags` HANDLE arm gains a newworld
+branch (before `processing_interrupt`/`interrupt_copy`/`HandleInterrupt`): if
+`VirtClockDECPending()` + `ExcDeliverable(msr)` + `execute_depth==1`, performs the KDP
+register-save shim (offset-by-offset from `interrupt()`: KDP+0x004/+0x018, the [KDP+0x65c] context
+block +0x13c..+0x16c, r1/r7/r13 splice) with honest upgrades — r10/r12=real restart PC (block-start,
+the poll contract), r11=real composed SRR1 (byte-equal to 0xf072 for the boot-real case) — then
+`ExcEnter`. Deferred: latch held, re-raised at EE-edges + the four nested-execute returns. Entry
+table `g_exc_entry_table`: interrupt_entry=0x50412b1c (probe-verified vs static 0x312b1c,
+M3A-ENTRY-TABLE.md); `SS_EXC_ENTRY` override for no-rebuild iteration; `SS_EXC_BARE=1` skips the
+shim (direct-entry experiment). DEC unresolved guard (I1: guards wild-jump after latch clear + KDP
+mutation). Telemetry: `exc=delivered/deferred_ee/deferred_depth` in the `[HB]` heartbeat (rides the
+heartbeat because SIGALRM skips atexit) + crash-path dump. Gates: 353/353, machine 9/9,
+test-opcodes inert (zero `[EXC]` lines on paravirtual).
+
+**Cold-MSR EE=0 fix** (`ab8e5ac6`) — Boot-A root cause: `0xf072` has EE=1 from instruction zero,
+so the first DEC expiry delivered into NK cold-init (all registers zero, LR=0) → handler's r7-flag
+`blr` exit → jump to 0 → ignoreillegal zero-page march → SIGSEGV at 0x100000 mapping edge.
+Architecturally, reset MSR has EE=0. Fix: newworld trampoline seeds MSR=0x7072 (fiction minus EE).
+Verified: `exc=0/1/0` in the heartbeat — cold-init expiry defers, boot reaches the console spin
+intact. Paravirtual keeps 0xf072 (untouched). Boot frontier identified as the NK Thud debug console
+(designed wake = serial character, not timer; EE stays honestly masked there).
+
+**SCC Rx queue + SS_SCC_RX_INJECT** (`a2dd1ff8`) — per-channel 16-byte Rx FIFO in the SCC 8530
+model (RR0 bit0 = queue non-empty; data read pops; M1 conformance defaults intact when empty;
+M3b's real serial input will reuse this queue). `SCCInjectRx` (caller-holds-region-lock contract).
+Debug knob `SS_SCC_RX_INJECT=DELAY_S:HEXBYTES` (M2 scheduler one-shot → `MMIOBusWithRegion` →
+inject). SCC unit test 19 → 37 checks.
+
+**End-to-end machine-layer demonstration (airtight A/B, one boot):** `SS_SCC_RX_INJECT=25:0D` fed
+one CR to the NK Thud console at T+25s; JIT compile counter frozen at 781 (two pre-injection
+heartbeats) → 791 (two post-injection heartbeats) — 10 new code blocks compiled and executed in
+direct response. M2 scheduler → M1 bus/backpatch → SCC Rx → `check_work` → console. Every
+machine-layer milestone composing in one observable event. M1's carried-forward consumer-(b)
+Rx-path coverage is closed.
+
+**Gates throughout:** batch + legacy test-jit 353/353 score=100; machine suite 9/9 (scc 37 checks);
+e2e-test PASS; paravirtual `make e2e` lifecycle PASS; paravirtual byte-identical (all changes
+newworld-gated).
+
 ### [SheepShaver] Wave 0: the 0x50326050 MMU/SR wall is CROSSED (`b27aa6de`, `54a5d04a`, `29859b52`)
 
 - **SR0–15 + MSR stored state** in the CPU core (the SPRG store-the-write/return-the-read
@@ -27,10 +93,11 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 - **Live result (`M5-MMU-SR-WALL-ANALYSIS.md` §8):** zero SIGSEGV (was: instant fault at
   0x50326068); identity confirmed (EA = flat 0x200a0, probe r22=0; saved SR == programmed
   SR); no handler re-entry; rung 3/4 stays deferred. **New frontier = M3's acceptance
-  target:** the runtime-staged (parcels-relocated, 0x504xxxxx) NK idle loop polling our real
-  SCC 8530 model at 0xF3012000 through the backpatched MMIO bus — M1's carried-forward
-  consumer-(b) acceptance is live and evidently working; the loop awaits real interrupt
-  delivery (M3a).
+  target (closed by M3a ✅ — see the M3a entry above):** the runtime-staged (parcels-relocated,
+  0x504xxxxx) NK idle loop polling our real SCC 8530 model at 0xF3012000 through the backpatched
+  MMIO bus — M1's carried-forward consumer-(b) acceptance is live; the loop awaited real
+  interrupt delivery, delivered in M3a (first real PPC exception; end-to-end demo via
+  SS_SCC_RX_INJECT).
 - Gates: batch + legacy test-jit 353/353; machine suite 8/8; test-opcodes 353/353;
   e2e-test 122/122; paravirtual e2e lifecycle PASS; paravirtual byte-identical.
 
@@ -89,7 +156,7 @@ Post-M1 diagnostic spike (2026-06-10):
 
 - **`virt_clock` module** (`5ccfb070`, `07caef23`) — guest-visible TB and DEC backed by an
   injected host-monotonic-ns source at a fixed ratio (`tb_freq_hz = TimebaseSpeed`). DEC
-  expiry raises an exception **CONDITION only** (latch + telemetry; delivery is M3). `SS_SYNTH_DEC`
+  expiry raises an exception **CONDITION only** (latch + telemetry; delivery landed in M3a). `SS_SYNTH_DEC`
   absorbed as a deprecated force-override (`=0` escape hatch preserved); cold state bit-identical
   to M1's synthetic down-counter. Fused generation+armed single-CAS prevents stale scheduler
   events from stealing a fresh arm. Standalone unit test (`test_virt_clock`) validates the
@@ -136,7 +203,7 @@ Post-M1 diagnostic spike (2026-06-10):
   (profile check on the slow path only).
 
 - **Known accepted M2 risks (documented in plan):** VIA `timer_arm` allocates on a
-  Mach-fault-reachable path (§2g); M3 hardening = pre-allocated slots or skip-eager-arm-on-
+  Mach-fault-reachable path (§2g); M3a hardening = pre-allocated slots or skip-eager-arm-on-
   handler-thread. Crash-path `pthread_join` hazard in `sched_pump_stop` addressed in M3
   (bounded-join).
 

@@ -1,6 +1,6 @@
 # Documentation Review & CHANGELOG Reconciliation — Agent Charter
 
-> **Status:** 🟡 Ready to dispatch · **Created:** 2026-06-07 · **Updated:** 2026-06-07
+> **Status:** ⏸ Never dispatched — superseded by manual doc sweep 2026-06-10 · **Created:** 2026-06-07 · **Updated:** 2026-06-10
 > **Why this doc exists:** a self-contained prompt for a FRESH agent to audit the project's docs for
 > staleness/coherence and reconcile the CHANGELOG against git history (tie features to their commits). A
 > fresh agent is chosen deliberately — the people who wrote these docs have author bias (it has already

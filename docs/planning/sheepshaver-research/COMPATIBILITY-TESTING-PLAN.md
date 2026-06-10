@@ -1,6 +1,6 @@
 # SheepShaver Compatibility Testing Plan
 
-> **Status:** 🟡 Open · **Created:** 2026-06-02 · **Updated:** 2026-06-05
+> **Status:** 📖 Reference — framework defined, resume when Machine Layer enables 9.x testing · **Created:** 2026-06-02 · **Updated:** 2026-06-10
 > **Why this doc exists:** Tiered plan for measuring SheepShaver compatibility (JIT vs interpreter, real apps).
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 

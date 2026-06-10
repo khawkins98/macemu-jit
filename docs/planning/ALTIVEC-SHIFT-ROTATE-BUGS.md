@@ -1,6 +1,6 @@
 # AltiVec / FP JIT codegen bug hunt (2026-06-06)
 
-> **Status:** 🟡 Active · **Created:** 2026-06-06 · **Updated:** 2026-06-07 (pixel family closed)
+> **Status:** ⏸ Dormant — pixel family closed, sum-across + fctiw rounding open but no guest exercises them · **Created:** 2026-06-06 · **Updated:** 2026-06-10
 > **Why this doc exists:** tracks the AltiVec/FP differential codegen bug hunt — the repro records,
 > root causes, and the reusable ev_mixed/saturation fix designs.
 > _Markers: ✅ done · 🟡 in progress · ⏸ deferred · ☐ todo._

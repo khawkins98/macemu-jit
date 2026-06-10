@@ -1,6 +1,6 @@
 # Plan: Snow comparative evaluation (classic-mac emulation + debugger tooling)
 
-> **Status:** 🟡 In progress — S1 crosswalk done, S2 panels specified · **Created:** 2026-06-06 · **Updated:** 2026-06-06
+> **Status:** ⏸ Dormant — S1 crosswalk done, S2 panels specified but not executed · **Created:** 2026-06-06 · **Updated:** 2026-06-10
 > **Why this doc exists:** Track a disciplined comparison against Snow so we can selectively adopt useful emulation and debugging ideas without derailing SheepShaver priorities.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 

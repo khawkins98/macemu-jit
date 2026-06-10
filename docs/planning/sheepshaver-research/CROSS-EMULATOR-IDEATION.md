@@ -1,6 +1,6 @@
 # Cross-emulator ideation — techniques from Dolphin / RPCS3 / Cemu / QEMU / Rosetta
 
-> **Status:** 🟡 Open — idea bank · **Created:** 2026-06-06 · **Updated:** 2026-06-06
+> **Status:** 📖 Reference — idea bank, pick up as needed · **Created:** 2026-06-06 · **Updated:** 2026-06-10
 > **Why this doc exists:** Captures a structured lateral-ideation pass (6 emulator-specialist personas → combine → rank → deep-dive) on what SheepShaver could borrow from other emulators, **reality-checked against the actual source** so we don't re-chase work that's already done or ruled out.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 

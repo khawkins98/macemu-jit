@@ -241,14 +241,17 @@ Pitfall: HFS disks contain MULTIPLE copies of each resource (allocation artifact
 "live" copy matters. The live boot id=3 starts at disk offset 0x18f39748 on pathB_upgrade.dsk.
 Other copies at different offsets have different internal layouts and patching them has no effect.
 
-### The post-splash stall is SCC serial polling (identified)
+### ~~The post-splash stall is SCC serial polling~~ → A-line vector ($28) corruption
+
+> **Corrected:** the SCC polling is a downstream symptom. Real root cause: guest `$28`
+> corrupted by Memory Manager heap mismatch (see correction banner above + SYSTEM-BOOT-GATES §5).
 
 After bypassing both gates, boot shows the Mac OS 9.2 splash (Happy Mac + "Mac OS 9.2") but
 stalls in a tight loop (~2M blocks/s, no new compilations, HOT-PC at 0x50484038). SS_PROBE_PC
 revealed the 68k PC at 0x500cc998 — ROM serial init code polling SCC hardware at 0xF3012000
 (channel B) and 0xF3016000 (channel A). The stall is NOT gate-related (persists with ALL A9C9
-NOP'd) and NOT disk-related (identical on HD and ISO boot). It's SCC emulation incomplete for
-9.2.1's serial init requirements.
+NOP'd) and NOT disk-related (identical on HD and ISO boot). The 1.1 ROM is structurally
+incompatible with 9.2.1 — confirmed not a JIT bug (interpreter reproduces). Path closed.
 
 ---
 

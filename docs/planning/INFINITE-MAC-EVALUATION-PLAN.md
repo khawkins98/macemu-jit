@@ -1,6 +1,6 @@
 # Plan: Infinite Mac comparative evaluation (host/runtime integration)
 
-> **Status:** 🟡 In progress — exploratory evaluation · **Created:** 2026-06-06 · **Updated:** 2026-06-06
+> **Status:** ⏸ Dormant — initial research complete, no active work · **Created:** 2026-06-06 · **Updated:** 2026-06-10
 > **Why this doc exists:** Track a disciplined comparison against Infinite Mac for host/runtime techniques we may adapt in native macOS flows.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 

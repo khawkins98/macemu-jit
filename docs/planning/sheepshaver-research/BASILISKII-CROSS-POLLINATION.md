@@ -1,6 +1,6 @@
 # BasiliskII → SheepShaver JIT cross-pollination
 
-> **Status:** 🟡 Open · **Created:** 2026-06-05 · **Updated:** 2026-06-05
+> **Status:** 📖 Reference — initial triage complete, pick up as needed · **Created:** 2026-06-05 · **Updated:** 2026-06-10
 > **Why this doc exists:** Triage of which BasiliskII (68K JIT, the more mature same-host lineage from the upstream Linux ARM64 developer) techniques we want to borrow for the SheepShaver PPC JIT — and which heavy machinery to leave behind.
 > _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
 

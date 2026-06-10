@@ -464,11 +464,13 @@ chase a no-ROM-file design; do treat "synthesize the supervisor environment" as 
 
 ## 2.7 The hybrid approach — minimal hardware model for boot, HLE for runtime (2026-06-09)
 
-> **Status:** 🟡 Active investigation — reopening the NW chapter with a new approach.
+> **Status:** ⏸ Absorbed into [Machine Layer](MACHINE-LAYER-PLAN.md) §2c (2026-06-10).
 > **Decision:** The stop-rule that closed the NW forcing function (§1.7) was based on the premise
 > that the remaining work = "84 HLE shim byte-pattern porting." The hybrid reframe changes that
 > calculus: the DR Emulator wall may be solvable with a **synthetic ECB stub** (same proven technique
-> as the SegMap/PMDT spike), not a full shim port.
+> as the SegMap/PMDT spike), not a full shim port. *This insight was adopted by the Machine Layer
+> architecture, which implements proper device models (MMIO bus + SCC + VIA) for the boot phase
+> and retains HLE for runtime — exactly the two-phase strategy proposed here.*
 
 ### The insight: two phases, two emulation strategies
 

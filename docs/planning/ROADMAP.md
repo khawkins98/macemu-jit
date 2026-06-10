@@ -817,7 +817,13 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > absorbed as components. DingusPPC = device-model donor (GPL; never PR upstream to them),
 > QEMU mac99 = behavioral oracle.
 >
-> **▶ PLANNING DOC:** `docs/planning/MACHINE-LAYER-PLAN.md` (architecture, milestones M0–M8, testing; rev 2 incorporates the adversarial code review — MMIO two-path dispatch, virtual clock, interrupt/exception big rock, Core99-only machine).
+> **▶ PLANNING DOC:** `docs/planning/MACHINE-LAYER-PLAN.md` (architecture, milestones M0–M8, testing; rev 4).
+> **Progress:** spikes S1–S3 ✅ (gates pass natively on 9.0.1 ROM; Mach fault-decode proven ~8.5µs;
+> r18=VIA/r19=SCC) · **M0 ✅ landed 2026-06-10** (machine pref + profile module, SS_NW_* consolidated,
+> CORE99 machine description + ROM-patch audit; test-jit 350/350, e2e PASS) · **next: M1** (MMIO bus +
+> SCC 8530 + VIA timer surface; acceptance = nanokernel `check_work` on the 9.0.1 ROM).
+> Retreat point: tag **`pre-machine-layer`** (=46e497d8). The 1.1-ROM/9.2.1 path is **closed**
+> (A-line vector corruption root cause + CFM fragment audit — not fixable by device models).
 > **▶ SUPERSEDED:** `docs/planning/UPGRADE-CARD-PATH.md` (Path B — gate bypass + SCC findings remain tactical inputs).
 > **▶ PARKED:** `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` (Path A state; §2.8 obstacle map still the per-wall reference).
 

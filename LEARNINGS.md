@@ -17,7 +17,50 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-10 (latest) — System file gate anatomy; DSAT; binary search on disk; SCC stall identified
+## 2026-06-10 (latest) — Machine Layer day: pivot → architecture → spikes → M0 landed
+
+The full arc in one day: strategic pivot (Path A/B → **Machine Layer**, `docs/planning/MACHINE-LAYER-PLAN.md`),
+2 adversarial review rounds (21 findings, §8), 3 de-risking spikes (`docs/planning/spikes/`), M0
+implemented subagent-driven in a worktree, merged back. Tag **`pre-machine-layer`** (=46e497d8) is
+the retreat point. Non-obvious learnings:
+
+### Device identities flip-flopped a THIRD time — r18=VIA, r19=SCC
+Spike S3 disassembled the actual stall loop: **0xF3016000 is the VIA 6522** (matches our own
+AddrMap patch!), 0xF3012000 the SCC. The earlier "r18=SCC ch A" claim (below, and in pre-rewrite
+SYSTEM-BOOT-GATES §5) was wrong. Rule reaffirmed: never label a device base without disassembling
+the consumer — we have now mislabeled SCC/VIA in three separate sessions.
+
+### Gate 2 ($63) is a CFM boot-fragment audit, not a model check
+Spike S1 (QEMU mac99 oracle): the 0x7E24 probe Gestalt-selects a checklist then verifies CFM boot
+fragments (DebugLib/InterfaceLib/...) that only **parcels ROMs** provide. Unpatched 9.2.1 boots to
+Finder on the 9.0.1 ROM under QEMU. Identity patches never had a chance; 9.2-on-1.1 is structurally
+impossible. The "version words" in the gate doc were resource IDs.
+
+### Mach-exception MMIO is viable but ~8.5 µs/fault — backpatch is mandatory for hot sites
+Spike S2 (spikes/s2-mach-fault-decode/): PROT_NONE trap → decode JIT-form LDR → thread_set_state
+inject → resume works first-try, identically from MAP_JIT pages, zero entitlement friction. But
+~10^4× a mapped access: a MHz-rate poll through the fault path is unusable — hot MMIO sites must be
+JIT-backpatched to direct bus calls.
+
+### SS_TEST_HEX bypasses init — don't use test-opcodes to verify startup logs
+The SS_TEST_HEX early-exit returns before PrefsInit, so `make test-opcodes` can never show startup
+lines like [MACHINE]. Verify init-time behavior with a <6s isolated-config run
+(`perl -e 'alarm 6; exec ...'` — plain `timeout` is not on this box).
+
+### M0 behavior change: SS_NW_TRAMPOLINE=1 now implies the fidelity profile
+The deprecated alias selects `machine newworld`, which ALSO disables the legacy serial-skip hacks
+and ignoresegv. Pre-M0 diagnostic behavior is only recoverable via the `pre-machine-layer` tag.
+Reconciliation note: DEPRECATED-SCAFFOLDING-INVENTORY.md.
+
+---
+
+## 2026-06-10 — System file gate anatomy; DSAT; binary search on disk; SCC stall identified
+
+> **⚠️ CORRECTED 2026-06-10 (same day):** two claims below are superseded — (1) r18 is the
+> **VIA 6522**, not "SCC channel A" (SPIKE-S3); (2) the stall's root cause is **A-line vector
+> ($28) corruption from a Memory Manager free-list bug**, not SCC polling — the serial monitor
+> is where the corrupted vector *lands* (SYSTEM-BOOT-GATES §5 rewrite, commit 46e497d8).
+> Gate anatomy/DSAT/binary-search methodology below remains valid.
 
 ### Post-splash stall is SCC hardware polling in ROM serial init
 

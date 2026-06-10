@@ -45,9 +45,9 @@ type(scope): short description — context/metric
 Longer explanation if needed.
 ```
 
-**Types:** `feat`, `fix`, `perf`, `docs`, `test`, `bench`, `fix+perf` (combined)
+**Types:** `feat`, `fix`, `perf`, `docs`, `test`, `bench`, `refactor`, `chore`, `fix+perf` (combined)
 
-**Scopes:** `jit`, `ss` (SheepShaver), `b2` (BasiliskII), `prefs`, omit for cross-cutting
+**Scopes:** `jit`, `ss` (SheepShaver), `b2` (BasiliskII), `prefs`, `machine` (Machine Layer — profile/bus/devices, `src/machine/`), `planning`/`plans` (docs), omit for cross-cutting
 
 **Examples from this project:**
 ```

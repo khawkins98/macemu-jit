@@ -29,6 +29,23 @@
 # define VM_CAN_ACCESS_UNALIGNED
 #endif
 
+// Machine Layer M1 (MACHINE-LAYER-PLAN §2b, interpreter path): device-range check.
+// vm.hpp is a low-level header compiled into both engines and cannot include
+// mmio_bus.h, so the bus globals + slow-path entry points are forward-declared here.
+// mmio_bus_active is false on the paravirtual default -> one predicted-untaken branch.
+// Types use the kpx uint32/uint64 (identical underlying types to mmio_bus.cpp's
+// uint32_t/uint64_t on this target, so the declarations link).
+extern bool mmio_bus_active;
+extern uint32 mmio_bus_lo, mmio_bus_hi;
+extern uint64 MMIOBusRead(uint32 addr, unsigned size);
+extern void MMIOBusWrite(uint32 addr, unsigned size, uint64 value);
+
+static inline bool vm_is_mmio(uint32 addr)
+{
+	return __builtin_expect(mmio_bus_active, 0)
+	    && (addr - mmio_bus_lo < mmio_bus_hi - mmio_bus_lo);
+}
+
 #ifdef WORDS_BIGENDIAN
 
 #ifdef VM_CAN_ACCESS_UNALIGNED
@@ -223,63 +240,75 @@ static inline vm_addr_t vm_do_get_virtual_address(uint8 *addr)
 }
 static inline uint32 vm_read_memory_1(vm_addr_t addr)
 {
+	if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 1);
 	uint8 * const m = vm_do_get_real_address(addr);
 	return vm_do_read_memory_1(m);
 }
 static inline uint32 vm_read_memory_2(vm_addr_t addr)
 {
+	if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 2);
 	uint16 * const m = (uint16 *)vm_do_get_real_address(addr);
 	return vm_do_read_memory_2(m);
 }
 static inline uint32 vm_read_memory_4(vm_addr_t addr)
 {
+	if (vm_is_mmio(addr)) return (uint32)MMIOBusRead(addr, 4);
 	uint32 * const m = (uint32 *)vm_do_get_real_address(addr);
 	return vm_do_read_memory_4(m);
 }
 static inline uint64 vm_read_memory_8(vm_addr_t addr)
 {
+	if (vm_is_mmio(addr)) return MMIOBusRead(addr, 8);
 	uint64 * const m = (uint64 *)vm_do_get_real_address(addr);
 	return vm_do_read_memory_8(m);
 }
 #define vm_read_memory_1_reversed vm_read_memory_1
 static inline uint32 vm_read_memory_2_reversed(vm_addr_t addr)
 {
+	if (vm_is_mmio(addr)) return (uint32)__builtin_bswap16((uint16)MMIOBusRead(addr, 2));
 	uint16 * const m = (uint16 *)vm_do_get_real_address(addr);
 	return vm_do_read_memory_2_reversed(m);
 }
 static inline uint32 vm_read_memory_4_reversed(vm_addr_t addr)
 {
+	if (vm_is_mmio(addr)) return (uint32)__builtin_bswap32((uint32)MMIOBusRead(addr, 4));
 	uint32 * const m = (uint32 *)vm_do_get_real_address(addr);
 	return vm_do_read_memory_4_reversed(m);
 }
 static inline void vm_write_memory_1(vm_addr_t addr, uint32 value)
 {
+	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 1, value); return; }
 	uint8 * const m = vm_do_get_real_address(addr);
 	vm_do_write_memory_1(m, value);
 }
 static inline void vm_write_memory_2(vm_addr_t addr, uint32 value)
 {
+	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 2, value); return; }
 	uint16 * const m = (uint16 *)vm_do_get_real_address(addr);
 	vm_do_write_memory_2(m, value);
 }
 static inline void vm_write_memory_4(vm_addr_t addr, uint32 value)
 {
+	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 4, value); return; }
 	uint32 * const m = (uint32 *)vm_do_get_real_address(addr);
 	vm_do_write_memory_4(m, value);
 }
 static inline void vm_write_memory_8(vm_addr_t addr, uint64 value)
 {
+	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 8, value); return; }
 	uint64 * const m = (uint64 *)vm_do_get_real_address(addr);
 	vm_do_write_memory_8(m, value);
 }
 #define vm_write_memory_1_reversed vm_write_memory_1
 static inline void vm_write_memory_2_reversed(vm_addr_t addr, uint32 value)
 {
+	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 2, __builtin_bswap16((uint16)value)); return; }
 	uint16 * const m = (uint16 *)vm_do_get_real_address(addr);
 	vm_do_write_memory_2_reversed(m, value);
 }
 static inline void vm_write_memory_4_reversed(vm_addr_t addr, uint32 value)
 {
+	if (vm_is_mmio(addr)) { MMIOBusWrite(addr, 4, __builtin_bswap32((uint32)value)); return; }
 	uint32 * const m = (uint32 *)vm_do_get_real_address(addr);
 	vm_do_write_memory_4_reversed(m, value);
 }

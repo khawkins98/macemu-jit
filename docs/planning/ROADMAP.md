@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-09 (D3 pivoted to Upgrade Card approach; Path A parked)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-10 (D3 pivoted to Machine Layer; M0 + M1 complete — M1 live acceptance PARTIAL, blocked by NK boot ceiling)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -29,7 +29,7 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 |-------|--------|-------|
 | **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
 | **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to "Upgrade Card" approach** (2026-06-09): run 9.2 on the proven 1.1 ROM via targeted enabler shims rather than porting the NewWorld nanokernel. Path A (NW ROM port) parked after harvesting 4+ general bugs. | 🟡 active |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ (live acceptance PARTIAL — NK boot ceiling). | 🟡 active |
 | **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
@@ -820,8 +820,7 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > **▶ PLANNING DOC:** `docs/planning/MACHINE-LAYER-PLAN.md` (architecture, milestones M0–M8, testing; rev 4).
 > **Progress:** spikes S1–S3 ✅ (gates pass natively on 9.0.1 ROM; Mach fault-decode proven ~8.5µs;
 > r18=VIA/r19=SCC) · **M0 ✅ landed 2026-06-10** (machine pref + profile module, SS_NW_* consolidated,
-> CORE99 machine description + ROM-patch audit; test-jit 350/350, e2e PASS) · **next: M1** (MMIO bus +
-> SCC 8530 + VIA timer surface; acceptance = nanokernel `check_work` on the 9.0.1 ROM).
+> CORE99 machine description + ROM-patch audit; test-jit 350/350, e2e PASS) · **M1 ✅ complete 2026-06-10** (MMIO bus + SCC 8530 + VIA timer/IFR + JIT backpatch; test-jit 350/350 + 6 unit binaries ALL PASS + THUNK-SELFTEST PASS; paravirtual e2e PASS. **Live acceptance PARTIAL** — bus activation/KDP wiring/scc_init retirement verified; consumer-(b) `check_work` live SCC poll blocked by the pre-existing NK boot ceiling at pc=0x503123fc — carried forward to when the fidelity boot resumes, M3/M5) · **next: M2** (virtual clock).
 > Retreat point: tag **`pre-machine-layer`** (=46e497d8). The 1.1-ROM/9.2.1 path is **closed**
 > (A-line vector corruption root cause + CFM fragment audit — not fixable by device models).
 > **▶ SUPERSEDED:** `docs/planning/UPGRADE-CARD-PATH.md` (Path B — gate bypass + SCC findings remain tactical inputs).

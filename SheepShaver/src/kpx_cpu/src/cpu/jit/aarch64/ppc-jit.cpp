@@ -4838,6 +4838,271 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 	}
 }
 
+#ifdef SS_MMIO_BACKPATCH
+/* =====================================================================
+ *  M1 MMIO backpatch (MACHINE-LAYER-PLAN.md §2b polling strategy / Task 9)
+ *
+ *  Hot fault sites (the JIT load/store insns that Mach-fault into device
+ *  space) are rewritten in place to call a single generic thunk that banks
+ *  the live register file, hands a frame pointer + the site address to a C
+ *  dispatcher, and restores. The dispatcher decodes the ORIGINAL insn from a
+ *  side table (recorded at patch time), reads the guest EA from frame[rm],
+ *  and routes to MMIOBusRead/Write. One thunk serves every form because the
+ *  decode is data-driven.
+ *
+ *  Every Task-9 addition lives behind #ifdef SS_MMIO_BACKPATCH: ppc-jit.cpp is
+ *  also compiled standalone by rom-harness/Makefile (no bus symbols / include
+ *  path), which does NOT define this — there the weak no-op stubs in
+ *  mmio_machfault.cpp win and the fault path stays cold-only.
+ *
+ *  Encodings are the VERIFIED ones from docs/superpowers/plans/
+ *  m1-task9-thunk-encodings.md (clang-cross-checked). Helpers ported from
+ *  spikes/m1-thunk-prework/thunk_ref.c — do not re-derive.
+ * ===================================================================== */
+#include "a64_mmio_decode.h"
+#include "mmio_bus.h"   /* C++ linkage MMIOBusRead/Write/Count* — do NOT re-declare extern "C" */
+#include <assert.h>     /* helper immediate-range insurance (compiled out under NDEBUG) */
+
+#define MMIO_SITE_MAX 256
+static struct { uint32_t *site; uint32_t orig_insn; } mmio_sites[MMIO_SITE_MAX];
+static int n_mmio_sites = 0;
+static uint32_t *mmio_thunk_entry = NULL;   /* emitted once at init, re-emitted on flush */
+
+/* Is host pc inside the executable JIT code cache? (the faulting host PC is the
+ * candidate patch site; only sites we generated are patchable.) */
+extern "C" bool ppc_jit_pc_in_cache(const void *pc)
+{
+	return jit_cache_base && (const uint8_t *)pc >= jit_cache_base
+	       && (const uint8_t *)pc < (const uint8_t *)jit_cache_end;
+}
+
+/* The C dispatcher the thunk BLRs into. Runs on the CPU/emul thread (no §2g
+ * constraints — stdio/abort are fine).
+ *   frame[0..28] == x0..x28 (the thunk banked them); x18 banked for slot
+ *   regularity. The thunk passes x0 = frame base, x1 = site address (x30-4). */
+extern "C" void ppc_jit_mmio_thunk_dispatch(uint64_t *frame, uint32_t *site)
+{
+	uint32_t orig = 0;
+	for (int i = 0; i < n_mmio_sites; i++)
+		if (mmio_sites[i].site == site) { orig = mmio_sites[i].orig_insn; break; }
+	A64MemAccess acc;
+	if (!orig || !A64DecodeMMIOAccess(orig, &acc)) {
+		fprintf(stderr, "PPC-JIT-A64: MMIO thunk at unpatched site %p\n", (void *)site);
+		abort();
+	}
+	uint32_t gaddr = (uint32_t)frame[acc.rm];          /* EA reg (rm) holds the guest address */
+	unsigned bytes = 1u << acc.size_log2;
+	if (acc.is_load) {
+		uint64_t arch = MMIOBusRead(gaddr, bytes);
+		/* the paired REV was NOPed: deliver the ARCHITECTURAL value, zero-extended to
+		 * the access width exactly as the real LDRB/LDRH/LDR{w} would (hot/cold parity:
+		 * the cold path's A64SwapForWidth also truncates). Harmless for M1's clean
+		 * <=8-bit SCC/VIA values; matters once M2 adds wider/aperture devices. */
+		if (bytes < 8) arch &= (1ull << (bytes * 8)) - 1;
+		if (acc.rt != 31) frame[acc.rt] = arch;
+	} else {
+		uint64_t raw = (acc.rt == 31) ? 0 : frame[acc.rt];
+		/* width>1: the JIT's REV still runs before the BL, so frame[rt] is raw BE */
+		uint64_t arch = (acc.size_log2 == 0) ? (raw & 0xFF)
+		                                     : A64SwapForWidth(raw, acc.size_log2);
+		MMIOBusWrite(gaddr, bytes, arch);
+	}
+}
+
+/* ---- Verified AArch64 encoder helpers (ported from thunk_ref.c §1) ----
+ * Each returns the 32-bit word; sp == reg 31 in the load/store base position.
+ * The asserts are the cheap insurance the plan asked for; keep them. */
+static uint32_t mmio_stp_x(int rt, int rt2, int imm_bytes) {   /* STP Xt,Xt2,[sp,#imm] */
+	assert(imm_bytes % 8 == 0); int imm7 = imm_bytes / 8;
+	assert(imm7 >= -64 && imm7 <= 63);
+	return 0xA9000000u | ((uint32_t)(imm7 & 0x7F) << 15) | ((uint32_t)rt2 << 10)
+	     | (31u << 5) | (uint32_t)rt;
+}
+static uint32_t mmio_ldp_x(int rt, int rt2, int imm_bytes) {   /* LDP Xt,Xt2,[sp,#imm] */
+	assert(imm_bytes % 8 == 0); int imm7 = imm_bytes / 8;
+	assert(imm7 >= -64 && imm7 <= 63);
+	return 0xA9400000u | ((uint32_t)(imm7 & 0x7F) << 15) | ((uint32_t)rt2 << 10)
+	     | (31u << 5) | (uint32_t)rt;
+}
+static uint32_t mmio_str_x_imm(int rt, int imm_bytes) {        /* STR Xt,[sp,#imm] */
+	assert(imm_bytes % 8 == 0 && imm_bytes >= 0);
+	uint32_t imm12 = (uint32_t)(imm_bytes / 8); assert(imm12 < 4096);
+	return 0xF9000000u | (imm12 << 10) | (31u << 5) | (uint32_t)rt;
+}
+static uint32_t mmio_ldr_x_imm(int rt, int imm_bytes) {        /* LDR Xt,[sp,#imm] */
+	assert(imm_bytes % 8 == 0 && imm_bytes >= 0);
+	uint32_t imm12 = (uint32_t)(imm_bytes / 8); assert(imm12 < 4096);
+	return 0xF9400000u | (imm12 << 10) | (31u << 5) | (uint32_t)rt;
+}
+static uint32_t mmio_stp_q(int qt, int qt2, int imm_bytes) {   /* STP Qt,Qt2,[sp,#imm] */
+	assert(imm_bytes % 16 == 0); int imm7 = imm_bytes / 16;
+	assert(imm7 >= -64 && imm7 <= 63);
+	return 0xAD000000u | ((uint32_t)(imm7 & 0x7F) << 15) | ((uint32_t)qt2 << 10)
+	     | (31u << 5) | (uint32_t)qt;
+}
+static uint32_t mmio_ldp_q(int qt, int qt2, int imm_bytes) {   /* LDP Qt,Qt2,[sp,#imm] */
+	assert(imm_bytes % 16 == 0); int imm7 = imm_bytes / 16;
+	assert(imm7 >= -64 && imm7 <= 63);
+	return 0xAD400000u | ((uint32_t)(imm7 & 0x7F) << 15) | ((uint32_t)qt2 << 10)
+	     | (31u << 5) | (uint32_t)qt;
+}
+static uint32_t mmio_sub_sp_imm(int imm) {                     /* SUB sp,sp,#imm12 */
+	assert(imm >= 0 && imm < 4096);
+	return 0xD1000000u | ((uint32_t)imm << 10) | (31u << 5) | 31u;
+}
+static uint32_t mmio_add_sp_imm(int imm) {                     /* ADD sp,sp,#imm12 */
+	assert(imm >= 0 && imm < 4096);
+	return 0x91000000u | ((uint32_t)imm << 10) | (31u << 5) | 31u;
+}
+
+/* NZCV preservation encodings — clang-verified 2026-06-10:
+ *   `mrs x9, nzcv`  -> 0xD53B4209 ;  `msr nzcv, x9` -> 0xD51B4209  */
+#define MMIO_MRS_X9_NZCV  0xD53B4209u
+#define MMIO_MSR_NZCV_X9  0xD51B4209u
+
+#define MMIO_FRAME_SUB  624   /* 16-multiple; total stack = 624 + 16 (fp/lr push) = 640 */
+#define MMIO_QBASE      240   /* Q region; 8-byte pad at 232 doubles as the NZCV slot */
+#define MMIO_NZCV_SLOT  232
+
+/* Emit the generic thunk at the current cache write pointer. Called once at init
+ * AND re-called by ppc_jit_aarch64_flush (the flush resets jit_cache_wp to base,
+ * which would otherwise let the next compiled block overwrite the thunk in place
+ * while mmio_thunk_entry still points there). Reserving the thunk at cache start
+ * keeps every later patch site within BL ±128 MB range. */
+static void emit_mmio_thunk(void)
+{
+	jit_cache_begin_write();
+	jit_code_ptr = jit_cache_wp;          /* (rev 2 C3) emit32 writes through jit_code_ptr */
+	mmio_thunk_entry = jit_code_ptr;
+	/* prologue: push fp/lr (16 B), then SUB the 624-byte frame */
+	a64_stp_pre(A64_FP, A64_LR, A64_SP, -16);   /* stp x29,x30,[sp,#-16]!  = 0xA9BF7BFD */
+	emit32(mmio_sub_sp_imm(MMIO_FRAME_SUB));
+	/* bank x0..x27 (14 STP pairs) + x28 (single STR) */
+	for (int r = 0; r < 28; r += 2) emit32(mmio_stp_x(r, r + 1, r * 8));
+	emit32(mmio_str_x_imm(28, 224));
+	/* bank q0..q7, q16..q31 (caller-saved; guest FPRs live in v16..v23) */
+	int qoff = MMIO_QBASE;
+	for (int q = 0; q < 8; q += 2, qoff += 32)  emit32(mmio_stp_q(q, q + 1, qoff));
+	for (int q = 16; q < 32; q += 2, qoff += 32) emit32(mmio_stp_q(q, q + 1, qoff));
+	/* args: x0 = frame base (= sp), x1 = site = x30 - 4 */
+	emit32(0x910003E0u);                  /* mov x0, sp  (ADD x0,sp,#0; the ORR-MOV form = XZR) */
+	emit32(0xD10013C1u);                  /* sub x1, x30, #4 */
+	emit_load_imm64(16, (uint64_t)(uintptr_t)&ppc_jit_mmio_thunk_dispatch);
+	/* NZCV save/restore across the call. The plan body's "hold flags in x9 across
+	 * the BLR" is WRONG: x9 is caller-saved, the dispatcher may clobber it. Spill
+	 * the flags to the frame's 8-byte pad (offset 232) — that slot is ours and sits
+	 * above the dispatcher's frame, so it survives the call. */
+	emit32(MMIO_MRS_X9_NZCV);             /* mrs x9, nzcv */
+	emit32(mmio_str_x_imm(9, MMIO_NZCV_SLOT));
+	a64_blr(16);                          /* blr x16  = 0xD63F0200 */
+	emit32(mmio_ldr_x_imm(9, MMIO_NZCV_SLOT));
+	emit32(MMIO_MSR_NZCV_X9);             /* msr nzcv, x9 */
+	/* restore — exact mirror of the save (offsets identical) */
+	for (int r = 0; r < 28; r += 2) emit32(mmio_ldp_x(r, r + 1, r * 8));
+	emit32(mmio_ldr_x_imm(28, 224));
+	qoff = MMIO_QBASE;
+	for (int q = 0; q < 8; q += 2, qoff += 32)  emit32(mmio_ldp_q(q, q + 1, qoff));
+	for (int q = 16; q < 32; q += 2, qoff += 32) emit32(mmio_ldp_q(q, q + 1, qoff));
+	emit32(mmio_add_sp_imm(MMIO_FRAME_SUB));
+	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);   /* ldp x29,x30,[sp],#16 = 0xA8C17BFD */
+	a64_ret();
+	jit_cache_wp = jit_code_ptr;          /* (rev 2 C3) publish the advanced write pointer */
+	jit_cache_end_write(mmio_thunk_entry, (jit_code_ptr - mmio_thunk_entry) * 4);
+}
+
+/* Backpatch a hot fault site (called on the Mach handler thread — §2g-safe by
+ * construction: the only thread that EXECUTES JIT code is the emul thread, and it
+ * is Mach-suspended at exactly this site while we patch; pthread_jit_write_protect_np
+ * is per-thread; after sys_icache_invalidate the resumed thread re-fetches the BL).
+ *
+ * (rev 2 N1) Single-instruction patch only: STR/LDR -> BL keeps any nearby CBZ +8
+ * skip-target (the stwcx. reservation pattern) valid because BL is also 4 bytes.
+ * Never change the patched insn count. lwarx/stwcx. sites lose reservation
+ * semantics if patched — acceptable (no S3 device-space consumer uses atomics; the
+ * cold fault path has the same property). */
+extern "C" bool ppc_jit_backpatch_mmio(uint32_t *site, const A64MemAccess *acc)
+{
+	if (!mmio_thunk_entry || n_mmio_sites >= MMIO_SITE_MAX) return false;
+	int64_t off = (int64_t)((uint8_t *)mmio_thunk_entry - (uint8_t *)site);
+	if (off < -(1 << 27) || off >= (1 << 27)) return false;     /* BL range ±128MB */
+	uint32_t bl = 0x94000000u | (uint32_t)((off >> 2) & 0x3FFFFFFu);
+	bool nop_rev = acc->is_load && acc->size_log2 > 0;
+	if (nop_rev && !A64IsPairedSwap(site[1], acc->size_log2, acc->rt))
+		return false;                                            /* contract surprise: stay cold */
+	mmio_sites[n_mmio_sites].site = site;
+	mmio_sites[n_mmio_sites].orig_insn = *site;
+	__atomic_add_fetch(&n_mmio_sites, 1, __ATOMIC_RELEASE);     /* dispatch scans <= n */
+	jit_cache_begin_write();        /* pthread_jit_write_protect_np is PER-THREAD: ok here */
+	site[0] = bl;
+	if (nop_rev) site[1] = 0xD503201Fu;                         /* NOP the paired REV */
+	jit_cache_end_write(site, nop_rev ? 8 : 4);                 /* re-protect + sys_icache_invalidate */
+	return true;
+}
+
+/* Standalone self-test: emit a real callable block whose body is a JIT load form,
+ * backpatch it, then call it through a function pointer and assert the bus's
+ * architectural value lands in the destination register. Env-gated (cheap, kept as
+ * permanent insurance). Self-registers its own bus region because on the harness
+ * path JIT init runs BEFORE main_unix's bus bring-up (and that path never inits the
+ * real bus — rev 2 C2). exit()s with the verdict. */
+static uint64_t mmio_selftest_read(void *, uint32_t, unsigned) { return 0xCAFEBABEu; }
+static void     mmio_selftest_write(void *, uint32_t, unsigned, uint64_t) {}
+
+static void mmio_thunk_selftest(void)
+{
+	/* Cross-check the two NZCV encodings (not in the prework's 18-helper table). */
+	if (MMIO_MRS_X9_NZCV != 0xD53B4209u || MMIO_MSR_NZCV_X9 != 0xD51B4209u) {
+		fprintf(stderr, "THUNK-SELFTEST: FAIL (NZCV encoding constant mismatch)\n");
+		exit(1);
+	}
+	static const MMIODevice dev = { "selftest", 0,
+	                                mmio_selftest_read, mmio_selftest_write, 0 };
+	const uint32_t base = 0xF3050000u, gaddr = 0xF3050002u;
+	if (!MMIOBusRegister(base, 0x1000, MMIO_TRAPPED, &dev)) {
+		fprintf(stderr, "THUNK-SELFTEST: FAIL (MMIOBusRegister)\n");
+		exit(1);
+	}
+	MMIOBusActivate();
+
+	/* Emit a callable block:
+	 *     stp x29,x30,[sp,#-16]!     ; save lr (the BL below clobbers x30)
+	 * site:ldr w1,[x19,w0,uxtw]      ; -> patched to BL thunk
+	 *     rev w1,w1                  ; -> patched to NOP
+	 *     mov w0,w1                  ; surface result in the return register
+	 *     ldp x29,x30,[sp],#16
+	 *     ret
+	 * Called as fn(gaddr): x0=gaddr=EA(rm=0); the thunk reads frame[0], writes the
+	 * architectural value to frame[1]; restore puts it in x1; mov w0,w1 returns it. */
+	jit_cache_begin_write();
+	jit_code_ptr = jit_cache_wp;
+	uint32_t *entry = jit_code_ptr;
+	a64_stp_pre(A64_FP, A64_LR, A64_SP, -16);
+	uint32_t *site = jit_code_ptr;
+	a64_ldr_w_reg(1, 19, 0);              /* ldr w1,[x19,w0,uxtw] */
+	emit32(0x5AC00800u | (1 << 5) | 1);   /* rev w1,w1 = 0x5AC00821 (matches A64IsPairedSwap) */
+	emit32(0x2A0103E0u);                  /* mov w0,w1 (ORR Wd,WZR,Wm) */
+	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
+	a64_ret();
+	jit_cache_wp = jit_code_ptr;
+	jit_cache_end_write(entry, (jit_code_ptr - entry) * 4);
+
+	A64MemAccess acc = { true, 2, 1, 19, 0 };   /* load, W, rt=1, rn=19, rm=0 */
+	if (!ppc_jit_backpatch_mmio(site, &acc)) {
+		fprintf(stderr, "THUNK-SELFTEST: FAIL (backpatch refused)\n");
+		exit(1);
+	}
+	uint64_t (*fn)(uint64_t) = (uint64_t (*)(uint64_t))(void *)entry;
+	uint64_t got = fn(gaddr) & 0xFFFFFFFFu;
+	if (got != 0xCAFEBABEu) {
+		fprintf(stderr, "THUNK-SELFTEST: FAIL (got 0x%08llx, want 0xCAFEBABE)\n",
+		        (unsigned long long)got);
+		exit(1);
+	}
+	fprintf(stderr, "THUNK-SELFTEST: PASS\n");
+	exit(0);
+}
+#endif /* SS_MMIO_BACKPATCH */
+
 /* ---- Public API ---- */
 
 bool ppc_jit_aarch64_init(size_t cache_size_kb)
@@ -4872,6 +5137,13 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 #endif
 	fprintf(stderr, "PPC-JIT-A64: code cache %zu KB at %p, block cache %d buckets / %d pool\n",
 	        cache_size_kb, jit_cache_base, JIT_BC_BUCKETS, JIT_BC_POOL);
+#ifdef SS_MMIO_BACKPATCH
+	/* Reserve the MMIO backpatch thunk at cache start (keeps every later patch
+	 * site within BL ±128MB). Must precede any block compile. */
+	emit_mmio_thunk();
+	if (getenv("SS_MMIO_THUNK_SELFTEST"))
+		mmio_thunk_selftest();   /* exits 0/1 */
+#endif
 	atexit(jit_report_misses);
 	return true;
 }
@@ -5032,6 +5304,19 @@ void ppc_jit_aarch64_flush(void)
 	JIT_LOG("JIT cache flush, blocks compiled so far: %d", jit_bc_pool_next);
 	jit_cache_wp = (uint32_t *)jit_cache_base;
 	jit_bc_flush();
+#ifdef SS_MMIO_BACKPATCH
+	/* The flush just reset jit_cache_wp to base, so the next compiled block would
+	 * overwrite the MMIO thunk in place while mmio_thunk_entry still pointed there
+	 * (every backpatched BL would then jump into a random block -> crash). Re-lay
+	 * the thunk at base and drop the now-wiped patch sites: their host code is gone,
+	 * and stale entries could mis-decode a recompiled site or exhaust MMIO_SITE_MAX.
+	 * emit_mmio_thunk self-brackets begin/end_write; flush is never called inside an
+	 * open write region. */
+	if (jit_cache_base) {
+		n_mmio_sites = 0;
+		emit_mmio_thunk();
+	}
+#endif
 }
 
 void ppc_jit_aarch64_invalidate_pc(uint32_t pc)

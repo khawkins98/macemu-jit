@@ -40,4 +40,13 @@ extern bool MachineProfileIsNewWorld(void);
 // true iff the variable is set, non-empty, and not "0".
 extern bool MachineEnvFlag(const char *name);
 
+// True when the MMIO bus + device models are live: the newworld profile, or the
+// named third config "paravirtual + bus + devices - serial-skips" (SS_MMIO_BUS=1).
+// MACHINE-LAYER-PLAN.md M1 row, consumer (a).
+extern bool MachineUsesMMIOBus(void);
+
+// Pure decision function for the above (unit-tested standalone; no emulator deps).
+// env_mmio_bus is the value of SS_MMIO_BUS (may be NULL).
+extern bool MachineUsesMMIOBusParse(MachineProfile p, const char *env_mmio_bus);
+
 #endif // MACHINE_PROFILE_H

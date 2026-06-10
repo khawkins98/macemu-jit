@@ -27,6 +27,7 @@
 #include "rom_patches.h"
 #include "macos_util.h"
 #include "machine_profile.h"
+#include "mmio_bus.h"
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -927,6 +928,21 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 
 	const uintptr addr = (uintptr)sigsegv_get_fault_address(sip);
 
+	// Machine Layer M1: MMIO bus dispatch (MACHINE-LAYER-PLAN.md section 2b, JIT
+	// path). Must run BEFORE any legacy skip (and before the ROM-write check
+	// below) so no device-space access is silently eaten. Inactive on the
+	// paravirtual default (predicted-untaken branch).
+	if (mmio_bus_active) {
+		uint32 gaddr = (uint32)((uintptr)addr - VMBaseDiff);   // host -> guest
+		if (MMIOBusInRange(gaddr)) {
+			void *ts = sigsegv_get_thread_state(sip);
+			if (ts && MMIOMachFaultDispatch(gaddr, ts))
+				return SIGSEGV_RETURN_STATE_MODIFIED;
+			fprintf(stderr, "[MMIO] FATAL: in-range fault not serviced (gaddr=0x%08x)\n", gaddr);
+			return SIGSEGV_RETURN_FAILURE;
+		}
+	}
+
 #if HAVE_SIGSEGV_SKIP_INSTRUCTION
 	// Ignore writes to ROM
 	if ((addr - (uintptr)ROMBaseHost) < ROM_SIZE)
@@ -941,10 +957,10 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	if (mac_fault) {
 
 		// Legacy PC-keyed skip hacks (installer probes, serial-driver device
-		// probes). PARAVIRTUAL ONLY: on the newworld fidelity profile these
-		// would silently eat MMIO accesses the bus must see
-		// (MACHINE-LAYER-PLAN.md section 2b).
-		if (!MachineProfileIsNewWorld()) {
+		// probes). PARAVIRTUAL ONLY: on the newworld fidelity profile and the
+		// SS_MMIO_BUS=1 named third config these would silently eat MMIO
+		// accesses the bus must see (MACHINE-LAYER-PLAN.md section 2b).
+		if (!MachineUsesMMIOBus()) {
 
 			// "VM settings" during MacOS 8 installation
 			if (pc == ROMBase + 0x488160 && cpu->gpr(20) == 0xf8000000)
@@ -976,9 +992,10 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
 
 		// Ignore all other faults, if requested. PARAVIRTUAL ONLY: on the
-		// newworld profile an unexpected fault must abort loudly, not be
-		// silently skipped (MACHINE-LAYER-PLAN.md section 2b / section 6).
-		if (!MachineProfileIsNewWorld() && PrefsFindBool("ignoresegv"))
+		// newworld profile and the SS_MMIO_BUS=1 named third config an
+		// unexpected fault must abort loudly, not be silently skipped
+		// (MACHINE-LAYER-PLAN.md section 2b / section 6).
+		if (!MachineUsesMMIOBus() && PrefsFindBool("ignoresegv"))
 			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
 	}
 #else
@@ -988,6 +1005,13 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	fprintf(stderr, "SIGSEGV\n");
 	fprintf(stderr, "  pc %p\n", sigsegv_get_fault_instruction_address(sip));
 	fprintf(stderr, "  ea %p\n", sigsegv_get_fault_address(sip));
+	// Machine Layer M1 acceptance instrumentation (Task 12): the atexit MMIO
+	// stats dump is skipped when the diagnostic boot dies on a signal, so emit
+	// the bus telemetry here, before the heavier register/disasm/trace dumps
+	// that can themselves re-fault. The fault PC is a normal guest PC (not a
+	// bus dispatch), so no device lock is held — reading the counters is safe.
+	if (MachineUsesMMIOBus())
+		MMIOBusDumpStats(stderr);
 	dump_registers();
 	dump_log();
 	dump_disassembly(pc, 8, 8);
@@ -1456,22 +1480,26 @@ void init_emul_ppc(void)
 		// Non-null: check_work does BAT3-setup, reads RR0 byte 2, checks
 		// bit 0 ("Rx char available"). If set, reads data byte 6.
 		//
-		// WARNING: setting byte 2 bit 0 = 1 causes the nanokernel's idle/yield
-		// primitive (0x503272e0 → idle loop at 0x5032751c) to fall through to
-		// the character-processing path (0x50327540 → Thud debug console),
-		// endlessly consuming phantom characters. Setting byte 2 = 0 with
-		// a non-null base causes check_work's timeout loop (0x50326548) to
-		// self-modify scc[2], creating phantom "char available" state.
-		// Setting the base to 0 is safest — check_work returns -1 immediately.
-		//
 		// The register access pattern (alternating reg#/data writes at
 		// offsets 2 and 6) matches a Zilog SCC (8530), not a VIA 6522.
-		// Leave [KDP-0x900] = 0 (no SCC hardware). check_work returns -1
-		// immediately when the SCC base is null — no BAT setup, no polling,
-		// no risk of the nanokernel's own SCC register writes creating
-		// phantom "char available" state on fake memory.
-		WriteMacInt32(kdp - 0x900, 0);
-		fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0 (no SCC — check_work returns -1)\n");
+		//
+		// M1: point check_work at the bus's SCC region (0xF3012000). The SCC 8530
+		// model (machine/dev_scc8530.cpp) answers RR0 honestly — bit0 ("Rx char
+		// available") is always 0 because no Rx source is connected in M1, so the
+		// old M0 phantom-character hazards no longer apply: the nanokernel's idle/
+		// yield primitive (0x503272e0) never falls through to the Thud debug console
+		// (0x50327540), and check_work's timeout loop (0x50326548) sees a stable
+		// "no character" state. The byte writes the nanokernel makes during SCC init
+		// now Mach-fault into the model instead of corrupting fake memory
+		// (SPIKE-S3 §2: lbz +2 = RR0, lbz +6 = data, full WR init at 0x50326980).
+		// SS_NW_NO_SCC=1 restores the M0 behavior (base 0 → check_work returns -1).
+		if (!MachineEnvFlag("SS_NW_NO_SCC")) {
+			WriteMacInt32(kdp - 0x900, 0xF3012000);
+			fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0xF3012000 (SCC via MMIO bus)\n");
+		} else {
+			WriteMacInt32(kdp - 0x900, 0);
+			fprintf(stderr, "[NW-TRAMP] [KDP-0x900]=0 (no SCC — check_work returns -1)\n");
+		}
 		fprintf(stderr, "[NW-TRAMP] dispatch: +0x5a0(ctx)=%08x, +0x5a4(code_base)=%08x, "
 		        "entry=%08x\n",
 		        kdp, emul_code_base, emul_code_base + 0x26e8);

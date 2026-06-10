@@ -15,6 +15,7 @@
 #endif
 
 static MachineProfile g_profile = MACHINE_PARAVIRTUAL;
+static bool g_uses_mmio_bus = false;
 
 static bool parse_one(const char *s, MachineProfile *out)
 {
@@ -62,6 +63,14 @@ bool MachineEnvFlag(const char *name)
 	return v != NULL && *v != '\0' && strcmp(v, "0") != 0;
 }
 
+bool MachineUsesMMIOBusParse(MachineProfile p, const char *env_mmio_bus)
+{
+	return p == MACHINE_NEWWORLD ||
+	       (env_mmio_bus && *env_mmio_bus != '\0' && strcmp(env_mmio_bus, "0") != 0);
+}
+
+bool MachineUsesMMIOBus(void) { return g_uses_mmio_bus; }
+
 #ifndef MACHINE_PROFILE_STANDALONE_TEST
 void MachineProfileInit(void)
 {
@@ -72,8 +81,10 @@ void MachineProfileInit(void)
 	                                &warning);
 	if (warning)
 		fprintf(stderr, "[MACHINE] WARNING: %s\n", warning);
-	fprintf(stderr, "[MACHINE] profile=%s\n",
-	        g_profile == MACHINE_NEWWORLD ? "newworld" : "paravirtual");
+	g_uses_mmio_bus = MachineUsesMMIOBusParse(g_profile, getenv("SS_MMIO_BUS"));
+	fprintf(stderr, "[MACHINE] profile=%s mmio_bus=%s\n",
+	        g_profile == MACHINE_NEWWORLD ? "newworld" : "paravirtual",
+	        g_uses_mmio_bus ? "yes" : "no");
 }
 #endif
 

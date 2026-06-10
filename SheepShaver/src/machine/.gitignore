@@ -1,2 +1,12 @@
 test_machine_profile
 test_machine_profile.dSYM/
+test_mmio_bus
+test_mmio_bus.dSYM/
+test_dev_scc8530
+test_dev_scc8530.dSYM/
+test_dev_via6522
+test_dev_via6522.dSYM/
+test_a64_mmio_decode
+test_a64_mmio_decode.dSYM/
+test_mmio_machfault
+test_mmio_machfault.dSYM/

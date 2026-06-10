@@ -1,0 +1,3 @@
+[JIT 9.80s]   blocks=600M pc=5031040c
+[BOOT] idle frontApp='Finder' modal=0 ticks=812 (13.5s)
+[HB 14s] blocks=620M (1.2M/s) comp=210000

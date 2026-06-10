@@ -11,6 +11,67 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-10
 
+### [SheepShaver] Machine Layer M1: MMIO bus + SCC 8530 + VIA timer/IFR surface + JIT backpatch
+
+- **MMIO bus core** (`7fa756c0`, `e369405a`) — region registry with trapped-MMIO and
+  mapped-aperture region kinds; locked dispatch; per-region fault-rate telemetry + idle-detection
+  hook; `SS_MMIO_BUS=1` named third config (paravirtual + bus + devices − serial-skips);
+  PROT_NONE MacIO reservation at `0xF3000000–0xF3080000`; `SS_JIT_VERIFY` hard-incompatible with
+  the bus (device reads are side-effecting — never double-execute).
+- **AArch64 MMIO access decoder** (`da1a59c4`) — standalone-tested pure module; decodes the
+  exact JIT-emitted `LDR/STR Wt, [RMEMBASE, Xm, UXTW]` + `REV`/`REV16` forms; the JIT
+  memory-emitters are the decoder's contract; unmapped undecodable faults abort loudly, no silent
+  zero-reads or blind `pc += 4`.
+- **Mach fault path** (`bc3029d3`) — S2 productionized: decode JIT accesses → bus dispatch →
+  AArch64 thread-state writeback; adds `SIGSEGV_RETURN_STATE_MODIFIED` return code + lazy
+  thread-state fetch to `sigsegv.cpp`; `[KDP-0x900]` set to `0xF3012000` (real SCC base) on
+  the newworld profile (`sheepshaver_glue.cpp`) — `SS_NW_NO_SCC` env escape preserved.
+- **SCC 8530 model** (`4f2ba41f`) — legacy `+2/+6` port layout, WR-pointer state machine,
+  RR0/RR1 status bits; SPIKE-S3 conformance write-vectors pass. **`scc_init` ROM patch retired
+  on newworld profile** (`0f2e83f2`): guest SCC init now reaches the model; profile check at
+  the patch site guards the paravirtual path.
+- **VIA 6522 timer/IFR surface** (`44529d82`) — lazy T1/T2, IFR/IER register decode; Cuda =
+  loud stub (state latched, no stdio on fault path per §2g).
+- **JIT backpatch** (`ab1d008c`) — generic thunk emitted at JIT-init; strong symbol overrides
+  weak stubs so the emulator build never links the no-op fallback; verified AArch64 encodings
+  (MOV/BL/NZCV save-restore); thunk re-emitted on JIT cache flush; hot MMIO fault sites become
+  direct bus calls — THUNK-SELFTEST PASS.
+- **Interpreter range check + host-accessor guards** (`2694c1e6`) — `vm.hpp` MMIO dispatch is
+  branch-gated per profile (paravirtual interpreter path pays zero); `Mac2HostAddr` aborts via
+  `mmio_mac2host_abort` on device-range addresses; `SS_PROBE_PC` / `SS_JIT_WATCH_ADDR` refuse
+  device ranges loudly; interpreter bench delta indistinguishable from environmental noise (the
+  paravirtual check is a single predicted-untaken branch; medians 22.44 s → 23.41 s on a loaded
+  machine with min-run delta −1.9% — within measurement noise).
+- **Minimal DEC tick** (`43f61082`) — synthetic decrementer default-on for newworld profile so
+  `check_work`'s timeout loop has a ticking DEC; full clock/scheduler deferred to M2.
+- **Conformance audit** (`0a3007a9`) — QEMU `escc.c` / `mos6522.c` and DingusPPC
+  `escc.cpp` / `viacuda.cpp` checked against the M1 scope fence; zero model fixes warranted;
+  9 note-level deltas (N1–N9) documented in `docs/planning/machine/M1-DEVICE-CONFORMANCE.md`.
+- **rom-harness link fix** (`fca3b259`) — stub `ss_stub_trace_dump` for standalone link; fixes
+  pre-existing break from `127d54d8`; rom-harness `a64`/`op` deltas remain +0.000.
+- **Crash-path MMIO stats dump** (`e7db6336`) — the JIT SIGSEGV handler dumps per-region MMIO
+  counters on crash, so a boot that dies before clean shutdown still yields device-traffic
+  evidence (used by the acceptance run below).
+- **e2e log-fixture fix** (`686a4771`) — e2e test fixtures were silently swallowed by the
+  `*.log` gitignore pattern, breaking the offline unit suite on fresh clones; fixtures
+  un-ignored, offline suite now 122/122.
+- **Gates:** `make test-jit` 350/350 score=100 throughout; machine unit suite 6 binaries
+  (28/19/18/64/21 checks + profile test) ALL PASS; THUNK-SELFTEST PASS (through the real
+  patch write path).
+- **Acceptance (Task 12): PARTIAL.** Validated: bus activates on `machine newworld`;
+  `[KDP-0x900]` wiring correct per-run (0 vs `0xF3012000`); `[M1] scc_init ROM patch retired`
+  fires; no undecodable-access or macio-stub aborts; no regression vs baseline; paravirtual
+  `make e2e` smoke **PASS** (boot → Finder → clean shutdown, exit 0, zero `[MMIO]` lines).
+  **Blocked:** consumer (b)'s end-to-end "`check_work` polls the real SCC without a fault
+  storm" could NOT be exercised — the 9.0.1 diagnostic boot crashes at the pre-existing M0
+  ceiling (guest pc=`0x503123fc`, ea=`0xffffffff`, nanokernel page-descriptor build loop)
+  before the kernel idle phase, identically with SCC enabled and disabled (SCC/VIA region
+  counters zero on both runs). The fault path + backpatch + thunk ARE validated by unit
+  tests (21-check machfault dispatch; THUNK-SELFTEST); only the live boot exercise is
+  missing — carried forward as the first work item when the fidelity-profile boot resumes
+  (M3/M5 territory, HANDOFF §2.8 obstacle map). Logs: `/tmp/m1-baseline.log`,
+  `/tmp/m1-accept.log`, `/tmp/m1-e2e.log`.
+
 ### [SheepShaver] Machine Layer M0: pref-selected machine profile (paravirtual / newworld)
 
 - **`machine` pref + profile module** — new `machine` pref (`paravirtual` default /

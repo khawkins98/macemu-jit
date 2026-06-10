@@ -87,6 +87,11 @@ extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val) {
 	siglongjmp(jit_guard_jmp, 1);
 }
 
+/* Stub for ss_stub_trace_dump — defined in ppc-execute.cpp (introduced in 127d54d8),
+ * which the standalone rom-harness does not link.  Called from ppc_jit_aarch64_exit()
+ * to flush supervisor-stub pressure counters; harmless no-op here. */
+extern "C" void ss_stub_trace_dump(void) {}
+
 /* ---------- PPC instruction decoding helpers ---------- */
 
 static inline uint32_t read_be32(const uint8_t *p) {

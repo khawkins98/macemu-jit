@@ -69,7 +69,18 @@ static inline void WriteMacInt32(uint32 addr, uint32 v) {vm_write_memory_4(addr,
 static inline uint64 ReadMacInt64(uint32 addr) {return vm_read_memory_8(addr);}
 static inline void WriteMacInt64(uint32 addr, uint64 v) {vm_write_memory_8(addr, v);}
 static inline uint32 Host2MacAddr(uint8 *addr) {return vm_do_get_virtual_address(addr);}
-static inline uint8 *Mac2HostAddr(uint32 addr) {return vm_do_get_real_address(addr);}
+static inline uint8 *Mac2HostAddr(uint32 addr) {
+	// Machine Layer M1 (MACHINE-LAYER-PLAN §2b host-accessor path): raw host
+	// pointers into trapped device space are a contract violation - fail at the
+	// source, not at a later undecodable compiler-generated fault. Out-of-line
+	// abort helper (mmio_bus.cpp) keeps stdio/stdlib out of this header.
+	extern bool mmio_bus_active; extern uint32 mmio_bus_lo, mmio_bus_hi;
+	extern void mmio_mac2host_abort(uint32 addr);
+	if (__builtin_expect(mmio_bus_active, 0)
+	    && addr - mmio_bus_lo < mmio_bus_hi - mmio_bus_lo)
+		mmio_mac2host_abort(addr);
+	return vm_do_get_real_address(addr);
+}
 static inline void *Mac_memset(uint32 addr, int c, size_t n) {return vm_memset(addr, c, n);}
 static inline void *Mac2Host_memcpy(void *dest, uint32 src, size_t n) {return vm_memcpy(dest, src, n);}
 static inline void *Host2Mac_memcpy(uint32 dest, const void *src, size_t n) {return vm_memcpy(dest, src, n);}

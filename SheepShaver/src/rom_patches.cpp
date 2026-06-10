@@ -1694,6 +1694,16 @@ static bool patch_nanokernel(void)
 	base = find_rom_data(0x310000, 0x314000, mdec_dat, sizeof(mdec_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
 	if (base) {
+	if (MachineProfileIsNewWorld()) {
+		// M2 (ROM-PATCH-AUDIT: mdec_dat RETIRE@M2): the virtual clock honors
+		// mtspr/mfspr DEC, so the nanokernel's decrementer programming must run
+		// and reach the clock - the patch would make the M2 clock dead code.
+		// Paravirtual keeps the patch. NOTE: this pattern exists only in
+		// 1.1/OldWorld NKs (ROM ~0x312c24); 9.0.x parcels ROMs never match
+		// (base==0 -> the SKIP note below) - the gate is live only for
+		// 1.1-ROM newworld configs.
+		fprintf(stderr, "[M2] mdec nanokernel patch retired (newworld profile): guest mtdec/mfdec reach the virtual clock\n");
+	} else {
 	D(bug("mdec %08lx\n", base));
 	lp = (uint32 *)(ROMBaseHost + base);		// Don't modify DEC
 	lp[0] = htonl(0x3be00000);					// li	r31,0
@@ -1704,7 +1714,8 @@ static bool patch_nanokernel(void)
 	lp[3] = htonl(0x39000040);					// li	r8,0x40
 	lp[4] = htonl(0x990600e4);					// stb	r8,0xe4(r6)
 #endif
-	} else fprintf(stderr, "[ROMPATCH] SKIP mdec (decrementer neutralize — absent in 9.0.4; boot may need this)\n");
+	}
+	} else fprintf(stderr, "[ROMPATCH] SKIP mdec (decrementer neutralize — absent in 9.0.x parcels ROMs; pattern is OldWorld/1.1-NK)\n");
 
 	static const uint8 restore_fpu_caller_dat[] = {0x81, 0x06, 0x00, 0xf4, 0x81, 0x46, 0x00, 0xfc, 0x7d, 0x09, 0x03, 0xa6, 0x40};
 	base = find_rom_data(0x310000, 0x314000, restore_fpu_caller_dat, sizeof(restore_fpu_caller_dat));

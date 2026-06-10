@@ -28,6 +28,7 @@
 #include "macos_util.h"
 #include "machine_profile.h"
 #include "mmio_bus.h"
+#include "virt_clock.h"
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -1031,6 +1032,11 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// bus dispatch), so no device lock is held — reading the counters is safe.
 	if (MachineUsesMMIOBus())
 		MMIOBusDumpStats(stderr);
+	// Machine Layer M2 acceptance instrumentation (Task 8): same reasoning for
+	// the virtual-clock telemetry — the [VCLK] atexit dump never runs on the
+	// signal-death path, and the seam DoD asserts mtspr_dec/mfspr_dec counts.
+	if (VirtClockReady(&g_virt_clock))
+		VirtClockDumpStats(&g_virt_clock, stderr);
 	dump_registers();
 	dump_log();
 	dump_disassembly(pc, 8, 8);

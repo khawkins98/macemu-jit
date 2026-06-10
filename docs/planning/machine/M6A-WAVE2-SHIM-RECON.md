@@ -284,3 +284,24 @@ dividend), #5 (first EMUL_OP port).
    deferred EE pending — relevant once shims let the boot reach interrupt-driven stages.
 7. Capstone M68K mis-aligns on inline `bra.l`-thunk data; all excerpts above were
    re-verified by hand at the byte level where it mattered (aa10 entry, ab68, afb4, ad7c).
+
+---
+
+## Wave 2 night-run results (2026-06-11, commits 4c978a50..HEAD)
+
+Executed queue: io_poll retirement (#5-adjacent, 4c978a50) -> 'Hnfo' + vector stubs (#1+#2,
+2f71ac2a) -> run_diags a6-clobber NOP (#3) + the MacIO absent-device fence policy (PENDING
+RATIFICATION) -> backpatch-thunk non-MMIO fallback (M1 debt) -> via_init/time_via retirement
+(#4) + the VIA read histogram. Plus M6a rung 1 (r1-independent UserModeMSR): **the first
+EE-enabled DEC delivery on the boot path fired and the NK round-trip RESUMED the guest**
+(srr1=0xd032 through the real machinery).
+
+Boot-frontier ladder crossed tonight: console-printer landing -> machine-detect F-line ->
+BootGlobs a6 clobber -> IDE probe (absent-device) -> backpatch non-MMIO abort -> the VIA
+ORB poll. **Final frontier: the 68k boot polls the Cuda TREQ handshake (histogram:
+ORB=18338, SR=1) against the M1 loud stub, gives up, and parks in a non-device spin
+(comp=841, jDR climbing, MMIO counters frozen).** The audit's adb_init_dat row and the
+donor study's §7.2 predicted precisely this: **Cuda is now the named, live, on-critical-path
+consumer — M3b (Cuda protocol + minimal ADB stub + OpenPIC) is the next milestone**, with
+the M6a remaining items (the post-Cuda spin diagnosis, ongoing-entry rung 2 polish, shim
+queue continuation) interleaved as its acceptance reveals them.

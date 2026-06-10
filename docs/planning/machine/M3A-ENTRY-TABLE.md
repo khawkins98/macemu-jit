@@ -47,6 +47,62 @@
    0xF3012000 (Wave-0 §8). MSR observed 0xf072 at the wall (EE=1); the spin's `mtmsr`
    writes are DR-toggles preserving EE — outcome-(c) (EE-masked) remains low-probability.
 
+## Task 7 acceptance results (2026-06-10)
+
+### The first real PPC exception ever delivered
+
+```
+[EXC] DEC delivered #1: restart=50429b40 srr1=0000f072 msr=00001040 -> entry=50412b1c
+```
+
+The KDP shim satisfied the handler ABI; the handler ran natively, reprogrammed DEC itself
+(`mtspr_dec 3->4`), and exited via its r7-flag `blr` path as designed. Delivery at
+`entry=0x50412b1c` matches the Task 0 probe-verified interrupt_entry (KDP-SHIM mode, above).
+
+### Boot-A root cause and fix (commit ab8e5ac6)
+
+The cold MSR fiction `0xf072` has `EE=1` from instruction zero. The first DEC expiry
+therefore delivered into NK cold-init, whose state was: all registers zero, LR=0. The
+handler ran correctly (shim ABI satisfied), then exited via the r7-flag `blr` path with
+LR=0 → jumped to address 0 → `ignoreillegal` zero-page march → SIGSEGV at the 0x100000
+mapping edge.
+
+Architecturally, reset MSR has EE=0; the OS enables interrupts when ready. Fix: the
+newworld trampoline now seeds MSR=0x7072 (the fiction minus EE bit). Verified live:
+heartbeat shows `exc=0/1/0` (delivered=0, deferred_ee=1, deferred_depth=0) — the
+cold-init expiry defers correctly, boot reaches the console spin intact.
+
+### Acceptance reinterpretation — both delivery directions verified
+
+The post-fix boot frontier is the NK **Thud debug console** (SPIKE-S3 §2.5), whose
+**designed wake is a serial character, not a timer**. EE stays honestly masked at the
+console prompt. The same behavior occurs with and without `SS_ROM_SKIP_JUMP68K`; on a
+diskless, System-less diagnostic boot this is plausibly the NK's designed end state.
+
+**Carry-forward (not failure):** M3a verified both directions of the delivery machinery —
+delivery when EE permits, and deferral (with correct re-raise) when EE is masked.
+"Idle loop wakes via real delivery" in the M3 row sense is gated on the boot proceeding
+past the console (M6 PPC→68k handoff + M3b external-source wiring). Recorded explicitly
+as a carry-forward, not a regression.
+
+**Planned debug knob dropped:** `SS_EXC_FORCE` (deliver once ignoring EE) was in the plan
+but never implemented — the deferral evidence (exc=0/1/0 telemetry) came for free from the
+heartbeat, making the knob moot. Noted as dropped.
+
+### End-to-end machine-layer demonstration (commit a2dd1ff8)
+
+`SS_SCC_RX_INJECT=25:0D` (inject one CR at T+25s) fed the console its designed wake signal.
+
+Evidence (two consecutive two-heartbeat windows, same boot):
+- **Pre-injection:** JIT compile counter frozen at 781 blocks (two heartbeats identical).
+- **Post-injection:** compile counter 781 → 791 (two heartbeats, 10 new code blocks compiled
+  and executed in direct response).
+- Console processed the byte and returned to its prompt-wait loop.
+
+This is an airtight A/B within one boot: M2 scheduler → M1 bus/backpatch → SCC Rx →
+`check_work` → console. Every machine-layer milestone composing in one observable event.
+M1's carried-forward consumer-(b) Rx-path coverage is closed.
+
 ## Probe recipes used (for reproduction)
 
 ```bash

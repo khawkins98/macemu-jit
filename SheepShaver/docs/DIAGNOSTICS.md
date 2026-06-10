@@ -251,3 +251,93 @@ lldb -b -p $(pgrep -x SheepShaver) \
 
 Attach **at most once per run** and detach immediately — repeated lldb attach/detach can defer
 the 60 Hz VBL timer and hang early boot (see the lldb/VBL caveat in `CLAUDE.md` / `LEARNINGS.md`).
+
+## Machine Layer M3a — exception core + DEC delivery diagnostics
+
+### `[EXC]` heartbeat field
+
+M3a adds a compact exception counter to the periodic `[HB]` heartbeat (the `exc=…` suffix):
+
+```
+[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0
+```
+
+The three numbers are `delivered/deferred_ee/deferred_depth` for the DEC exception class,
+accumulated since boot:
+
+| Subfield | Meaning |
+|---|---|
+| `delivered` | DEC exceptions delivered to the guest handler (KDP shim + ExcEnter applied) |
+| `deferred_ee` | Deliveries skipped because `MSR[EE]=0` at the poll point (latch held; re-raised at EE 0→1 edges) |
+| `deferred_depth` | Deliveries skipped because `execute_depth > 1` (inside a nested execute context; re-raised on return) |
+
+On the paravirtual profile the suffix is omitted (`exc=NULL`). Telemetry rides the heartbeat
+rather than `atexit` because `SIGALRM` from the `perl alarm` wrapper skips `atexit` dumps.
+
+### `[EXC]` delivery and FATAL lines
+
+```
+[EXC] DEC delivered #N: restart=PPPPPPPP srr1=SSSSSSSS msr=MMMMMMMM -> entry=EEEEEEEE
+```
+Emitted to stderr on each successful delivery. Fields: `restart` = block-start PC (the
+not-yet-executed restart address stored in SRR0); `srr1` = composed SRR1 (msr & 0x0000FFFF);
+`msr` = new guest MSR after the exception-entry transform; `entry` = guest handler PC.
+
+```
+[EXC] FATAL: DEC entry unresolved (SS_EXC_ENTRY not set); halting
+```
+Emitted and aborted if the entry table's interrupt_entry is `EXC_PC_UNRESOLVED` when a
+delivery is attempted. Use `SS_EXC_ENTRY` to override without a rebuild.
+
+```
+[EXC] FATAL: sc entry unresolved — abort; srr0=PPPPPPPP lr=LLLLLLLL r1=RRRRRRRR
+```
+Emitted and aborted when `execute_syscall` fires on the newworld profile and
+`syscall_entry == 0` (default: no sc entry resolved in Task 0). Use `SS_EXC_SC=legacy`
+to fall back to the old behavior without a rebuild.
+
+### M3a exception-delivery env vars
+
+| Env var | Effect |
+|---|---|
+| `SS_EXC_ENTRY=0xINT[,0xSC]` | Override the interrupt entry address (and optionally the syscall entry) without rebuilding. Hex; comma-separated. Useful for iterating on entry-table values after Task 0 recon. |
+| `SS_EXC_SC=abort\|legacy` | Controls what `execute_syscall` does on newworld when `syscall_entry` is unresolved. `abort` (default): SRR-capture + context print then abort. `legacy`: fall back to the old `execute_illegal` + ad-hoc PC-bump behavior (the pre-M3a no-op path). |
+| `SS_EXC_BARE=1` | Skip the KDP register-save shim before `ExcEnter` — the bounded direct-entry experiment. Without the shim the handler prologue reads uninitialized context-block fields; use only with a handler known not to dereference r6. |
+
+**Note:** `SS_EXC_FORCE` (deliver once ignoring MSR[EE]) was planned as a debug knob but
+was **not implemented** — the heartbeat `exc=0/1/0` deferral telemetry provided equivalent
+evidence without it, so the knob was dropped as moot.
+
+### SCC Rx injection (`SS_SCC_RX_INJECT`)
+
+```
+SS_SCC_RX_INJECT=DELAY_S:HEXBYTES
+```
+
+Inject bytes into the SCC channel-A Rx FIFO after `DELAY_S` seconds of guest execution.
+`HEXBYTES` is a hex string (no `0x` prefix, no spaces; e.g. `0D` for one CR, `68656C6C6F0D`
+for "hello\r"). Maximum 16 bytes per injection (the FIFO capacity). Newworld profile +
+bus-active config only; paravirtual is ungated and silently ignored.
+
+**Demo recipe** (the M3a end-to-end demonstration from commit a2dd1ff8):
+
+```bash
+# 9.0.1 diagnostic boot; inject one CR at T+25s to wake the NK Thud console:
+SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1 SS_SCC_RX_INJECT=25:0D \
+  ./SheepShaver --config /tmp/m2accept.prefs 2>&1 | grep -E '\[HB|EXC\]'
+```
+
+Expected output (two pre-injection HBs with comp frozen at 781, two post-injection HBs
+with comp 791):
+
+```
+[HB ...] ... comp=781 | ... | exc=0/1/0
+[HB ...] ... comp=781 | ... | exc=0/1/0
+[HB ...] ... comp=791 | ... | exc=0/1/0
+[HB ...] ... comp=791 | ... | exc=0/1/0
+```
+
+The `comp` jump (781→791, 10 new blocks) is the machine-layer composition signal: M2
+scheduler → M1 bus/backpatch → SCC Rx → `check_work` → console. The `exc=0/1/0` pattern
+(deferred_ee=1) is the cold-MSR-EE fix working correctly — DEC deferred during NK cold-init,
+delivered once EE is enabled by the guest.

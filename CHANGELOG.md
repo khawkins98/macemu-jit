@@ -62,6 +62,66 @@ Post-M1 diagnostic spike (2026-06-10):
   acceptance remains blocked, now by a root-caused, documented hard wall instead of a mystery.
 - Probe logs: `/tmp/nk-probe.out`, `/tmp/nk-run3.out` (ephemeral).
 
+### [SheepShaver] Machine Layer M2: virtual clock (TB/DEC) + DingusPPC event scheduler + VIA timer state machine
+
+- **`virt_clock` module** (`5ccfb070`, `07caef23`) — guest-visible TB and DEC backed by an
+  injected host-monotonic-ns source at a fixed ratio (`tb_freq_hz = TimebaseSpeed`). DEC
+  expiry raises an exception **CONDITION only** (latch + telemetry; delivery is M3). `SS_SYNTH_DEC`
+  absorbed as a deprecated force-override (`=0` escape hatch preserved); cold state bit-identical
+  to M1's synthetic down-counter. Fused generation+armed single-CAS prevents stale scheduler
+  events from stealing a fresh arm. Standalone unit test (`test_virt_clock`) validates the
+  `check_work` DEC-deadline consumer contract (SPIKE-S3 §2.4).
+
+- **`event_sched` module — DingusPPC TimerManager port** (`27747fb9`, `07caef23`) — ported from
+  DingusPPC `core/timermanager.{cpp,h}` at commit
+  `92bb6d10549529f9f4031a85c2bc136149535bdc` (https://github.com/dingusdev/dingusppc),
+  GPL-3.0-or-later; combined work GPLv3 per `DINGUSPPC-EVALUATION-PLAN.md`. Adaptations
+  (`[SS]`-marked in source): class renamed `TimerManager` → `EventScheduler`; singleton
+  `get_instance()` removed (machine layer owns the instance); `loguru` → `fprintf(stderr,...)`
+  on `cancel_all` warning path only. Queue, ordering, re-arm, and callback semantics preserved
+  verbatim — including the donor's contract that `process_timers()` never holds the queue mutex
+  while invoking a callback (the M2 lock-order rule: device/region lock → scheduler queue only,
+  never the reverse). Standalone unit test (`test_event_sched`) exercises ordering, cyclic
+  drift-correction, cancel, and the no-lock-during-callback contract.
+
+- **VIA 6522 timer state machine + N6/N7/N8 fixes** (`96bbb53a`, `b61acf0e`) — IDLE/RUNNING/FIRED
+  state machine replaces the lazy expiry-on-read model. Resolves three M1-deferred conformance
+  notes from `M1-DEVICE-CONFORMANCE.md` §6:
+  - **N7 ✅** expiry now at N+1 ticks (`dt > cnt`; hardware-correct per 6522 datasheet)
+  - **N6 ✅** T2CL (and T1CL, added for symmetry) read now clears the respective IFR bit (6522 ack path)
+  - **N8 ✅** IFR write-1-clear clears the flag only; FIRED one-shot state prevents re-assert (matches QEMU/DingusPPC)
+  Two execution-time quality fixes also landed: count-read TOCTOU single-sample; IFR blind-clear
+  settles the deadline before broadcasting. New `MMIOBusWithRegion` bus API (runs a callback
+  under the owning region's lock — scheduler callbacks mutate device state safely; lock-order
+  rule: device → queue only).
+
+- **Integration** (`0293ba6a`, `dcf61ddd`) — clock init on both normal + harness paths (after
+  `get_system_info()` so the `cpuclock` pref is honored); scheduler pump thread (10ms cap,
+  kicked-predicate); DEC eager-expiry hook with stale-one-shot cancel; VIA re-clocked off
+  `VirtClockNowNS`. Paravirtual profile inert (no thread, no output — byte-identical).
+
+- **`mdec_dat` patch retirement on newworld** (`47a82c78`) — gate live for 1.1-ROM newworld
+  (profile check at the site, M1 `scc_init` idiom). **Honest scope:** the pattern is absent
+  in the 9.0.1 parcels ROM (byte-verified — `[ROMPATCH] SKIP mdec` in every prior 9.0.1 run);
+  the 9.0.1 fidelity boot exercises the M2 clock seams directly, not the retirement gate.
+  `9.0.1 diagnostic boot 2026-06-10: mtspr_dec=3 / mfspr_dec=0 / tb_writes=0 / dec_expiries=0; boot dies at the unchanged pre-existing 0x50326050–68 MMU/SR wall (ea=0x200a0), identical in baseline (SS_SYNTH_DEC=0) and acceptance runs — DEC is not load-bearing pre-wall on the current path; the S3 §2.4 check_work DEC consumer (0x50326520+) lies beyond the ceiling, so mfspr-DEC live coverage carries forward with it (unit-level: the check_work deadline-math simulation in test_virt_clock)`
+
+- **Interpreter seams** (`6f4930f7`) — `mfspr`/`mtspr` for DEC (SPR 22), TBL/TBU writes
+  (SPR 284/285), and `mftb` routed through `g_virt_clock` on the newworld profile; `SS_SYNTH_DEC`
+  honored as a deprecated alias (deprecation warning printed). JIT unmodified (all these forms
+  fall back to the interpreter via `return false` — verified). Paravirtual path pays nothing
+  (profile check on the slow path only).
+
+- **Known accepted M2 risks (documented in plan):** VIA `timer_arm` allocates on a
+  Mach-fault-reachable path (§2g); M3 hardening = pre-allocated slots or skip-eager-arm-on-
+  handler-thread. Crash-path `pthread_join` hazard in `sched_pump_stop` addressed in M3
+  (bounded-join).
+
+- **Gates:** machine suite 8/8 binaries (192+ checks) ALL PASS; `make test-jit` 350/350
+  batch+legacy score=100 throughout; `make test-opcodes` inert (interpreter determinism
+  unchanged); rom-harness builds clean; `make e2e-test` 122/122; positive seam check
+  (`mfspr r3,DEC` force-on returned nonzero through the real interpreter seam).
+
 ### [SheepShaver] Machine Layer M1: MMIO bus + SCC 8530 + VIA timer/IFR surface + JIT backpatch
 
 - **MMIO bus core** (`7fa756c0`, `e369405a`) — region registry with trapped-MMIO and

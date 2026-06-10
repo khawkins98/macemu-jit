@@ -810,7 +810,7 @@ disasm with `rom-inspect --dump`: `SheepShaver/rom-inspect/rom-inspect "<rom>" -
 - `SS_JIT_TRACE_RING=1` + live `lldb -b -p $(pgrep -x SheepShaver) -o "expression -- (void)ppc_jit_dump_trace_ring()" -o detach -o quit` → `/tmp/ss_jit_ring.txt` (the recent block history at a wedge). Attach **at most once per run** (lldb defers the VBL timer — see CLAUDE.md/LEARNINGS).
 - `SS_JIT_VERIFY=1` — re-runs every JIT block through the interpreter and flags register divergences =
   real codegen bugs. Slow but decisive (it cleanly ruled codegen *out* for the spinlock wall).
-- `SS_SYNTH_DEC=1` — synthetic free-running decrementer (mfspr DEC was 0). Use to rule in/out timing.
+- `SS_SYNTH_DEC=1` — synthetic free-running decrementer (mfspr DEC was 0). Use to rule in/out timing. [post-M2: deprecated alias — `SS_SYNTH_DEC` is now a force-override of the virtual clock (absorbed by M2); readings are no longer a monotone free-run once the guest writes DEC via `mtspr`.]
 - Heartbeat `[HB …]` (stderr) — block rate, `comp` (new-block count: advancing = progress, frozen =
   stuck), region split (`jNK`/`jDR`/`jRAM`), `iDR` (interp fallback). The `[ALARM]` boot-stall watchdog
   fires pre-idle on a wedge. Diag file: `/tmp/jit_diag.<ts>.<pid>.log` (HOT-PC, `pc=` samples).

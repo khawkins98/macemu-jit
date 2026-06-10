@@ -300,12 +300,14 @@ The complete list of `note`-classified deltas (out-of-fence, future M2+ relevanc
 | N3 | RR1 bits1-3 (residue code): we return 0, DingusPPC returns 0x06 | SCC §3.3, fence-excluded item 4 | Immaterial; residue code is an SDLC-mode artifact not used by consumers |
 | N4 | RR0 bit6 (TxUnderrun): we return 0, others set it | SCC fence-excluded item 3 | If a guest checks TxUnderrun during flow-control |
 | N5 | Error Reset (0x30) does not clear hypothetical latched errors | SCC §3.5, fence-excluded item 8 | M2 if Rx error injection is added |
-| N6 | T2CL read does not clear IFR.T2 | VIA §4.2, fence-excluded item 1 | If a guest uses T2CL read as the IFR-acknowledge path |
-| N7 | T2 expiry at N ticks (hardware: N+1; DingusPPC: N+3) | VIA §4.1 | Immaterial for 83ms timeout; note if sub-tick timer precision required |
-| N8 | IFR write stops timer (ours); references only clear flag | VIA §4.6, fence-excluded item 4 | Conservative behavior; can only cause under-trigger (IFR stays low longer), not over-trigger |
+| N6 | T2CL read does not clear IFR.T2 | VIA §4.2, fence-excluded item 1 | If a guest uses T2CL read as the IFR-acknowledge path | **✅ resolved in M2** — T2CL (and T1CL, added for symmetry) read now clears the respective IFR bit; T1CL-read ack added beyond the original N6 note |
+| N7 | T2 expiry at N ticks (hardware: N+1; DingusPPC: N+3) | VIA §4.1 | Immaterial for 83ms timeout; note if sub-tick timer precision required | **✅ resolved in M2** — IDLE/RUNNING/FIRED state machine uses `dt > cnt` (expiry at N+1 ticks, matching hardware spec) |
+| N8 | IFR write stops timer (ours); references only clear flag | VIA §4.6, fence-excluded item 4 | Conservative behavior; can only cause under-trigger (IFR stays low longer), not over-trigger | **✅ resolved in M2** — IFR write-1-clear now clears the flag only; timer disarming is handled by the FIRED one-shot state (re-assert impossible), matching QEMU/DingusPPC semantics |
 | N9 | Channel B stubs shared with channel A logic | SCC fence-excluded item 9 | M2+ if channel B is ever driven independently |
 
 **The models are conformant for the M1 scope and ready for integration.**
+
+**M2 postscript (2026-06-10):** VIA conformance notes N6, N7, and N8 were resolved in M2 as part of the VIA timer state-machine rework (IDLE/RUNNING/FIRED, scheduler binding). N1–N5 and N9 remain out-of-scope; no new defects were introduced.
 
 ---
 

@@ -201,6 +201,44 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_ROM_NO_904=1` | Opt out of checksum-based auto-lenient for the 9.0.4 G4 ROM. Does not affect `SS_ROM_LENIENT=1`. |
 | `SS_NW_TRAMPOLINE=1` | Enable NewWorld nanokernel trampoline path (`rom_patches.cpp`). Gates the `[NW-MIRROR]` cold-start patch at ROM+0x46e8c0 and other NW-specific trampoline code. Required for New World ROM diagnostic boots. |
 
+## Machine Layer M2 — virtual clock and event scheduler diagnostics
+
+### `[VCLK]` exit dump
+
+On clean shutdown (or atexit), the virtual clock emits one stats line to stderr:
+
+```
+[VCLK] tb_freq=25000000Hz mfspr_dec=N mtspr_dec=N tb_writes=N dec_expiries=N pending=0
+```
+
+| Field | Meaning |
+|---|---|
+| `tb_freq` | TB/DEC tick rate in Hz (reflects the `cpuclock` pref; default 25 MHz) |
+| `mfspr_dec` | Count of `mfspr DEC` reads routed through the virtual clock |
+| `mtspr_dec` | Count of `mtspr DEC` writes honoured by the virtual clock |
+| `tb_writes` | Count of `mttbl`/`mttbu` writes |
+| `dec_expiries` | Count of DEC-expiry condition latches (eager from scheduler or lazy from read-side) |
+| `pending` | 1 if the DEC condition was still latched at exit (M3 will consume this) |
+
+**Paravirtual profile note:** `SS_SYNTH_DEC=1` on the paravirtual profile keeps the profile inert (no scheduler thread starts, no pump loop runs); the `[VCLK]` exit dump is NOT emitted in that case because the clock module is not initialized. Use the newworld profile to observe `[VCLK]` output.
+
+### `[ESCHED]` pump line
+
+The scheduler pump thread emits one line per cancelled timer when `cancel_all_timers()` is called at shutdown:
+
+```
+[ESCHED] Canceling timer id:N ns:TTTTTTTTTT
+```
+
+This is a normal shutdown message (the DEC eager-expiry one-shot and the VIA cyclic timers are cancelled). If you see many such lines in non-shutdown context, it indicates unexpected queue-flush (not a normal operating state).
+
+### `SS_SYNTH_DEC` deprecation semantics (post-M2)
+
+`SS_SYNTH_DEC` is now a **deprecated force-override** of the virtual clock:
+- `SS_SYNTH_DEC=1` (or any non-zero value) on the newworld profile prints a deprecation warning and forces the pre-M2 synthetic free-running `0 - TB` counter behaviour. The virtual clock module is still initialized but the mfspr DEC path returns the legacy value instead of the real countdown. Use only as a diagnostic/escape hatch.
+- `SS_SYNTH_DEC=0` on the newworld profile explicitly disables the force-override (same as not setting it); the virtual clock runs normally.
+- **Historical note:** before M2, `SS_SYNTH_DEC=1` was the only way to get a moving DEC value. Any older recipe that sets it can be updated to remove it — the newworld profile now provides a real virtual clock unconditionally.
+
 ### Dump the trace ring from a running (or hung) process
 
 With `SS_JIT_TRACE_RING=1`, the ring can be dumped from a **live** process without crashing

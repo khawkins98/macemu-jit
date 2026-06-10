@@ -129,7 +129,7 @@ in the structure; do not assume the byte offsets transfer.
   watching what value it must hold for the helper to not fault.
 - [SPRG0-4] -> [..-0xb30] : a boolean/flag that, when nonzero, makes the spin loop recompute
   the decrementer deadline every iteration (disables the lock-timeout). This is why
-  SS_SYNTH_DEC could not break the wedge. Likely a "lock-timeout-disabled" / debug flag in
+  SS_SYNTH_DEC could not break the wedge [post-M2: deprecated alias — see MACHINE-LAYER-PLAN M2]. Likely a "lock-timeout-disabled" / debug flag in
   the secondary structure.
 
 None of these three is namable byte-exactly from /tmp/NanoKernel; they are 9.0.1-specific.

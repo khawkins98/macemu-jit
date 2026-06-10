@@ -260,7 +260,7 @@ no registers at +2/+6 (its stride is 0x200 on MacIO), and no 0x80-reset/BRG sema
 ```
 
 → `check_work`'s drain/timeout logic **requires a ticking DEC** (today DEC reads return 0
-or `SS_SYNTH_DEC`). This couples consumer (b) to the M2 virtual clock: a real SCC model at
+or `SS_SYNTH_DEC` [post-M2: deprecated alias — see MACHINE-LAYER-PLAN M2]). This couples consumer (b) to the M2 virtual clock: a real SCC model at
 `[KDP-0x900]` without a moving DEC turns this loop into a second spin site.
 
 ### 2.5 The idle-loop consumer (0x5032751c, prologue 0x503272e0)
@@ -330,7 +330,7 @@ whole 0xF3000000–0xF3020000 block is device space) — consistent with MACHINE
    code, not the observed poll — but the register *decode* must exist so a touch is visible
    telemetry, not a silent fault-skip.
 3. **DEC must tick** for consumer (b)'s drain/timeout loop (§2.4). M1 can keep `SS_SYNTH_DEC`
-   as the interim; the real fix is M2 — note the dependency explicitly in M1's DoD.
+   as the interim; the real fix is M2 — note the dependency explicitly in M1's DoD. [post-M2: `SS_SYNTH_DEC` is a deprecated alias — see MACHINE-LAYER-PLAN M2; the M2 virtual clock is the live implementation]
 4. **Retire the gpr-pattern serial-skip hacks on the fidelity/named-third config** (they
    never matched this stall anyway — wrong register, §1.6) per the plan's M1 DoD.
 

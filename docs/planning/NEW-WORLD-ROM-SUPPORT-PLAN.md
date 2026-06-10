@@ -310,7 +310,7 @@ NW trampoline (`sheepshaver_glue.cpp`, gated by `SS_NW_TRAMPOLINE`):
 
 Also patched 5 VIA/CUDA I/O poll loops (`lbz rN,2(r28); eieio; andi. rN,rN,4; beq $-0xC`)
 that spin waiting for a device-ready bit that doesn't exist in emulation (NOP the beq).
-Requires `SS_SYNTH_DEC=1` (synthesized decrementer) to pass the nanokernel's timer checks.
+Requires `SS_SYNTH_DEC=1` (synthesized decrementer) to pass the nanokernel's timer checks. [post-M2: deprecated alias — see MACHINE-LAYER-PLAN M2]
 
 **Results:** The nanokernel advanced past the idle loop into the interrupt-handling event
 loop (VIA/CUDA init sequence). Block rate dropped from ~1500M/10s (tight idle) to ~240M/10s

@@ -927,36 +927,45 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	bool mac_fault = (pc >= ROMBase && pc < (ROMBase + ROM_AREA_SIZE)) || (pc >= RAMBase && pc < (RAMBase + RAMSize)) || (pc >= DR_CACHE_BASE && pc < (DR_CACHE_BASE + DR_CACHE_SIZE));
 	if (mac_fault) {
 
-		// "VM settings" during MacOS 8 installation
-		if (pc == ROMBase + 0x488160 && cpu->gpr(20) == 0xf8000000)
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-	
-		// MacOS 8.5 installation
-		else if (pc == ROMBase + 0x488140 && cpu->gpr(16) == 0xf8000000)
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-	
-		// MacOS 8 serial drivers on startup
-		else if (pc == ROMBase + 0x48e080 && (cpu->gpr(8) == 0xf3012002 || cpu->gpr(8) == 0xf3012000))
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-	
-		// MacOS 8.1 serial drivers on startup
-		else if (pc == ROMBase + 0x48c5e0 && (cpu->gpr(20) == 0xf3012002 || cpu->gpr(20) == 0xf3012000))
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-		else if (pc == ROMBase + 0x4a10a0 && (cpu->gpr(20) == 0xf3012002 || cpu->gpr(20) == 0xf3012000))
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-	
-		// MacOS 8.6 serial drivers on startup (with DR Cache and OldWorld ROM)
-		else if ((pc - DR_CACHE_BASE) < DR_CACHE_SIZE && (cpu->gpr(16) == 0xf3012002 || cpu->gpr(16) == 0xf3012000))
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-		else if ((pc - DR_CACHE_BASE) < DR_CACHE_SIZE && (cpu->gpr(20) == 0xf3012002 || cpu->gpr(20) == 0xf3012000))
+		// Legacy PC-keyed skip hacks (installer probes, serial-driver device
+		// probes). PARAVIRTUAL ONLY: on the newworld fidelity profile these
+		// would silently eat MMIO accesses the bus must see
+		// (MACHINE-LAYER-PLAN.md section 2b).
+		if (!MachineProfileIsNewWorld()) {
+
+			// "VM settings" during MacOS 8 installation
+			if (pc == ROMBase + 0x488160 && cpu->gpr(20) == 0xf8000000)
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+
+			// MacOS 8.5 installation
+			else if (pc == ROMBase + 0x488140 && cpu->gpr(16) == 0xf8000000)
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+
+			// MacOS 8 serial drivers on startup
+			else if (pc == ROMBase + 0x48e080 && (cpu->gpr(8) == 0xf3012002 || cpu->gpr(8) == 0xf3012000))
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+
+			// MacOS 8.1 serial drivers on startup
+			else if (pc == ROMBase + 0x48c5e0 && (cpu->gpr(20) == 0xf3012002 || cpu->gpr(20) == 0xf3012000))
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+			else if (pc == ROMBase + 0x4a10a0 && (cpu->gpr(20) == 0xf3012002 || cpu->gpr(20) == 0xf3012000))
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+
+			// MacOS 8.6 serial drivers on startup (with DR Cache and OldWorld ROM)
+			else if ((pc - DR_CACHE_BASE) < DR_CACHE_SIZE && (cpu->gpr(16) == 0xf3012002 || cpu->gpr(16) == 0xf3012000))
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+			else if ((pc - DR_CACHE_BASE) < DR_CACHE_SIZE && (cpu->gpr(20) == 0xf3012002 || cpu->gpr(20) == 0xf3012000))
+				return SIGSEGV_RETURN_SKIP_INSTRUCTION;
+		}
+
+		// Ignore writes to the zero page (SheepMem; both profiles)
+		if ((uint32)(addr - SheepMem::ZeroPage()) < (uint32)SheepMem::PageSize())
 			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
 
-		// Ignore writes to the zero page
-		else if ((uint32)(addr - SheepMem::ZeroPage()) < (uint32)SheepMem::PageSize())
-			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
-
-		// Ignore all other faults, if requested
-		if (PrefsFindBool("ignoresegv"))
+		// Ignore all other faults, if requested. PARAVIRTUAL ONLY: on the
+		// newworld profile an unexpected fault must abort loudly, not be
+		// silently skipped (MACHINE-LAYER-PLAN.md section 2b / section 6).
+		if (!MachineProfileIsNewWorld() && PrefsFindBool("ignoresegv"))
 			return SIGSEGV_RETURN_SKIP_INSTRUCTION;
 	}
 #else

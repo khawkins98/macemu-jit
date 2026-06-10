@@ -2304,39 +2304,43 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 	bool mac_fault = (r->pc() >= ROMBase) && (r->pc() < (ROMBase + ROM_AREA_SIZE)) || (r->pc() >= RAMBase) && (r->pc() < (RAMBase + RAMSize)) || (r->pc() >= DR_CACHE_BASE && r->pc() < (DR_CACHE_BASE + DR_CACHE_SIZE));
 	if (mac_fault) {
 
-		// "VM settings" during MacOS 8 installation
-		if (r->pc() == ROMBase + 0x488160 && r->gpr(20) == 0xf8000000) {
-			r->pc() += 4;
-			r->gpr(8) = 0;
-			return;
-	
-		// MacOS 8.5 installation
-		} else if (r->pc() == ROMBase + 0x488140 && r->gpr(16) == 0xf8000000) {
-			r->pc() += 4;
-			r->gpr(8) = 0;
-			return;
-	
-		// MacOS 8 serial drivers on startup
-		} else if (r->pc() == ROMBase + 0x48e080 && (r->gpr(8) == 0xf3012002 || r->gpr(8) == 0xf3012000)) {
-			r->pc() += 4;
-			r->gpr(8) = 0;
-			return;
-	
-		// MacOS 8.1 serial drivers on startup
-		} else if (r->pc() == ROMBase + 0x48c5e0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
-		} else if (r->pc() == ROMBase + 0x4a10a0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
-	
-		// MacOS 8.6 serial drivers on startup (with DR Cache and OldWorld ROM)
-		} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(16) == 0xf3012002 || r->gpr(16) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
-		} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
+		// Legacy PC-keyed skip hacks - PARAVIRTUAL ONLY (see sheepshaver_glue.cpp
+		// sigsegv handler; MACHINE-LAYER-PLAN.md section 2b).
+		if (!MachineProfileIsNewWorld()) {
+			// "VM settings" during MacOS 8 installation
+			if (r->pc() == ROMBase + 0x488160 && r->gpr(20) == 0xf8000000) {
+				r->pc() += 4;
+				r->gpr(8) = 0;
+				return;
+
+			// MacOS 8.5 installation
+			} else if (r->pc() == ROMBase + 0x488140 && r->gpr(16) == 0xf8000000) {
+				r->pc() += 4;
+				r->gpr(8) = 0;
+				return;
+
+			// MacOS 8 serial drivers on startup
+			} else if (r->pc() == ROMBase + 0x48e080 && (r->gpr(8) == 0xf3012002 || r->gpr(8) == 0xf3012000)) {
+				r->pc() += 4;
+				r->gpr(8) = 0;
+				return;
+
+			// MacOS 8.1 serial drivers on startup
+			} else if (r->pc() == ROMBase + 0x48c5e0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+			} else if (r->pc() == ROMBase + 0x4a10a0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+
+			// MacOS 8.6 serial drivers on startup (with DR Cache and OldWorld ROM)
+			} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(16) == 0xf3012002 || r->gpr(16) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+			} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+			}
 		}
 
 		// Get opcode and divide into fields
@@ -2468,8 +2472,9 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 			goto rti;
 		}
 
-		// Ignore illegal memory accesses?
-		if (PrefsFindBool("ignoresegv")) {
+		// Ignore illegal memory accesses? (paravirtual only - the newworld
+		// profile must abort loudly on unexpected faults)
+		if (!MachineProfileIsNewWorld() && PrefsFindBool("ignoresegv")) {
 			if (addr_mode == MODE_U || addr_mode == MODE_UX)
 				r->gpr(ra) = addr;
 			if (transfer_type == TYPE_LOAD)

@@ -78,6 +78,10 @@ The post-fix boot frontier is the NK **Thud debug console** (SPIKE-S3 §2.5), wh
 **designed wake is a serial character, not a timer**. EE stays honestly masked at the
 console prompt. The same behavior occurs with and without `SS_ROM_SKIP_JUMP68K`; on a
 diskless, System-less diagnostic boot this is plausibly the NK's designed end state.
+**[SUPERSEDED 2026-06-10, M6A-DR-HANDOFF-ANALYSIS.md]:** the console is designed, but it is
+reached because the boot process DIED at the first 68k opcode dispatch (garbage dispatch
+base lands the opcode handler inside the console help-text printer) — not because diskless
+boots end there.
 
 **Carry-forward (not failure):** M3a verified both directions of the delivery machinery —
 delivery when EE permits, and deferral (with correct re-raise) when EE is masked.

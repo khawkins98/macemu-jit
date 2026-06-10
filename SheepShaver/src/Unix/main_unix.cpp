@@ -118,6 +118,8 @@
 #include "mmio_bus.h"
 #include "dev_scc8530.h"
 #include "dev_via6522.h"
+#include "virt_clock.h"
+#include "event_sched.h"
 #if defined(__linux__) && defined(__aarch64__)
 #include <sys/personality.h>
 #endif
@@ -1157,12 +1159,96 @@ static void mmio_stub_write(void *, uint32_t addr, unsigned size, uint64_t v)
 	        size * 8, (unsigned long long)v, addr);
 	abort();
 }
-// VIA clock: host microseconds -> VIA ticks (783360 Hz). GetTicks_usec() is the
-// emulator's existing monotonic source (timer.h / timer_unix.cpp).
+// M2: the single host time authority. GetTicks_usec() is the emulator's existing
+// monotonic source; everything (TB, DEC, VIA ticks, scheduler deadlines) derives
+// from it through the virtual clock so all guest-visible time is mutually consistent.
+static uint64_t vclk_host_now_ns(void *)
+{
+	return GetTicks_usec() * 1000ull;
+}
+// Idempotent: callable from both the harness early path and normal init.
+static void VirtClockInitHost(void)
+{
+	if (!VirtClockReady(&g_virt_clock))
+		VirtClockInit(&g_virt_clock, (uint32_t)TimebaseSpeed, vclk_host_now_ns, NULL);
+}
+
+// VIA clock: virtual-clock ns -> VIA ticks (783360 Hz). 128-bit: host-uptime-scale
+// ns * 783360 overflows uint64.
 static uint64_t mmio_via_now_ticks(void *)
 {
-	return GetTicks_usec() * VIA_CLOCK_HZ / 1000000ull;
+	return (uint64_t)((unsigned __int128)VirtClockNowNS(&g_virt_clock) * VIA_CLOCK_HZ
+	                  / 1000000000u);
 }
+
+// M2: event scheduler (MACHINE-LAYER-PLAN §2c) + its pump thread (§2g row 3:
+// "Event-scheduler callbacks - tick/timer thread"). Started only when the machine
+// layer is live (MachineUsesMMIOBus() for devices, or newworld for DEC expiry).
+static EventScheduler *g_event_sched = NULL;
+static pthread_t sched_pump_thread;
+static pthread_mutex_t sched_pump_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  sched_pump_cv  = PTHREAD_COND_INITIALIZER;
+static bool sched_pump_quit = false;     // guarded by sched_pump_mtx (rev 2 I3: not volatile-as-sync)
+static bool sched_pump_kicked = false;   // condvar predicate (rev 2 I3: lost-wakeup guard)
+static bool sched_pump_started = false;
+
+static void sched_pump_kick(void)
+{
+	pthread_mutex_lock(&sched_pump_mtx);
+	sched_pump_kicked = true;            // (rev 2 I3) a kick before the wait is never lost
+	pthread_cond_signal(&sched_pump_cv);
+	pthread_mutex_unlock(&sched_pump_mtx);
+}
+
+static void *sched_pump_main(void *)
+{
+	// (rev 2 I3) Residual latency note: a timer added between process_timers()
+	// returning and the predicate check below is caught by sched_pump_kicked; the
+	// 10ms cap additionally bounds any CLOCK_REALTIME step (NTP) distortion.
+	const uint64_t CAP_NS = 10000000ull;   // 10 ms re-check cap (idle floor)
+	for (;;) {
+		uint64_t slice = g_event_sched->process_timers();
+		if (slice == 0 || slice > CAP_NS) slice = CAP_NS;
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_nsec += (long)(slice % 1000000000ull);
+		ts.tv_sec  += (time_t)(slice / 1000000000ull) + ts.tv_nsec / 1000000000L;
+		ts.tv_nsec %= 1000000000L;
+		pthread_mutex_lock(&sched_pump_mtx);
+		if (!sched_pump_quit && !sched_pump_kicked)
+			pthread_cond_timedwait(&sched_pump_cv, &sched_pump_mtx, &ts);
+		sched_pump_kicked = false;
+		bool quit = sched_pump_quit;
+		pthread_mutex_unlock(&sched_pump_mtx);
+		if (quit) break;
+	}
+	return NULL;
+}
+
+static void sched_pump_stop(void)   // atexit: stop callbacks before the [VCLK] dump
+{
+	if (!sched_pump_started) return;
+	pthread_mutex_lock(&sched_pump_mtx);
+	sched_pump_quit = true;
+	pthread_cond_signal(&sched_pump_cv);
+	pthread_mutex_unlock(&sched_pump_mtx);
+	pthread_join(sched_pump_thread, NULL);
+}
+// (rev 2 I6) Ordering caveat: M1's [MMIO] stats atexit registers at bus bring-up,
+// i.e. AFTER this task's block -> by LIFO it dumps BEFORE the pump stops. Cosmetic
+// only (stats counters are monotonic; M2 callbacks only latch IFR bits); the
+// [VCLK] dump below IS ordered after the stop.
+
+// DEC eager-expiry hook (VirtClock on_dec_write): one-shot that latches the
+// condition. Generation-guarded inside VirtClockDECExpire - stale events no-op.
+static void vclk_dec_arm(void *, uint64_t ns_until_expiry, uint32_t gen)
+{
+	if (g_event_sched)
+		g_event_sched->add_oneshot_timer(ns_until_expiry,
+		                                 [gen]() { VirtClockDECExpire(&g_virt_clock, gen); });
+}
+
+static void vclk_dump_stats_atexit(void) { VirtClockDumpStats(&g_virt_clock, stderr); }
 // Device model instances. File scope (not block-scope statics in the bring-up
 // block below) so mmio_dump_stats_atexit can drain the VIA's latched Cuda-protocol
 // warning at exit. Behavior is otherwise identical to the prior static locals.
@@ -1202,6 +1288,7 @@ int main(int argc, char **argv)
 	if ((getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) ||
 	    (getenv("SS_TEST_HEX_FILE") && *getenv("SS_TEST_HEX_FILE"))) {
 		extern bool ss_run_opcode_test(void);
+		VirtClockInitHost();   // M2: harness path — TimebaseSpeed=0 here, fallback freq OK
 		ss_run_opcode_test();
 		return 0;
 	}
@@ -1395,6 +1482,11 @@ int main(int argc, char **argv)
 	// Get system info
 	get_system_info();
 
+	// M2: virtual clock init. Must follow get_system_info() so TimebaseSpeed is final
+	// (the cpuclock pref may override the 25 MHz default; initializing earlier would
+	// pin the clock at the fallback rate while the TB/DEC machinery uses the real rate).
+	VirtClockInitHost();
+
 	// Init system routines
 	SysInit();
 
@@ -1555,6 +1647,24 @@ int main(int argc, char **argv)
 	rom_area_mapped = true;
 	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
 
+	// M2: event scheduler + pump. Needed by the VIA timers (any bus config) and by
+	// the DEC eager-expiry (newworld). Paravirtual default: none of this starts.
+	if (MachineUsesMMIOBus() || MachineProfileIsNewWorld()) {
+		g_event_sched = new EventScheduler();
+		g_event_sched->set_time_now_cb([]() { return vclk_host_now_ns(NULL); });
+		g_event_sched->set_notify_changes_cb(sched_pump_kick);
+		g_virt_clock.on_dec_write = vclk_dec_arm;
+		g_virt_clock.cb_opaque = NULL;
+		if (pthread_create(&sched_pump_thread, NULL, sched_pump_main, NULL) != 0) {
+			fprintf(stderr, "[ESCHED] FATAL: cannot start scheduler pump thread\n");
+			QuitEmulator();
+		}
+		sched_pump_started = true;
+		atexit(vclk_dump_stats_atexit);   // registered BEFORE stop => runs AFTER it (LIFO)
+		atexit(sched_pump_stop);
+		fprintf(stderr, "[ESCHED] event scheduler pump running (cap 10ms)\n");
+	}
+
 	// Machine Layer M1: MMIO bus + device models (MACHINE-LAYER-PLAN.md §2b; CORE99 §1).
 	// Active on the newworld profile or the named third config SS_MMIO_BUS=1.
 	if (MachineUsesMMIOBus()) {
@@ -1585,6 +1695,10 @@ int main(int argc, char **argv)
 		       && MMIOBusRegister(0xF3016000, 0x2000, MMIO_TRAPPED, &via_dev);
 		if (!ok) { fprintf(stderr, "[MMIO] FATAL: region registration failed\n"); QuitEmulator(); }
 		MMIOBusActivate();
+		// M2: VIA timers hang on the event scheduler (eager IFR latch; reads stay
+		// the lazy backstop). Must be after region registration: expiry callbacks
+		// run under the region lock via MMIOBusWithRegion.
+		VIABindScheduler(&via, g_event_sched, MMIOBusWithRegion);
 		atexit(mmio_dump_stats_atexit);
 		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000, scc 0xF3012000, via 0xF3016000\n");
 

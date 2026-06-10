@@ -41,6 +41,7 @@
 #include "main.h"
 #include "prefs.h"
 #include "machine_profile.h"
+#include "virt_clock.h"
 #endif
 
 #if ENABLE_MON
@@ -1281,6 +1282,26 @@ void powerpc_cpu::execute_mfmsr(uint32 opcode)
 
 static inline uint64 get_tb_ticks(void);	// defined below; used by the synthetic decrementer
 
+/* M2 (MACHINE-LAYER-PLAN §2c): one gate for all virtual-clock SPR seams.
+ * Resolution (once): SS_SYNTH_DEC, if set, is honored as a deprecated alias
+ * (=0 forces the clock OFF on any profile - escape hatch; non-zero forces it ON,
+ * absorbing the old synthetic-DEC experiment); otherwise the newworld profile
+ * gets the clock, paravirtual stays frozen (byte-identical default). */
+static inline bool ss_vclk_active(void)
+{
+	static const int active = []() -> int {
+		const char *e = getenv("SS_SYNTH_DEC");
+		if (e) {
+			fprintf(stderr, "[VCLK] SS_SYNTH_DEC is deprecated (absorbed by the M2 "
+			        "virtual clock); honoring it as a force-%s override\n",
+			        e[0] != '0' ? "on" : "off");
+			return e[0] != '0';
+		}
+		return MachineProfileIsNewWorld() ? 1 : 0;
+	}();
+	return active != 0;
+}
+
 template< class SPR >
 void powerpc_cpu::execute_mfspr(uint32 opcode)
 {
@@ -1317,21 +1338,20 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
 		d = regs().bat[spr - powerpc_registers::SPR_IBAT0U];
 		break;
-	case 22: {	/* DEC (decrementer) — SheepShaver has no real one (host-signal timer instead) */
-		/* SS_SYNTH_DEC: synthesize a free-running down-counter at the timebase rate so guest TIMED
-		 * spin-waits make progress (delta of two DEC reads advances). Default returns 0 like any
-		 * other stubbed SPR — which makes such waits never elapse. Surfaced by the parcels (9.0.1)
-		 * nanokernel init wait at ROM 0x3127a8 (mfspr DEC; subf.; bgt) that hangs with DEC frozen
-		 * at 0. Env-gated experiment; off by default so 1.1/8.6/9.0.4 paths are unchanged. */
-		/* M1 (MACHINE-LAYER-PLAN M1 row): the newworld profile gets the synthetic
-		 * down-counter by default - check_work's drain/timeout loop (S3 §2.4) needs a
-		 * moving DEC. SS_SYNTH_DEC still overrides both ways (=0 forces frozen).
-		 * mtspr DEC stays dropped; the real clock is M2. */
-		static const int synth = getenv("SS_SYNTH_DEC")
-			? (getenv("SS_SYNTH_DEC")[0] != '0')
-			: (MachineProfileIsNewWorld() ? 1 : 0);
-		if (synth) {
-			d = (uint32)(0u - (uint32)get_tb_ticks());	// decreases over time at the TB rate
+	case 22: {	/* DEC (decrementer) — M2 virtual clock (MACHINE-LAYER-PLAN §2c) */
+		/* Newworld (or SS_SYNTH_DEC force-on): a real down-counter honoring mtspr,
+		 * with the expiry condition latched (delivery is M3). Cold state (no mtspr
+		 * yet) is 0 - TB, bit-identical to M1's synthetic counter. VirtClockReady
+		 * guards the SS_TEST_HEX-style early paths (clock is init'd there too, but
+		 * belt-and-braces: an unready clock reads as the legacy synthetic value).
+		 *
+		 * History: SS_SYNTH_DEC first surfaced this need (parcels 9.0.1 nanokernel
+		 * spin-wait at ROM 0x3127a8). M1 made it newworld-default. M2 absorbs it
+		 * into the virtual clock — SS_SYNTH_DEC is now a deprecated force override. */
+		if (ss_vclk_active()) {
+			d = VirtClockReady(&g_virt_clock)
+			    ? VirtClockReadDEC(&g_virt_clock)
+			    : (uint32)(0u - (uint32)get_tb_ticks());
 			break;
 		}
 		d = 0;
@@ -1383,7 +1403,28 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
 		regs().bat[spr - powerpc_registers::SPR_IBAT0U] = s;
 		break;
-	default:  /* SheepShaver drops all other SPR writes (DEC, etc.) — stub */
+	case 22:	/* DEC — M2: honored on the virtual clock (was: dropped) */
+		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockWriteDEC(&g_virt_clock, s);
+			break;
+		}
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
+	case 284:	/* TBL write */
+		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockWriteTBL(&g_virt_clock, s);
+			break;
+		}
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
+	case 285:	/* TBU write */
+		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockWriteTBU(&g_virt_clock, s);
+			break;
+		}
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
+	default:  /* SheepShaver drops all other SPR writes — stub */
 		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
 		break;
 #endif
@@ -1434,8 +1475,14 @@ void powerpc_cpu::execute_mftbr(uint32 opcode)
 	uint32 tbr = TBR::get(this, opcode);
 	uint32 d = 0;
 	switch (tbr) {
-	case 268: d = (uint32)get_tb_ticks(); break;
-	case 269: d = (get_tb_ticks() >> 32); break;
+	case 268:
+		d = (uint32)((ss_vclk_active() && VirtClockReady(&g_virt_clock))
+		             ? VirtClockTB(&g_virt_clock) : get_tb_ticks());
+		break;
+	case 269:
+		d = (uint32)(((ss_vclk_active() && VirtClockReady(&g_virt_clock))
+		             ? VirtClockTB(&g_virt_clock) : get_tb_ticks()) >> 32);
+		break;
 	default: execute_illegal(opcode);
 	}
 	operand_RD::set(this, opcode, d);

@@ -29,4 +29,15 @@ extern bool A64IsPairedSwap(uint32_t insn, unsigned size_log2, unsigned rt);
 // Byte-swap an architectural value to/from raw memory order for a given width.
 extern uint64_t A64SwapForWidth(uint64_t v, unsigned size_log2);
 
+// Replay a backpatched MMIO site's ORIGINAL access raw against guest memory
+// (used when the thunk's EA is NOT device space — backpatched code locations are
+// shared by guest paths with different base registers). frame[0..28] = x0..x28
+// as banked by the thunk; guest EA = (uint32)frame[acc->rm]; host_base is the
+// host address of guest 0 (caller passes its addressing-model base — kept as a
+// parameter so this stays pure and standalone-testable, no NATMEM knowledge here).
+// Semantics are byte-identical to the patched LDR/STR (see .cpp for the
+// endianness reasoning).
+extern void mmio_thunk_raw_access(uint64_t *frame, const A64MemAccess *acc,
+                                  uint8_t *host_base);
+
 #endif

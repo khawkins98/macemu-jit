@@ -60,6 +60,77 @@ int main()
 	CHECK(A64SwapForWidth(0x12345678u, 2) == 0x78563412u);
 	CHECK(A64SwapForWidth(0x0102030405060708ull, 3) == 0x0807060504030201ull);
 
+	// ---- mmio_thunk_raw_access: non-MMIO-EA fallback semantics ----
+	// Pins the endianness double-negative: loads deliver ARCHITECTURAL (the
+	// paired REV was NOPed); stores receive RAW post-REV register images and
+	// must land guest memory byte-identical to the original STR (LE register
+	// byte order == architectural value big-endian in memory).
+	{
+		uint64_t frame[32];
+		uint8_t mem[64];                      // fake guest memory; host_base = mem
+		const unsigned RM = 0, RT = 5;        // EA reg, data reg
+		A64MemAccess ra;
+		ra.rn = 19; ra.rm = RM;
+
+		// LOADS: guest-BE memory bytes -> architectural value in frame[rt],
+		// zero-extended across the full 64-bit slot (stale bits cleared).
+		struct { unsigned sz; uint8_t bytes[8]; uint64_t arch; } lcases[] = {
+			{ 0, {0xAB},                                          0xAB },
+			{ 1, {0x12, 0x34},                                    0x1234 },
+			{ 2, {0x11, 0x22, 0x33, 0x44},                        0x11223344 },
+			{ 3, {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}, 0x0102030405060708ull },
+		};
+		for (unsigned i = 0; i < 4; i++) {
+			for (unsigned k = 0; k < sizeof mem; k++) mem[k] = 0xEE;
+			for (unsigned k = 0; k < (1u << lcases[i].sz); k++) mem[8 + k] = lcases[i].bytes[k];
+			frame[RM] = 8;                                  // guest EA
+			frame[RT] = 0xFFFFFFFFFFFFFFFFull;              // stale high bits must vanish
+			ra.is_load = true; ra.size_log2 = lcases[i].sz; ra.rt = RT;
+			mmio_thunk_raw_access(frame, &ra, mem);
+			CHECK(frame[RT] == lcases[i].arch);
+		}
+		// rt==31 (WZR/XZR): value discarded, frame untouched.
+		frame[RM] = 8; frame[RT] = 0x5555;
+		ra.is_load = true; ra.size_log2 = 2; ra.rt = 31;
+		mmio_thunk_raw_access(frame, &ra, mem);
+		CHECK(frame[RT] == 0x5555);
+
+		// STORES: frame[rt] = raw post-REV image (with garbage above the access
+		// width — must be ignored); memory must end up architectural-BE, with
+		// neighboring sentinel bytes untouched.
+		struct { unsigned sz; uint64_t raw; uint8_t bytes[8]; } scases[] = {
+			{ 0, 0xFFFFFFFFFFFFFFABull, {0xAB} },                            // byte: no REV, arch==raw low byte
+			{ 1, 0xFFFFFFFF00003412ull, {0x12, 0x34} },                      // arch 0x1234, REV16'd
+			{ 2, 0xFFFFFFFF44332211ull, {0x11, 0x22, 0x33, 0x44} },          // arch 0x11223344, REV'd
+			{ 3, 0x0807060504030201ull, {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08} }, // arch 0x01..08
+		};
+		for (unsigned i = 0; i < 4; i++) {
+			unsigned n = 1u << scases[i].sz;
+			for (unsigned k = 0; k < sizeof mem; k++) mem[k] = 0xEE;
+			frame[RM] = 8; frame[RT] = scases[i].raw;
+			ra.is_load = false; ra.size_log2 = scases[i].sz; ra.rt = RT;
+			mmio_thunk_raw_access(frame, &ra, mem);
+			for (unsigned k = 0; k < n; k++) CHECK(mem[8 + k] == scases[i].bytes[k]);
+			CHECK(mem[7] == 0xEE && mem[8 + n] == 0xEE);    // width respected
+		}
+		// Store rt==31: STR WZR/XZR semantics — writes zeros.
+		for (unsigned k = 0; k < sizeof mem; k++) mem[k] = 0xEE;
+		frame[RM] = 8;
+		ra.is_load = false; ra.size_log2 = 2; ra.rt = 31;
+		mmio_thunk_raw_access(frame, &ra, mem);
+		CHECK(mem[8] == 0 && mem[9] == 0 && mem[10] == 0 && mem[11] == 0 && mem[12] == 0xEE);
+
+		// Round trip: store raw image then load it back -> architectural value.
+		for (unsigned k = 0; k < sizeof mem; k++) mem[k] = 0xEE;
+		frame[RM] = 16; frame[RT] = 0x78563412;             // raw of arch 0x12345678
+		ra.is_load = false; ra.size_log2 = 2; ra.rt = RT;
+		mmio_thunk_raw_access(frame, &ra, mem);
+		frame[RT] = 0;
+		ra.is_load = true;
+		mmio_thunk_raw_access(frame, &ra, mem);
+		CHECK(frame[RT] == 0x12345678);
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

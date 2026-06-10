@@ -40,3 +40,43 @@ uint64_t A64SwapForWidth(uint64_t v, unsigned size_log2)
 	default: return __builtin_bswap64(v);
 	}
 }
+
+/* Raw replay of a backpatched site's original access against guest memory.
+ *
+ * Endianness reasoning (the double-negative, spelled out):
+ *  - Guest memory holds PPC BIG-ENDIAN bytes. AArch64 data accesses are
+ *    little-endian, so the JIT pairs each width>1 LDR with a REV (raw -> arch)
+ *    and each width>1 STR with a REV before it (arch -> raw).
+ *  - LOAD: at patch time the paired REV after the LDR was NOPed, so the thunk
+ *    must deliver the ARCHITECTURAL value to frame[rt]. Assembling the memory
+ *    bytes MSB-first (a big-endian read) yields exactly REV(little-endian LDR)
+ *    == the architectural value — for every width, including bytes where the
+ *    two views coincide. Written as a full 64-bit slot store: the real LDR Wt
+ *    zero-extends into Xt and the thunk restores the whole X register from the
+ *    slot. rt==31 is WZR/XZR: discard.
+ *  - STORE: the JIT's REV ran BEFORE the BL, so frame[rt] already holds the
+ *    RAW byte-reversed register image (and for bytes, where no REV exists,
+ *    raw == architectural anyway). The original STR would write its low
+ *    1<<size_log2 register bytes to memory in little-endian register order:
+ *    mem[i] = (reg >> 8*i) & 0xFF. Replicating that loop verbatim lands the
+ *    architectural value big-endian in guest memory — byte-identical to what
+ *    the unpatched STR produced. (Host-endianness independent by construction;
+ *    deliberately not a memcpy.) Bytes beyond the access width are untouched. */
+void mmio_thunk_raw_access(uint64_t *frame, const A64MemAccess *acc,
+                           uint8_t *host_base)
+{
+	uint32_t gaddr = (uint32_t)frame[acc->rm];
+	uint8_t *p = host_base + gaddr;
+	unsigned bytes = 1u << acc->size_log2;
+	if (acc->is_load) {
+		uint64_t arch = 0;
+		for (unsigned i = 0; i < bytes; i++)
+			arch = (arch << 8) | p[i];            // big-endian assembly == post-REV value
+		if (acc->rt != 31)
+			frame[acc->rt] = arch;                // zero-extended, full slot (LDR Wt -> Xt)
+	} else {
+		uint64_t raw = (acc->rt == 31) ? 0 : frame[acc->rt];
+		for (unsigned i = 0; i < bytes; i++)
+			p[i] = (uint8_t)(raw >> (8 * i));     // STR's little-endian byte order
+	}
+}

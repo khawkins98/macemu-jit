@@ -4865,6 +4865,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 #define MMIO_SITE_MAX 256
 static struct { uint32_t *site; uint32_t orig_insn; } mmio_sites[MMIO_SITE_MAX];
 static int n_mmio_sites = 0;
+static uint64_t mmio_thunk_nonmmio = 0;     /* thunk re-executed with a non-device EA
+                                             * (telemetry; CPU thread only — plain is fine) */
 static uint32_t *mmio_thunk_entry = NULL;   /* emitted once at init, re-emitted on flush */
 
 /* Is host pc inside the executable JIT code cache? (the faulting host PC is the
@@ -4891,6 +4893,23 @@ extern "C" void ppc_jit_mmio_thunk_dispatch(uint64_t *frame, uint32_t *site)
 	}
 	uint32_t gaddr = (uint32_t)frame[acc.rm];          /* EA reg (rm) holds the guest address */
 	unsigned bytes = 1u << acc.size_log2;
+	if (!MMIOBusInRange(gaddr)) {
+		/* Backpatched sites are SHARED code: another guest path re-executes the
+		 * same host instruction with a non-device base register (M6a: the 68k
+		 * world re-runs NK blocks with low-memory pointers). Replay the original
+		 * access raw against guest memory instead of dispatching to the bus
+		 * (whose lookup_or_die would abort on an unregistered address).
+		 * Guest->host: JIT_MEM_BASE is this TU's addressing-model base (the same
+		 * constant the patched LDR/STR used in RMEMBASE/x19 — NATMEM_OFFSET on
+		 * macOS DIRECT_ADDRESSING, 0 on REAL), so host EA matches the original
+		 * instruction's exactly. */
+		mmio_thunk_nonmmio++;
+		if (mmio_thunk_nonmmio == 1)
+			fprintf(stderr, "[MMIO] backpatch thunk: non-MMIO EA fallback engaged (first: 0x%08x) - raw access path\n",
+			        gaddr);
+		mmio_thunk_raw_access(frame, &acc, (uint8_t *)(uintptr_t)JIT_MEM_BASE);
+		return;
+	}
 	if (acc.is_load) {
 		uint64_t arch = MMIOBusRead(gaddr, bytes);
 		/* the paired REV was NOPed: deliver the ARCHITECTURAL value, zero-extended to

@@ -17,6 +17,25 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-10 (latest) — Batch harness: score-only equivalence passes vacuously when both modes share a bug
+
+When adding batch mode to the opcode harness, the first implementation omitted the
+FPR/VR/FPSCR/vrsave reset between vectors. Both legacy mode (per-process) and the broken
+batch mode produced the same stale floating-point and vector register state — so their
+REGDUMPs matched and `score=100` in both modes. A score-only equivalence check would have
+declared the modes identical and shipped the bug.
+
+**The lesson:** if both modes share a defect identically (same stale state, same wrong
+output), comparing scores is vacuous — you need to compare REGDUMP *content* byte-for-byte.
+The batch equivalence proof was rerun after adding FPR/VR/FPSCR/vrsave reset and confirmed
+byte-identical content for all 350 vectors in both interp and JIT modes, plus a deliberate
+corruption test to confirm the diff logic is live (`pass=349` on the corrupted vector).
+
+**Rule for any future "equivalent to the reference" claim:** content equivalence is the bar,
+not score equivalence. Score equivalence is necessary but not sufficient.
+
+---
+
 ## 2026-06-10 (latest) — NK-boot ceiling root-caused; ignoresegv was masking a whole fault class
 
 ### Path A's nanokernel progress was partly an ignoresegv illusion

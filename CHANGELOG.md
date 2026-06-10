@@ -11,6 +11,32 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-10
 
+### [build][SheepShaver] Developer-speed tooling: ccache recipe, batch harness, SS_SEED_MEM (`c9b5f926`, `311b0920`, `1fcdc297`)
+
+Three developer-productivity tools landed in one session:
+
+- **ccache recipe** (`c9b5f926`): SheepShaver's autoconf build wires ccache by re-running
+  configure with `CC="ccache gcc" CXX="ccache g++"` (plus the standard flags). Per-checkout
+  config state (not committed; a fresh clone/worktree must re-run configure with those
+  CC/CXX values). Measured: clean-tree rebuild ~5.88s cold → ~0.48s warm (~12×). See
+  CLAUDE.md and CONTRIBUTING.md for the one-line recipe to add to configure.
+
+- **Batch harness** (`311b0920`, `SS_HARNESS_BATCH=1 make test-jit`): all 350 vectors in ONE
+  emulator process per mode instead of one process per vector (~700 launches → 2). Timing:
+  **~3s vs ~32s** (legacy). Per-vector state is fully reset between vectors (GPR/CR/XER/LR/CTR
+  + FPR/VR/FPSCR/vrsave + interpreter cache + JIT cache). Equivalence proven by byte-identical
+  per-vector REGDUMP content in both interp and JIT modes across all 350 vectors, plus a
+  deliberate corruption test confirming the diff logic is live. Usage: batch for the inner
+  loop, plain `make test-jit` as the authoritative gate (process-per-vector isolation is the
+  stronger contract). `SS_HARNESS_KEEP=1` preserves REGDUMPs for auditing.
+
+- **SS_SEED_MEM** (`1fcdc297`): no-recompile guest-memory poke knob with two forms —
+  immediate (`0xADDR=0xVAL`) applied at NW-trampoline-end, and PC-triggered
+  (`0xPC:0xADDR=0xVAL`) applied at the first JIT block-entry visit of 0xPC. Up to 16
+  semicolon-separated entries; 32-bit writes; MMIO ranges refused; `[SEED]` stderr lines.
+  Born from the NK spike where a KDP field needed re-seeding after the nanokernel's own
+  cold-init zeroing clobbered it. Full reference: `SheepShaver/docs/DIAGNOSTICS.md`.
+
 ### [SheepShaver] NK-boot ceiling root-caused + fixed (d8932203); new frontier is the 0x50326050 MMU/SR wall
 
 Post-M1 diagnostic spike (2026-06-10):

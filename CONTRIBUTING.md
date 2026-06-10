@@ -27,6 +27,8 @@ cd <worktree>/SheepShaver/src/Unix
 NO_CONFIGURE=1 ./autogen.sh
 ./configure --enable-sdl-video --enable-sdl-audio --enable-jit --without-gtk --without-x \
             --without-esd --with-vdeplug CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib
+# Optional ccache speedup (~12x warm rebuilds): re-run configure with CC="ccache gcc" CXX="ccache g++"
+# before building. Per-worktree config state — each new worktree needs its own configure run.
 cd ../../ && make build-ss          # then build as usual
 ```
 
@@ -153,7 +155,7 @@ with the header; when you touch an old doc, add it if missing.
 
 ### JIT codegen change (ppc-jit.cpp)
 
-- [ ] `make test-jit` passes (score=100) — NOT `make test-opcodes` (that only tests the interpreter)
+- [ ] `make test-jit` passes (score=100) — NOT `make test-opcodes` (that only tests the interpreter). Use `SS_HARNESS_BATCH=1 make test-jit` (~3s) for the inner loop; run plain `make test-jit` as the authoritative gate at least once per task/commit.
 - [ ] **Verify the actual machine encoding — don't hand-decode or trust inline comments.** Disassemble
   the exact `emit32()` words (`python3 -c 'import capstone…'`, AArch64 little-endian) and confirm the
   mnemonic + operands. The AltiVec shift codegen shipped *scrambled* comments and the wrong NEON ops

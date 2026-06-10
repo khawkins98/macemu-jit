@@ -17,7 +17,29 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-10 (latest) — Batch harness: score-only equivalence passes vacuously when both modes share a bug
+## 2026-06-10 (latest) — Wave 0 crossed the MMU/SR wall; the live 9.0.1 NK is RELOCATED (static ROM dump useless there)
+
+The 0x50326050 wall fell to stored state + a mapping (SR0-15 + MSR + low-mem 0x0–0x100000;
+`b27aa6de`/`54a5d04a`) — no MMU emulation needed; identity confirmed by probe (EA = flat
+0x200a0, r22=0). Three non-obvious findings:
+
+1. **The live parcels NK runs at 0x504xxxxx, ~0x100000 above its static 0x503xxxxx ROM
+   addresses** (e.g. check_work's SCC poll observed at ~0x504268d4 vs the documented
+   0x50326880) — the parcels boot STAGES the kernel at runtime. **The static decompressed
+   ROM dump has ZEROS in the staged region**: capstone-on-the-dump silently produces nothing
+   there. Live-code inspection must use `SS_PROBE_PC='0xPC:[0xADDR],[0xADDR+4],…'` word
+   dumps (16 fields/probe; recipe proven in `M5-MMU-SR-WALL-ANALYSIS.md` §8).
+2. **The JIT natively constant-folds some "stubbed" supervisor reads** (mfsr/mfsrin→0,
+   mfmsr→0xf072 in ppc-jit.cpp) — adding stored state in the interpreter alone silently
+   does nothing under JIT, and the differential harness can't see it (both engines agreed
+   pre-fix). Rule: when promoting a dropped/stubbed op to stored state, grep ppc-jit.cpp
+   for a native case FIRST.
+3. **The boot frontier now sits exactly at M3's acceptance criterion**: the NK idle loop
+   polling our real SCC 8530 through the backpatched bus (~1–2M iter/s — only possible via
+   backpatch; raw fault path caps at ~0.12M/s), waiting for interrupt delivery that doesn't
+   exist yet. M1's consumer-(b) carry-forward is live; M3a delivers the wake-up.
+
+## 2026-06-10 — Batch harness: score-only equivalence passes vacuously when both modes share a bug
 
 When adding batch mode to the opcode harness, the first implementation omitted the
 FPR/VR/FPSCR/vrsave reset between vectors. Both legacy mode (per-process) and the broken

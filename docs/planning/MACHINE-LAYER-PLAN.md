@@ -1,6 +1,6 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
-> **Status:** 🟢 Approved architecture (rev 4) — **spikes done; M0 + M1 complete (2026-06-10); M2 implementation complete + gates green (2026-06-10); acceptance: `9.0.1 boot: NK native DEC programming reached the clock (mtspr_dec=3); unchanged 0x50326068 wall; mfspr_dec=0 (no DEC reads pre-wall — check_work lies beyond the ceiling); 1.1-ROM probe: retirement gate fired live`; next: M3**
+> **Status:** 🟢 Approved architecture (rev 4) — **spikes done; M0 + M1 complete (2026-06-10); M2 implementation complete + gates green (2026-06-10); acceptance: `9.0.1 boot: NK native DEC programming reached the clock (mtspr_dec=3); unchanged 0x50326068 wall; mfspr_dec=0 (no DEC reads pre-wall — check_work lies beyond the ceiling); 1.1-ROM probe: retirement gate fired live`; **Wave 0 (2026-06-10): the 0x50326050 MMU/SR wall is CROSSED** (SR0-15+MSR stored state + newworld low-mem mapping; identity confirmed; new frontier = the relocated NK idle loop polling the real SCC through the bus — precisely M3's acceptance target; `machine/M5-MMU-SR-WALL-ANALYSIS.md` §8); next: M3a**
 > · **Created:** 2026-06-10
 > · **Updated:** 2026-06-10 (rev 2+3: two adversarial review rounds — §8; rev 4: spike results
 > folded in — §3 spikes, M1/M2/M7 re-scoped, §9 re-score #1: capability ~70–75%; post-M1 spike:

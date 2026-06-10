@@ -11,6 +11,29 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-10
 
+### [SheepShaver] Wave 0: the 0x50326050 MMU/SR wall is CROSSED (`b27aa6de`, `54a5d04a`, `29859b52`)
+
+- **SR0–15 + MSR stored state** in the CPU core (the SPRG store-the-write/return-the-read
+  pattern; fields appended last; MSR cold value 0xf072 = the old `mfmsr` hardcode, byte-
+  identical; MSR stays stored-only — DR/EE semantics land in M3a). Decode entries for
+  mtmsr/mtsr/mtsrin/mfsr/mfsrin (previously `execute_illegal` no-ops via the default-true
+  `ignoreillegal` pref); native JIT mfsr/mfsrin/mfmsr constants neutralized to interpreter
+  fallback (red-team C1 — left native they'd defeat the stored state). Also fixed: sdr1/bat/
+  srr0/srr1 were malloc-garbage at cold start. Harness +3 round-trip vectors (353 total);
+  batch per-vector reset extended to the trailing supervisor block.
+- **Newworld low memory extended to 0x0–0x100000** (single profile-sized acquire — red-team
+  C2: a second Mach acquire at 0x3000 page-truncates into an overlap failure) backing the
+  NK's low-physical descriptor probes (~0x200a0).
+- **Live result (`M5-MMU-SR-WALL-ANALYSIS.md` §8):** zero SIGSEGV (was: instant fault at
+  0x50326068); identity confirmed (EA = flat 0x200a0, probe r22=0; saved SR == programmed
+  SR); no handler re-entry; rung 3/4 stays deferred. **New frontier = M3's acceptance
+  target:** the runtime-staged (parcels-relocated, 0x504xxxxx) NK idle loop polling our real
+  SCC 8530 model at 0xF3012000 through the backpatched MMIO bus — M1's carried-forward
+  consumer-(b) acceptance is live and evidently working; the loop awaits real interrupt
+  delivery (M3a).
+- Gates: batch + legacy test-jit 353/353; machine suite 8/8; test-opcodes 353/353;
+  e2e-test 122/122; paravirtual e2e lifecycle PASS; paravirtual byte-identical.
+
 ### [build][SheepShaver] Developer-speed tooling: ccache recipe, batch harness, SS_SEED_MEM (`c9b5f926`, `311b0920`, `1fcdc297`)
 
 Three developer-productivity tools landed in one session:

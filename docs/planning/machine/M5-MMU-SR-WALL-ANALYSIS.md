@@ -296,3 +296,43 @@ status of the nanokernel's mapping for it, and whether crossing this wall reveal
 wall immediately behind it — all three are **untestable without a live boot** and gate the
 final cost. The static analysis fixes the *mechanism* (SR/MSR dropped + hole unmapped) with
 high confidence; the *sufficiency* is a one-boot measurement away.
+
+---
+
+## 8. Wave 0 results (2026-06-10 — live boots, plan `2026-06-10-mmu-sr-wall-wave0.md`)
+
+**Verdict: outcome class (a) — the wall is CROSSED.** With SR[16]+MSR stored state
+(commit `b27aa6de`) and the newworld low-memory extension to 0x100000 (`54a5d04a`):
+
+1. **Zero SIGSEGV in a 120s boot** (was: immediate fault at 0x50326068). The wall routine
+   completes; probe visit counts at 0x50325f00/0x50326050 are **1** (no re-entry — the §7.4
+   loop hazard did not materialize).
+2. **Identity CONFIRMED (REDTEAM question D):** probe at 0x50326050 shows `r22=0x00000000`
+   → the faulting EA was flat `0x200a0` exactly; `r23=0xf072` (saved MSR, DR already set as
+   the §5-nuance predicted); probe at 0x50325f68 shows saved SR == programmed SR ==
+   `0x20000000`. Rung 2 + mapping was sufficient; **rung 3/4 stays deferred** (REDTEAM
+   verdict stands).
+3. **New frontier — and it is M3's acceptance target:** the boot advances ~1 MB of ROM into
+   the **runtime-staged (parcels-relocated) NK** and settles in a tight spin at
+   0x50426884–0x50426b1c (~15M blocks/s, comp frozen). Probe-dumped live code words decode to
+   the **`check_work` SCC poll** (SPIKE-S3 §2.1 shape, relocated): `ori r30,r31,0x10; mtmsr`
+   (DR on — now coherent thanks to Wave 0) … `lbz r30,2(r28); eieio; andi. r30,r30,1; beq`
+   — with **`r28 = 0xF3012000`** (probe-confirmed): the NK is polling **our real SCC 8530
+   model through the MMIO bus**. The observed iteration rate (~1–2M/s implied) is only
+   possible via the M1 JIT backpatch (a raw fault path caps at ~0.12M/s) — M1's
+   carried-forward consumer-(b) live acceptance ("check_work polls a real SCC at an unmapped
+   F3 address without a fault storm") is now **live and evidently working**; capture the
+   region counters in M3a (the alarm-killed probe boots skip the atexit stats dump).
+4. **Why it spins:** the SCC honestly reports "no Rx char" (correct, M1-conformant), and the
+   idle loop's wake-up requires **real interrupt delivery** (S3 §2.5: "its wake-up must come
+   from real SCC state + interrupt delivery") — i.e. the boot frontier now sits precisely at
+   MACHINE-LAYER-PLAN M3's acceptance criterion ("nanokernel idle loop wakes via real
+   delivery on the 9.0.1 diagnostic boot"). The 0x50426aec probe block shows the
+   mfspr/mtspr-dense timeout path with `r30=0xffffffff` (DEC-era values from the M2 clock).
+5. **Address-relocation note for M3a:** the live NK runs at 0x504xxxxx (staged), not the
+   static 0x503xxxxx the docs cite — e.g. check_work's poll observed at ~0x504268d4 vs the
+   static 0x50326880. The static ROM dump has ZEROS in the staged region — live-code
+   inspection needs SS_PROBE_PC `[0xADDR]` word dumps (recipe proven here), not the dump file.
+
+Logs: /tmp/wave0-bootA.log (wall test), /tmp/wave0-bootB.log (§7.1 registers),
+/tmp/wave0-diag.log (spin PCs); probe word-dump runs recorded above.

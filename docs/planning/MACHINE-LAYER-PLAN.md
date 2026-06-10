@@ -1,7 +1,7 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
-> **Status:** 🟢 Approved architecture (rev 2) — implementation not started · **Created:** 2026-06-10
-> · **Updated:** 2026-06-10 (rev 2: incorporated adversarial code-review findings — see §8)
+> **Status:** 🟢 Approved architecture (rev 3) — implementation not started · **Created:** 2026-06-10
+> · **Updated:** 2026-06-10 (rev 2 + rev 3: incorporated two rounds of adversarial code-review findings — see §8)
 > **Decision (2026-06-10):** Stop extending the ROM-patching/paravirtualization approach toward
 > NewWorld and Mac OS 9.2.x one bug at a time. Instead, build the thing SheepShaver never had:
 > a **real machine-model layer** — MMIO bus, virtual clock, device models, interrupt/exception
@@ -66,8 +66,14 @@ Decisions made 2026-06-10 (with Ken):
    B&W/G4 era — KeyLargo MacIO + OpenPIC), the machine QEMU `mac99` and DingusPPC both model
    well and the 9.0.1 ROM targets.** The 1.1 ROM expects Heathrow/Paddington-class hardware —
    a *different* machine; supporting both would mean two address maps, two PICs, two device
-   trees. The 1.1-ROM/9.2.1 tactical path (Path B's frontier) gets **only the standalone SCC
-   model at the addresses it polls** (0xF3016000/0xF3012000), not the full profile.
+   trees. The 1.1-ROM/9.2.1 tactical path (Path B's frontier) gets **only standalone device
+   model(s) at the addresses the stall loop actually polls** — not the full profile.
+   *(rev 3 correction: the device identity behind the stall is NOT settled. Our own AddrMap
+   patch — `rom_patches.cpp:1903` — assigns 0xF3016000 to the **VIA** and 0xF3012000 to the
+   SCC, and the project has flip-flopped on the `[KDP-0x900]` identity twice. A pre-M1 probe
+   pass must disassemble the actual stall loop and pin which device(s)/offsets it polls —
+   it may need the VIA (+ timer) as well as or instead of the SCC, which would change M1's
+   scope. See §3 spikes.)*
 
 ---
 
@@ -116,9 +122,10 @@ HLE-backed devices must NOT advertise capabilities (e.g. DBDMA channels) that we
 A registry of guest physical address ranges → device objects with
 `read(addr, size)` / `write(addr, size, value)` handlers.
 
-**Two dispatch paths, by execution engine** *(rev 2 — the original "the existing SIGSEGV
+**Three dispatch paths, by access origin** *(rev 2 — the original "the existing SIGSEGV
 machinery already decodes faulting accesses" was wrong; on macOS arm64 the handler is
-`pc += 4` with no operand decode — `sigsegv.cpp:2564`)*:
+`pc += 4` with no operand decode — `sigsegv.cpp:2564`. rev 3 — a third access class was
+missed entirely)*:
 
 - **JIT path — fault + decode.** Device pages are left unmapped inside the NATMEM
   reservation; a SIGSEGV/Mach-exception handler decodes the faulting **JIT-emitted** access
@@ -132,7 +139,20 @@ machinery already decodes faulting accesses" was wrong; on macOS arm64 the handl
   compiler-generated host code (undecodable), and nested `execute()` contexts (interrupt
   handlers, EMUL_OPs) run in the interpreter — exactly where device touches from handlers
   happen. The interpreter's memory accessors get an address-range check that calls the bus
-  directly. Both paths land on the same device handler.
+  directly. Both paths land on the same device handler. *(rev 3)* The range check is
+  **compiled/branch-gated per profile** so the paravirtual interpreter path (incl. all
+  nested-execute contexts and the `SS_USE_JIT=0` baseline) pays nothing — and the bench
+  gates must include an interpreter-mode measurement to prove it, since the §3 gates
+  otherwise only measure JIT.
+- ***(rev 3)* Host-accessor path — explicit bus entry points.** A large access class is
+  host-side C++ via `ReadMacInt*`/`WriteMacInt*`/`Mac2HostAddr`: EMUL_OP handlers,
+  `Execute68k`, HLE shims (serial/disk/video), ROM patching — and our own debug tooling
+  (`SS_PROBE_PC` `[rN:SIZE]` dumps, `SS_JIT_WATCH_ADDR` reads). Any of these touching a
+  trapped page faults at arbitrary compiler-generated code — undecodable, so under the
+  abort-loudly rule a guest driver handing a device address to an HLE shim (or a developer
+  probing 0xF3xxxxxx) would hard-abort the emulator. Contract: host code accesses device
+  space only through explicit `bus_read`/`bus_write`; debug builds assert-on-MMIO-range in
+  `Mac2HostAddr`; the probe/watch tools route through the bus or refuse device ranges loudly.
 
 **Region kinds** *(rev 2)*: the bus API distinguishes **trapped-MMIO** regions (unmapped,
 fault-dispatched — device registers) from **mapped-aperture** regions (real memory, direct
@@ -141,13 +161,16 @@ impossible; baking the distinction into the API now avoids a bus redesign at the
 milestone.
 
 **Polling-loop strategy** *(rev 2 — the original "boot-time polling is not perf-critical" was
-contradicted by our own data: the nanokernel idle loop IS an SCC poll, observed at ~2.6M
-iter/s)*: a hot faulting access must not become a perpetual Mach-exception storm. Decision:
-**(a) idle-detection** — when a device read polls "no work" N consecutive times, the device
-may request a host-side sleep/yield (this is also the future power-management hook); plus
-**(b) optional JIT backpatch** — a known-faulting access site can be patched to call the bus
-directly (Dolphin's approach), held in reserve until profiling demands it. The bus logs
-per-region fault rates so the storm is visible, not theorized.
+contradicted by our own data: the nanokernel idle loop IS a device poll, observed at ~2.6M
+iter/s. rev 3 — costed honestly: this build uses **Mach exceptions**, not in-thread signals;
+each fault is a Mach message + thread suspend + 2× get/set state = microseconds, so a MHz-rate
+poll through the fault path is ~hours-per-second of wall time, not merely "slow")*:
+**(a) JIT backpatch is in M1 scope, not in reserve** — a known-faulting access site gets
+patched to call the bus directly (Dolphin's approach); the fault path is the *discovery*
+mechanism, the backpatch is the steady state for hot sites; **(b) idle-detection** — when a
+device read polls "no work" N consecutive times, the device may request a host-side
+sleep/yield (also the future power-management hook). The bus logs per-region fault rates so
+any storm is visible, not theorized.
 
 **Constraints:** 16 KB host-page granularity (trapped regions must be 16 KB-aligned; fine for
 the 0xF30xxxxx device block, but means a "device pointer" aimed into mapped RAM can never
@@ -202,6 +225,14 @@ What that actually requires (the honest list):
   proven mechanism.
 - **Host-integration relocation:** `SDL_PumpEvents` and friends move out of the interrupt
   path to a host-side cadence.
+- ***(rev 3)* Deliverability rule — real exceptions vs the nested-execute HLE we keep:**
+  EMUL_OPs/HLE (§2f) still run via nested `execute()` terminated by EMUL_RETURN trampolines.
+  A PIC assertion delivered *inside* a nested context would have the guest handler `rfi`
+  "back" into a continuation that is a host C++ stack frame — undefined, the `sc`
+  double-increment bug class one layer up. Rule: **external interrupts are deliverable only
+  at depth-1 block boundaries**; nested HLE contexts execute as if MSR.EE were masked, with
+  a pending-latch drained on return to depth 1. M3's harness additions include a test vector
+  for exactly this.
 - **CPU-core honesty** *(rev 2 — the original "CPU core unchanged" claim was false)*: `sc`,
   DEC, MSR, SRR0/1 live in shared CPU files (`ppc-execute.cpp`, `ppc-jit.cpp` SPR cases).
   The profile seam goes *inside* the CPU core on **slow paths only** (exception dispatch, SPR
@@ -232,6 +263,38 @@ state: **LLE for what the ROM probes, HLE for what the OS uses.** Constraint fro
 device tree must not advertise LLE capabilities behind HLE devices (no phantom DBDMA channels
 on nodes we service by HLE).
 
+### 2g. Execution & locking model *(rev 3 — new section; rev 2 had zero words on threading)*
+
+This build handles faults via **Mach exceptions on a dedicated handler thread**
+(`HAVE_MACH_EXCEPTIONS`, `sigsegv.cpp:727` spawns `handleExceptions`, which mutates the
+suspended CPU thread via `thread_get/set_state`). So the machine layer's contexts are:
+
+| Context | Thread | Touches device state? |
+|---|---|---|
+| JIT-path MMIO (fault dispatch) | **Mach exception-handler thread**, CPU thread suspended mid-instruction | yes |
+| Interpreter/host-accessor MMIO | emul (CPU) thread | yes |
+| Event-scheduler callbacks (VIA timers, DBDMA completion) | tick/timer thread | yes |
+| Interrupt assertion (PIC → CPU) | any of the above | spcflags only |
+
+Rules:
+1. **One lock per device** (or finer): all device-state mutation goes through the owning
+   device's lock, regardless of entry path. Device handlers must be small and never call
+   out into emulator subsystems while holding their lock.
+2. **The Mach-handler thread takes no foreign locks** — no malloc, no stdio, no JIT-compile
+   lock; anything possibly held by the suspended thread deadlocks the emulator. Device
+   handlers reachable from the fault path must satisfy this (lock-only-their-device,
+   pre-allocated memory, deferred logging via ring buffer).
+3. **Interrupt assertion is atomic-with-ordering**: PIC → spcflags uses the existing atomic
+   spcflags mechanism (release/acquire), safe from any thread; delivery happens only at the
+   CPU thread's block-boundary poll (§2d).
+4. **SIGUSR2 interplay**: the legacy tick→`pthread_kill(emul_thread, SIGUSR2)` interrupt
+   path can land while the CPU thread is Mach-suspended; on the fidelity profile the SIGUSR2
+   mechanism is retired with the nested-execute path (M3) — until then, fidelity-profile
+   testing documents the suspension window as a known hazard.
+5. **lldb caveat**: a debugger attach contends the EXC_BAD_ACCESS exception port — debugging
+   the bus with lldb perturbs the bus. Bus diagnostics must be log/telemetry-first (consistent
+   with the existing single-attach VBL rule in LEARNINGS).
+
 ---
 
 ## 3. Milestones *(rev 2 — re-cut after review: M1 grew, the clock got its own milestone, the
@@ -242,16 +305,33 @@ Each milestone is independently valuable and gated; the paravirtual profile's ga
 (`make test-jit`, `make e2e`, bench history) stay green throughout — the standing
 non-regression contract.
 
+**Pre-M0 spikes** *(rev 3 — cheap experiments that de-risk the plan's two biggest bets,
+run BEFORE committing to the milestone sequence)*:
+- **S1 — QEMU gate-check (days, ~zero code):** boot Mac OS 9.2.x under QEMU `mac99` with the
+  same 9.0.1 "Mac OS ROM" file. Directly answers M7's untested premise ("9.0.1 may satisfy
+  9.2.x's gates natively") — what 9.2's gate-2 subroutine (~0x7E24) actually checks is still
+  unknown. Statically RE-ing that probe is the second cheap angle. If 9.0.1 fails, the
+  near-free fallback is a **newer family ROM** (9.6.1/9.8.1 differ from 9.0.1 by 0.04% in the
+  nanokernel — HANDOFF §1.5), before falling back to the 4-byte bypass.
+- **S2 — Mach fault-decode spike (~1 day):** trap one unmapped page, decode one JIT-emitted
+  `LDR`, inject a value via `thread_set_state`, resume, observe the `REV`'d result in the
+  guest. Proves M1's keystone end-to-end (incl. measuring the real Mach round-trip cost)
+  before the bus is designed around it.
+- **S3 — stall-loop device probe (~half day):** disassemble the 9.2.1 post-splash polling
+  loop and the nanokernel `check_work` consumer; pin **which device(s)** (SCC vs VIA vs both)
+  and which register offsets they poll (decision 5 rev-3 caveat). Determines M1's actual
+  device scope.
+
 | # | Milestone | Definition of done | Effort |
 |---|---|---|---|
-| **M0** | **Profile plumbing + machine description** | `machine` pref (`paravirtual` default / `newworld`); `SS_NW_*` env-gate sprawl consolidated under the profile; fidelity profile disables `ignoresegv` + legacy serial-skip hacks; paravirtual byte-identical, all gates green. **Plus the §2a machine-description artifact** (Core99 address map, interrupt tree, device-tree skeleton) reviewed against the 9.0.1 ROM's actual probes. | S–M |
-| **M1** | **MMIO bus + SCC model** | Two-path dispatch (§2b): AArch64 fault decoder + Mach writeback + endianness contract for the JIT path; software range-check in interpreter accessors; region kinds (trapped/aperture) in the API; per-region fault-rate logging + idle-detection hook. SCC 8530 register state machine answers the ROM's serial-init polling. Consumers: (a) 9.2.1-on-1.1-ROM boot progresses past the post-splash stall (standalone SCC at 0xF3016000/0xF3012000 — decision 5); (b) nanokernel `check_work` polls a real SCC **at an unmapped F3 address** (not a RAM pointer) without a fault storm (idle-detection proven). Device unit tests + QEMU conformance (§5). | **L** |
+| **M0** | **Profile plumbing + machine description** | `machine` pref (`paravirtual` default / `newworld`); `SS_NW_*` env-gate sprawl consolidated under the profile; fidelity profile disables `ignoresegv` + legacy serial-skip hacks; paravirtual byte-identical, all gates green. **Plus the §2a machine-description artifact** (Core99 address map, interrupt tree, device-tree skeleton) reviewed against the 9.0.1 ROM's actual probes, **including a ROM-patch audit table** *(rev 3)*: every `PatchROM`/`patch_nanokernel`/`patch_68k` patch that neutralizes device init (`via_init*`, `scc_init`, `cuda_init`, GC interrupt-mask NOPs…) classified keep-on-fidelity / retire-at-Mx / replace-with-device-model — device models behind patched-out guest init are dead code, so each device milestone's DoD names the patches it retires and asserts the un-patched ROM init sequence completes. | M |
+| **M1** | **MMIO bus + boot-stall device model(s)** | Three-path dispatch (§2b): AArch64 fault decoder + Mach writeback + endianness contract for the JIT path (validated by spike S2); software range-check in interpreter accessors (profile-gated, interpreter-mode bench proof); explicit `bus_read/write` host-accessor entry points; region kinds (trapped/aperture) in the API; **JIT backpatch for hot sites (in scope, not reserve)**; per-region fault-rate logging + idle-detection hook; §2g locking rules implemented. Device model(s) per spike S3 (SCC 8530, possibly VIA timer) answer the ROM's polling. Consumers: (a) 9.2.1-on-1.1-ROM boot progresses past the post-splash stall — run as a **named third config** (`paravirtual` + bus + device − serial-skips), with `SS_COMPAT_92X`'s SCC-neutralizing patches retired so the DoD asserts **observed device register traffic**, not just boot progress (no false pass); (b) nanokernel `check_work` polls a real device **at an unmapped F3 address** (not a RAM pointer) without a fault storm (backpatch + idle-detection proven). Device unit tests + QEMU conformance (§5). | **L** |
 | **M2** | **Virtual clock** | Guest-visible TB/DEC honoring `mtspr`/`mfspr` (the `SS_SYNTH_DEC` hack retired); host event scheduler for device timers; DEC-expiry raises the CPU decrementer exception *condition* (delivery lands in M3). | M |
 | **M3** | **Interrupt & exception architecture + PIC + VIA/Cuda** ← *the big rock* | §2d in full: MSR(EE)/SRR0-1/`rfi` model; vector-base experiment decided (direct-entry vs single mapping); OpenPIC model routing device inputs; VIA/Cuda (timers via M2 scheduler, ADB, RTC); the `[NW-INT]` host-injection hack and nested-execute interrupt path **deleted on the fidelity profile**; nanokernel idle loop wakes via real delivery on the 9.0.1 diagnostic boot; `SDL_PumpEvents` relocated. | **XL** |
 | **M4** | **NVRAM + MacIO container + DBDMA stubs** | Full partitioned 8 KB NVRAM behind the bus at the KeyLargo-correct address; MacIO container address map live; **DBDMA channel stubs that abort loudly** (NewWorld serial/audio drivers probe DBDMA — rev-2 addition; real channel engine only when a milestone demands it). | S–M |
-| **M5** | **Supervisor environment** | Rung 2 SR/BAT stored state; synthesized Trampoline handoff replaces `SS_NW_TRAMPOLINE` ad-hoc writes, publishing the M0 device tree. | M |
+| **M5** | **Supervisor environment + boot framebuffer** | Rung 2 SR/BAT stored state; synthesized Trampoline handoff replaces `SS_NW_TRAMPOLINE` ad-hoc writes, publishing the M0 device tree — **including a boot-framebuffer aperture** *(rev 3)*: the ROM draws happy-Mac/splash to the OF display node's `address` long before any `.ndrv` loads, so M5 publishes a mapped-aperture bus region backed by real memory and blitted to SDL (also the first live test of the aperture region kind before Metal). Without it, M7 debugs a black screen. | M |
 | **M6** | **PPC→68k handoff + shim triage** *(inherited Path A walls — HANDOFF §2.8 Phases 1–2, previously hidden inside "integration")* | DR Emulator cold-start ECB/dispatch-table completion (currently crashes at `rfi` to garbage SRR0); `patch_68k` shim triage for the 9.0.1 ROM (28 in-range / 31 relocated-unverified / 25 absent — incremental, boot-path-first per the obstacle map). | **L (1–2+ wks, incremental)** |
-| **M7** | **Mac OS 9.2.2 boots on the fidelity profile** | End-to-end: 9.0.1 ROM (may satisfy 9.2.x natively; the 4-byte gate bypass kept as fallback), boot to Finder, E2E lifecycle PASS on the `newworld` profile. | L (integration) |
+| **M7** | **Mac OS 9.2.2 boots on the fidelity profile** | End-to-end: 9.0.1 ROM (gate compatibility answered up-front by spike S1, not discovered here), boot to Finder, E2E lifecycle PASS on the `newworld` profile. Fallback ladder *(rev 3)*: newer family ROM (9.6.1/9.8.1) → 4-byte gate bypass. | L (integration) |
 | **M8+** | **Platform features** (separate designs when reached) | PMU power management (builds on the M1 idle-detection hook); Metal-mapped video via the `.ndrv` seam + mapped-aperture bus regions; fidelity profile becomes default once it dominates paravirtual on the E2E + bench matrix. | — |
 
 **Sequencing notes:**
@@ -301,12 +381,20 @@ non-regression contract.
 5. **MMIO fault-rate telemetry as a gate:** per-region fault counters in the bus; an idle
    fidelity-profile boot must not exceed a budgeted fault rate (catches polling storms as a
    regression, not a discovery).
+6. ***(rev 3)* Asset reality:** the 9.0.1 ROM and 9.2.x media are Apple-copyrighted and
+   non-redistributable — the `e2e-newworld` lane is local-assets-only forever (no hosted CI,
+   no fresh-clone reproducibility; same posture as the existing e2e assets). Interpreter-mode
+   bench measurement added to the profile matrix (§2b range-check gating proof).
 
 ## 6. Error handling & risk
 
 | Risk | Mitigation |
 |---|---|
 | AArch64 fault-decoder gaps (JIT emits an access form the decoder misses) | The JIT's memory-access emitters are the contract: decoder unit tests enumerate every emitted form; unmapped-but-unregistered or undecodable faults abort loudly with PC + address (no silent zero-reads, no blind `pc += 4`). |
+| Cross-thread device-state races / Mach-handler deadlock | §2g locking model: per-device locks, no foreign locks on the exception-handler thread, atomic spcflags assertion, SIGUSR2 suspension-window documented until M3 retires it. |
+| ROM patches and device models double-handling the same hardware | M0 ROM-patch audit table; each device milestone retires its patches and asserts the un-patched guest init completes. |
+| M1 false pass via `SS_COMPAT_92X` (boot progresses but the device model never exercised) | Named third config; SS_COMPAT_92X SCC-neutralizing patches retired in that config; DoD requires observed device register traffic. |
+| Wrong device identity behind the boot stall (SCC vs VIA — already flip-flopped twice) | Spike S3 disassembles the actual polling loop before M1's device scope is frozen. |
 | Interpreter/nested-execute MMIO from handler contexts | First-class second dispatch path (§2b), not an afterthought; covered by device unit tests run through both engines. |
 | MMIO polling storm (idle loop = SCC poll at MHz rates) | Idle-detection hook + fault-rate telemetry budget (§5.5); JIT backpatch held in reserve. |
 | Side-effecting device reads double-executed by oracles | MMIO regions excluded from `SS_JIT_VERIFY` replay; bus logging never re-reads. |
@@ -351,3 +439,31 @@ The structural ones, for the record:
     M0 disables.
 12. **16 KB page granularity + trapped-vs-aperture region kinds** (Metal constraint now) →
     §2b.
+
+**Rev 3 (second adversarial review, 2026-06-10)** — 9 further findings, none duplicating rev 2:
+
+13. **No threading/concurrency model** — this build uses Mach exceptions on a dedicated
+    handler thread (`sigsegv.cpp:727`); JIT-path MMIO runs on that thread with the CPU thread
+    suspended; scheduler callbacks run on a third thread; SIGUSR2 interplay; Mach round-trip
+    cost makes fault-path polling ~hours/sec at observed rates → new §2g; backpatch promoted
+    into M1 scope; lldb exception-port caveat.
+14. **0xF3016000 is the VIA per our own AddrMap** (`rom_patches.cpp:1903`), and the
+    `[KDP-0x900]` identity has flip-flopped twice — the stall's device identity is unverified
+    → decision 5 caveat + spike S3.
+15. **M1 consumer (a) is a third, unnamed config on the frozen profile, confounded by the
+    `SS_COMPAT_92X` SCC-neutralizing patches** (false-pass risk) → named config, patch
+    disposition, register-traffic DoD.
+16. **No ROM-patch retirement inventory** — device models behind patched-out guest init
+    (`via_init*`, `scc_init`, `cuda_init`, GC mask NOPs) are dead code → M0 audit table,
+    per-milestone patch retirement.
+17. **Third memory-access path unhandled** — host C++ accessors (`ReadMacInt*`,
+    EMUL_OP/HLE/`Execute68k`) and our own debug tools (`SS_PROBE_PC`, `SS_JIT_WATCH_ADDR`)
+    would abort-loudly on device pages → §2b host-accessor contract.
+18. **M7's premise testable for ~zero code now** (QEMU gate-check; 0x7E24 probe RE; newer
+    family ROM fallback) → pre-M0 spikes S1; M7 fallback ladder.
+19. **Real exception delivery vs kept nested-execute HLE unreconciled** (`rfi` into a host
+    C++ continuation) → §2d deliverability rule + M3 test vector.
+20. **No boot framebuffer** — the ROM draws the splash to the OF display node long before any
+    `.ndrv`; M7 would debug a black screen → M5 aperture + blit.
+21. **Honesty gaps:** interpreter range-check cost on the frozen profile (gating + bench
+    proof) and the non-redistributable-assets posture for `e2e-newworld` → §2b, §5.6.

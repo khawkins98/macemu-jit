@@ -10,3 +10,7 @@ test_a64_mmio_decode
 test_a64_mmio_decode.dSYM/
 test_mmio_machfault
 test_mmio_machfault.dSYM/
+test_virt_clock
+test_virt_clock.dSYM/
+test_event_sched
+test_event_sched.dSYM/

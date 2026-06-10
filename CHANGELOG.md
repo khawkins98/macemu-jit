@@ -9,6 +9,27 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-10
+
+### [SheepShaver] Machine Layer M0: pref-selected machine profile (paravirtual / newworld)
+
+- **`machine` pref + profile module** — new `machine` pref (`paravirtual` default /
+  `newworld`) resolved once at startup (`src/machine/machine_profile.cpp`, standalone unit
+  test: `make -C src/machine test`). Env override `SS_MACHINE`; legacy `SS_NW_TRAMPOLINE`
+  is now a deprecated alias that maps to the newworld profile (warning printed).
+- **`SS_NW_*` env-gate sprawl consolidated** — all 9 getenv sites (rom_patches,
+  sheepshaver_glue, main_unix, name_registry) now consult the profile module.
+- **Fidelity-profile fault honesty** — on `machine newworld`, the legacy PC-keyed
+  serial/installer skip hacks and the `ignoresegv` blanket skip are disabled (a silent
+  skip would eat MMIO accesses the future bus must see); zero-page skip kept on both.
+- **M0 design artifacts** — `docs/planning/machine/CORE99-MACHINE-DESCRIPTION.md` (the
+  cited address-map/interrupt-tree/device-tree contract M1–M5 implement against) and
+  `docs/planning/machine/ROM-PATCH-AUDIT.md` (22 device-neutralizing patches with
+  retire-at-milestone dispositions).
+- **Paravirtual non-regression verified** — byte-identical default behavior: `make
+  test-jit` 350/350 score=100, machine unit test ALL PASS, e2e lifecycle PASS (boot →
+  Finder → clean shutdown, exit 0). See `docs/planning/MACHINE-LAYER-PLAN.md` (M0).
+
 ## 2026-06-09
 
 ### [SheepShaver] NewWorld: DR Emulator entry wall cleared

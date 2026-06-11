@@ -269,28 +269,46 @@ allowed (full gates).
 
 ### Task C: acceptance + default flip (flip LAST, revert-on-red)
 
-- [ ] **PASS/FAIL gates first, env-on (`SS_NW_SC_SURFACE=1`):** (a) full gates;
+- [x] **PASS/FAIL gates first, env-on (`SS_NW_SC_SURFACE=1`):** (a) full gates;
   (b) Task A handler-entry conformance; (c) Task B round-trip + result conformance;
   (d) rung-2 invariant carry-over (cold-once, guest[0]/[4], slot-15, switch round trip
   itself still green: TVector visit + completion resume per the rung-2 Task Y recipe);
-  (e) gated-off boot reproduces the sc-wall baseline byte-identically.
-- [ ] **Fix budget:** telemetry/capture commits freely; at most ONE small in-scope fix
-  iteration per falsified contract, full gates re-run after any fix.
-- [ ] **THEN flip** `SS_NW_SC_SURFACE` to the newworld profile default (opt-out `=0`
+  (e) gated-off boot reproduces the sc-wall baseline byte-identically. *(ALL PASS —
+  build-ss OK; batch + plain test-jit 353/353 score=100 (plain re-run, closing Task
+  B's skip); machine suite 12/12 ALL PASS (incl. committed test_dev_openpic, 206
+  checks); e2e-test 122; paravirtual e2e PASS. Boot C1 `/tmp/taskC1.log`: handler
+  visit=1 exact Q-S2 row; resume r3=0, r1/LR/r4..r10 preserved; cold-once WATCH pair;
+  slot-15 zero visits; TVector r25=0x5000fcf2; e1f4 r6=0xff,
+  [saveblk+0x3c]=0x50033776. Boot C2 `/tmp/taskC2_off.log`: FATAL lines diff-verified
+  byte-identical to /tmp/taskA_offAB.log, exit 134, pre-HB death.)*
+- [x] **Fix budget:** telemetry/capture commits freely; at most ONE small in-scope fix
+  iteration per falsified contract, full gates re-run after any fix. *(Consumed: ZERO —
+  no falsifications.)*
+- [x] **THEN flip** `SS_NW_SC_SURFACE` to the newworld profile default (opt-out `=0`
   kept, polarity mirroring SS_NW_MM_SWITCH) and re-run (a)–(e) with NO env vars.
   **Any gate failure after the flip ⇒ the flip is REVERTED in the same task (machinery
   stays env-gated), the failure recorded — the milestone does not ship default-on with
-  red gates.**
-- [ ] **DIAGNOSTIC OUTCOMES (recorded, NOT gates):** does MPLibrary's init RETURN
+  red gates.** *(FLIP LANDED — glue table finalization: explicit-"0"-only opt-out,
+  [NW-SC] line + env-matrix comment updated, loud opt-out announcement line. Post-flip
+  (a)-(e) ALL PASS with no env vars: boots `/tmp/taskC3_flip.log` +
+  `/tmp/taskC4_optout.log`; all signatures byte-identical to env-on. No revert.)*
+- [x] **DIAGNOSTIC OUTCOMES (recorded, NOT gates):** does MPLibrary's init RETURN
   (ring: the excursion's 68k resume at the completion-written `[saveblk+0x3c]` +
   continued CFM caller-region execution past it)? Does the parcel chain reach the
   CodeFragmentMgr parcel? Capture the new frontier with the full HB/CUDA/ring baseline,
   named honestly: the NEXT milestone's opening evidence — likely more syscalls
   (new selectors), the next parcel's walls, or the EE-enable/interrupt chain. Stop-rule
   trigger 2 applies: capture and stop, no staging beyond abort-capture for new classes.
-- [ ] Record results: M3A-ENTRY-TABLE.md (the syscall_entry row RESOLVED + results
+  *(P-M4 artifact captured (M3A-ENTRY-TABLE.md "Task C results"): excursion returns,
+  68k resumes at [saveblk+0x3c] and runs the CFM-prep region; nothing NEW vs Task B —
+  ring tail byte-identical, same 5 selectors, same counter classes. The park NAMED via
+  one bounded capstone-M68K look: 0x5000dfa2 = the ROM 68k A-line trap dispatcher;
+  the e3e0..e43c leg fills an ExpandMem-anchored array ([$2b6],$310); 0x5000f240
+  issues F-line trap $FE1F selector d0=0x31; park PC 0x5000f248 = the instruction
+  after that trap. Next frontier class: the FE1F service surface — captured, stopped.)*
+- [x] Record results: M3A-ENTRY-TABLE.md (the syscall_entry row RESOLVED + results
   section — the M3a descope formally closed), M6A-WAVE2-SHIM-RECON.md (frontier
-  update). Commit.
+  update). Commit. *(Both landed; syscall_entry table row flipped to RESOLVED.)*
 
 ### Task Z: docs
 

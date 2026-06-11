@@ -86,10 +86,11 @@ extern "C" {
 
 /* M3a Task 3: interrupt entry table — newworld profile only.
  * Default interrupt_entry = 0x50412b1c (probe-verified in M3A-ENTRY-TABLE.md).
- * syscall_entry default (NK-syscall-surface Task A) = 0x50314ac0, ACTIVE ONLY
- * under SS_NW_SC_SURFACE=1 (bring-up gate, default OFF — applied at table
- * finalization in init_emul_ppc; the static initializer below stays {intr, 0}
- * so the gated-off abort-with-capture baseline is byte-identical).
+ * syscall_entry default (NK-syscall-surface Task A; newworld DEFAULT since
+ * Task C) = 0x50314ac0 — opt-out with SS_NW_SC_SURFACE=0 (polarity mirrors
+ * SS_NW_MM_SWITCH; applied at table finalization in init_emul_ppc; the static
+ * initializer below stays {intr, 0} so the opted-out abort-with-capture
+ * baseline is byte-identical).
  * Override via SS_EXC_ENTRY=0xINT[,0xSC] for no-rebuild iteration.
  * Paravirtual never reads this table.
  *
@@ -2190,26 +2191,34 @@ void init_emul_ppc(void)
 		/* M3a Task 3 + NK-syscall-surface Task A: finalize the exception entry
 		 * table for newworld.
 		 * Defaults: interrupt_entry = 0x50412b1c (probe-verified, M3A-ENTRY-TABLE.md);
-		 *           syscall_entry   = 0x50314ac0 under SS_NW_SC_SURFACE=1 (bring-up
-		 *           gate, default OFF), else 0 (the abort-with-capture baseline).
+		 *           syscall_entry   = 0x50314ac0 — newworld DEFAULT since Task C
+		 *           (acceptance battery green pre/post-flip); opt-out with
+		 *           SS_NW_SC_SURFACE=0 (polarity mirrors SS_NW_MM_SWITCH) restores
+		 *           the abort-with-capture baseline (syscall_entry = 0).
 		 * Precedence (plan rev 2 P-M1): SS_EXC_ENTRY > SS_NW_SC_SURFACE default > 0.
 		 *
-		 * The override x gate 2x2 (P-M1, pinned):
-		 *   gate OFF, no override      -> {0x50412b1c, 0}            (FATAL sc baseline)
-		 *   gate ON,  no override      -> {0x50412b1c, 0x50314ac0}   (surface armed)
-		 *   gate OFF, SS_EXC_ENTRY=I,S -> {I, S}   override active REGARDLESS of gate —
+		 * The override x gate 2x2 (P-M1, pinned; gate now default-ON, =0 opts out):
+		 *   gate=0,  no override       -> {0x50412b1c, 0}            (FATAL sc baseline)
+		 *   default, no override       -> {0x50412b1c, 0x50314ac0}   (surface armed)
+		 *   gate=0,  SS_EXC_ENTRY=I,S  -> {I, S}   override active REGARDLESS of gate —
 		 *                                 the designed PROBE-S3 no-rebuild channel
-		 *   gate ON,  SS_EXC_ENTRY=I   -> {I, 0x50314ac0}  no-comma form PRESERVES the
-		 *                                 gated syscall default (see trap fix below) */
+		 *   default, SS_EXC_ENTRY=I    -> {I, 0x50314ac0}  no-comma form PRESERVES the
+		 *                                 default syscall entry (see trap fix below) */
 		{
-			const bool sc_surface = MachineEnvFlag("SS_NW_SC_SURFACE");
+			/* Task C flip: default ON; explicit "0" opts out (SS_NW_MM_SWITCH
+			 * polarity — NOT MachineEnvFlag, which would read unset as off). */
+			const char *sc_env = getenv("SS_NW_SC_SURFACE");
+			const bool sc_surface = !(sc_env && strcmp(sc_env, "0") == 0);
 			if (sc_surface) {
 				g_exc_entry_table.syscall_entry = NW_SYSCALL_ENTRY_DEFAULT;
-				/* Task A: loud bring-up line — entry resolved + shim armed. */
-				fprintf(stderr, "[NW-SC] syscall surface armed (SS_NW_SC_SURFACE=1): "
+				fprintf(stderr, "[NW-SC] syscall surface armed (newworld default; "
+				        "opt-out SS_NW_SC_SURFACE=0): "
 				        "entry=0x%08x (primary copy, NK-published [KDP+0x390]); "
 				        "shim=SPRG1:=caller r1, SPRG2:=caller LR\n",
 				        g_exc_entry_table.syscall_entry);
+			} else {
+				fprintf(stderr, "[NW-SC] syscall surface OFF (SS_NW_SC_SURFACE=0 "
+				        "opt-out): syscall_entry=0 — abort-with-capture baseline\n");
 			}
 			const char *exc_env = getenv("SS_EXC_ENTRY");
 			if (exc_env && exc_env[0]) {

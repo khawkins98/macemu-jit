@@ -555,8 +555,20 @@ extern bool SheepExcDeliverPending(void);
 /* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
  * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions).
  * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4).
- * FE1F-service-surface Task A: out[5]=delivered_program (the 6th exc= field). */
-extern "C" void SheepExcStats(uint64_t out[6]);
+ * FE1F-service-surface Task A: out[5]=delivered_program (the 6th exc= field).
+ * Wave-2 W2-3: out[6]=delivered_ext (7th field, appended LAST; emitters print
+ * it only when SheepExcExtConfigured() so gated-off tuples stay byte-identical). */
+extern "C" void SheepExcStats(uint64_t out[7]);
+/* Wave-2 W2-3: the level-held EXC_EXTERNAL source (the OpenPIC output flag,
+ * single-copy-atomic — sheepshaver_glue.cpp owns it; main_unix's PIC output
+ * callback writes it via SheepExcExtSetPending + kicks the CPU thread on the
+ * assert edge, rev 2 F5). SheepExcExtPending: lock-free sample for the
+ * delivery hook + the EE-edge re-raise sites. SheepExcExtConfigured: gates
+ * the exc= tuple's 7th field (set once at PIC bring-up / harness knob). */
+extern "C" int SheepExcExtPending(void);
+extern "C" int SheepExcExtConfigured(void);
+extern "C" void SheepExcExtSetPending(int asserted);
+extern "C" void SheepExcExtConfigure(void);
 /* NK-syscall-surface Task A: the sc-side vector-stub shim (sheepshaver_glue.cpp).
  * Called from execute_syscall's newworld arm when the syscall entry is RESOLVED,
  * before the architectural transition is applied (the DEC-shim seam precedent —

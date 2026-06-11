@@ -174,6 +174,39 @@ EXC_ENV=("${DELIVERY_ENV[@]}")
 check_vector H3_rfi_edge "3C801000 6084401C 7C9A03A6 3CA00000 60A5F072 7CBB03A6 4C000064 48000000" \
     GPR4=1000401c GPR5=0000f072 GPR20=00001040 GPR21=1000401c GPR22=0000f072
 
+# ---- H6 (W2-3): EXT delivery via the mtmsr edge -------------------------------
+# The level-held EXT source (SS_TEST_EXT_PENDING — the PIC-output flag seam)
+# with NO DEC pending; same H1 geometry. ENTRY DISCRIMINATION is the gating
+# trick: interrupt_entry=0 (an EXT delivery wrongly routed to the shared
+# entry FATALs unresolved => no REGDUMP => FAIL), external_entry=stub.
+# r22=0xf072 also pins SRR1.EE=1 (the NK EXT body's punch-through guard).
+EXC_ENV=(SS_TEST_EXT_PENDING=1 SS_TEST_MSR=0x00007072
+         SS_EXC_ENTRY=0,0,0x1000C000 SS_TEST_EXC_STUB=1 SS_TEST_EXC_STATS=1)
+check_vector H6_ext_mtmsr_edge "3C600000 6063F072 7C600124 48000000" \
+    GPR20=00001040 GPR21=1000400c GPR22=0000f072 LR=10008000
+if grep -q "^EXCSTAT: delivered_dec=0 .* delivered_ext=1$" \
+        "$RUN_DIR/H6_ext_mtmsr_edge.interp.log" 2>/dev/null; then
+    report H6_ext_stats 1 "(delivered_ext=1, delivered_dec=0 — EXT branch + external_entry consumed)"
+else
+    report H6_ext_stats 0 "(EXCSTAT delivered_ext=1 not observed)"
+fi
+
+# ---- H7 (W2-3): dual-pending priority — DEC before EXT (U13 live analogue) ----
+# DEC latch armed AND EXT level held; one edge => exactly ONE delivery, and it
+# must be the DEC (one-shot-vs-level-held justification at the hook). The
+# EXCSTAT tuple is the discriminator (the REGDUMP alone cannot tell the source
+# when both entries resolve to the same stub).
+EXC_ENV=(SS_TEST_DEC_PENDING=1 SS_TEST_EXT_PENDING=1 SS_TEST_MSR=0x00007072
+         SS_EXC_ENTRY=0x1000C000,0,0x1000C000 SS_TEST_EXC_STUB=1 SS_TEST_EXC_STATS=1)
+check_vector H7_dual_pending_dec_first "3C600000 6063F072 7C600124 48000000" \
+    GPR20=00001040 GPR21=1000400c GPR22=0000f072
+if grep -q "^EXCSTAT: delivered_dec=1 .* delivered_ext=0$" \
+        "$RUN_DIR/H7_dual_pending_dec_first.interp.log" 2>/dev/null; then
+    report H7_dual_stats 1 "(delivered_dec=1, delivered_ext=0 — DEC-before-EXT order held)"
+else
+    report H7_dual_stats 0 "(EXCSTAT delivered_dec=1/delivered_ext=0 not observed)"
+fi
+
 # ---- H5: sc-class regression (rev 2 F12: process-isolated) -------------------
 # H5r resolved-to-stub: sc delivers; SRR0 ownership = sc+4 (r21=0x10004004).
 EXC_ENV=(SS_EXC_ENTRY=0x1000C000,0x1000C000 SS_TEST_EXC_STUB=1)

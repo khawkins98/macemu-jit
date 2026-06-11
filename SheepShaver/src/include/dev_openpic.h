@@ -70,11 +70,19 @@
  *      glb/cpu) / non-32-bit accesses: all-ones reads, ignored writes,
  *      loud-latch (the absent-device idiom).
  *
- *  Endianness note for the wiring task (DEFERRED): QEMU maps KeyLargo with
- *  the little-endian ops table (list_le).  This module speaks NATURAL
- *  (logical) register values; the byte-lane mapping for the big-endian guest
- *  (lwbrx/stwbrx decode or value swap at the bus boundary) is W2.0-gated
- *  wiring work, not modeled here.
+ *  Endianness note — the W2-3 byte-lane DECISION ([STATIC-oracle], Wave-2
+ *  plan rev 2 F16): QEMU maps KeyLargo with the little-endian ops table
+ *  (list_le).  This module speaks NATURAL (logical) register values; the
+ *  MMIO bus speaks ARCHITECTURAL values (what the BE guest's lwz yields).
+ *  A BE lwz of an LE-mapped natural-value register yields bswap32(value),
+ *  so the bus trampolines in main_unix VALUE-SWAP 32-bit accesses in both
+ *  directions (openpic_bus_read/write).  FALSIFIER (documented per F16; the
+ *  guest has never read the PIC, so the oracle decides until live evidence
+ *  exists): the first live guest FRR read must observe 0x02003F00
+ *  (= bswap32(0x003F0002)); observing 0x003F0002 falsifies the swap —
+ *  guest evidence wins, flip to natural pass-through and record the
+ *  falsification in EE-CHAIN-RECON.md.  The first FRR read is logged loud
+ *  at the trampoline for exactly this purpose.
  *
  *  House rules (MACHINE-LAYER-PLAN §2g): no stdio, no malloc on any
  *  read/write/raise path — warnings are latched (OpenPICTakePendingWarning,
@@ -203,5 +211,17 @@ extern size_t OpenPICFormatStats(const OpenPICDevice *p, char *buf, size_t bufle
 // source that has been IACKed, in source order).  Returns chars written
 // (0 if no IACK was ever delivered).  Safe threads only.
 extern size_t OpenPICFormatFirstIACKs(const OpenPICDevice *p, char *buf, size_t buflen);
+
+// --- Wave-2 W2-3: registered-diag-instance formatters (the VIA/Cuda
+// RegisterDiagInstance idiom) — crash-path/heartbeat telemetry without the
+// consumer holding the device pointer.  All return 0 when no instance is
+// registered (paravirtual / gated-off boots stay byte-identical).  Unlocked
+// counter loads (aligned 64-bit, single-copy-atomic on AArch64 — worst case
+// a slightly stale count; benign for telemetry).  Safe threads only.
+extern void OpenPICRegisterDiagInstance(OpenPICDevice *p);
+extern size_t OpenPICFormatStatsRegistered(char *buf, size_t buflen);
+extern size_t OpenPICFormatFirstIACKsRegistered(char *buf, size_t buflen);
+// Compact heartbeat form: " pic=out:O/r:RAISES/i:IACKS" (leading space).
+extern size_t OpenPICFormatBriefRegistered(char *buf, size_t buflen);
 
 #endif

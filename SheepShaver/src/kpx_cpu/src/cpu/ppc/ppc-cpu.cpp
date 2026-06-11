@@ -28,6 +28,7 @@
 #include "machine_profile.h"   /* M3a Task 4: newworld gate in check_spcflags */
 #include "mmio_bus.h"          /* M6a Wave 1: MMIO region counters on the heartbeat */
 #include "dev_via6522.h"       /* M6a Wave 2 #4: top-2 VIA read registers on the heartbeat */
+#include "dev_openpic.h"       /* Wave-2 W2-3: pic= brief on the heartbeat (registered instance) */
 #else
 #include "basic-kernel.hpp"
 #endif
@@ -278,14 +279,21 @@ static void probe68k_check(powerpc_registers *r, uint32_t bpc) {
 	fprintf(stderr, "[PROBE68K 0x%08x match=%u/%u]\n"
 	        "  d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x d6=%08x d7=%08x\n"
 	        "  a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n"
-	        "  ppc: block=0x%08x r24=%08x r27=%08x r29=%08x lr=%08x ctr=%08x cr=%08x\n",
+	        "  ppc: block=0x%08x r24=%08x r27=%08x r29=%08x lr=%08x ctr=%08x cr=%08x\n"
+	        "  dr-tmp: r0=%08x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x r30=%08x\n",
 	        s_probe68k_pc, s_probe68k_hits, s_probe68k_max,
 	        r->gpr[8],  r->gpr[9],  r->gpr[10], r->gpr[11],
 	        r->gpr[12], r->gpr[13], r->gpr[14], r->gpr[15],
 	        r->gpr[16], r->gpr[17], r->gpr[18], r->gpr[19],
 	        r->gpr[20], r->gpr[21], r->gpr[22], r->gpr[1],
 	        bpc, r24, r->gpr[27], r->gpr[29],
-	        r->lr, r->ctr, r->cr.get());
+	        r->lr, r->ctr, r->cr.get(),
+	        /* desync-task0 (F7-class capture extension): the DR's EA/operand
+	         * pipeline temps — r3=EA, r4=loaded operand, r5=index/resolver
+	         * scratch, r6/r7=d8/extension scratch, r30=DR resolver-table base.
+	         * Capture-only; zero cost when the probe is unset. */
+	        r->gpr[0], r->gpr[3], r->gpr[4], r->gpr[5],
+	        r->gpr[6], r->gpr[7], r->gpr[30]);
 	fflush(stderr);
 	if (s_probe68k_hits >= s_probe68k_max) {
 		s_probe68k_state = 2;
@@ -2609,14 +2617,31 @@ void powerpc_cpu::execute(uint32 entry)
 								 * M6a Wave 1: + MMIO region read counts (memo §5.5a).
 								 * NK-syscall-surface Task A: 5th field = delivered_sc (P-M4).
 								 * FE1F-service-surface Task A: 6th field = delivered_program. */
-								char excbuf[160]; excbuf[0] = 0;
+								char excbuf[224]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
-									uint64_t exc[6];
+									uint64_t exc[7];
 									SheepExcStats(exc);
-									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu/%llu",
-									         (unsigned long long)exc[0], (unsigned long long)exc[1],
-									         (unsigned long long)exc[2], (unsigned long long)exc[3],
-									         (unsigned long long)exc[4], (unsigned long long)exc[5]);
+									/* W2-3: 7th field (delivered_ext) appends only when the EXT
+									 * source is configured (SS_NW_PIC bring-up) - gated-off
+									 * heartbeat lines stay byte-identical to the 6-field baseline.
+									 * The pic= brief (OpenPICFormatBriefRegistered) rides the same
+									 * rule: 0 chars unless the diag instance was registered. */
+									if (SheepExcExtConfigured())
+										snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu/%llu/%llu",
+										         (unsigned long long)exc[0], (unsigned long long)exc[1],
+										         (unsigned long long)exc[2], (unsigned long long)exc[3],
+										         (unsigned long long)exc[4], (unsigned long long)exc[5],
+										         (unsigned long long)exc[6]);
+									else
+										snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu/%llu",
+										         (unsigned long long)exc[0], (unsigned long long)exc[1],
+										         (unsigned long long)exc[2], (unsigned long long)exc[3],
+										         (unsigned long long)exc[4], (unsigned long long)exc[5]);
+									{
+										size_t hb_n = strlen(excbuf);
+										if (hb_n < sizeof excbuf)
+											OpenPICFormatBriefRegistered(excbuf + hb_n, sizeof excbuf - hb_n);
+									}
 									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
@@ -2814,14 +2839,31 @@ void powerpc_cpu::execute(uint32 entry)
 								 * M6a Wave 1: + MMIO region read counts (memo §5.5a).
 								 * NK-syscall-surface Task A: 5th field = delivered_sc (P-M4).
 								 * FE1F-service-surface Task A: 6th field = delivered_program. */
-								char excbuf[160]; excbuf[0] = 0;
+								char excbuf[224]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
-									uint64_t exc[6];
+									uint64_t exc[7];
 									SheepExcStats(exc);
-									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu/%llu",
-									         (unsigned long long)exc[0], (unsigned long long)exc[1],
-									         (unsigned long long)exc[2], (unsigned long long)exc[3],
-									         (unsigned long long)exc[4], (unsigned long long)exc[5]);
+									/* W2-3: 7th field (delivered_ext) appends only when the EXT
+									 * source is configured (SS_NW_PIC bring-up) - gated-off
+									 * heartbeat lines stay byte-identical to the 6-field baseline.
+									 * The pic= brief (OpenPICFormatBriefRegistered) rides the same
+									 * rule: 0 chars unless the diag instance was registered. */
+									if (SheepExcExtConfigured())
+										snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu/%llu/%llu",
+										         (unsigned long long)exc[0], (unsigned long long)exc[1],
+										         (unsigned long long)exc[2], (unsigned long long)exc[3],
+										         (unsigned long long)exc[4], (unsigned long long)exc[5],
+										         (unsigned long long)exc[6]);
+									else
+										snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu/%llu",
+										         (unsigned long long)exc[0], (unsigned long long)exc[1],
+										         (unsigned long long)exc[2], (unsigned long long)exc[3],
+										         (unsigned long long)exc[4], (unsigned long long)exc[5]);
+									{
+										size_t hb_n = strlen(excbuf);
+										if (hb_n < sizeof excbuf)
+											OpenPICFormatBriefRegistered(excbuf + hb_n, sizeof excbuf - hb_n);
+									}
 									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, false, now, interp_block_count,

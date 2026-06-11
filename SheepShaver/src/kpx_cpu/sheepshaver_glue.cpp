@@ -29,6 +29,7 @@
 #include "machine_profile.h"
 #include "mmio_bus.h"
 #include "dev_cuda.h"
+#include "dev_openpic.h"   // W2-3: crash-path [PIC] stats (registered-instance formatters)
 #include "virt_clock.h"
 #include "exc_core.h"
 #include "block-alloc.hpp"
@@ -114,14 +115,28 @@ extern "C" {
  * opt-out with SS_NW_FE1F_SURFACE=0 (explicit-"0"-only, the SS_NW_SC_SURFACE
  * polarity precedent). */
 #define NW_PROGRAM_ENTRY_DEFAULT   0x50314700u  /* primary copy, NK-published [KDP+0x37c] [PROBE✓] */
-ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u, 0u };
+/* Wave-2 W2-3 (rev 2 F6 + Q-W2): the EXT (0x500) entry — the NK-published
+ * external-interrupt handler, [KDP+0x374] = 0x50314880 [PROBE✓ syscall
+ * milestone], primary copy (the same publication-precedent rule as syscall/
+ * program). CONSUMED by ExcEnter(EXC_EXTERNAL) since W2-3 (the sanctioned
+ * U12 flip); inert until an EXT source exists — the only live caller is the
+ * delivery hook's EXT branch, reachable only when the SS_NW_PIC-gated PIC
+ * output is wired AND asserted. Its shim is the sc/program 2-SPR shim
+ * (EE-CHAIN-RECON.md §W2S-2 verdict), NOT the DEC KDP save shim. */
+#define NW_EXTERNAL_ENTRY_DEFAULT  0x50314880u  /* primary copy, NK-published [KDP+0x374] [PROBE✓] */
+ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u, 0u,
+                                    NW_EXTERNAL_ENTRY_DEFAULT };
 
-/* Wave-2 W2-1 (plan rev 2 F1): the SS_EXC_ENTRY=0xINT[,0xSC] override parse,
- * SHARED between the boot path (init_emul_ppc table finalization below) and
- * the SS_TEST harness path (main_unix's harness gate returns before the boot
- * parse ever runs — the F1 fix is calling this from the harness knob block in
- * ss_run_one_vector). The no-comma form PRESERVES syscall_entry (the P-M1
- * trap fix, carried verbatim — only an explicit ",0xSC" field overrides it).
+/* Wave-2 W2-1 (plan rev 2 F1): the SS_EXC_ENTRY=0xINT[,0xSC[,0xEXT]] override
+ * parse, SHARED between the boot path (init_emul_ppc table finalization below)
+ * and the SS_TEST harness path (main_unix's harness gate returns before the
+ * boot parse ever runs — the F1 fix is calling this from the harness knob
+ * block in ss_run_one_vector). The no-comma form PRESERVES syscall_entry (the
+ * P-M1 trap fix, carried verbatim — only an explicit ",0xSC" field overrides
+ * it). W2-3: optional THIRD field overrides external_entry the same way (an
+ * absent field preserves the default; an explicit ",...,0" clears it, which
+ * restores the pre-W2-3 shared-entry fallback — used by the harness EXT
+ * vectors to discriminate which entry a delivery consumed).
  * Returns true iff the env var was present and applied (the caller decides
  * what to log in the no-override case). */
 static bool exc_entry_table_apply_env_override(void)
@@ -131,14 +146,20 @@ static bool exc_entry_table_apply_env_override(void)
 		return false;
 	char *endp = NULL;
 	uint32_t ie = (uint32_t)strtoul(exc_env, &endp, 0);
-	if (endp && *endp == ',')
+	if (endp && *endp == ',') {
+		char *endp2 = NULL;
 		g_exc_entry_table.syscall_entry =
-			(uint32_t)strtoul(endp + 1, NULL, 0);
+			(uint32_t)strtoul(endp + 1, &endp2, 0);
+		if (endp2 && *endp2 == ',')
+			g_exc_entry_table.external_entry =
+				(uint32_t)strtoul(endp2 + 1, NULL, 0);
+	}
 	g_exc_entry_table.interrupt_entry = ie;
 	fprintf(stderr, "[EXC] entry table override (SS_EXC_ENTRY): "
-	        "interrupt=0x%08x syscall=0x%08x\n",
+	        "interrupt=0x%08x syscall=0x%08x external=0x%08x\n",
 	        g_exc_entry_table.interrupt_entry,
-	        g_exc_entry_table.syscall_entry);
+	        g_exc_entry_table.syscall_entry,
+	        g_exc_entry_table.external_entry);
 	return true;
 }
 
@@ -152,6 +173,69 @@ static uint64_t exc_stat_deferred_depth = 0;
 static uint64_t exc_stat_deferred_native = 0;	// M6a W2: deferred during native excursion ([XLM_RUN_MODE]!=0)
 static uint64_t exc_stat_delivered_sc   = 0;	// NK-syscall-surface Task A (plan rev 2 P-M4): delivered sc count
 static uint64_t exc_stat_delivered_program = 0;	// FE1F-service-surface Task A: delivered 0x700 (trap) count
+static uint64_t exc_stat_delivered_ext  = 0;	// Wave-2 W2-3: delivered EXC_EXTERNAL count (7th field, appended LAST)
+
+/* --- Wave-2 W2-3: the EXC_EXTERNAL pending source (the OpenPIC output) -----
+ *
+ * F5 atomicity contract: the PIC's bound-output callback (main_unix) runs
+ * under the PIC bus-region lock on WHATEVER thread mutated the PIC (the CPU
+ * thread via guest MMIO faults, or the scheduler-pump thread via the
+ * SS_SCC_RX_INJECT one-shot -> SCC lock -> PIC lock). The flag is therefore a
+ * single-copy-atomic 32-bit word (never a plain bool), written with release
+ * and read lock-free with acquire at the CPU-thread poll. The CPU kick on the
+ * ASSERT edge (TriggerInterrupt — the DEC-expiry idiom) lives with the
+ * callback in main_unix; a spurious kick is safe (the hook re-gates on real
+ * machine state), a missed kick is not (no 60 Hz safety net on newworld).
+ *
+ * LEVEL-HELD semantics (rev 2 C1, BINDING): the hook never clears this —
+ * only the PIC's deassert edge does (guest IACK/EOI/mask retiring the line,
+ * or the source dropping). Mirrors OpenPICOutputAsserted exactly: main_unix
+ * forwards BOTH edges.
+ *
+ * exc_ext_configured: set once at PIC bring-up (SS_NW_PIC on) or by the
+ * SS_TEST_EXT_PENDING harness knob. Gates the exc= tuple's 7th field so
+ * gated-off boots stay BYTE-IDENTICAL to the pre-W2-3 baseline class. */
+static volatile uint32 exc_ext_pending_flag = 0;
+static volatile uint32 exc_ext_configured = 0;
+/* Tripwire counters (CPU-thread writers in the hook; the SetPending resets
+ * run on the asserting thread — benign telemetry races, counts only). */
+static uint64_t exc_ext_delivs_this_assert = 0;   // EXT deliveries since the last edge
+static uint64_t exc_dec_delivs_while_ext  = 0;    // DEC deliveries with EXT pending, since last EXT delivery/edge
+#define EXC_EXT_RUNAWAY_N    16   /* re-delivery runaway guard (rev 2 C1) */
+#define EXC_EXT_STARVATION_N 64   /* U13 starvation tripwire (rev 2 tension 2) */
+
+extern "C" int SheepExcExtPending(void)
+{
+	return __atomic_load_n(&exc_ext_pending_flag, __ATOMIC_ACQUIRE) != 0;
+}
+
+extern "C" int SheepExcExtConfigured(void)
+{
+	return __atomic_load_n(&exc_ext_configured, __ATOMIC_ACQUIRE) != 0;
+}
+
+extern "C" void SheepExcExtConfigure(void)
+{
+	__atomic_store_n(&exc_ext_configured, 1u, __ATOMIC_RELEASE);
+}
+
+extern "C" void SheepExcExtSetPending(int asserted)
+{
+	__atomic_store_n(&exc_ext_pending_flag, asserted ? 1u : 0u, __ATOMIC_RELEASE);
+	/* Edge bookkeeping for the tripwires (telemetry-only, racy-benign). */
+	exc_ext_delivs_this_assert = 0;
+	exc_dec_delivs_while_ext = 0;
+	/* First few edges to stderr for live triage (the DEC-delivery idiom).
+	 * stdio caveat: the PIC callback path runs under bus locks but never on
+	 * the Mach exception-handler thread for the SCC-inject lever (pump
+	 * thread) and is bounded (<=6 lines) on the fault path — the macio-stub
+	 * first-touch precedent. */
+	static uint64_t edge_count = 0;
+	if (++edge_count <= 6)
+		fprintf(stderr, "[EXC] EXT pending %s (edge #%llu)\n",
+		        asserted ? "ASSERTED" : "deasserted",
+		        (unsigned long long)edge_count);
+}
 
 /* FE1F-service-surface Task C (the authorized fix-budget item, Task B record):
  * the SC delivered-print caps at 5 (live-triage idiom), which left selectors
@@ -823,7 +907,8 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	// hook re-gates on the real MSR) — behavior-identical to the unconditional
 	// if-pending recheck. See ExcEdgeReRaise's header comment.
 	if (MachineProfileIsNewWorld() &&
-	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
+	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -886,7 +971,14 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	// into the MMCB whose slots the NK switch-back save is about to rewrite.
 	// Latch stays set; EE-edge re-raises + the block-boundary poll pick it up
 	// once [0x2810] returns to 0. Newworld-gated by construction.
-	const int pending = VirtClockDECPending(&g_virt_clock) ? 1 : 0;
+	// Wave-2 W2-3: SECOND pending source — the OpenPIC output (level-held,
+	// rev 2 C1). The gates are evaluated ONCE on the combined pending (per-poll
+	// deferral counts keep their pre-W2-3 tuple semantics; with the PIC gated
+	// off ext_pending is constant 0 and this is byte-identical to the DEC-only
+	// hook). Source selection happens after DELIVER.
+	const int dec_pending = VirtClockDECPending(&g_virt_clock) ? 1 : 0;
+	const int ext_pending = SheepExcExtPending();
+	const int pending = dec_pending | ext_pending;
 	ExcDecision decision = ExcDeliveryDecision(pending, current_execute_depth(),
 	                                           msr_reg(), 0);
 	if (decision == EXC_DECIDE_DELIVER)
@@ -907,6 +999,75 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	case EXC_DECIDE_DELIVER:
 		break;
 	}
+
+	// --- Source selection: DEC before EXT (M3b rev 2 m11/C1, justified
+	// locally as required): OEA ranks External ABOVE Decrementer, but our DEC
+	// latch is ONE-SHOT-clear-on-delivery while PIC pending is LEVEL-HELD —
+	// an EXT line safely waits one poll (it stays asserted until the guest
+	// retires it), whereas inverting the order would let a stuck-asserted EXT
+	// line starve the one-shot DEC forever. The U13 starvation tripwire below
+	// bounds the residual risk in the chosen order. ---
+	if (!dec_pending) {
+		// EXT-only delivery (the DEC path below is the pre-W2-3 body, unchanged).
+		const uint32 restart_pc_ext = pc();
+		ExcTransition te = ExcEnter(restart_pc_ext, msr_reg(), EXC_EXTERNAL,
+		                            &g_exc_entry_table);
+		if (te.pc == EXC_PC_UNRESOLVED) {
+			fprintf(stderr, "[EXC] FATAL: EXT delivery with unresolved entry "
+			        "(restart=%08x msr=%08x) - check SS_EXC_ENTRY\n",
+			        restart_pc_ext, msr_reg());
+			abort();
+		}
+		// LEVEL-HELD (rev 2 C1, BINDING): do NOT clear the PIC pending — the
+		// guest's handler retires it (IACK/EOI/mask -> output deassert edge).
+		// At today's frontier that handler is the [KDP+0x5b0] fallback
+		// (0x50325f00, registered-handler table NOT installed — W2L-1);
+		// observe what it does, record honestly.
+		//
+		// The 2-SPR shim (Q-W2 verdict, EE-CHAIN-RECON §W2S-2; the sc/program
+		// precedent): the EXT body 0x50314880 opens with the SHARED save
+		// prologue 0x313d40, which consumes exactly SPRG1 := caller r1 and
+		// SPRG2 := caller LR. Everything else it reads is NK-maintained staged
+		// state. The DEC KDP save shim does NOT transfer (same verdict as sc
+		// Q-S2) — deliberately absent here. Unconditional like the sc/program
+		// shims (no SS_EXC_BARE gate: two register writes, no guest memory).
+		sprg_reg(1) = gpr(1);
+		sprg_reg(2) = lr();
+		// SRR1.EE=1 mandatory (the NK EXT body's punch-through guard PANICS on
+		// EE=0): structurally guaranteed — the EE gate above admits only EE=1
+		// MSRs and ExcEnter keeps the low 16 bits (test_exc_chain pins it).
+		srr0_reg() = te.srr0;
+		srr1_reg() = te.srr1;
+		msr_reg()  = te.msr;
+		pc()       = te.pc;
+		exc_stat_delivered_ext++;
+		// Re-delivery runaway guard (rev 2 C1): EXT is level-held, so each
+		// handler round-trip that fails to retire the line re-delivers on the
+		// next EE rise. N deliveries with no intervening deassert edge = the
+		// guest is not retiring the source — loud once per assert episode.
+		if (++exc_ext_delivs_this_assert == EXC_EXT_RUNAWAY_N)
+			fprintf(stderr, "[EXC] TRIPWIRE: EXT re-delivery runaway - %u "
+			        "deliveries with no PIC retirement (IACK/EOI/mask); the "
+			        "guest handler is not servicing the line\n",
+			        (unsigned)EXC_EXT_RUNAWAY_N);
+		exc_dec_delivs_while_ext = 0;   // EXT got through: starvation reset
+		if (exc_stat_delivered_ext <= 5)
+			fprintf(stderr, "[EXC] EXT delivered #%llu: restart=%08x srr1=%08x "
+			        "msr=%08x -> entry=%08x\n",
+			        (unsigned long long)exc_stat_delivered_ext, te.srr0, te.srr1,
+			        te.msr, te.pc);
+		return true;
+	}
+
+	// DEC delivery (the pre-W2-3 body, unchanged below) + the U13 starvation
+	// tripwire (rev 2 tension 2): EXT pending across >N consecutive DEC
+	// deliveries with no EXT delivery means the DEC-before-EXT order is
+	// starving the level-held source — loud, symmetric to the runaway guard.
+	if (ext_pending && ++exc_dec_delivs_while_ext == EXC_EXT_STARVATION_N)
+		fprintf(stderr, "[EXC] TRIPWIRE: EXT starvation - %u consecutive DEC "
+		        "deliveries with EXT pending and no EXT delivery (U13; "
+		        "DEC-before-EXT order under sustained dual-pending)\n",
+		        (unsigned)EXC_EXT_STARVATION_N);
 	VirtClockClearDECPending(&g_virt_clock);
 
 	const uint32 restart_pc = pc();
@@ -1101,7 +1262,8 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	// W2-0: synthetic-full-edge form of ExcEdgeReRaise (= if-pending re-raise;
 	// behavior-identical — see the predicate's header comment).
 	if (MachineProfileIsNewWorld() &&
-	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
+	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1159,7 +1321,8 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	// W2-0: synthetic-full-edge form of ExcEdgeReRaise (= if-pending re-raise;
 	// behavior-identical — see the predicate's header comment).
 	if (MachineProfileIsNewWorld() &&
-	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
+	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1188,7 +1351,8 @@ inline void sheepshaver_cpu::execute_ppc(uint32 entry)
 	// W2-0: synthetic-full-edge form of ExcEdgeReRaise (= if-pending re-raise;
 	// behavior-identical — see the predicate's header comment).
 	if (MachineProfileIsNewWorld() &&
-	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
+	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
 		trigger_interrupt();
 }
 
@@ -1337,7 +1501,10 @@ extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
 // M6a W2: + out[3] = deferred_native (the native-excursion DEC fence).
 // NK-syscall-surface Task A: + out[4] = delivered_sc (plan rev 2 P-M4).
 // FE1F-service-surface Task A: + out[5] = delivered_program (6th exc= field).
-extern "C" void SheepExcStats(uint64_t out[6])
+// Wave-2 W2-3: + out[6] = delivered_ext (7th field, APPENDED LAST). Emitters
+// print it only when SheepExcExtConfigured() — gated-off boots keep the
+// 6-field tuple byte-identical to the pre-W2-3 baseline class.
+extern "C" void SheepExcStats(uint64_t out[7])
 {
 	out[0] = exc_stat_delivered_dec;
 	out[1] = exc_stat_deferred_ee;
@@ -1345,6 +1512,7 @@ extern "C" void SheepExcStats(uint64_t out[6])
 	out[3] = exc_stat_deferred_native;
 	out[4] = exc_stat_delivered_sc;
 	out[5] = exc_stat_delivered_program;
+	out[6] = exc_stat_delivered_ext;
 }
 
 // C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
@@ -1499,6 +1667,14 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 		if (CudaFormatStatsRegistered(cuda_stats, sizeof(cuda_stats)))
 			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
 		CudaDumpPacketTrace(stderr);   // no-op unless SS_CUDA_TRACE=1
+		// Wave-2 W2-3: OpenPIC counters + the Q8 first-IACK record on the
+		// crash path too (registered-instance formatters return 0 unless the
+		// SS_NW_PIC bring-up registered the PIC — gated-off boots unchanged).
+		char pic_stats[512];
+		if (OpenPICFormatStatsRegistered(pic_stats, sizeof(pic_stats)))
+			fprintf(stderr, "[PIC] %s\n", pic_stats);
+		if (OpenPICFormatFirstIACKsRegistered(pic_stats, sizeof(pic_stats)))
+			fprintf(stderr, "[PIC] first-iacks: %s\n", pic_stats);
 	}
 	// Machine Layer M2 acceptance instrumentation (Task 8): same reasoning for
 	// the virtual-clock telemetry — the [VCLK] atexit dump never runs on the
@@ -1510,13 +1686,20 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// signal death, so emit the counters here too. Newworld-only (the hook never
 	// runs on paravirtual; keeps paravirtual crash output byte-identical).
 	if (MachineProfileIsNewWorld()) {
-		uint64_t exc[6];
+		uint64_t exc[7];
 		SheepExcStats(exc);
+		/* W2-3: the 7th field (delivered_ext) prints only when the EXT source
+		 * is configured — gated-off boots keep the 6-field line byte-identical. */
+		char extbuf[40];
+		extbuf[0] = 0;
+		if (SheepExcExtConfigured())
+			snprintf(extbuf, sizeof extbuf, " delivered_ext=%llu",
+			         (unsigned long long)exc[6]);
 		fprintf(stderr, "[EXC] delivered_dec=%llu deferred_ee=%llu deferred_depth=%llu "
-		        "deferred_native=%llu delivered_sc=%llu delivered_program=%llu\n",
+		        "deferred_native=%llu delivered_sc=%llu delivered_program=%llu%s\n",
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
 		        (unsigned long long)exc[2], (unsigned long long)exc[3],
-		        (unsigned long long)exc[4], (unsigned long long)exc[5]);
+		        (unsigned long long)exc[4], (unsigned long long)exc[5], extbuf);
 		/* Task C: the atexit selector dump does not fire on the signal-death
 		 * path (same reasoning as the counters above) — dump explicitly. */
 		exc_dump_sc_selectors();
@@ -1611,6 +1794,12 @@ static const size_t       SS_TEST_RAM_SIZE     = 16 * 1024 * 1024;
  *                         VirtClockInitHost runs at main_unix's SS_TEST gate
  *                         before ss_run_opcode_test) — only the latch arm is
  *                         missing. Also maps guest lowmem (the F2 fix, below).
+ *  SS_TEST_EXT_PENDING=1  assert the level-held EXT source (the W2-3 PIC-
+ *                         output flag) — the EXT-branch analogue of
+ *                         SS_TEST_DEC_PENDING (re-asserted per vector; the
+ *                         hook never clears a level-held source). Also maps
+ *                         the F2 lowmem page and configures the EXCSTAT
+ *                         7th field (delivered_ext).
  *  SS_TEST_MSR=0xHEX      initial MSR for the vector. Default (unset) is the
  *                         reset_supervisor_for_test value 0xf072 — byte-
  *                         compatible with all legacy vectors; the EE-edge
@@ -1656,6 +1845,7 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 {
 	static int parsed = 0;
 	static int knob_dec_pending = 0;
+	static int knob_ext_pending = 0;
 	static int knob_msr_set = 0;
 	static uint32 knob_msr = 0;
 	static int knob_stub = 0;
@@ -1664,6 +1854,14 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		const char *e;
 		e = getenv("SS_TEST_DEC_PENDING");
 		knob_dec_pending = (e && e[0] && e[0] != '0') ? 1 : 0;
+		/* W2-3: SS_TEST_EXT_PENDING=1 — assert the level-held EXT source (the
+		 * PIC-output flag) directly at the seam the delivery hook samples.
+		 * This is the harness-level EXT delivery exerciser: no PIC/SCC model
+		 * runs here; the knob tests the hook's EXT branch + entry-point
+		 * discrimination + the 2-SPR shim, exactly as SS_TEST_DEC_PENDING
+		 * tests the DEC branch. Needs the same F2 lowmem page. */
+		e = getenv("SS_TEST_EXT_PENDING");
+		knob_ext_pending = (e && e[0] && e[0] != '0') ? 1 : 0;
 		e = getenv("SS_TEST_MSR");
 		if (e && e[0]) {
 			knob_msr = (uint32)strtoul(e, NULL, 0);
@@ -1677,11 +1875,13 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		e = getenv("SS_MACHINE");
 		if (e && e[0])
 			MachineProfileInit();
-		if (knob_dec_pending) {
+		if (knob_dec_pending || knob_ext_pending) {
 #if REAL_ADDRESSING
-			fprintf(stderr, "SS_TEST_DEC_PENDING: unsupported under REAL_ADDRESSING "
-			        "(guest lowmem page 0 is the host NULL page) — knob ignored\n");
+			fprintf(stderr, "SS_TEST_DEC_PENDING/SS_TEST_EXT_PENDING: unsupported "
+			        "under REAL_ADDRESSING (guest lowmem page 0 is the host NULL "
+			        "page) — knobs ignored\n");
 			knob_dec_pending = 0;
+			knob_ext_pending = 0;
 #else
 			uint8 *lm_host = Mac2HostAddr(0);
 			void *lm = mmap((void *)lm_host, 0x4000, PROT_READ | PROT_WRITE,
@@ -1692,7 +1892,9 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 				exit(1);
 			}
 			fprintf(stderr, "[EXC-TEST] guest lowmem [0x0,0x4000) mapped zero (F2); "
-			        "DEC latch armed per vector%s%s\n",
+			        "%s armed per vector%s%s\n",
+			        knob_dec_pending && knob_ext_pending ? "DEC latch + EXT level"
+			        : knob_ext_pending ? "EXT level" : "DEC latch",
 			        knob_msr_set ? "; SS_TEST_MSR set" : "",
 			        knob_stub ? "; capture stub at 0x1000C000" : "");
 #endif
@@ -1703,6 +1905,13 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		/* The latch word is cross-thread atomic on the boot path; the harness
 		 * is single-threaded, but use the module's idiom anyway. */
 		__atomic_store_n(&g_virt_clock.dec_pending, 1u, __ATOMIC_RELEASE);
+	}
+	if (knob_ext_pending) {
+		/* Level-held: assert (and re-assert per vector); the hook never clears
+		 * it — process teardown is the deassert. Configure first so the
+		 * EXCSTAT line carries the 7th field. */
+		SheepExcExtConfigure();
+		SheepExcExtSetPending(1);
 	}
 	if (knob_msr_set)
 		cpu->set_msr_for_test(knob_msr);
@@ -2044,17 +2253,24 @@ regdump:
 		fprintf(stderr, "\n");
 	}
 
-	/* Wave-2 W2-1 (H4 observable): the exc= 6-tuple, one line, knob-gated —
-	 * SS_TEST_EXC_STATS unset => no output, legacy REGDUMP stream unchanged. */
+	/* Wave-2 W2-1 (H4 observable): the exc= tuple, one line, knob-gated —
+	 * SS_TEST_EXC_STATS unset => no output, legacy REGDUMP stream unchanged.
+	 * W2-3: the 7th field (delivered_ext) appends only when the EXT source is
+	 * configured (the SS_TEST_EXT_PENDING knob) — pre-W2-3 lane greps intact. */
 	if (ss_test_exc_stats_enabled()) {
-		uint64_t exc[6];
+		uint64_t exc[7];
 		SheepExcStats(exc);
+		char extbuf[40];
+		extbuf[0] = 0;
+		if (SheepExcExtConfigured())
+			snprintf(extbuf, sizeof extbuf, " delivered_ext=%llu",
+			         (unsigned long long)exc[6]);
 		fprintf(stderr, "EXCSTAT: delivered_dec=%llu deferred_ee=%llu "
 		        "deferred_depth=%llu deferred_native=%llu delivered_sc=%llu "
-		        "delivered_program=%llu\n",
+		        "delivered_program=%llu%s\n",
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
 		        (unsigned long long)exc[2], (unsigned long long)exc[3],
-		        (unsigned long long)exc[4], (unsigned long long)exc[5]);
+		        (unsigned long long)exc[4], (unsigned long long)exc[5], extbuf);
 	}
 
 	/* Batch keeps the CPU + RAM alive for the next vector (torn down once by

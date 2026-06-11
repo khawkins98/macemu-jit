@@ -625,6 +625,42 @@ size_t OpenPICFormatStats(const OpenPICDevice *p, char *buf, size_t buflen)
 	return (n < 0) ? 0 : (size_t)n;
 }
 
+// --- Wave-2 W2-3: registered-diag-instance formatters (header contract) ----
+
+static OpenPICDevice *g_diag_pic;   // prod bring-up registers it (gated on SS_NW_PIC)
+
+void OpenPICRegisterDiagInstance(OpenPICDevice *p)
+{
+	g_diag_pic = p;
+}
+
+size_t OpenPICFormatStatsRegistered(char *buf, size_t buflen)
+{
+	return g_diag_pic ? OpenPICFormatStats(g_diag_pic, buf, buflen) : 0;
+}
+
+size_t OpenPICFormatFirstIACKsRegistered(char *buf, size_t buflen)
+{
+	return g_diag_pic ? OpenPICFormatFirstIACKs(g_diag_pic, buf, buflen) : 0;
+}
+
+size_t OpenPICFormatBriefRegistered(char *buf, size_t buflen)
+{
+	const OpenPICDevice *p = g_diag_pic;
+	if (!p)
+		return 0;
+	uint64_t raises_total = 0, iacks_src = 0;
+	for (int i = 0; i < OPENPIC_NUM_SRC; i++) {
+		raises_total += p->raises[i];
+		iacks_src += p->iacks[i];
+	}
+	int n = snprintf(buf, buflen, " pic=out:%u/r:%llu/i:%llu",
+	                 (unsigned)p->out_asserted,
+	                 (unsigned long long)raises_total,
+	                 (unsigned long long)iacks_src);
+	return (n < 0) ? 0 : (size_t)n;
+}
+
 size_t OpenPICFormatFirstIACKs(const OpenPICDevice *p, char *buf, size_t buflen)
 {
 	size_t pos = 0;

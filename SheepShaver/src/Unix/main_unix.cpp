@@ -120,6 +120,7 @@
 #include "dev_scc8530.h"
 #include "dev_via6522.h"
 #include "dev_cuda.h"
+#include "dev_openpic.h"   // Wave-2 W2-3: OpenPIC bus wiring (SS_NW_PIC)
 #include "adb_stub.h"
 #include "virt_clock.h"
 #include "event_sched.h"
@@ -1362,6 +1363,104 @@ static VIA6522 via;
 // touches them; the VIA stays in M1 loud-stub mode there).
 static CudaDevice cuda;
 static ADBStub adb;
+
+// --- Wave-2 W2-3: OpenPIC bus wiring (env-gated SS_NW_PIC, default OFF) -------
+// Plan: docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md Task W2-3.
+static OpenPICDevice openpic;
+static bool nw_pic_on = false;        // resolved once at bus bring-up
+static bool nw_pic_force = false;     // [DIAG-FORCED] knob (SS_NW_PIC_FORCE=1)
+
+// The EXT pending flag + configure seam live in sheepshaver_glue.cpp (declared
+// in ppc-cpu.hpp, which this file does not include — file-scope externs by the
+// established TriggerInterrupt/main.h pattern, not function-scope ones).
+extern "C" void SheepExcExtSetPending(int asserted);
+extern "C" void SheepExcExtConfigure(void);
+
+// Byte-lane trampolines — the F16 DECISION ([STATIC-oracle]: LE VALUE-SWAP).
+// QEMU maps KeyLargo's MPIC with the little-endian ops table; the model speaks
+// NATURAL register values; the bus speaks ARCHITECTURAL values (what the BE
+// guest's lwz yields). A BE lwz of an LE-mapped natural-value register yields
+// bswap32(value) — so 32-bit accesses are value-swapped in BOTH directions.
+// FALSIFIER (documented per rev 2 F16 — the guest has never read the PIC, so
+// the oracle decides until live evidence exists): the FIRST live guest FRR
+// read must observe 0x02003F00 (= bswap32(0x003F0002)); observing 0x003F0002
+// falsifies the swap — guest evidence wins, flip to natural pass-through and
+// record in EE-CHAIN-RECON.md. The first FRR read and first CTPR write are
+// logged loud below (bounded-once lines; the macio-stub first-touch fprintf
+// precedent for fault-reachable paths, §2g tension documented there).
+static uint64_t openpic_bus_read(void *opaque, uint32_t addr, unsigned size)
+{
+	uint64_t v = OpenPICRead(opaque, addr, size);
+	if (size == 4) {
+		v = (uint64_t)__builtin_bswap32((uint32_t)v);
+		// F16 falsifier observable: the first guest FRR read (glb+0x1000).
+		static bool frr_logged = false;
+		if (!frr_logged && (addr - openpic.base) == 0x1000u) {
+			frr_logged = true;
+			fprintf(stderr, "[PIC] FIRST guest FRR read -> 0x%08x "
+			        "(F16 falsifier: LE value-swap predicts 0x02003F00; "
+			        "0x003F0002 falsifies the swap)\n", (uint32_t)v);
+		}
+	}
+	return v;
+}
+static void openpic_bus_write(void *opaque, uint32_t addr, unsigned size, uint64_t value)
+{
+	if (size == 4)
+		value = __builtin_bswap32((uint32_t)value);
+	// CTPR reset-15 gate observable: distinguishes "guest hasn't initialized
+	// the PIC" from "wiring broken" (W2-3 observability requirement).
+	uint32_t off = addr - openpic.base;
+	if (off == 0x80u || off == 0x20080u) {
+		static bool ctpr_logged = false;
+		if (!ctpr_logged) {
+			ctpr_logged = true;
+			fprintf(stderr, "[PIC] FIRST guest CTPR write: 0x%08x "
+			        "(reset gate 15 %s)\n", (uint32_t)value,
+			        ((uint32_t)value & 0xFu) < 15u ? "OPENS" : "still closed");
+		}
+	}
+	OpenPICWrite(opaque, addr, size, value);
+}
+
+// PIC output -> the CPU-side EXT pending flag + kick (rev 2 F5). Runs under
+// the PIC region lock on whatever thread mutated the PIC (CPU thread via
+// guest MMIO fault, or the scheduler-pump thread via SS_SCC_RX_INJECT ->
+// SCC lock -> PIC lock). Must touch NO device locks (the pic->device
+// direction is forbidden by the documented lock order); it only writes the
+// single-copy-atomic flag and kicks the CPU thread on the ASSERT edge
+// (TriggerInterrupt — the DEC-expiry idiom; pthread_kill is async-safe).
+static void nw_pic_output_edge(void *, bool asserted)
+{
+	SheepExcExtSetPending(asserted ? 1 : 0);
+	if (asserted)
+		TriggerInterrupt();
+}
+
+// Device -> PIC input edges. Both callbacks fire under the OWNING DEVICE's
+// region lock (SCC or VIA) and take the PIC region lock via MMIOBusWithRegion
+// — the documented cross-region order: device -> pic, never pic -> device.
+struct PICInputCtx { unsigned input; bool asserted; };
+static void pic_input_locked(void *opaque)
+{
+	PICInputCtx *c = (PICInputCtx *)opaque;
+	if (c->asserted)
+		OpenPICRaiseInput(&openpic, c->input);
+	else
+		OpenPICLowerInput(&openpic, c->input);
+}
+static void nw_scc_irq_edge(void *, int ch, bool asserted)
+{
+	// Q8 input map: ESCC ch A = 0x25, ch B = 0x24 (dev_openpic.h).
+	PICInputCtx c = { (ch == SCC_CH_A) ? (unsigned)OPENPIC_IRQ_ESCC_A
+	                                   : (unsigned)OPENPIC_IRQ_ESCC_B, asserted };
+	MMIOBusWithRegion(OPENPIC_CORE99_BASE, pic_input_locked, &c);
+}
+static void nw_via_irq_edge(void *, bool asserted)
+{
+	PICInputCtx c = { OPENPIC_IRQ_VIA_CUDA, asserted };   // 0x19
+	MMIOBusWithRegion(OPENPIC_CORE99_BASE, pic_input_locked, &c);
+}
 // Injected Cuda services. now_mac uses the paravirtual local-time convention
 // (plan rev 2 m8: macos_util.cpp TimeToMacTime, Mac-epoch LOCAL seconds — do
 // not re-derive UTC). §2g hardening (Task-3 review): GET_TIME commit runs under
@@ -1415,6 +1514,19 @@ static void mmio_dump_stats_atexit(void)
 			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
 	}
 	CudaDumpPacketTrace(stderr);   // no-op unless SS_CUDA_TRACE=1
+	// Wave-2 W2-3: OpenPIC counters + warning latch + the Q8 first-IACK record
+	// (term-dump path: SS_TERM_DUMP=1 turns SIGTERM into exit(1), so this
+	// atexit IS the slot-boot capture). Silent unless SS_NW_PIC registered it.
+	if (nw_pic_on) {
+		const char *pic_warn = OpenPICTakePendingWarning(&openpic);
+		if (pic_warn)
+			fprintf(stderr, "[PIC] warning: %s\n", pic_warn);
+		char pic_stats[512];
+		if (OpenPICFormatStats(&openpic, pic_stats, sizeof(pic_stats)))
+			fprintf(stderr, "[PIC] %s\n", pic_stats);
+		if (OpenPICFormatFirstIACKs(&openpic, pic_stats, sizeof(pic_stats)))
+			fprintf(stderr, "[PIC] first-iacks: %s\n", pic_stats);
+	}
 }
 
 // ---
@@ -1850,18 +1962,90 @@ int main(int argc, char **argv)
 		SCCReset(&scc, 0xF3012000);
 		VIAReset(&via, 0xF3016000, mmio_via_now_ticks, NULL);
 
+		// Wave-2 W2-3: SS_NW_PIC gate (default OFF; flip-LAST per the plan —
+		// the flip is held pending acceptance, stop-rule 3).
+		{
+			const char *pic_env = getenv("SS_NW_PIC");
+			nw_pic_on = pic_env && pic_env[0] && pic_env[0] != '0';
+		}
+
 		static const MMIODevice macio_stub_dev =
 			{ "macio-stub", NULL, mmio_stub_read, mmio_stub_write, NULL };
 		static const MMIODevice scc_dev =
 			{ "scc8530", &scc, SCCRead, SCCWrite, SCCReadIsIdle };
 		static const MMIODevice via_dev =
 			{ "via6522", &via, VIARead, VIAWrite, NULL };
+		// OpenPIC: contained overlap inside the macio stub (0xF3040000+0x40000
+		// ⊂ 0xF3000000+0x80000) — most-specific wins, the scc/via idiom
+		// (mmio_bus.h:38; no carve needed). Trampolines are the F16 byte-lane
+		// value-swap wrappers above.
+		static const MMIODevice openpic_dev =
+			{ "openpic", &openpic, openpic_bus_read, openpic_bus_write, NULL };
 
 		bool ok = MMIOBusRegister(0xF3000000, 0x80000, MMIO_TRAPPED, &macio_stub_dev)
 		       && MMIOBusRegister(0xF3012000, 0x1000, MMIO_TRAPPED, &scc_dev)
 		       && MMIOBusRegister(0xF3016000, 0x2000, MMIO_TRAPPED, &via_dev);
+		if (ok && nw_pic_on) {
+			// Reset-then-BindOutput order (header contract: reset clears the
+			// binding). Reset BEFORE registration so no fault can ever observe
+			// pre-reset state; the output bind happens below, after the device
+			// edges exist.
+			OpenPICReset(&openpic, OPENPIC_CORE99_BASE);
+			ok = MMIOBusRegister(OPENPIC_CORE99_BASE, OPENPIC_REGION_SPAN,
+			                     MMIO_TRAPPED, &openpic_dev);
+		}
 		if (!ok) { fprintf(stderr, "[MMIO] FATAL: region registration failed\n"); QuitEmulator(); }
 		MMIOBusActivate();
+		if (nw_pic_on) {
+			// Output seam: PIC -> single-copy-atomic EXT flag + CPU kick (F5).
+			OpenPICBindOutput(&openpic, nw_pic_output_edge, NULL);
+			// Source edges (device -> pic lock order, documented at the
+			// callbacks): SCC ch A/B Rx conditions -> inputs 0x25/0x24,
+			// VIA IFR&IER summary -> input 0x19 (Q8 map).
+			SCCBindIRQOutput(&scc, nw_scc_irq_edge, NULL);
+			VIABindIRQOutput(&via, nw_via_irq_edge, NULL);
+			OpenPICRegisterDiagInstance(&openpic);   // heartbeat + crash-path stats
+			SheepExcExtConfigure();                  // exc= tuple gains the 7th field
+			fprintf(stderr, "[PIC] openpic wired: region 0xF3040000+0x40000, "
+			        "inputs scc-a=0x25 scc-b=0x24 via=0x19, byte-lane=LE-value-swap "
+			        "[STATIC-oracle], CTPR reset 15 (silent until guest init)\n");
+			// [DIAG-FORCED] (rev 2 tension 1, sanctioned): SS_NW_PIC_FORCE=1
+			// host-forces the unmask path the guest has not yet programmed —
+			// CTPR=0 + IVPR unmask/level/prio for the three wired sources.
+			// DIAGNOSTIC ONLY, NEVER ACCEPTANCE: it distinguishes wiring-broken
+			// from guest-hasn't-initialized, which CTPR logging alone cannot.
+			// Runs single-threaded at bring-up (before emulation), so direct
+			// model calls (natural values, no byte-lane wrapper) are safe.
+			const char *force_env = getenv("SS_NW_PIC_FORCE");
+			nw_pic_force = force_env && force_env[0] && force_env[0] != '0';
+			if (nw_pic_force) {
+				static const unsigned forced[3] = { OPENPIC_IRQ_ESCC_A,
+					OPENPIC_IRQ_ESCC_B, OPENPIC_IRQ_VIA_CUDA };
+				for (int i = 0; i < 3; i++) {
+					// unmasked, LEVEL sense (the devices hold level
+					// conditions), priority 8, vector = input number
+					// Direct MODEL calls (natural values — deliberately NOT the
+					// byte-lane wrapper; this is the host, not the BE guest).
+					uint32_t ivpr = OPENPIC_IVPR_SENSE |
+					                (8u << OPENPIC_IVPR_PRIO_SHIFT) | forced[i];
+					OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+					             (forced[i] << 5), 4, ivpr);
+					OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+					             (forced[i] << 5) + 0x10, 4, 1u);
+				}
+				OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x20080, 4, 0);  // CTPR=0
+				// SCC enables (WR1 Rx-int / WR9 MIE) are NOT forced here: the
+				// guest's own SCC init (WR9=0xC0 force-hw-reset, the STM table)
+				// would clear them mid-boot. They are re-applied at INJECTION
+				// time instead (the SS_SCC_RX_INJECT one-shot below, under the
+				// SCC region lock) so the injected byte traverses the full
+				// chain mechanically.
+				fprintf(stderr, "[PIC] [DIAG-FORCED] host-forced unmask: CTPR=0, "
+				        "IVPR(0x25/0x24/0x19) unmasked level prio=8; SCC int-enables "
+				        "re-applied at inject time - DIAGNOSTIC, NOT ACCEPTANCE "
+				        "(rev 2 tension 1)\n");
+			}
+		}
 		// M2: VIA timers hang on the event scheduler (eager IFR latch; reads stay
 		// the lazy backstop). Must be after region registration: expiry callbacks
 		// run under the region lock via MMIOBusWithRegion.
@@ -1885,8 +2069,9 @@ int main(int argc, char **argv)
 		CudaRegisterDiagInstance(&cuda);   // crash-path stats (sheepshaver_glue)
 		fprintf(stderr, "[CUDA] model bound to via6522 SR/ORB seam (lazy-only; ADB stub kbd@2 mouse@3)\n");
 		atexit(mmio_dump_stats_atexit);
-		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000 (%s), scc 0xF3012000, via 0xF3016000\n",
-		        mmio_strict ? "strict fence: abort on unmodeled" : "absent-device stub");
+		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000 (%s), scc 0xF3012000, via 0xF3016000%s\n",
+		        mmio_strict ? "strict fence: abort on unmodeled" : "absent-device stub",
+		        nw_pic_on ? ", pic 0xF3040000" : "");
 
 		// SS_SCC_RX_INJECT=DELAY_S:HEXBYTES — debug/demo Rx injection into SCC ch A.
 		// Format: unsigned decimal seconds, colon, then hex byte pairs (no separator).
@@ -1927,6 +2112,17 @@ int main(int argc, char **argv)
 							InjCtx *ctx = (InjCtx *)opaque;
 							SCCInjectRx(ctx->scc, SCC_CH_A, ctx->byte);
 						};
+						// [DIAG-FORCED] (W2-3, rev 2 tension 1): re-apply the SCC
+						// interrupt enables right before injecting — the guest's own
+						// SCC init (WR9 force-hw-reset) cleared any bring-up forcing.
+						// Runs under the SCC region lock like the injection itself.
+						static auto force_enables = [](void *opaque) {
+							SCC8530 *s = (SCC8530 *)opaque;
+							SCCWrite(s, 0xF3012002, 1, 1);     // ch A WR0: point WR1
+							SCCWrite(s, 0xF3012002, 1, 0x10);  // WR1: Rx-int-on-all
+							SCCWrite(s, 0xF3012002, 1, 9);     // WR0: point WR9
+							SCCWrite(s, 0xF3012002, 1, 0x08);  // WR9: MIE
+						};
 						size_t n = inject_bytes.size();
 						uint64_t delay_ns = (uint64_t)delay_s * 1000000000ull;
 						// Shared mutable state captured by the lambda must outlive the timer.
@@ -1936,6 +2132,11 @@ int main(int argc, char **argv)
 						g_event_sched->add_oneshot_timer(delay_ns, [scc_ptr, bytes_heap]() {
 							InjCtx ctx;
 							ctx.scc = scc_ptr;
+							if (nw_pic_force) {
+								MMIOBusWithRegion(0xF3012002, force_enables, scc_ptr);
+								fprintf(stderr, "[PIC] [DIAG-FORCED] SCC WR1=0x10 WR9=MIE "
+								        "re-applied at inject time\n");
+							}
 							for (uint8_t b : *bytes_heap) {
 								ctx.byte = b;
 								MMIOBusWithRegion(0xF3012002, inject_one, &ctx);

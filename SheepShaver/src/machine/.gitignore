@@ -20,3 +20,5 @@ test_dev_cuda
 test_dev_cuda.dSYM/
 test_adb_stub
 test_adb_stub.dSYM/
+test_dev_openpic
+test_dev_openpic.dSYM/

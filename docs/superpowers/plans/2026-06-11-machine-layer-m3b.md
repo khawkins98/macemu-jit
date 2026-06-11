@@ -165,6 +165,21 @@ Decrementer — if DEC-first is kept, justify locally: the DEC latch clears on d
 while level-held PIC pending safely waits one poll.)
 OpenPIC pure module (donor §5.2 surface: FRR/GCR, per-source IVPR/IDR, IACK/EOI/TPR; timers+IPI abort-loudly... now absent-device-consistent: loud-log) at 0xF3040000 (carve the macio-stub overlap); `EXC_EXTERNAL` into the delivery hook (PIC-pending beside the DEC latch, DEC priority); VIA IFR→PIC input 0x19 + SCC→0x24/0x25 assertion edges; first-IACK-per-source logging (Q8 tripwire); tm_task_dat + via_int cluster retirement (real delivery replaces host 60Hz injection — THE deliverability harness vector lands here); SDL_PumpEvents decision (recon option (c): keep + decouple — re-evaluate against what the 68k world needs); nested-execute interrupt-path retirement completion; acceptance = a device-sourced external interrupt delivered through PIC→ExcEnter→NK→rfi on the live boot.
 
+**Wave-2 status (2026-06-11): OpenPIC model + unit tests LANDED per the stop-rule
+disposition** — `dev_openpic.{h,cpp}` + `test_dev_openpic.cpp` (206 checks, machine suite
+12/12 green), a pure module with NO live consumer: the EXC_EXTERNAL wiring (bus registration
+at 0xF3040000, VIA/SCC assertion edges, the M3a delivery-hook extension) remains GATED ON
+W2.0 — the NK-handler recon must resolve the IACK/EOI discrimination and the level-held
+latch semantics before anything binds `OpenPICBindOutput`. Surface per donor §5.2
+(FRR/GCR/SPVE, per-source IVPR/IDR, IACK/EOI/CTPR, raise/lower inputs, edge/level sense);
+timers+IPI+multi-CPU are absent-device-consistent loud-latch (rev: not abort — and
+higher-fidelity than QEMU's mapped-but-dead tmr bank, KEYLARGO_MAX_TMR=0). Q8 first-IACK
+tripwire recorded per source (`OpenPICFormatFirstIACKs`). Oracle: QEMU openpic.c/openpic.h
+@ de5d8bfd6105d3dd3ae668df9762df244a6d1506 (reimplementation, not a port); KeyLargo is
+mapped little-endian in QEMU — the byte-lane decision is wiring-task scope, documented in
+the header. Mutation probes run: 5/5 killed after two added vectors (raise-time CTPR
+boundary, edge-pending consumed on IACK).
+
 ## Self-review record
 Wave-1-before-OpenPIC is sound: the boot's Cuda path is poll-driven (S3 §1.5 — IFR bit 2 + ORB handshake; no interrupt required); the PIC has no live consumer until the 68k world runs further. ADB scope honors the documented decision verbatim. PRAM-in-memory vs M4 NVRAM boundary stated. The post-Cuda spin is an honest unknown gating Wave 2's final shape.
 

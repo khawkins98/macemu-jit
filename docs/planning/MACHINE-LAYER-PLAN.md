@@ -599,3 +599,28 @@ Qualitative shifts:
 - **New honest negative:** the 9.2-on-1.1 demo (M1 consumer (a)) is a testbed, not a
   product milestone — the visible "9.2 splash on the old ROM" win will not become a boot.
   The real 9.2 path runs entirely through the fidelity profile + 9.0.1 ROM (M3→M6).
+
+### Re-score #2 — post-M3a/M3b-Wave-1/M6a-rung-2 (2026-06-11; the two named risk concentrations have landed)
+
+| Bet | Was | Now | Why |
+|---|---|---|---|
+| Platform | ~92% | **~95%** | The machine layer is no longer a bet — it is seven shipped, gated, reviewed milestones (M0–M2, M3a, M3b W1, M6a W1–2 + rung 2) with 353/353 + 11-suite + paravirtual-byte-identical invariants held through every landing. The strangler-fig structure survived two stop-rule firings and a re-scope without destabilizing. |
+| Capability (M7) | ~70–75% | **~80%** | Re-score #1's two named drags both broke favorably: **M3** (the "could eat a month" make-or-break) landed as M3a in ~a day — exc_core + real DEC delivery + sc/rfi semantics, and the syscall surface recon now shows the NK's own syscall machinery running on staged state (selector 0x3f end-to-end with just an entry override). **M6** (the inherited Path-A walls) yielded to seeds + small shims, not the feared 84-shim grind: the DR dispatch repair was three constants + an MSR write; the MixedMode switch was two KDP seeds + a world-flip word. The pattern is now established across five walls: *the staged NK is far more complete than Path A assumed — our obligation keeps reducing to "provide the Trampoline-init surface" (seeds), not "reimplement services".* Residual drag: the unbounded count of remaining walls (CFM, Process Mgr, drivers — each individually small on the evidence, but the tail is unmeasured), the unwired interrupt-delivery chain (EE has never risen on the boot path; Wave-2/via_int territory), and M5's framebuffer aperture before anything is visible. |
+| Vision | unscoreable | unscoreable | Unchanged; still strictly downstream. |
+
+Qualitative shifts:
+- **The "beliefs must become experiments" discipline compounded:** every acceptance this
+  cycle produced a falsification that redirected the plan (the CV-10 SR-int race; the
+  reboot loop being our own scaffolding; the W "advancing" illusion; the 0x5f0 retarget
+  that all prior docs recommended and a red-team killed before it broke the working path).
+  Verify-first framing is now the default task shape, not a review afterthought.
+- **The risk model inverted on M6:** Path A's obstacle map priced the walls as
+  reimplementation; the actual cost profile is recon-heavy/implementation-light (Task 0s
+  routinely consume more effort than the Tasks A they gate — and that is the cheap side).
+- **New honest negatives:** (1) the boot has still never risen past EE=0 — the entire
+  interrupt-delivery chain (PIC wiring, tick restoration, via_int retirement) is unexercised
+  and is the likeliest place for the next M3-class surprise; (2) the device surface beyond
+  Cuda (I2C clock chips, DBDMA probes, the M5 framebuffer) is stubbed-absent and the boot
+  has not yet reached the stage that demands it; (3) M4/M5 remain deliberately unstarted
+  (dispositions recorded in their rows) — correct sequencing, but they are real remaining
+  work inside the M7 estimate, not free.

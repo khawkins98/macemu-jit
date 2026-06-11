@@ -51,19 +51,41 @@
 /* Returned in ExcTransition.pc when the class's table entry is 0 (unresolved). */
 #define EXC_PC_UNRESOLVED   0xFFFFFFFFu
 
+/* FE1F-service-surface Task A (plan rev 3, 2026-06-11): program-exception SRR1
+ * cause bit for a TRAP-type program interrupt (vector 0x700). PEM program-
+ * interrupt SRR1 semantics (32-bit, IBM bit numbering, bit 0 = MSB):
+ *   bit 11 (0x00100000)  FP enabled exception
+ *   bit 12 (0x00080000)  illegal instruction
+ *   bit 13 (0x00040000)  privileged instruction
+ *   bit 14 (0x00020000)  TRAP (tw/twi with condition satisfied)  <- this one
+ *   bit 15 (0x00010000)  SRR0 points at the NEXT instruction (0 for trap:
+ *                        SRR0 = the address of the tw/twi itself)
+ * Only the trap bit is modeled (the only program-exception cause we deliver);
+ * bits 11-13/15 stay 0 by construction. SRR1 low 16 bits keep the MSR snapshot
+ * per EXC_SRR1_KEEP_MASK exactly as for the other classes (masks are LAW). */
+#define EXC_SRR1_PROGRAM_TRAP  0x00020000u
+
 /* --- Types --- */
 
 enum ExcClass {
 	EXC_DECREMENTER,   /* DEC expiry — vector 0x900 */
 	EXC_EXTERNAL,      /* external interrupt — vector 0x500 */
-	EXC_SC             /* sc instruction — vector 0xC00 (EXC_SYSCALL avoided: conflicts with
+	EXC_SC,            /* sc instruction — vector 0xC00 (EXC_SYSCALL avoided: conflicts with
 	                    * macOS SDK <mach/exception_types.h> macro of the same name) */
+	EXC_PROGRAM        /* program interrupt — vector 0x700, trap type (tw/twi taken).
+	                    * SRR0 = the trap instruction itself (verbatim, NOT +4);
+	                    * SRR1 gains EXC_SRR1_PROGRAM_TRAP atop the masked MSR.
+	                    * FE1F-service-surface Task A (appended last). */
 };
 
-/* Entry table: resolved handler PCs. 0 = unresolved (ExcEnter returns EXC_PC_UNRESOLVED). */
+/* Entry table: resolved handler PCs. 0 = unresolved (ExcEnter returns EXC_PC_UNRESOLVED).
+ * Fields are appended LAST only (standing rule — existing aggregate initializers
+ * {intr, sc} keep compiling with program_entry zero-initialized). */
 struct ExcEntryTable {
 	uint32_t interrupt_entry;   /* DEC and EXT share this target */
 	uint32_t syscall_entry;     /* SC target; 0 = descoped/unresolved */
+	uint32_t program_entry;     /* PROGRAM (0x700) target; 0 = unresolved
+	                             * (FE1F-service-surface Task A, appended last) */
 };
 
 /* Result of ExcEnter: the complete machine-state transition to apply atomically. */

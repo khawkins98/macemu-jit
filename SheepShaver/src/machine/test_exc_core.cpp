@@ -112,6 +112,58 @@ int main()
 		CHECK(out_msr2 != M_pow);  /* POW lost -- architecturally correct */
 	}
 
+	/* --- Test 8: EXC_PROGRAM (FE1F-service-surface Task A, plan rev 3) ---
+	 * Trap-type program exception (vector 0x700). Existing tests above are
+	 * untouched (extend, never edit). */
+	{
+		ExcEntryTable tbl = { 0x504268a0u, 0x50312cb0u, 0x50314700u };
+
+		/* 8a: SRR0 = the trap instruction itself, VERBATIM (no +4 — PEM: SRR1
+		 * bit 15 = 0, SRR0 points at the offending tw/twi). The live anchor:
+		 * the slot-8 twi at 0x5046e8e0. */
+		uint32_t twi_addr = 0x5046e8e0u;
+		ExcTransition tp = ExcEnter(twi_addr, 0xf072u, EXC_PROGRAM, &tbl);
+		CHECK(tp.srr0 == twi_addr);
+
+		/* 8b: SRR1 = (msr & KEEP_MASK) | trap bit — the trap-cause literal is
+		 * TEST-PINNED (PEM program-interrupt SRR1 bit 14 = 0x00020000; a literal,
+		 * not the macro — same anti-tautology rule as Test 2). */
+		CHECK(tp.srr1 == (0xf072u | 0x00020000u));
+		ExcTransition tps = ExcEnter(twi_addr, 0xFFFFFFFFu, EXC_PROGRAM, &tbl);
+		CHECK(tps.srr1 == 0x0002FFFFu);  /* low-16 keep + trap bit, nothing else */
+
+		/* 8c: entry MSR transform is class-independent (masks are LAW). */
+		CHECK(tps.msr == 0xFFFB10CDu);   /* same literal Test 2 pins for DEC */
+
+		/* 8d: dispatch target = program_entry; zero -> EXC_PC_UNRESOLVED. */
+		CHECK(tp.pc == tbl.program_entry);
+		ExcEntryTable tbl0 = { 0x504268a0u, 0x50312cb0u, 0u };
+		ExcTransition tu = ExcEnter(twi_addr, 0xf072u, EXC_PROGRAM, &tbl0);
+		CHECK(tu.pc == EXC_PC_UNRESOLVED);
+
+		/* 8e: anti-vacuity — the trap bit is PROGRAM-only; the other classes'
+		 * SRR1 stays pure masked-MSR (no cause-bit leakage). */
+		CHECK((ExcEnter(twi_addr, 0xf072u, EXC_DECREMENTER, &tbl).srr1 & 0x00020000u) == 0u);
+		CHECK((ExcEnter(twi_addr, 0xf072u, EXC_EXTERNAL,    &tbl).srr1 & 0x00020000u) == 0u);
+		CHECK((ExcEnter(twi_addr, 0xf072u, EXC_SC,          &tbl).srr1 & 0x00020000u) == 0u);
+
+		/* 8f: two-field aggregate initializers (the pre-Task-A form) leave
+		 * program_entry zero-initialized -> UNRESOLVED, not garbage. */
+		ExcEntryTable tbl_legacy = { 0x504268a0u, 0x50312cb0u };
+		ExcTransition tl = ExcEnter(twi_addr, 0xf072u, EXC_PROGRAM, &tbl_legacy);
+		CHECK(tl.pc == EXC_PC_UNRESOLVED);
+
+		/* 8g: rfi round trip — SRR0 verbatim means rfi would RE-EXECUTE the trap
+		 * site; the real 0x700 handler advances past it via its own r10+4
+		 * protocol, not via SRR0. Pin the raw ExcRfi reading anyway: pc back =
+		 * the twi address; the trap bit (above the 16-bit RFI window) does NOT
+		 * leak into the restored MSR. */
+		uint32_t out_pc, out_msr;
+		ExcRfi(tp.srr0, tp.srr1, tp.msr, &out_pc, &out_msr);
+		CHECK(out_pc == twi_addr);
+		CHECK((out_msr & 0x00020000u) == 0u);
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

@@ -611,3 +611,145 @@ can drift from this init picture (the probed values match it today).
 | Q-W3 [KDP+0x660] encoding | **PINNED** (bit table §W2S-3; no EXT-pending bit; shim composes nothing) | [KDP-0x10] live value at delivery (rides W2S-R1) |
 | P2 chain READY/BROKEN | — | entirely boot-half (P2) |
 | Nest balance (link 8) | drift MECHANISM pinned static (W2S-R2 signature pre-computed) | live confirmation (P1) |
+
+---
+
+## W2-2 probe session results (boot half: P1 census + F7 gate + P2 storm) — 2026-06-11
+
+> **Status:** the bounded live-probe session (plan Task W2-2, Rev 2 F3/F7/F9 applied).
+> **Boots used: 2 of the ≤4 budget**, both ≤58s, slot protocol (no pkill):
+> P1 = `/tmp/ss-slots/slot0/runs/20260611-212608.4897/`, P2 (storm) =
+> `/tmp/ss-slots/slot0/runs/20260611-212903.5448/`. Binary rebuilt at HEAD
+> (`dd6ba65f` tree: W2-0 extraction + W2-1 knobs + instrument batch + FE1F default
+> all in). Default newworld diagnostic config (9.0.1 ROM, 256MB, nogui).
+> **Frontier signature (F8 staleness anchor for every pin below):** the standing NK
+> boot ceiling — SIGSEGV ea(guest)=0x0fffff42 at mirror-dispatch host pc, guest pc
+> 0x504661a0 (the DSAT-wall-class 68k desync, `8218ee68` recon), ring total
+> 4,480,458 records, `delivered_sc=13 delivered_program=2`, `[CUDA] packets=13 …
+> i2c=9`. The two boots are byte-deterministic against each other (identical watch
+> record numbers #4658/#3391659 across runs).
+
+### W2L-1. Boot P1 — baseline census [PROBE✓]
+
+Env: the plan's P1 probe set + the §W2S-R1 upgrades (r9/[0x658]/[KDP-0x10]) + F9a
+[0x68ffe67c] + W2S-R3 frontier-state fields on the 0x50313bf8 probe;
+`SS_JIT_WATCH_ADDR=2818` (hex per F3), `SS_JIT_TRACE_RING=1`.
+
+- **(F7 gate) PASS — twice.** Terminal tuple in BOTH boots is byte-identical to the
+  pre-W2-0 baseline: `delivered_dec=0 deferred_ee=1 deferred_depth=0
+  deferred_native=0 delivered_sc=13 delivered_program=2` (sc selector census also
+  unchanged: 9 distinct, 0x3f/0x19/0x14/0x0f/0x27/0x40/0x42/0x50/0x4d). The W2-0
+  decision-extraction refactor transposed nothing.
+- **0x50313bf8 (the EE-forcer) live, visit 1:** `r3=0x000000ff r7=0x00200000
+  r11=0x0002f072`. The stub-composed MSR fiction arrives with EE **already set**
+  (0xf072 ⊃ 0x8000) — the `ori r11,r11,0x8000` force is idempotent on this leg;
+  r7 carries exactly the V-seed bit (world-parity 0x00800000 CLEAR at this
+  instant); selector r3=0xff. Only visit 1 was captured (later traversals — ≥13
+  proven by `->50313bf8` watch records — ran chained past the probe dispatch);
+  recorded honestly, not over-claimed.
+- **0x50412b1c never fired** (delivered_dec=0 — no EE rise on a default boot, as
+  expected). W2S-R1's live half (r9/cr6/[KDP-0x10] at the delivery instant) is
+  therefore **unobtainable until a delivery can occur** — see W2L-3.
+- **(W2S-R3 partially → fully pinned, with P2's table fields):**
+  `[KDP+0x5b0]=0x50325f00` (EXT fallback pointer, live), `[KDP-0x338]=0x68ffc1c0`,
+  `[[KDP-0x338]+0x20]=0x00000001` (**< 2 ⇒ every EXT delivery at today's frontier
+  takes the [KDP+0x5b0] fallback** — the registered-handler table is NOT
+  installed), `[+0x38]` base = 0, `[+0x44]` bound = 0 [PROBE✓ P2, visit 1 of
+  0x50313bf8]. Also `[KDP+0x5a0]=0x68ffe000` (DEC-hook slot — raw value recorded,
+  interpretation deferred), `[KDP-0x118]` word = 0x00020000 (reschedule byte at
+  -0x118 itself = 0x00, clear), `[KDP-0x238]=0` (no EXT source code ever posted).
+
+### W2L-2. Nest balance (link 8) — the W2S-R2 signature CONFIRMED, and generalized [PROBE✓]
+
+44 watch transitions on 0x2818 (P1; P2 = same endpoints, 47 with block-attribution
+shifts from the extra probe PCs splitting blocks):
+
+- **Start 0 → first transition #4658: 0 → 0xFFFFFFFF at pc=0x50318000** — the
+  historic lone restore-tail decrement (M3A finding 3, now timestamped live).
+- **Warm switch-backs are BALANCED**: slot-stub entries increment (pc family
+  0x5046de08 ×6, 0x504ff010 ×5, 0x5046fa00/0x5046f900/0x5046e120 ×1 each = 14
+  increments), each paired with a patched-exit decrement — alternating ±1 around
+  −1, exactly the healthy signature.
+- **Every hook DELIVERY drifts the counter −1 unmatched**: runs of consecutive
+  decrements at the patched trap-return exit family (block-entry attribution
+  0x50324524 ×28, 0x503244d4/0x50318000 ×1 each = 30 decrements; the watch `sp`
+  values match the `[EXC] SC delivered` r1 values line for line). Final value
+  **0xFFFFFFF0 = −16 = 1 historic + 13 SC + 15−13=2 PROGRAM deliveries** — the
+  arithmetic closes exactly. Quiescent for the last ~1.09M ring records (the
+  mirror-68k phase touches it never).
+- **Generalization beyond the static prediction:** W2S-1 mismatch #3 predicted the
+  −1-per-DEC-delivery drift; live shows it is −1 per **ANY** ExcEnter-shim delivery
+  (SC and PROGRAM included — all exit through the patched `trap_return` family,
+  which decrements at the 0x318000 stub with no shim-side increment). Drift
+  scales with sc/twi traffic, not just future DEC traffic. Stays negative ⇒
+  `HandleInterrupt`'s `>0` early-out unaffected today; unbounded ⇒ **the W2-4
+  XLM_IRQ_NEST ownership item is now evidence-backed and quantified.**
+
+### W2L-3. Boot P2 — the EE-storm: verdict **LEVER-DEAD** (the storm cannot run under the current armed state)
+
+Env: `SS_M6A_USER_MSR=1` + the P1 set + 0x50429b40 + 0x50412d04 probes + the R-14
+instruments (`[ECB+0xfc]`/`[MMCB+0xfc]` fields on the delivery probe) + the F9c
+Ticks watch (`SS_JIT_WATCH_ADDR=2818,16a`).
+
+- **First line of consequence:** `[NW-TRAMP] V: SS_M6A_USER_MSR=1 ignored under
+  SS_NW_MM_SWITCH=1 (Q-E verdict: per-context MSR via the NK switch; user-msr
+  stays quarantined known-broken diagnostic)`. The quarantine is STRUCTURAL, not
+  advisory: rom_patches.cpp:964–976 — Q-E's per-context-MSR verdict plus the
+  trampoline word budget (pool+switch+user-msr = 49 > 48 slots before the
+  0x429c00 stop stubs). **With the MM switch default-ON (Task Y), the only
+  EE-rise lever we own is a no-op.** The boot ran as a pure baseline replica
+  (tuple, frontier, nest endpoints all byte-identical to P1).
+- **The plan's P2 premise is falsified** — not by the R-2 slide (never reached)
+  but one level earlier: there is no storm to bound. The pre-pinned READY/BROKEN
+  per-link table was **not scored** (no signature of either class appeared; zero
+  DEC deliveries; 0x50412b1c/0x50412d04 probes never fired; Ticks 0x16a watch:
+  zero hits — link-7 starvation visible as total tick silence).
+- **Why the alternative was NOT taken** (one-iteration discipline, recorded):
+  `SS_NW_MM_SWITCH=0 SS_M6A_USER_MSR=1` would re-arm the lever but collapses the
+  boot to the pre-Task-V FE01 retry-spin frontier with the V-seed absent — i.e.
+  it re-runs the rung-1 night-run conditions (already proven, single-datum) and
+  cannot score "the chain under the CURRENT armed state", which is the verdict
+  W2-3/W2-4 gate on. A storm there is evidence about a configuration we no
+  longer ship.
+- **Coherence with the pre-recon (this is the W2S-0 headline validating, not a
+  contradiction):** the `trap_return` patch already removed the NK's rfi resume
+  (the designed EE-riser) from the interrupt/trap exit path, and now the only
+  diagnostic EE lever is structurally quarantined too. Under the current patch
+  set + armed state, **EE has no remaining riser at all on the paths the boot
+  takes**: §B's "EE first rises at an NK rfi" narrows to the un-patched rfi
+  sites (the 0x800 FP-unavail handler's rfi, the vector-stub fast exits, the
+  template page) — none on the current boot's path — or a future deliberate
+  lever (P3-class `SS_EXC_FORCE_EE_AT`, a SECOND session per Rev-2 F9b +
+  Tension 5, source commit + full gates).
+- **P3 not attempted** (per Rev-2 F9b it is a second session; per the task
+  instruction the session STOPS and reports — the coordinator decides whether to
+  schedule it). Boots 3–4 of the budget intentionally unspent: nothing else was
+  pinnable without the lever.
+
+### W2L-4. P4 — depth-deferral carry-forward
+
+`deferred_depth=0` in BOTH boots. **M3a carry-forward #1 remains OPEN** (recorded
+either way, as specified). No delivery request has ever landed during a nested
+EMUL_OP execute on a live boot; unit case U2 + the level-3 telemetry remain its
+only coverage.
+
+### W2L-5. The blocking-answer table (the W2-2 gate — final status)
+
+| Blocking answer | Status | Evidence / residue |
+|---|---|---|
+| Q-W1 r7-flag tree + R-9 arm | **PINNED** (static §W2S-1 + live frontier census) | Tree mapped; R-9 = enabler of the NK 68k-post, not a delivery-time branch. Live residue: r9/cr6/[KDP-0x10] at a delivery instant (W2S-R1) is **inert-by-construction** — no delivery can occur before an EE riser exists; it rides whichever lever next fires a delivery, and W2-3's EXT shim does not depend on it (the 2-SPR shim + published-handler verdict make the 0x412b1c save-and-switch entry's r9 hazard DEC-path-only). |
+| Q-W2 IACK/EOI + source discrimination | **PINNED** (static + live) | No NK IACK/EOI; entry-point + constant source 9 + registered-handler table. Live: table NOT installed at the frontier (`[[KDP-0x338]+0x20]=1`, base/bound=0) ⇒ W2-3's first EXT delivery exits via the `[KDP+0x5b0]` fallback = **0x50325f00** [PROBE✓]; the re-delivery tripwire is load-bearing from delivery #1, as rev 2 C1 said. |
+| Q-W3 [KDP+0x660] EXT encoding | **PINNED** (static; live interface-copy value r7=0x00200000 confirmed at the switch-back probe) | No EXT-pending bit; the W2-3 shim composes nothing into the flags word. [KDP-0x10]-at-delivery rides the same inert residue as Q-W1. |
+| P2 chain READY/BROKEN per link | **NOT SCORED — LEVER-DEAD** (stop-rule event) | The storm lever is structurally quarantined under the default armed state (W2L-3). Per-link table unscorable without a new riser. **W2-3's start decision goes to the coordinator**: either accept the static+W2-0/W2-1 coverage as sufficient de-risking for the EXT path (which does NOT route through the unverified 0x412b1c save-and-switch — it uses the self-contained published-handler shape), or schedule the P3 lever session first. |
+| Nest balance (link 8) | **PINNED — drift confirmed** | −1 per delivery, generalized to ALL hook deliveries (W2L-2); −16 at the frontier; stays negative (benign today); W2-4 ownership input quantified. |
+
+**Session residues (new):**
+- **W2L-R1:** the `[KDP+0x67c]` resolved target is guest-seeded and was never
+  readable this session (the only probes carrying it sit on delivery-path PCs
+  that never fired). F9's "P2 watches its resolved target" is satisfiable only
+  after a first delivery reveals the pointer — fold into the P3-class session.
+- **W2L-R2:** probe sampling vs chaining — 0x50313bf8 captured visit 1 only
+  despite ≥14 traversals; future census probes on hot switch-back PCs should
+  pair with `SS_PROBE_LINEAR=1` (cap permitting) or accept first-visit-only.
+- **W2L-R3 (carried):** W2S-R1/R4/R5/R6/R7/R8 unchanged; R3 retired (pinned
+  above).

@@ -1887,7 +1887,14 @@ void init_emul_ppc(void)
 		 *          synthesized record carries; present in the parcels record table
 		 *          at 0xE1DC)
 		 *   rest   zero (pool pre-zeroed above)
-		 * Scratch record at 0x68ff5000 (next pool page, zeroed, no other users).
+		 * Scratch record at 0x68ff5000 — the machine-detect copy-out writes
+		 * scratch bytes +0x10..+0x17 there, so it is NOT free space.  Rung 2
+		 * Task T: the MM save-record pool, briefly staged at this same address
+		 * (the rev 2 C1 collision), is relocated to 0x68ff5800; the scratch
+		 * page reserve is 0x68ff5000..0x68ff57ff.  Authoritative allocation:
+		 * the "Sub-KDP occupancy map" in M6A-ONGOING-ENTRY-DESIGN.md
+		 * ("Rung 2 contracts") — consult/extend it before placing ANYTHING in
+		 * [0x68ff4000..0x68ffc000).
 		 *
 		 * NOTE: the [KDP+0xfd0] POINTER lives in the KDP page, which NK cold-init
 		 * partially wipes (cf. the KDP+0x6b4 cap clobber, comment below) — the

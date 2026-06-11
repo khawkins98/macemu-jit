@@ -638,3 +638,51 @@ made by the ROM's own native glue (0x500ebc20), so Task V writes seeds, not call
   written at 0x5046e35c — semantics unknown; restored by e408 each cycle, inert so far.
 - **R-9**: the interrupt-handler-side `[KDP+0x660]` flag tests (original O4 probe
   target) — unexercised this boot; same bit family as the pinned consumer.
+
+### Sub-KDP occupancy map (Task T, 2026-06-11 — AUTHORITATIVE; extend before placing anything here)
+
+The mapped+zeroed sub-KDP region is `[0x68FF4000..0x68FFC000)` (32 KB,
+`vm_acquire_fixed` + memset in `sheepshaver_glue.cpp` init_emul_ppc; KDP=0x68FFE000,
+shmem boundary 0x68FFC000). Every known occupant, ascending:
+
+| Range | Size | Occupant | Writer / consumer |
+|---|---|---|---|
+| `0x68FF4000..0x68FF4120` | 0x120 | NKSystemInfo block | glue seeds; NK/ROM read (also PROBE-O2's r5 cold-dispatch value) |
+| `0x68FF4120..0x68FF4DF0` | — | free (reserve for NKSystemInfo growth) | — |
+| `0x68FF4DF0..0x68FF4EBC` | 0xCC | IRP bank table (banks 0–25; irp_base=0x68FF4000, +0xDF0) | glue seeds bank 0; NK reads |
+| `0x68FF4EBC..0x68FF4F00` | — | free | — |
+| `0x68FF4F00..0x68FF4F80` | ~0x80 | 'Hnfo' hardware-info record (`[KDP+0xfd0]` target; fields to +0x76) | glue seeds; ROM machine detect reads |
+| `0x68FF5000..0x68FF5800` | 0x800 (reserve) | 'Hnfo' writable scratch record (`[hnfo_rec+0x08]`); observed writes +0x10..+0x17 (ROM+0xAC20 copy-out) | ROM machine detect writes each cold cycle |
+| `0x68FF5800..0x68FF6080` | 0x880 | **MM save-record pool, 4 × 0x220** (`[ECB+0xE0/E4]`; existence bitmap 0xF0000000) — Task T relocation (was 0x68FF5000, rev 2 C1 collision with the scratch) | trampoline re-seeds per entry; DR allocator 0x5046e304 + NK context save |
+| `0x68FF6080..0x68FF6084` | 4 | **RESERVED: Task-X R2 cold/ongoing discriminator scratch word** | Task X (data-only; not the ROM zero run) |
+| `0x68FF6084..0x68FF7000` | — | free (pool growth headroom if R-1 ever demands it) | — |
+| `0x68FF7000..` | — | NK pool/heap free-list (KDP-0x7000) | NK cold-init builds; extent NK-owned — treat `0x68FF7000..0x68FFC000` as NK territory |
+| `0x68FFB8E0..0x68FFBB00` | 0x220 | NK-supplied initial MM save record (`[MMCB+0xd8]` chain head, Q-A [PROBE✓]) | NK ECB build; DR chain/free |
+
+Notes:
+- The pool's 4-record sizing is Q-A's pinned answer (observed depth 1; fallback rule
+  "4 + loud stop, never guess bigger"). Exhaustion now parks at the slot-15 loud stop
+  `0x50429cf0` (Task T) — the R-1 tripwire.
+- The old pool base 0x68FF5000 was claimed "free gap / no other users" by the seed-site
+  comment — falsified by the repo's own Hnfo seed (glue) + the machine-detect copy-out.
+  Lesson recorded for Task Z: free-space claims in this region require THIS map.
+
+### Task T results (2026-06-11)
+
+- Pool relocated 0x68FF5000 → **0x68FF5800** per the map above; Task-X scratch word
+  reserved at 0x68FF6080.
+- `SS_NW_MM_POOL` promoted to **newworld profile default-ON**; `=0` opts out (A/B),
+  `=1` harmless explicit-on. Paravirtual/OldWorld untouched (whole block inside
+  `MachineProfileIsNewWorld()` gating). NOTE the opt-out A/B semantics changed: with
+  the slot-15 loud stop planted, pool-off now parks the first FE01 at 0x50429cf0
+  instead of reproducing the old ~80 ms reboot loop (loud park > silent loop).
+- Cold-arm invariant (rev 2 C3): the trampoline pool block is split — (a) idempotent
+  constant re-asserts ([0xE0/E4/E8]) safe on every entry; (b) the `[ECB+0xEC]` wipe
+  (2 words, `li r0,0; stw r0,0xEC(r28)`) carries the COLD-ARM-ONLY invariant comment.
+  No structural guard exists yet (no discriminator until Task X builds R2; today
+  always-cold == every-entry, PROBE-O1), so the choice made is: documented invariant +
+  code structured so Task X's discriminator wraps exactly those two words.
+- Slot-15 loud stop: entry-vector slot 15 (ROM+0x46e8fc, verified POWERPC_ILLEGAL==0
+  before write) → `b 0x50429cf0`; parked stub `b *` at mirror 0x50429cf0 (site
+  verified zero before write). PatchROM-time only (rev 2 C4); both writes
+  verify-zero-first (rev 2 C6).

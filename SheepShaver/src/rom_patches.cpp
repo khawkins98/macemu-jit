@@ -802,27 +802,52 @@ bool PatchROM(void)
 		// static table — and the zero-fall-through stub re-enters table[0] →
 		// this trampoline's cold start → 68k reset → the ~80 ms reboot loop.
 		// Probe-verified live: all four words read 0 at the bail.
-		// SS_NW_MM_POOL=1 (default OFF) seeds a 4-record pool at 0x68ff5000
-		// (free gap in the mapped+zeroed sub-KDP region, below the NK pool
-		// free-list at KDP-0x7000). V=P flat model → both bases identical.
+		//
+		// Rung 2 Task T (plan 2026-06-11-m6a-rung2-mixedmode-switch, rev 2 C1):
+		// the pool is now the NEWWORLD PROFILE DEFAULT (SS_NW_MM_POOL=0 opts
+		// OUT for A/B; =1 is a harmless explicit-on no-op).  Base RELOCATED
+		// 0x68ff5000 → 0x68ff5800: the old base was NOT a free gap — it is
+		// the 'Hnfo' machine-detect scratch record (sheepshaver_glue.cpp seeds
+		// [hnfo_rec+0x08] = irp_base+0x1000 = 0x68ff5000, and the ROM
+		// copy-out at ROM+0xAC20 writes scratch +0x10..+0x17 — inside what
+		// was MM save record 0).  New base per the sub-KDP occupancy map
+		// (M6A-ONGOING-ENTRY-DESIGN.md "Rung 2 contracts" → "Sub-KDP occupancy
+		// map"): pool = 0x68ff5800..0x68ff6080 (4 × 0x220), Task-X scratch
+		// word reserved at 0x68ff6080, all clear of NKSystemInfo (0x68ff4000
+		// +0x120), IRP banks (+0xDF0..0xEBC), Hnfo record (0x68ff4f00), Hnfo
+		// scratch (0x68ff5000..0x68ff57ff reserve), the NK free-list
+		// (KDP-0x7000 = 0x68ff7000) and the NK-supplied initial MM record
+		// (0x68ffb8e0).  V=P flat model → virt and phys bases identical.
 		// Guest-side (per-cycle) like the Hnfo re-assert: NK cold-init rebuilds
 		// the ECB every cycle, so glue-time seeds would not survive.
-		// Diagnostic A/B instrument: moves the bail past the allocator so the
-		// NEXT missing NK surface is observable; not a production fix (the
-		// ongoing-entry/table-slot population is Wave-2 — see
-		// M6A-WAVE2-SHIM-RECON.md "MPLibrary bail" section).
-		const bool mm_pool = MachineEnvFlag("SS_NW_MM_POOL");
+		// Pool sizing: 4 records + the slot-15 loud stop (Task-0 Q-A pinned —
+		// observed concurrent depth 1; never guess bigger, residue R-1).
+		const char *mm_pool_env = getenv("SS_NW_MM_POOL");
+		const bool mm_pool = !(mm_pool_env && strcmp(mm_pool_env, "0") == 0);
 		if (mm_pool) {
+			// (a) Idempotent constant re-asserts — SAFE on every entry
+			//     (cold or warm): base pointers + existence bitmap never
+			//     change after provisioning.
 			tp[idx++] = htonl(0x3F8068FFu);  // lis  r28, 0x68ff
 			tp[idx++] = htonl(0x639CF000u);  // ori  r28, r28, 0xf000 → r28=ECB
 			tp[idx++] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
-			tp[idx++] = htonl(0x60005000u);  // ori  r0, r0, 0x5000   → 0x68ff5000
+			tp[idx++] = htonl(0x60005800u);  // ori  r0, r0, 0x5800   → 0x68ff5800
 			tp[idx++] = htonl(0x901C00E0u);  // stw  r0, 0xE0(r28)    pool base (virt)
 			tp[idx++] = htonl(0x901C00E4u);  // stw  r0, 0xE4(r28)    pool base (phys, V=P)
 			tp[idx++] = htonl(0x3C00F000u);  // lis  r0, 0xF000       → 4-slot bitmap
 			tp[idx++] = htonl(0x901C00E8u);  // stw  r0, 0xE8(r28)    existence bitmap
+			// (b) COLD-ARM-ONLY INVARIANT (plan rev 2 C3): the [ECB+0xEC]
+			//     in-use-bitmap wipe is DESTRUCTIVE on a warm re-entry — it
+			//     frees records that may hold live 68k contexts (Tasks V/W
+			//     round trips).  Today table[0] is always-cold (PROBE-O1:
+			//     1 cold entry, 0 re-entries per boot), so every-entry ==
+			//     cold-only and this placement is exact.  Task X's R2
+			//     discriminator MUST wrap exactly these two words inside its
+			//     cold arm (the scratch word reserved at 0x68ff6080 is the
+			//     discriminator's home); the (a) re-asserts above may stay
+			//     on both arms.
 			tp[idx++] = htonl(0x38000000u);  // li   r0, 0
-			tp[idx++] = htonl(0x901C00ECu);  // stw  r0, 0xEC(r28)    in-use bitmap
+			tp[idx++] = htonl(0x901C00ECu);  // stw  r0, 0xEC(r28)    in-use bitmap (COLD ARM ONLY)
 		}
 		tp[idx] = htonl(0x3B800000u);  // li   r28, 0            (restore trampoline invariant)
 
@@ -874,13 +899,50 @@ bool PatchROM(void)
 		sp[0x10 / 2] = htons(0x60FE);  // bra.s *  (A-line stop)
 		sp[0x20 / 2] = htons(0x60FE);  // bra.s *  (F-line stop)
 
+		// Rung 2 Task T (plan rev 2 P2): entry-vector slot 15 (+0x3c) is the
+		// DR allocator's no-free-record bail target (0x5046e304: cntlzw of
+		// [ECB+0xE8] & ~[ECB+0xEC]; exhaustion → b slot 15).  Statically it is
+		// POWERPC_ILLEGAL == 0x00000000 (emul_op.h:26; patch_68k_emul writes
+		// branches at slots 0-3,5 and zeros elsewhere), so exhaustion used to
+		// fall through zeros into table[0] → cold start → the ~80 ms reboot
+		// loop.  Plant a LOUD STOP instead: slot 15 → a unique parked-PC PPC
+		// `b *` self-loop at mirror 0x50429cf0 (the Q-B advance-enumeration
+		// address, above the 0x429c30 budget line; the Task-U slots will use
+		// 0x429c40..0x429cd0).  Any pool exhaustion now parks at a probe-able
+		// PC (SS_PROBE_PC=0x50429cf0) — this is also the pool-sizing tripwire
+		// (residue R-1: re-measured at Task Y via this stop never firing).
+		// With SS_NW_MM_POOL=0 (A/B opt-out) the FIRST FE01 parks here —
+		// a loud park replaces the old reboot-loop signature by design.
+		// Both writes are verify-zero-first (rev 2 C6 — the bra.s stubs above
+		// predate that rule; do not copy them).  PatchROM-time only (rev 2 C4).
+		const uint32 exhaust_stub_offset = 0x429cf0;          // mirror 0x50429cf0
+		const uint32 slot15_offset = 0x46e8c0 + 0x3c;         // entry-vector slot 15
+		uint32 *exhaust_stub = (uint32 *)(ROMBaseHost + exhaust_stub_offset);
+		uint32 *slot15 = (uint32 *)(ROMBaseHost + slot15_offset);
+		if (ntohl(*exhaust_stub) != 0) {
+			fprintf(stderr, "[NW-TRAMP] slot-15 exhaust stub site ROM+0x%x not zero "
+			        "(%08x) — skipping loud stop\n",
+			        exhaust_stub_offset, ntohl(*exhaust_stub));
+		} else if (ntohl(*slot15) != 0) {
+			fprintf(stderr, "[NW-TRAMP] entry-vector slot 15 ROM+0x%x not zero "
+			        "(%08x, expected POWERPC_ILLEGAL=0) — skipping loud stop\n",
+			        slot15_offset, ntohl(*slot15));
+		} else {
+			*exhaust_stub = htonl(0x48000000u);  // b *  (parked self-loop)
+			*slot15 = htonl(0x48000000u |
+			                ((exhaust_stub_offset - slot15_offset) & 0x03FFFFFCu));
+			fprintf(stderr, "[NW-TRAMP] T: slot 15 (+0x3c, allocator exhaustion) → "
+			        "loud stop 0x50429cf0 (b *)\n");
+		}
+
 		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "
 		        "(%u insns), table[0] → trampoline → cold-start\n",
 		        tramp_offset, (unsigned)(b_idx + 1));
 		fprintf(stderr, "[NW-TRAMP] fixup: r31=0x68fff000 r30=0x50460000 "
 		        "r29=0x50480000 guest[4]=0x5000002a guest[0]=0x00100000 "
 		        "user-msr=%s mm-pool=%s\n", user_msr ? "ON (SS_M6A_USER_MSR)" : "off",
-		        mm_pool ? "ON (SS_NW_MM_POOL: ECB+0xE0/E4=0x68ff5000 E8=0xF0000000)" : "off");
+		        mm_pool ? "ON (default; ECB+0xE0/E4=0x68ff5800 E8=0xF0000000)"
+		                : "OFF (SS_NW_MM_POOL=0 opt-out)");
 		fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
 		        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
 		        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "

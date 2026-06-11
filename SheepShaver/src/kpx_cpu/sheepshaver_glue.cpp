@@ -126,6 +126,36 @@ static uint64_t exc_stat_deferred_native = 0;	// M6a W2: deferred during native 
 static uint64_t exc_stat_delivered_sc   = 0;	// NK-syscall-surface Task A (plan rev 2 P-M4): delivered sc count
 static uint64_t exc_stat_delivered_program = 0;	// FE1F-service-surface Task A: delivered 0x700 (trap) count
 
+/* FE1F-service-surface Task C (the authorized fix-budget item, Task B record):
+ * the SC delivered-print caps at 5 (live-triage idiom), which left selectors
+ * #6+ unenumerated once the FE1F surface pushed delivered_sc past 5 (13 on the
+ * Task-A/B boots, only #1-5 printed). Counters-for-counts (plan rev 2 P-m6):
+ * per-selector delivery counts, first 16 DISTINCT selectors in arrival order
+ * (NK gateway bounds-checks selectors vs 0x86; the boot path uses a handful).
+ * Dumped once at exit (atexit, armed on first delivery — newworld-only by
+ * construction: the shim is only called on the resolved newworld sc path) and
+ * explicitly on the crash path (atexit does not fire there). The cap-5 triage
+ * prints stay unchanged. */
+static struct { uint32 sel; uint64_t n; } exc_sc_sel_counts[16];
+static unsigned exc_sc_sel_distinct = 0;
+static uint64_t exc_sc_sel_overflow = 0;	// deliveries beyond 16 distinct selectors
+static bool exc_sc_sel_dumped = false;
+
+static void exc_dump_sc_selectors(void)
+{
+	if (exc_sc_sel_dumped || exc_sc_sel_distinct == 0)
+		return;
+	exc_sc_sel_dumped = true;
+	fprintf(stderr, "[EXC] sc selectors (arrival order, distinct=%u):", exc_sc_sel_distinct);
+	for (unsigned i = 0; i < exc_sc_sel_distinct; i++)
+		fprintf(stderr, " 0x%02x x%llu", exc_sc_sel_counts[i].sel,
+		        (unsigned long long)exc_sc_sel_counts[i].n);
+	if (exc_sc_sel_overflow)
+		fprintf(stderr, " (+%llu deliveries beyond 16 distinct)",
+		        (unsigned long long)exc_sc_sel_overflow);
+	fprintf(stderr, "\n");
+}
+
 // Emulation time statistics
 #ifndef EMUL_TIME_STATS
 #define EMUL_TIME_STATS 0
@@ -1173,6 +1203,22 @@ extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 s
 	ppc_cpu->sprg_reg(1) = caller_r1;	// SHIM WRITE #1: SPRG1 := caller r1
 	ppc_cpu->sprg_reg(2) = caller_lr;	// SHIM WRITE #2: SPRG2 := caller LR
 	exc_stat_delivered_sc++;
+	/* Task C: per-selector count (find-or-append; see exc_sc_sel_counts). */
+	{
+		unsigned i = 0;
+		while (i < exc_sc_sel_distinct && exc_sc_sel_counts[i].sel != selector_r0)
+			i++;
+		if (i < exc_sc_sel_distinct)
+			exc_sc_sel_counts[i].n++;
+		else if (i < 16) {
+			exc_sc_sel_counts[i].sel = selector_r0;
+			exc_sc_sel_counts[i].n = 1;
+			exc_sc_sel_distinct = i + 1;
+		} else
+			exc_sc_sel_overflow++;
+		if (exc_stat_delivered_sc == 1)
+			atexit(exc_dump_sc_selectors);
+	}
 	// First few deliveries to stderr for live triage (the DEC-delivery idiom);
 	// the running total rides the [HB] heartbeat as the 5th exc= field.
 	if (exc_stat_delivered_sc <= 5)
@@ -1409,6 +1455,9 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
 		        (unsigned long long)exc[2], (unsigned long long)exc[3],
 		        (unsigned long long)exc[4], (unsigned long long)exc[5]);
+		/* Task C: the atexit selector dump does not fire on the signal-death
+		 * path (same reasoning as the counters above) — dump explicitly. */
+		exc_dump_sc_selectors();
 	}
 	dump_registers();
 	dump_log();

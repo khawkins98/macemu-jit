@@ -9,6 +9,30 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-12
+
+### [SheepShaver] Machine Layer — tm_task ROM-patch misalignment fixed (the 0x505bb060 slide wall); new frontier = SysError 12 at _InsXTime (`2ff7765f`)
+
+The 0x505bb060 slide (SLIDE-WALL-RECON.md `f786fd99`) is fixed with a
+**verify-EXPECTED-first guard** on the `tm_task` patch's +28 NOP write
+(rom_patches.cpp): the 6 NOPs are written only when both covered slots start a
+`bsr.l` (0x61ff), the 1.1 layout — pinned offline by decoding the 1.1 ROM with a
+throwaway `rom_decode.hpp` host tool (no boot needed; base=0x2f8, two TM-install
+`bsr.l` calls at +28). On 9.0.1 the lenient-relocated anchor (0x262) puts +28
+mid-instruction (observed `038e 2e48 90fc 2000 a02d 6100`) — the guard fires a loud
+`[ROMPATCH] tm_task GUARDED-SKIP (9.0.1 misalignment)` and skips; `SS_NW_TM_TASK_FORCE=1`
+restores the old write for A/B (reproduces the baseline crash tuple exactly).
+Sibling sweep: all 25 lenient-RELOCATED patterns tabled (SLIDE-WALL-RECON appendix);
+tm_task was the only mid-instruction corruptor; one SUSPECT-semantic residue recorded
+(scsi_mgr base+0x20 second-entry stub, unguarded). Gating: ROMType-gated (not
+profile-gated) — paravirtual's 1.1 boot reaches the guard and passes it (byte-identical
+ROM); live `make e2e` smoke PASS. **New frontier P-M4**: a deliberate guest park —
+SysError 12 (dsCoreErr) at 0x500047ae `bra.b *`; probe-pinned D0=0x0c, D1=0xa458 =
+**_InsXTime**: Enable60HzInts now RUNS and dies because OS trap #0x58 (InsTime) has a
+NULL trap-table entry — the 60Hz TM task does not install yet. The chain to ticks is
+now the guest's own InsTime → TM-task → timer-interrupt path (trap-table population +
+real delivery, not ROM patching) — feeds W2-4 directly.
+
 ## 2026-06-11
 
 ### [SheepShaver] Machine Layer Wave-2 W2-4 step 0 — DEC delivery re-pointed to the NK-published handler 0x50313200 + 2-SPR shim (gated, default OFF)

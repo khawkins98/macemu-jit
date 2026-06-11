@@ -388,36 +388,60 @@ NK code maintains it — it is a Trampoline-init surface (on real HW the real sl
 bodies plausibly encode the flip).
 
 ### Task W2: the world-flip discipline (re-scoped from W; supersedes W's remaining scope)
-- [ ] Warm arm (0x50429d00 region): set `[KDP+0x65c] := MMCB (0x68fff400)` before
+- [x] Warm arm (0x50429d00 region): set `[KDP+0x65c] := MMCB (0x68fff400)` before
   `b 0x5046f900`. Slot-1 stub body (ours, patch_68k_emul): prepend
   `[KDP+0x65c] := ECB (0x68fff000)` (idempotent on the first call). Both env-gated
   with `SS_NW_MM_SWITCH` (the slot-1 prepend must be structurally inert when the
   switch is off — same table/stub write discipline as T/U: verify-before-write,
   PatchROM-time only; if the prepend cannot be gated at patch time without changing
   the switch-off stub bytes, gate it at RUNTIME inside the stub via a guarded load —
-  document the choice).
-- [ ] **RED-TEAM-FIRST risk (blocking)**: the M3a DEC shim also consumes
+  document the choice). *(Implemented per rev 3.1 BINDING corrections: slot-1 side =
+  the RETARGETED 7-word region at verified-zero 0x50429d80 (NOT a prepend, NOT
+  patch_68k_emul) + table-word retarget at 0x46e8c4 with verify-EXPECTED ==
+  0x4800113c; warm-arm flip = 5 words inserted before mfctr/b — the W region is now
+  30 words, 0x429d00..0x429d74 end-exclusive 0x429d78. Switch-off: zero writes.
+  + item-6 hardening: cold-arm [KDP-0x14]:=ECB, one word.)*
+- [x] **RED-TEAM-FIRST risk (blocking)**: the M3a DEC shim also consumes
   `[KDP+0x65c]` (the KDP register-save shim saves through r6=[KDP+0x65c]) — the flip
   is architecturally right for it (the interrupted world's ctx is exactly what the
   shim should save into) but UNVERIFIED: a DEC delivery during a native excursion
   would now save into the MMCB instead of the ECB. Verify the shim's full consumption
   chain (and the scheduler-restore side) tolerates MMCB-parked state, or fence DEC
   delivery during native excursions (EE is per-context anyway per Q-E — check what
-  MSR the native ctx runs with), BEFORE implementing.
-- [ ] Round-trip sub-contract (carried from W, now expected to PASS): TVector visit +
+  MSR the native ctx runs with), BEFORE implementing. *(Resolved per rev 3.1 item 3:
+  the DEC fence landed — deliver_pending_dec_exception defers while [XLM_RUN_MODE]
+  (0x2810) != 0; new deferred_native counter (exc= 4th field). Inert live:
+  exc=0/1/0/0. Residues R-14 (backward-half window) + long-term shim-save-target →
+  [KDP-0x14] recorded.)*
+- [x] Round-trip sub-contract (carried from W, now expected to PASS): TVector visit +
   68k resume at 0x5000fcf2 in the r24 ring; e1f4/e408 visits nonzero; cold-once +
-  guest[0]/[4] stability maintained.
-- [ ] Gates: canonical set + switch-off byte-identical boot.
-- [ ] One-iteration rule re-arms for THIS contract (the W falsifications are spent;
-  a NEW falsification of the flip contract = stop-rule, full re-plan).
+  guest[0]/[4] stability maintained. *(PASS — addendum "Task W2 results": TVector
+  visit=1 w/ Q-D-exact registers; ring shows the 0x5000fcf2 → 10024dea/de8 $AAFE
+  chain then CONTINUED execution (no reset signature; literal post-excursion
+  re-record dedup-masked), and the second excursion's resume IS literal in the ring
+  (… 100266f2 → 0 → 1 → 50033776 …) matching the probed [saveblk+0x3c]=0x50033776;
+  e1a0 + e1f4 execute (e1f4 r6=0xff command byte live; e408 0 block-entry visits —
+  chained, recorded); cold-once + stability PASS. Diagnostic frontier: sc at
+  0x500d638c, unresolved syscall_entry — stop-rule trigger 2's named wall, captured.)*
+- [x] Gates: canonical set + switch-off byte-identical boot. *(build-ss OK; batch +
+  plain test-jit 353/353 score=100; machine 11/11 ALL PASS (4794 checks); e2e-test
+  122 passed; paravirtual make e2e PASS; switch-off boot = baseline signature
+  (0 TVector, comp 3573, FE01↔NK spin, no W/W2 writes).)*
+- [x] One-iteration rule re-arms for THIS contract (the W falsifications are spent;
+  a NEW falsification of the flip contract = stop-rule, full re-plan). *(Zero
+  falsifications — no re-pin boot consumed.)*
 
 Task X's remaining scope after W's partial landing: R3 choice is MADE (warm arm →
-`b 0x5046f900` stub route landed in W; the [KDP+0x5f0/4] retarget question must be
+`b 0x5046f900` stub route landed in W; ~~the [KDP+0x5f0/4] retarget question must be
 re-checked — W's warm arm uses the displaced original slot-0 stub which exits via
-[KDP+0x5f0]); R4 ([KDP+0x660] flags) landed in V; R2 (discriminator) landed in W
-(Task X refines the scratch-word protocol if needed). Task X collapses into: the
-[KDP+0x5f0/4] mirror-retarget verification + the post-W2 re-census + the X
-sub-contracts. Then Y (acceptance + flip-last) and Z (docs) as planned.
+[KDP+0x5f0]~~ **STRUCK per rev 3.1 item 4 — verify-and-leave**: the live
+[KDP+0x5f0/4] values are NK-rebuilt staged addresses (0x50313bf8/0x503143a0, Q-C
+probe authoritative), the warm path traverses them correctly, and retargeting would
+destroy both switch directions); R4 ([KDP+0x660] flags) landed in V; R2
+(discriminator) landed in W (Task X refines the scratch-word protocol if needed).
+Task X collapses into: the [KDP+0x5f0/4] verify-and-leave check + the post-W2
+re-census + the X sub-contracts. Then Y (acceptance + flip-last) and Z (docs) as
+planned.
 
 ### Rev 3.1 — W2 red-team verdict folded (GO-WITH-CHANGES; the corrected design is BINDING)
 1. Slot-1 side = a retargeted **switch-on-only 7-word region** in PatchROM_NW_trampoline

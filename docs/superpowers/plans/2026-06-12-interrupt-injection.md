@@ -9,7 +9,8 @@
 
 **Goal:** Route host-side interrupt posts — timer expiry (`INTFLAG_TIMER`) first; SCC/VIA
 later — into the guest's **own** level-1 interrupt chain, with no host-thread injection
-and no fake-poke: host post → EXT pending (the W2-3 level-held seam; PIC-source semantics)
+and no fake-poke: host post → EXT pending (the W2-3 seam; **rev 2 A1: the host source is
+a deliver-once-per-assert-edge latch, NOT PIC-level semantics — see Rev 2**)
 → `ExcEnter(EXC_EXTERNAL)` delivery to the NK-published handler (`external_entry` =
 `[KDP+0x374]` = **0x50314880**, wired since W2-3, pre-positioned, **never live-fired**) →
 the NK's own dispatch → the NK's 68k-interrupt post (`sth →[[KDP+0x67c]]` + `[KDP+0x674]`
@@ -29,9 +30,12 @@ path. No new exception machinery — exc_core, the delivery hook's EXT branch, t
 level-held `exc_ext_pending_flag` seam (`SheepExcExtSetPending`, glue :231–271), and
 `external_entry=0x50314880` all shipped with W2-3 (gated-off, harness-proven H6/H7). What
 this milestone adds is (a) a **host interrupt source** for that seam — `InterruptFlags≠0`
-as a level, asserted by `SetInterruptFlag` and retired by `ClearInterruptFlag` (OP_IRQ's
-consumption), host-owned retirement so no guest IACK/EOI is needed (the NK has none —
-W2S-2 pinned) — and (b) whatever minimal NK-side conformance Task 0 pins so the EXT body
+asserted by `SetInterruptFlag`, retired by `ClearInterruptFlag` (OP_IRQ's consumption),
+host-owned retirement so no guest IACK/EOI is needed (the NK has none — W2S-2 pinned);
+**rev 2 A1/A2: forwarded as a once-per-assert-edge latch, not a bare level (livelock,
+statically determined), and retirement is `HasMacStarted()`-gated — pre-warm-start the
+level never deasserts by ANY route (see Rev 2 + Task B's regime split)** — and (b)
+whatever minimal NK-side conformance Task 0 pins so the EXT body
 reaches the 68k post. **The open architecture fork (PIC-routed EXT vs DEC-tick piggyback)
 is confronted in Task 0 Q-I1/Q-I2 with a pre-stated decision rule** — see "The fork"
 below; the *full*-fidelity PIC traversal (guest programs CTPR/masks, guest IACKs) is
@@ -66,7 +70,11 @@ W2-2 link 6), the plan re-pins to **DEC-tick piggyback**: the host level then ar
 acceptance chain from the post onward. If NEITHER body reaches the post without unstaged
 NK surfaces, the stop-rule fires (trigger 1) — no improvised host-side transcription of
 the post (writing `[[KDP+0x67c]]`/CR from the host IS the fenced fake-poke by another
-name; rejected in advance).
+name; rejected in advance). **(Rev 2 A1+A2: the decision rule is RE-STATED in the Rev 2
+section — the host source is edge-latched on EITHER route (a bare level under the riser
+is a statically-determined livelock), and the round-trip acceptance is split by the
+`[0xcfc]` warm-start regime. The Rev 2 statement overrides this paragraph where they
+differ.)**
 
 ---
 
@@ -86,7 +94,14 @@ charged to Task 0's budget):
 | E4 | The **new default-boot frontier signature** published (the inj-s-fixes close-out: term-dump exc= tuple shape, sc-selector census, park signature) | its addendum in INTERRUPT-INJECTION-RECON.md / CHANGELOG | the baseline class every A/B boot in this plan diffs against (Q-I5 starts from it, doesn't re-derive it) |
 
 **If any row is red or absent: HOLD — report to the coordinator; do not start Task 0
-against a moving baseline.** If inj-s-fixes shipped item 2 with a different mechanism
+against a moving baseline.** **(Rev 2 B3 — partial-green policy, stated deliberately:
+HOLD is TOTAL — no static-only continuation carve-out. Rationale: every Task 0 question
+including the static ones is scoped against E4's published frontier class; static work
+against an unpinned baseline re-derives it, which is exactly the waste the gate exists
+to prevent. The "≤1 verification boot" allowance covers ALL ambiguous rows co-scheduled
+in that one boot (probes for E1, signature grep for E2/E3/E4 from the same run); if one
+boot cannot cover every ambiguous row ⇒ HOLD, report.)** If inj-s-fixes shipped item 2
+with a different mechanism
 than "re-arm the HANDLE spcflag" (recon Q4 option c), read its record and carry the
 as-landed mechanism's name into this plan's boots — the signature (E3) is what binds,
 not the mechanism.
@@ -101,8 +116,8 @@ not the mechanism.
 | `docs/planning/machine/EE-CHAIN-RECON.md` D-6/D-7 + W2-2/W2S/W2L sections | The riser + cadence state: riser as-built (0x318000 stub, EE-only compose); D-6 storm-scale delivery proof (12.4M deliveries, handler clean); D-7 the KDP+0xf2c frequency staging (`f31d475e`) — cadence HEALTHY (mtspr_dec=8, 1.042 ms timeslice); **link-7 consumption OPEN** ("nothing posts Ticks even when delivered"); XLM_IRQ_NEST drift −1/delivery DEFERRED (item 2); W2S-1 the r7-flag tree + **the 68k post** (`r23:=[KDP+0x67c]`, `r28:=level\|0x8000`, bit-0x0a test, `sth →[[KDP+0x67c]]` + `[KDP+0x674]` CR OR; callers = service bodies + init `bl 0x3254a0` ×2); W2S-2 **NO NK IACK/EOI anywhere**; registered-handler table `[KDP-0x338]` NOT installed at frontier → fallback `[KDP+0x5b0]`=**0x50325f00**; W2S-3 no EXT-pending bit (external-ness = entry point + constant code 9); the KDP+0x360 published vector table (0x500→0x50314880, 0x900→0x50313200); W2L-R1 (the [KDP+0x67c] resolved target never live-read — Q-I2 retires it) |
 | `docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md` W2-3 (DONE note + body) | The as-landed EXT machinery this plan turns on: OpenPIC wired gated-off under `SS_NW_PIC` (bus 0xF3040000+0x40000, model `b86449c9` 206 checks); `external_entry`=0x50314880 (the sanctioned U12 flip — NOT the shared interrupt_entry); **level-held latch semantics BINDING (rev 2 C1)** — the hook never clears EXT pending, only the deassert edge does; the runaway (N=16) + U13 starvation (N=64) tripwires; DEC-before-EXT priority with the m11/C1 justification; the live facts: PIC reads=0 writes=0, CTPR=15, flip HELD per stop-rule 3; harness H6/H7 (entry discrimination + dual-pending priority) 9/9 |
 | `docs/planning/MACHINE-LAYER-PLAN.md` | The strategy frame (real device models, real exception delivery, no paravirtual fictions on newworld; §2d CPU-core honesty — profile seams on slow paths only); the M3b/W2-4 rows this milestone completes; **§9 stop-rules + re-score conventions** (re-score #3 is due at the next checkpoint — Task Z reminds the coordinator) |
-| `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` | The live sites: `exc_ext_pending_flag`/`SheepExcExtSetPending`/`SheepExcExtConfigure` + the F5 atomicity contract (:211–271); the delivery hook's EXT branch + `exc_stat_delivered_ext` (7th exc= field, :1076–1090); the tripwire counters (:233–238); `SS_EXC_ENTRY` third-field external override (:151–177); the exc= tuple layout (:1558–1572) |
-| `SheepShaver/src/Unix/main_unix.cpp` (:2792–2800, :2640–2660) + `SheepShaver/src/timer.cpp` (:548/572/596, :607–640) + `SheepShaver/src/emul_op.cpp` (OP_IRQ :811–840) | The host-source donor sites: `SetInterruptFlag`/`ClearInterruptFlag` (the level this plan forwards); the three PRECISE_TIMING-flavor expiry posts; OP_IRQ's per-flag consumption (`ClearInterruptFlag(INTFLAG_VIA/SERIAL/ETHER)` visible; **INTFLAG_TIMER's clear site is a Task 0 verification item**, Q-I4); `TimerInterrupt()` |
+| `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` | The live sites: `exc_ext_pending_flag`/`SheepExcExtSetPending`/`SheepExcExtConfigure` + the F5 atomicity contract (:211–271; SetPending body ~:260–268 — a single 0/1 word, rev 2 A5); the delivery hook's EXT branch + `exc_stat_delivered_ext` (~:1095–1155 at rev 2: tripwire print :1132, `EXT delivered #N` print :1138 — re-verify before editing, the file moves); the tripwire counters (:241–245); `SS_EXC_ENTRY` third-field external override (:151–177); the exc= tuple layout (:1558–1572); the six EE re-raise compose sites that include `SheepExcExtPending()` (glue :952/:1373/:1432/:1462 + `ppc-execute.cpp` :1434/:1733 — rev 2 A1's livelock census) |
+| `SheepShaver/src/Unix/main_unix.cpp` (:2792–2800, :2640–2660) + `SheepShaver/src/timer.cpp` (:548/572/596, :607–640) + `SheepShaver/src/emul_op.cpp` (OP_IRQ :811–855) | The host-source donor sites: `SetInterruptFlag`/`ClearInterruptFlag` (the level this plan forwards); the three PRECISE_TIMING-flavor expiry posts; OP_IRQ's per-flag consumption — **(rev 2 A6/A2) INTFLAG_TIMER's clear site is VISIBLE at emul_op.cpp:841 (`ClearInterruptFlag(INTFLAG_TIMER); TimerInterrupt();`) — the open Task 0 item is NOT finding it but the `HasMacStarted()` gate around the WHOLE flag-consuming block (emul_op.cpp:814; `[0xcfc]=='WLSC'` warm-start flag, `SheepShaver/src/include/macos_util.h:373–376`), unset at our frontier — see Q-I4(a)**; the `[KDP+0x67c]` pending-word clear at :812 sits OUTSIDE that gate (the 68k-side handshake IS pre-warm-start-reachable); `TimerInterrupt()` |
 | `docs/planning/machine/TRAP-TABLE-RECON.md` "FIX RECORD — instime-fix" | The TM trap-table state on 9.0.1 (entries #0x58/59/5a/93 → 0x2fd2xx, re-verified [PATCH-fresh] recon boot 3) — the host Time Manager (timer.cpp) is the timer model on BOTH profiles; the 60 Hz task proc is 0x5000bbb8 with the `jmp ([$568])` re-prime + `addq.l #1,$16a` |
 | `docs/AGENT-CONTEXT.md` + `SheepShaver/tools/README-slots.md` | Boot/probe/gate mechanics: slot protocol, `--expect`/`--absent` boot verdicts, `tools/gates.sh <tier>`, probe limits (8 PCs/run, 68k PCs probe-blind → `SS_PROBE_68K`), watch = hex + needs `SS_JIT_TRACE_RING=1`, ring-walk tooling, evidence tags |
 
@@ -128,21 +143,40 @@ not the mechanism.
   asserting thread: `SetInterruptFlag` runs on host timer/pump threads — the existing
   contract already anticipates non-CPU-thread assertion + a TriggerInterrupt-style kick
   on the assert edge; **a missed kick is not safe** (no 60 Hz safety net on newworld) —
-  the kick is part of Task A's contract.
-- **Level-held semantics are BINDING** (W2-3 rev 2 C1): the hook never clears EXT
-  pending. For the host source, the deassert edge = `ClearInterruptFlag` bringing
-  `InterruptFlags` to 0 (or the timer flag specifically — Task 0 Q-I4 pins the exact
-  level predicate: all-flags vs per-flag). Retirement is HOST-owned; no guest IACK
-  exists or is needed (W2S-2).
-- **The named nesting hazard (red-team this hard):** EXT pending stays asserted from
-  host post until OP_IRQ consumes the flag — an interval spanning the whole NK→68k→
-  via_int→OP_IRQ chain. Every EE rise inside that interval re-delivers EXT (level-held +
-  the runaway tripwire N=16 fires at 16 deliveries/assert). Whether the NK/68k chain
-  masks this naturally (the posted level rides the 68k SR mask; what rides the PPC EE
-  between NK exit and OP_IRQ?) is Q-I4's second half. If natural masking does not exist,
-  the candidate in-architecture damper is delivering EXT only when not already inside an
-  undelivered post window (a host-side once-per-assert latch on the DELIVERY side is a
-  semantic change to C1 — needs a written justification, default NO).
+  the kick is part of Task A's contract. **(Rev 2 A5: `SheepExcExtSetPending` stores a
+  single 0/1 word (`asserted ? 1u : 0u`, glue ~:260–268) — two independent sources
+  (host + PIC) forwarding edges into it CLOBBER each other (a PIC deassert would drop a
+  still-asserted host level and vice versa). Task A must either OR the sources at the
+  forwarding site (per-source state, composed before the store) or land a
+  mutual-exclusion assert (SS_NW_HOST_IRQ and SS_NW_PIC's bound output may not both
+  forward — acceptable this milestone since SS_NW_PIC stays held, but the assert makes
+  the latent clobber loud instead of silent).)**
+- **Level-held semantics are BINDING for PIC sources** (W2-3 rev 2 C1): the hook never
+  clears EXT pending; only the PIC's deassert edge does. **(Rev 2 A1: the HOST source is
+  NOT a PIC source — it is pinned as deliver-once-per-assert-edge, its own latch beside
+  the PIC seam; a THIRD semantics next to level-held-PIC and one-shot-DEC. C1 stays
+  binding, untouched, for real PIC sources.)** For the host source, the deassert edge =
+  `ClearInterruptFlag` bringing `InterruptFlags` to 0 (or the timer flag specifically —
+  Task 0 Q-I4 pins the exact level predicate: all-flags vs per-flag). Retirement is
+  HOST-owned; no guest IACK exists or is needed (W2S-2). **(Rev 2 A2: retirement is
+  additionally gated by `HasMacStarted()` — `[0xcfc]=='WLSC'`, unset at our frontier —
+  so pre-warm-start NO route deasserts the level; the deliver-once-per-edge latch is
+  what makes a pre-warm-start host post safe-but-unconsumed instead of a storm.)**
+- **The nesting livelock (rev 2 A1 — was "hazard"; now STATICALLY DETERMINED):** a bare
+  level-held EXT source under the riser is a CLOSED LIVELOCK, no boot needed to know it:
+  (i) the delivery restart PC is the not-yet-executed block start (the block-entry poll
+  stores it before any body code runs — glue, the `restart PC = block-start` contract
+  note ~:1054–1060), so the interrupted block makes no progress across a delivery;
+  (ii) all SIX EE re-raise compose sites include `SheepExcExtPending()` (glue :952/
+  :1373/:1432/:1462 + ppc-execute.cpp :1434/:1733) — every rfi/mtmsr EE rise re-delivers;
+  (iii) the hook never clears EXT (C1 binding); (iv) retirement (OP_IRQ's
+  `ClearInterruptFlag`) requires exactly the 68k progress the re-delivery storm prevents
+  — AND is HasMacStarted-gated besides (A2). Therefore the damper default is INVERTED
+  from rev 1: **the host source ships as a deliver-once-per-assert-edge latch (consumed
+  at delivery, re-armed only by the next assert edge) — this is Q-I4's DESIGN
+  deliverable, not a "find the natural masking" question.** "No damper" is not a
+  candidate; DEC-piggyback (which inherits DEC's one-shot clear-on-delivery) is the
+  alternative shape if Q-I1 re-pins the route.
 - **Riser/published-DEC config:** `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` are still
   default-OFF gates (their flip was reserved as "W2-4 final acceptance" — this milestone
   IS that acceptance work; Task C owns the cluster-flip decision). All live boots in
@@ -190,31 +224,65 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   is the post a callable service expecting arguments, and from which leg is it invoked
   with level-1?). One candidate live boot allowed (`SS_TEST_EXT_PENDING` or
   `SS_EXC_ENTRY` third field; riser+published on) to observe where a single forced EXT
-  delivery actually exits (probe 0x50314880 + 0x50325f00 + the post site).
+  delivery actually exits (probe 0x50314880 + 0x50325f00 + the post site). **(Rev 2
+  hint, red-team A: the fallback pointer 0x50325f00 lies INSIDE the 0x3258e0–0x326380
+  service-body range whose 9 tail-branches reach the 68k post (W2S-1, EE-CHAIN-RECON
+  :433–434) — the frontier "fallback swallow" may itself BE a post-reaching service
+  body. Start the static walk there.)**
 - [ ] **(Q-I2 — blocks Task A/B) The post's live targets:** probe `[0x68ffe67c]`
   (the pointer), `[[KDP+0x67c]]` resolved target value-before, `[0x68ffe674]` (CR mask)
   in the cold 68k world — retires W2L-R1. Pin: is the resolved target the DR emulator's
   pending word the 68k dispatch polls (and at what 68k-side check site)? **Deliverable:
   the watch address for Task B (the RESOLVED target — the watch instrument cannot follow
-  pointers) + the expected written value (`level|0x8000` class).**
+  pointers) + the expected written value (`level|0x8000` class).** *(Rev 2 B4 residue
+  fallback: if the cold-world probe boot is inconclusive (pointer null/unmapped at the
+  frontier), the [STATIC] fallback is the NK init writers of `[KDP+0x67c]` (the
+  `bl 0x3254a0` ×2 init callers, W2S-1) — pin the target class statically, mark the live
+  value a residue, and Task B's watch gate downgrades to probe-on-first-post.)*
 - [ ] **(Q-I3 — blocks Task B) The 68k consumption side:** from the resolved pending
-  word to OP_IRQ — static on the patched via_int chain: the 68k level-1 entry PC for
-  `SS_PROBE_68K`, the via_int head (file 0xef2c → its runtime 68k address), the fe6b
-  OP_IRQ site (file 0xbbc8 / proc 0x5000bbb8), and the CR-arm consumption (who reads
-  the CR mask the post ORs in). **Deliverable: the 68k probe-PC list + the expected
-  visit order for one tick.**
-- [ ] **(Q-I4 — blocks Task A) Host-source mapping + retirement + the nesting hazard:**
+  word to OP_IRQ — static on the patched via_int chain (**68k disassembly via
+  `tools/m68k-dis.py`** — capstone-M68K mis-decodes `fe1f`-class A/F-line words,
+  AGENT-CONTEXT): the 68k level-1 entry PC for `SS_PROBE_68K`, the via_int head (file
+  0xef2c → its runtime 68k address), the fe6b OP_IRQ site (file 0xbbc8 / proc
+  0x5000bbb8), and the CR-arm consumption (who reads the CR mask the post ORs in).
+  **(Rev 2 A2) Add `[0xcfc]` to this question's probe set** — the warm-start word
+  (`'WLSC'` = warm-started) pins WHICH OP_IRQ regime the frontier consumption runs in
+  (pre-warm-start: pending-word clear at emul_op.cpp:812 only, d0=1, NO InterruptFlags
+  consumption; post: the full :815–851 block). **Deliverable: the 68k probe-PC list +
+  the expected visit order for one tick + the `[0xcfc]` regime verdict at the
+  frontier.** *(Rev 2 B4 residue fallback: if the static via_int walk exceeds the
+  bounded window, the fallback is the patch-site bytes themselves ([PATCH-fresh] file
+  offsets above) + one `SS_PROBE_68K` boot on the via_int head — order pinned
+  empirically, the full static chain recorded as residue.)*
+- [ ] **(Q-I4 — blocks Task A) Host-source mapping + retirement regime + the
+  once-per-edge damper DESIGN (rev 2 A1/A2/A3 — reshaped):**
   (a) the exact level predicate (`InterruptFlags≠0` vs `INTFLAG_TIMER` bit) and the
-  deassert site — verify where INTFLAG_TIMER is cleared on the OP_IRQ path
-  (emul_op.cpp OP_IRQ; if TimerInterrupt or nothing clears it, name the site Task A
-  must use); (b) the assert-edge kick (TriggerInterrupt idiom from the timer thread —
-  the F5 contract's "missed kick is not safe"); (c) **the nesting arithmetic**: expected
-  deliveries-per-assert across the NK→68k→OP_IRQ window vs the runaway tripwire N=16 —
-  what masks re-delivery between the NK's rfi and OP_IRQ's clear (the posted-level/SR
-  mask? EE state in the 68k world per the riser's SRR1-image compose?). **Deliverable:
-  a written delivery-count expectation per 60 Hz period + the masking mechanism, or the
-  named gap.** A C1-touching damper, if needed, requires its own written justification
-  here — default is NO change to level-held semantics.
+  retirement story BY REGIME: the clear site is KNOWN (emul_op.cpp:841, inside the
+  `HasMacStarted()` block at :814 — `[0xcfc]=='WLSC'`, macos_util.h:373–376); **probe
+  `[0xcfc]` and pin the pre-warm-start retirement story explicitly** — at a
+  pre-warm-start frontier NO route consumes `InterruptFlags`, so the deliverable states
+  which acceptance outcomes are reachable pre-WLSC (delivery + NK post + pending-word
+  handshake) vs deferred-to-post-warm-start (deassert pairing, TimerInterrupt, Ticks);
+  (b) the assert-edge kick (TriggerInterrupt idiom from the timer thread — the F5
+  contract's "missed kick is not safe");
+  (c) **DESIGN the deliver-once-per-assert-edge damper** (the rev 2 A1 inversion — the
+  bare level is a statically-determined livelock, see Codebase facts; "find the natural
+  masking" is retired as the question): latch placement (its own word beside the PIC
+  seam — the third semantics; C1 untouched for PIC sources), consume-at-delivery /
+  re-arm-at-assert-edge rules, the A5 source-composition answer (OR vs
+  mutual-exclusion), and the F5 atomicity shape for the new word. Expected
+  deliveries-per-assert = **exactly 1** — that number, not N<16, is Task A's tripwire
+  expectation;
+  (d) **(rev 2 A3) the DEFER_NATIVE re-arm interaction**: the wake-up re-arm
+  (glue, `EXC_NATIVE_REARM_CAP` 65536, re-polls counted per re-poll) × the pending
+  window — with the once-per-edge latch the window is one delivery long, but the
+  assert-to-delivery interval still re-polls in every native window it crosses.
+  **Deliverable: the expected per-assert `deferred_native` count** (order-of-magnitude,
+  from the D-7 window-length data) — Task B's deferral invariant is restated against
+  THIS number, not E3's DEC-era class. A residue here = Task B's invariant carries an
+  honest unknown, flagged.
+  Any deviation from the once-per-edge default (e.g. a DEC-piggyback re-pin making the
+  latch moot) requires its own written justification here.
 - [ ] **(Q-I5) The baseline:** confirm E4's published frontier signature reproduces on
   one default boot of our own (`--expect` on its named lines); extend the
   characterization of R-II3 (PROGRAM slot=5 srr0=0x50324fec; the sc 0xffffffff growth)
@@ -235,22 +303,33 @@ byte-identical baseline (E4's class).
 
 - [ ] Land the gate: `SS_NW_HOST_IRQ` (default OFF) — at bring-up, when on:
   `SheepExcExtConfigure()`; `SetInterruptFlag`/`ClearInterruptFlag` newworld arm
-  forwards the Q-I4-pinned level to `SheepExcExtSetPending(level)` + the assert-edge
-  kick (the F5 contract: single-copy-atomic, release/acquire, kick on assert). If Q-I1
-  re-pinned to DEC-piggyback: the same level instead arms the Q-I1-pinned DEC-side post
-  condition — the gate name, counters, and acceptance shape are unchanged.
+  forwards the Q-I4-pinned level **through the Q-I4-designed once-per-assert-edge
+  latch** (rev 2 A1: deliver-once-per-edge is the host source's PINNED semantics, not
+  an optional damper) + the assert-edge kick (the F5 contract: single-copy-atomic,
+  release/acquire, kick on assert). **(Rev 2 A5)** the forwarding site must compose
+  sources, not clobber: OR with the PIC's bound output before any
+  `SheepExcExtSetPending` store, or land the mutual-exclusion assert (host-irq and PIC
+  may not both forward; one loud line). If Q-I1 re-pinned to DEC-piggyback: the same
+  edge-latched source instead arms the Q-I1-pinned DEC-side post condition — the gate
+  name, counters, and acceptance shape are unchanged.
 - [ ] Tripwire conformance: the runaway (N=16) and U13 starvation (N=64) counters must
-  be live on this path; add NOTHING new unless Q-I4 demanded a damper (then: the written
-  justification lands as a comment at the site, C1 cited).
+  be live on this path; the once-per-edge latch lands WITH its written semantics comment
+  at the site (C1 cited as the PIC-source contract this latch deliberately sits beside);
+  expected tripwire arithmetic = Q-I4(c)'s exactly-1-per-assert.
 - [ ] **Probe sub-contract (PASS/FAIL), env-on (riser+published+host-irq):**
   (a) `[EXC] EXT pending ASSERTED` edges appear at host-post cadence; (b) **the first
   live EXT delivery ever**: `[EXC] EXT delivered #1: … entry=50314880` (or the Q-I1
   route's equivalent first-delivery line) with the entry probe conforming to the
   Q-I1/Q-I2 expected state (interrupted-context class, flags word); (c) exc= field 7
-  (delivered_ext) > 0 at term-dump; (d) tripwires: zero runaway lines, or every firing
-  explained by the Q-I4 expectation (a divergence is a falsification → one-iteration
-  rule). Boot command shape:
-  `SheepShaver/tools/ss-slot-boot.sh --label m7-taskA --timeout 60 --env 'SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1 SS_NW_HOST_IRQ=1 SS_PROBE_PC=0x50314880;…' --expect 'EXT delivered #1;;EXT pending ASSERTED' --absent 'RUNAWAY'`
+  (delivered_ext) > 0 at term-dump; (d) tripwires: ZERO tripwire lines — under the
+  once-per-edge latch (rev 2 A1) the expectation is exactly 1 delivery per assert, so
+  ANY runaway firing is a falsification (one-iteration rule); a starvation firing is
+  checked against Q-I4(d)'s deferral expectation. Boot command shape:
+  `SheepShaver/tools/ss-slot-boot.sh --label m7-taskA --timeout 60 --env 'SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1 SS_NW_HOST_IRQ=1 SS_PROBE_PC=0x50314880;…' --expect 'EXT delivered #1;;EXT pending ASSERTED' --absent 'TRIPWIRE'`
+  *(rev 2 A4: the absent-pattern is `TRIPWIRE` — the code emits
+  `[EXC] TRIPWIRE: EXT re-delivery runaway …` (glue :1132); `RUNAWAY` uppercase appears
+  in no output line and would vacuously pass. `TRIPWIRE` also catches the starvation
+  tripwire — intended.)*
 - [ ] **Gated-off A/B (PASS/FAIL):** one boot without `SS_NW_HOST_IRQ` reproduces E4's
   baseline class byte-identically (no EXT lines, exc= 7th field absent, same park
   signature class).
@@ -263,15 +342,32 @@ byte-identical baseline (E4's class).
 Evidence task: at most seed/probe-class source changes (counters allowed, inner gates).
 Blocks on Q-I2/Q-I3.
 
+**(Rev 2 A2/B5 — the regime split, BINDING for gate grading):** Q-I3's `[0xcfc]` verdict
+partitions this task's gates. **Pre-warm-start-reachable (milestone-RED if they fail):**
+the post observed; via_int chain entered; OP_IRQ EXECUTES; the `[KDP+0x67c]` pending-word
+clear (emul_op.cpp:812 — OUTSIDE the HasMacStarted gate, so reachable at any frontier).
+**Post-warm-start-only (CONDITIONAL gates — PASS/FAIL only if the boot reaches
+`[0xcfc]=='WLSC'`; otherwise recorded as NOT-REACHED diagnostics, frontier-recordable
+not milestone-RED):** `InterruptFlags` consumption, the assert/deassert pairing,
+`TimerInterrupt`→`Execute68k`, and the Ticks rider (already diagnostic). The
+deliver-once-per-edge latch (rev 2 A1) is what makes pre-warm-start posts
+safe-but-unconsumed: each post delivers exactly once and the un-retired level cannot
+storm. The milestone may ship green on the pre-warm-start set with the post-warm-start
+set honestly NOT-REACHED — that outcome is acceptable and is recorded as the named
+frontier (stop-rule 2's shape).
+
 - [ ] **Post observed (PASS/FAIL):** `SS_JIT_TRACE_RING=1 SS_JIT_WATCH_ADDR=<Q-I2
   resolved target, hex no-0x>` — the NK's post writes the pinned value class
   (`level|0x8000`) at delivery cadence; writer PC = the post site, not host code
   (**the fake-poke staying fenced is itself a gate: zero host-side writers**).
 - [ ] **via_int → OP_IRQ (PASS/FAIL):** `SS_PROBE_68K=<Q-I3 entry PCs>` fires in the
   pinned order; OP_IRQ executes (EMULOP counter / one-shot counter at the fe6b site);
-  `InterruptFlags` consumed — the EXT level DEASSERTS after OP_IRQ (`[EXC] EXT pending
-  deasserted` edges paired with asserts; no monotonic pending).
-- [ ] **TimerInterrupt → Execute68k (PASS/FAIL):** the task-proc call observed
+  the pending-word clear observed (the :812 write — pre-warm-start-reachable).
+  *Conditional sub-gate (post-warm-start only, per the regime split above):*
+  `InterruptFlags` consumed — the host level retires after OP_IRQ (assert edges paired
+  with deasserts; no monotonic pending).
+- [ ] **TimerInterrupt → Execute68k (PASS/FAIL — conditional, post-warm-start only per
+  the regime split):** the task-proc call observed
   (`SS_PROBE_68K=0x5000bbba` per the +2 fetch idiom — the probe that NEVER fired in
   recon boots 1/2) and RETURNS (no recon-Q1 crash class; E1's staging carrying the
   load).
@@ -285,7 +381,9 @@ Blocks on Q-I2/Q-I3.
   next frontier.**
 - [ ] **Invariant carry-over (PASS/FAIL):** nest drift `[0x2818]` recorded (the deferred
   XLM_IRQ_NEST item — drift is EXPECTED and tolerated this milestone, but a NEW drift
-  rate class is a finding); no reset ring; deferred_native bounded (E3's class); DEC
+  rate class is a finding); no reset ring; **deferred_native bounded against Q-I4(d)'s
+  per-assert expectation (rev 2 A3 — NOT E3's DEC-era class; the host source crosses
+  native windows on a different cadence and the re-arm counts every re-poll)**; DEC
   cadence stays healthy (mtspr_dec single digits per D-7).
 - [ ] Gates: task tier (evidence task — smoke set per the stated-reason rule if zero
   source lines changed). Addendum results section. Commit.
@@ -299,6 +397,14 @@ Blocks on Q-I2/Q-I3.
 - [ ] **Fix budget:** telemetry/capture commits free; at most ONE small in-scope fix
   iteration per falsified contract, full gates re-run after any fix. Second
   falsification of the same contract ⇒ stop-rule.
+- [ ] **(Rev 2 B2) Pre-flip checklist — two wave2 carry-forwards land BEFORE the flip
+  commit:** (1) the run-exc.sh / `SS_NW_DEC_PUBLISHED` gate-ON-without-`SS_EXC_ENTRY`
+  guard (wave2 W2-4 step-0 review note P2: gate-on aims the 2-SPR shim at the unmapped
+  legacy default entry — a guard or loud comment in `SheepShaver/jit-test/run-exc.sh` +
+  the gate site, REQUIRED before any default-ON state exists); (2) the stub=1
+  6-words-not-4 P3 note (inert today only because fresh-process RAM is zero — re-verify
+  or fix before the flip makes the stub path default-reachable). Both verified-or-landed
+  ⇒ checklist green; either open ⇒ the flip HOLDS.
 - [ ] **THEN the flip decision (the cluster, explicitly):** flipping `SS_NW_HOST_IRQ`
   to the newworld default REQUIRES `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` flipped
   with it (the routing is meaningless without delivery) — this is the flip W2-4
@@ -323,7 +429,32 @@ Blocks on Q-I2/Q-I3.
 ### Task Z: docs close-out — size S
 
 - [ ] `SheepShaver/docs/DIAGNOSTICS.md`: `SS_NW_HOST_IRQ` (+ the cluster flip state,
-  opt-outs, interaction with SS_TEST_EXT_PENDING/SS_EXC_ENTRY third field).
+  opt-outs, interaction with SS_TEST_EXT_PENDING/SS_EXC_ENTRY third field; the host
+  source's once-per-edge semantics named next to C1's level-held).
+- [ ] **(Rev 2 B6) Gated-off-ship disposition (REQUIRED if Task C reverted the cluster
+  or never flipped):** for EACH cluster member (`SS_NW_HOST_IRQ`, `SS_NW_EE_RISER`,
+  `SS_NW_DEC_PUBLISHED`) record in DIAGNOSTICS: current state, opt-out, and the
+  retire-or-retain criterion (what evidence flips it / what evidence deletes it) + ONE
+  ROADMAP follow-on row owning the un-flipped cluster. The `SS_NW_*` gate census now
+  stands at **16 with this plan** (15 in-tree: DEC_PUBLISHED, DR_R0_INVARIANT, EE_RISER,
+  FE1F_SURFACE, MM_POOL, MM_SWITCH, MODEL, NO_SCC, PIC, PIC_FORCE, SC_SURFACE,
+  SYNTH_ENTRY, TM_TASK_FORCE, TM_TRAPS, TRAMPOLINE) — flag the census to the coordinator
+  as a re-score #3 input (gate-debt is now a strategy-level cost).
+- [ ] **(Rev 2 B1) The W2-4 supersession table** (lands in the wave2 plan's W2-4 DONE
+  note AND is mirrored in this plan's close-out commit message): one row per unticked
+  W2-4 checkbox → absorbed-here (section ref) or named-deferred (ROADMAP row):
+  | W2-4 item | Disposition |
+  |---|---|
+  | tm_task retirement A/B | **MOOTED** by the `2ff7765f` verify-EXPECTED-first guard (the 0x505bb060 slide fix) — record as such, no retirement A/B owed |
+  | via_int cluster disposition (rom_patches :3474–3511) | **ABSORBED here** — Q-I3/Task B's evidence of the patched chain consuming the NK post IS the disposition input; the written verdict lands in Task C dispositions |
+  | XLM_IRQ_NEST ownership | **ABSORBED here** — Task C disposition (1) |
+  | polled-trampoline + SDL_PumpEvents decisions | **NAMED-DEFERRED** — ROADMAP row (not touched by this plan's chain; record the default: leave / keep+decouple) |
+  | Ticks acceptance (the W2-4 headline) | **ABSORBED here** — Task B's item-4 rider (diagnostic, regime-split per rev 2 A2) |
+  | the reserved riser/published flip | **ABSORBED here** — Task C's cluster flip |
+- [ ] **(Rev 2 B1) M3A-ENTRY-TABLE cleanup:** the dual-mode `interrupt_entry` row + the
+  legacy-KDP-shim-retirement residue (M3A-ENTRY-TABLE.md "Residue") get their post-flip
+  state recorded (flipped ⇒ the legacy row is historical, schedule the retirement
+  follow-on; not flipped ⇒ row unchanged, pointer here).
 - [ ] `CHANGELOG.md`: the first host→guest interrupt delivered through the guest's own
   chain — acceptance numbers, flip state.
 - [ ] `docs/planning/MACHINE-LAYER-PLAN.md`: header + the M3b/W2-4 row (the reserved
@@ -345,7 +476,12 @@ Blocks on Q-I2/Q-I3.
 2. **The consumption wall:** if Task B shows delivery + post green but the 68k side
    never consumes (via_int unreached / OP_IRQ dead / TimerInterrupt's world empty),
    capture the exact link and stop — that is the next milestone's named frontier, not
-   tunnel material (the M5/M6 coupling precedent).
+   tunnel material (the M5/M6 coupling precedent). **(Rev 2 A2 grading note: the
+   HasMacStarted-gated outcomes — flag retirement, TimerInterrupt, Ticks — are NOT this
+   wall pre-warm-start; they grade per Task B's regime split.)** (Rev 2 B6) A stop here
+   ships gated-off — Task Z's gated-off-ship disposition (per-member state/opt-out/
+   retire-or-retain in DIAGNOSTICS + the ROADMAP follow-on row) is then REQUIRED, not
+   optional.
 3. A residue on a BLOCKING Task-0 answer ⇒ trigger-1 re-scope, not improvisation.
 4. The entry gate failing (inj-s-fixes red/absent) ⇒ HOLD before Task 0; coordinator
    decides.
@@ -378,4 +514,112 @@ the temptation to build the consumption side belongs to the next milestone.
 
 ## Red-team record
 
-*(empty — a red-team round follows this draft; findings to be folded as rev 2 markers)*
+Two rounds (A technical, B process/scope), both verdicts SOUND-WITH-FIXES, folded below.
+
+## Rev 2 (red-team fold, 2026-06-12) — BINDING amendments; where in conflict with the body, Rev 2 overrides
+
+> **Header note — the fork leans differently than rev 1:** A1 (a bare level under the
+> riser is a closed livelock, statically determined) + A2 (NO route retires
+> `InterruptFlags` pre-warm-start — OP_IRQ's consuming block is `HasMacStarted()`-gated)
+> together change the rev-1 picture. The level-held EXT source as drafted could not have
+> worked at this frontier regardless of Q-I1's route verdict; and Task B's "round trip"
+> as drafted (delivery → … → OP_IRQ consumes → deassert → TimerInterrupt → Ticks) is
+> unreachable before `[0xcfc]=='WLSC'` by construction. **The re-stated Q-I1 decision
+> rule:** the host source is a **deliver-once-per-assert-edge latch on EITHER route**
+> (its own word beside the PIC seam — a third semantics; C1 stays binding for real PIC
+> sources). With the storm objection thus removed from both candidates, the route
+> verdict remains evidence-driven exactly as drafted: if the EXT body (directly, via the
+> 0x50325f00 fallback — which sits INSIDE the W2S-1 service-body range, see the Q-I1
+> hint — or via the shared flag-tree) reaches the 68k post for a from-emulator delivery,
+> edge-latched EXT stands; else the same question of the DEC exit tree ⇒ DEC-piggyback
+> (which inherits DEC's one-shot semantics and makes the separate latch moot); else
+> stop-rule trigger 1. **And the regime question is confronted, not dodged:** this
+> milestone does NOT target the post-warm-start regime — it targets
+> delivery-through-the-guest's-own-chain at the current frontier, where the
+> once-per-edge latch makes pre-warm-start EXT **safe-but-unconsumed**: each post
+> delivers exactly once, the NK post + via_int + OP_IRQ-entry + pending-word handshake
+> are gateable (milestone-RED on failure), while flag retirement / TimerInterrupt /
+> Ticks are conditional gates — PASS/FAIL only if a boot reaches WLSC, otherwise
+> NOT-REACHED diagnostics and the named next frontier (Task B regime split; stop-rule 2
+> note). Shipping green-pre-warm-start with the consumption half honestly NOT-REACHED is
+> an acceptable milestone outcome; shipping a storm or a fake retirement is not.
+
+**Round A (technical) — dispositions:**
+- **A1 (BLOCKER — folded, default inverted):** the level-held host source is a CLOSED
+  LIVELOCK: restart PC = not-yet-executed block start (glue contract note ~:1054–1060;
+  A cited :962–967 — content verified, line drift only), all six EE re-raise compose
+  sites include `SheepExcExtPending()` (glue :952/:1373/:1432/:1462 +
+  ppc-execute.cpp :1434/:1733 — verified by grep), the hook never clears EXT (C1), and
+  retirement needs the 68k progress the storm prevents (plus A2's gate). Folded:
+  Codebase-facts livelock entry; Q-I4(c) is now "DESIGN the once-per-edge damper";
+  Task A pins the latch as the host source's semantics; tripwire expectation = exactly
+  1/assert.
+- **A2 (MAJOR — folded):** OP_IRQ's InterruptFlags-consuming block (incl.
+  `ClearInterruptFlag(INTFLAG_TIMER)` at emul_op.cpp:841) is gated by `HasMacStarted()`
+  (emul_op.cpp:814; `[0xcfc]=='WLSC'`). **Citation correction (mine): the SheepShaver
+  definition is `SheepShaver/src/include/macos_util.h:373–376`, not :278–281 — that is
+  the BasiliskII copy's line number. Substance verified.** Also verified (load-bearing
+  for the regime split): the `[KDP+0x67c]` pending-word clear at emul_op.cpp:812 is
+  OUTSIDE the gate — the 68k handshake IS pre-warm-start-reachable. Folded: `[0xcfc]`
+  probes in Q-I3 + Q-I4(a); the explicit pre-warm-start retirement story; Task B's
+  regime split.
+- **A3 (MAJOR — folded):** the DEFER_NATIVE re-arm (EXC_NATIVE_REARM_CAP=65536,
+  re-polls counted per re-poll — verified in glue) × a never-clearing level = designed
+  busy-poll explosion. Mitigated by the A1 latch (the window is one delivery long) but
+  the assert→delivery interval still re-polls; folded as Q-I4(d): expected per-assert
+  `deferred_native` count is a deliverable, and Task B's deferral invariant is restated
+  against that number, not E3's DEC-era class.
+- **A4 (MINOR — folded, verified):** the emitted line is
+  `[EXC] TRIPWIRE: EXT re-delivery runaway - …` (glue :1132 at rev 2); `--absent
+  'RUNAWAY'` matches nothing and vacuously passes. Task A's boot command now uses
+  `--absent 'TRIPWIRE'`.
+- **A5 (MINOR — folded, verified):** `SheepExcExtSetPending` stores a single 0/1 word
+  (glue ~:260–268; A cited :255–257, drift only) — host + PIC sources clobber. Task A
+  ORs sources at the forwarding site or lands the mutual-exclusion assert; Codebase
+  facts amended.
+- **A6 (MINOR — folded):** INTFLAG_TIMER clear site precision (visible at :841; the
+  open item is the gate) — Authoritative-inputs row corrected; glue EXT-branch line
+  refs updated to ~:1095–1155 with a re-verify-before-editing note.
+- **A supportive note (folded as the Q-I1 hint):** verified — `[KDP+0x5b0]` fallback
+  0x50325f00 ∈ 0x3258e0–0x326380, the service-body range whose 9 tails branch to the
+  68k post (EE-CHAIN-RECON.md :433–434, W2S-1). The "fallback swallow" may itself be a
+  post-reaching body; the static walk starts there.
+
+**Round B (process/scope) — dispositions:**
+- **B1 (BLOCKER — folded):** W2-4 supersession table added to Task Z (every unticked
+  W2-4 checkbox → absorbed-here ref or named-deferred ROADMAP row; tm_task retirement
+  recorded as MOOTED by `2ff7765f` — commit verified in-tree). M3A-ENTRY-TABLE
+  dual-mode-row/KDP-shim-retirement cleanup added to Task Z.
+- **B2 (BLOCKER — folded, verified):** both wave2 carry-forwards confirmed at
+  2026-06-11-wave2-interrupt-chain.md :449–451 (P2 run-exc.sh guard, P3 stub=1 six
+  words); now explicit Task C pre-flip checklist items — either open ⇒ the flip HOLDS.
+- **B3 (MINOR — folded):** entry-gate partial-green policy stated: HOLD-is-total,
+  deliberately (rationale recorded at the gate); the ≤1 verification boot must
+  co-schedule ALL ambiguous rows, more ⇒ HOLD.
+- **B4 (MINOR — folded):** per-Q residue fallbacks added to Q-I2 (static init-writer
+  pin + watch-gate downgrade) and Q-I3 (patch-site bytes + one SS_PROBE_68K boot);
+  `tools/m68k-dis.py` cited in Q-I3 (path verified: repo root `tools/`, NOT
+  `SheepShaver/tools/`).
+- **B5 (MINOR — folded):** Task B reds named: pre-warm-start-reachable set =
+  milestone-RED; HasMacStarted-gated set = conditional gates, NOT-REACHED ⇒
+  frontier-recordable (the regime-split paragraph).
+- **B6 (MAJOR — folded):** gated-off-ship disposition added to Task Z + stop-rule 2
+  (per-member state/opt-out/retire-or-retain in DIAGNOSTICS + ROADMAP follow-on row);
+  `SS_NW_*` census verified by grep: **15 in-tree + SS_NW_HOST_IRQ = 16 with this
+  plan**, flagged as a re-score #3 input.
+
+**Falsified findings:** none — every finding's substance verified against source/docs.
+Corrections found while verifying (recorded above): A2's macos_util.h line number is
+the BasiliskII file's; A1/A5's glue line numbers drifted (content exact); plus one fact
+the reviews missed that STRENGTHENS the plan: the :812 pending-word clear being outside
+the HasMacStarted gate is what keeps a pre-warm-start round trip partially gateable.
+
+**Rev-2 self-review:** all six A + six B findings have an in-place edit AND a
+disposition row; no body text still instructs the rev-1 behavior (the fork paragraph,
+nesting bullet, Q-I4, Task A contract, Task B invariants, Task C flip, Task Z, and
+stop-rule 2 all carry rev-2 markers); the boot-command/`--absent` fix is in the
+executable command line itself, not only the prose; budgets, gate tiers, and the
+stop-rule triggers are unchanged in number and binding. Consistency check: the
+once-per-edge latch appears with the same semantics in Codebase facts, Q-I4(c), Task A,
+and the Rev 2 header; the regime split appears identically in Q-I4(a), Task B, and
+stop-rule 2.

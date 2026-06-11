@@ -116,6 +116,15 @@ LAST step with an explicit rollback rule (rev 2 P6). `SS_NW_MM_SWITCH` implies t
 
 ## Tasks
 
+> **✅ RUNG 2 COMPLETE (2026-06-11).** All tasks done (0/T/U/V/W+W2/X/Y/Z); the 68k→PPC
+> Mixed Mode switch works in BOTH directions and is the **newworld profile DEFAULT**
+> (`SS_NW_MM_SWITCH=0` opt-out). First complete MixedMode round trip; MPLibrary's TVector
+> executes; boot transformed (jNK 116M→4104). All gates green throughout; opt-out boot
+> byte-identical to the pre-switch baseline. Results: M6A-ONGOING-ENTRY-DESIGN.md Task
+> T…Y sections + the CHANGELOG 2026-06-11 consolidated entry. **THE next frontier
+> (stop-rule trigger 2, captured): MPLibrary's first NK syscall — `sc` at 0x500d638c,
+> unresolved vector 0xC00 (SRR0=0x500d6390 SRR1=0x00007072).**
+
 ### Task 0: FE01/FE02 contract recon (BINDING — gates Tasks T..X; static RE + bounded probe boots)
 Pin each contract in a written addendum (M6A-ONGOING-ENTRY-DESIGN.md, "Rung 2 contracts"
 section). Budget honesty (rev 2 P5): this is N bounded diagnostic boots (probe-PC limit is
@@ -325,13 +334,20 @@ before its residue status is decided.
   (frontier update). Commit. *(Both updated 2026-06-11.)*
 
 ### Task Z: docs
-- [ ] DIAGNOSTICS.md: knob changes (`SS_NW_MM_POOL` default flip + the `=1` explicit-on
+- [x] DIAGNOSTICS.md: knob changes (`SS_NW_MM_POOL` default flip + the `=1` explicit-on
   disposition — rev 2 P11; `SS_NW_MM_SWITCH`; SS_M6A_USER_MSR disposition per Q-E);
   CHANGELOG (acceptance numbers, the pool-collision fix); MACHINE-LAYER-PLAN M6 row;
   ROADMAP cross-check; LEARNINGS (the pool-collision lesson: "free gap" claims need an
   occupancy map, and the falsifying writer was our own earlier commit); cross-tracker
   grep for stale "always-cold"/"SS_NW_MM_POOL default OFF"/8-slot-table statements.
-  Commit.
+  Commit. *(DONE 2026-06-11: DIAGNOSTICS.md new "Machine Layer M6a rung 2" section
+  (switch/pool/user-msr knobs + SS_DR_R24_RING/SS_INTERP_RING rings) + `exc=` tuple
+  4th field (deferred_native) + SS_CUDA_TRACE in the M3b section; CHANGELOG rung-2
+  consolidated entry; MACHINE-LAYER-PLAN header + M3b/M6 rows; ROADMAP status + D3;
+  LEARNINGS 3-lesson entry. Cross-tracker grep: stale current-state claims found only
+  in MACHINE-LAYER-PLAN M3b row + ROADMAP D3 (both fixed); remaining "always-cold"/
+  "8 slots"/"default OFF" hits are dated history in recon docs + plan files — left
+  per the historical-sections rule.)*
 
 ## Stop-rule (rev 2 P4/P10 — broadened + operationalized)
 Triggers, per MACHINE-LAYER-PLAN §9:

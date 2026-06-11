@@ -17,7 +17,49 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-10 (latest) — M3a: cold-MSR-fiction lesson; NK exception-exit ABI; Thud-console reframe; chained-block probe gap
+## 2026-06-11 (latest) — M6a rung 2: activity is not progress; live-verify before retargeting; "free gap" claims need an occupancy map
+
+Three durable lessons from completing the Mixed Mode switch (plan
+`docs/superpowers/plans/2026-06-11-m6a-rung2-mixedmode-switch.md`; results in
+`docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md`):
+
+### 1. "It's running deeper into the boot" can be a FASTER reboot loop — verify the resume, not the activity
+
+Task V's diagnostic read looked like real progress: TVector excursions running repeatedly,
+the 68k "advancing deep into ROM hardware-init", an MMIO/CUDA storm as the next frontier.
+Task W's verify-first round-trip check falsified all of it: every excursion ended in a
+**68k reset** through the always-cold table[0] (r24 ring signature `100266f2 → 0 → 1 →
+0x5000002c`); the "hardware-init poll loop" and the CUDA storm (8905 packets) were the
+reset cycle replaying. Post-fix, the same boot shows CUDA at 13 packets. The discriminator:
+a *literal resume PC* in the r24 ring matching the completion-written `[saveblk+0x3c]` —
+positive evidence the world came back — versus block counters and excursion counts, which
+only prove activity. Same family as the HOT-PC retraction: never infer guest progress from
+volume of execution; demand the specific round-trip signature.
+
+### 2. A directive every doc agrees on can still be wrong — live-probe before retargeting (verify-and-leave is a real outcome)
+
+The `[KDP+0x5f0/0x5f4]` mirror retarget was recommended by the design doc (§1.3), carried
+into the plan, and queued as Task-X work. The W2 red-team demanded a live probe first: the
+live values are **NK-rebuilt staged addresses** (0x50313bf8/0x503143a0) that the warm
+switch-back path traverses *correctly* — the glue's primary-world seeds the directive was
+written against are dead on arrival (NK cold-init overwrites them before first dispatch).
+Executing the retarget would have destroyed BOTH switch directions at the moment the round
+trip first worked. Lesson: a directive derived from static analysis of *our own seed
+values* is a hypothesis about live state, not a fact; probe the live word at the
+consumption point before rewriting it, and record "verify-and-leave" as a completed task,
+not a skipped one.
+
+### 3. "Free gap, no other users" without an occupancy map is a guess — and the falsifying writer was our own commit
+
+The staged MM pool base 0x68ff5000 carried a seed-site comment claiming the region free.
+The red-team found the collision: our *own* Hnfo-scratch seed (`sheepshaver_glue.cpp`)
+points machine-detect copy-out writes into the same bytes — inside MM save record 0. Latent
+only by ordering luck (machine detect precedes FE01 each cold cycle). The fix that sticks:
+a tracked **sub-KDP occupancy map** (M6A-ONGOING-ENTRY-DESIGN) that every future placement
+must extend first. In shared guest-memory regions, free-space claims require enumerating
+writers — and the writer you forget is most likely yours, from an earlier session.
+
+## 2026-06-10 — M3a: cold-MSR-fiction lesson; NK exception-exit ABI; Thud-console reframe; chained-block probe gap
 
 Four non-obvious findings from M3a implementation and acceptance:
 

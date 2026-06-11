@@ -487,3 +487,89 @@ ring capture in this regime.
   (used here to exonerate memory at 0x5000e380).
 - The e388 selector shim (raw==patched): only selector 0 is valid; its single
   table entry at e380 (0x005c) → e3dc. Any d0≠0 at the shim returns −50.
+
+## Task B — advancement + invariant evidence (68k-pc-desync plan) — 2026-06-11
+
+> **Status: ALL ROWS PASS** (advancement sub-contract + invariant carry-over,
+> per the Task-0 predicate verbatim). **Boots: 2** fresh slot-protocol boots,
+> gate ON (`SS_NW_DR_R0_INVARIANT=1`):
+> B1 `desync-taskB-on1` (full-length to the frontier crash; probes d760/cef8c/
+> d6b4/314ac0/314700/429da0 linear cap 8 + watches 0,4,c70,af0 + e412 census,
+> rundir 20260611-224918.32214), B2 `desync-taskB-on2-ring` (big-ring 0x400000 +
+> `SS_JIT_RING_DUMP_AT_PC=500f49c8` window dump + watches 100037c4/100037dc/2818
+> + e394 predicate, rundir 20260611-225222.32692). Ring artifact:
+> `/tmp/desync_taskB_ring_on.txt` (#3390800..#3391999 of 3,408,978 — Task A
+> ON-4 total 3,408,977, the ±1 jitter class). No source edits this task
+> (evidence-only; inner gates re-confirmed green at task start: batch test-jit
+> 353/353, machine suite 13 suites ALL PASS).
+> Instrument note: `SS_JIT_WATCH_ADDR` caps at **4 addresses** (parser,
+> ppc-cpu.cpp:1054) — B1's 5th/6th tokens were silently dropped; the slot/nest
+> watches moved to B2. Absolute-address probe fields are single-word only
+> (`[0xADDR]`); the range form is register-indirect (`[rN:SIZE]`) only.
+
+### Advancement sub-contract — PASS
+
+- **(a) The boot passes 0xe410 intact — Task A rows re-asserted fresh:**
+  `0x5046d760` (vector-0x2c raise) **0 visits the whole boot** [PROBE✓ B1,
+  full-length]; no `[$C70]` failure write, no `[$AF0]:=0x000A` — the only
+  c70/af0 events are the known boot-fill/clear classes (#22122/#22602 fill
+  0xffffffff @r24=0x500005f6, #32193 c70 clear, #1840154 af0:=0xffff0000)
+  [WATCH✓ B1]; ring window `r24=5000e414` count **0**, block 50467cfc produces
+  **r24=0x5000e3de** at the #3391672-class record (now #3391878, gate-ON
+  renumbering, invocation-2 d1=0 signature) [RING✓ B2]; e412 legit census = 2
+  (the corrected ≥2 class) [PROBE68K✓ B1]; e394 match-2
+  **dr-tmp r0=0x00000000 r4=0x0000005c d0=0x5c** — the pinned register
+  predicate verbatim (baseline poison 0x36/0x92/0x92) [PROBE68K✓ B2].
+- **(b) The e3e0 table run completes; ExpandMem slots fill (corrected
+  early-exit reading):** invocation 1 fills `[0x100037dc]:=0x00120001`
+  (#3391081, writer r24=0x5000f258 = the f240 stub tail — the Task A class);
+  **invocation 2 fills `[0x100037c4]:=0x00150001` (#3392112, same writer
+  class)** — id 4 → index 1 → slot base+4·1, handle 0x00150001 [WATCH✓ B2,
+  PROBE✓ B1: $36 service visit=2 r3=0x00150001 r4=0x00000001; $31/$36 args
+  per invocation: r4=2/7 then 4/1]. Per the corrected e388-shim reading, only
+  lea-reaching invocations fill slots; both observed invocations did. Note
+  the d6b4 entry-time `[0x100037c0]`=2 (index-1 slot pre-fill residue R-F2
+  unchanged).
+- **(c) The 68k advances past e490 + caller:** e490-family epilogue walked in
+  the window (e492×2, e496×3, e498, e49a, e49e rts) [RING✓ B2]; B1 runs
+  ~3.4M records past the window to the NEW frontier (crash r24=0x500050ef,
+  pc slide 0x505bb060→0x55590000) — the park tail (5000f248) and the DSAT
+  crash tail (50004ad0) both ABSENT [RING✓/crash regs B1].
+
+### Invariant carry-over — PASS (same boots)
+
+- Cold-once trampoline WATCH pair: record **#4666** (pc=50429b40, guest[0]/[4]
+  exactly once); pre-NK writes #213/215 + the legit vector install
+  (pc=50490e00, r24=500389fe/50038a02, #1030517/18) — known classes only ✓.
+- `delivered_dec=0` (deferred_ee=5 deferred_depth=0 deferred_native=0) ✓.
+- PROGRAM deliveries: **count = 4** (recorded), conformant per-delivery — ALL
+  slot 8, srr0=5046e8e0, word=0fff0008, lr=5046db6c → entry=0x50314700;
+  entry-state r0/r4 = $31/2, $36/7 (invocation 1), $31/4, $36/1 (invocation 2)
+  [PROBE✓ B1 0x50314700 linear].
+- sc surface: **169 deliveries, 16 distinct** (count recorded as diagnostic);
+  per-delivery conformance sampled at handler 0x50314ac0 (first 8 linear:
+  selectors 0x3f/0x19/0x14/0x19/0x0f/0x27/0x40/0x42 in census order, r3-class
+  args per M3A) ✓. **⚠ RECORDED PROMINENTLY — the negative-selector oddity:
+  `0xfffffffe ×17` and `0xffffffff ×103`** dominate the post-wall sc census
+  (full list: 0x3f×1 0x19×6 0x14×3 0x0f×8 0x27×7 0x40×1 0x42×2 0x50×1 0x4d×1
+  0xfffffffe×17 0xffffffff×103 0x1b×3 0x1c×3 0x07×3 0x0c×3 0x08×3, +4 beyond
+  the 16-distinct counter cap). Negative selectors are not in the NK's
+  positive service-table range — **this smells like a NEW surface class**
+  (sentinel/queue-poll selectors, or a different sc consumer in the advanced
+  regime; crash regs r26=0xfffffffe is suggestive). Flagged as a candidate
+  recon question for the NEXT milestone — not chased here.
+- TVector round trip intact: `[PROBE 0x500cef8c visit=1] r25=0x5000fcf2` ✓.
+- Slot-15 unvisited (no slot-15 line; all PROGRAM deliveries slot 8) ✓.
+- XLM_IRQ_NEST drift recorded (diagnostic): 118 watch events on 0x2818 through
+  B2's window; the −1/delivery sawtooth class (W2S-1), one return-to-0 at
+  #3388726, value 0xffffffca (−54) at the window dump. Q-DS3 found it not
+  load-bearing for the desync; stands as the pre-named link-8 signature.
+
+### Diagnostic — where the boot now stands (recorded, not gates)
+
+The honest map: both FE1F invocations complete ($31+$36 each, 4 PROGRAM
+deliveries — the f280/$34 sibling did NOT fire this regime); the sc surface
+grows 13→169 with the negative-selector family above; deferred_ee=5, CUDA 13
+packets, VIA/SCC MMIO traffic. The boot dies at the **0x505bb060 off-ROM PC
+slide** (Task A's named frontier) — the P-M4 artifact + origin-class look is
+Task C's deliverable. No new wall class beyond it.

@@ -31,6 +31,16 @@
 
 ## Wave 1 tasks
 
+> **✅ Wave 1 COMPLETE (2026-06-11).** Tasks 1–5 all landed: dev_cuda (`143f66e7`, 3924 checks),
+> adb_stub (`e7120368`+`bb09269f`, 90 checks), Task-3 integration + retirements
+> (`b7a3445b`/`912f27cb`/`94c4a0f0`/`8c7f6796`), acceptance (`d3e60d88` CV-10 deferred SR-int
+> delivery — the unlocking fix; + `4e544aff` I2C 0x22/0x25), Wave-1 docs (this commit group).
+> The 18338-read sync frontier is CROSSED; boot runs past the Cuda walls but cycles its probe
+> sequence — the loop-ender recon (Ticks-starvation hypothesis) gates Wave 2's shape per the
+> stop-rule. Full acceptance record: `docs/planning/machine/M6A-WAVE2-SHIM-RECON.md`
+> "M3b Wave 1 acceptance". All gates green throughout (machine 11/11, test-jit 353/353
+> batch+legacy, e2e-test 122, paravirtual e2e PASS + byte-identical).
+
 ### Task 1: `dev_cuda` pure module (standalone-tested)
 `src/include/dev_cuda.h` + `src/machine/dev_cuda.cpp` + `test_dev_cuda.cpp`. The SR-handshake state machine, the command dispatcher (boot-critical set per donor §4.3: AUTOPOLL on/off + rate, GET/SET_TIME, READ/WRITE_PRAM + MCU_MEM, FILE_SERVER_FLAG/POWER_MESSAGES acks, RESET/POWERDOWN as loud logs, DEVICE_LIST/bitmap), ADB packets → an **injected handler callback** with the pinned `ADBStubCommand` shape (`CudaBindADB(dev, fn, opaque)`; no compile-time dependency on adb_stub.h — Tasks 1+2 build/test independently, Task 3 binds the real stub). Oracles cited per backport hygiene (behavioral extraction, not code port — cite both SHAs in the header).
 

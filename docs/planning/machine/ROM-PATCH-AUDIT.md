@@ -22,7 +22,9 @@
 Milestone owners (MACHINE-LAYER-PLAN §3): M1 = MMIO bus + SCC 8530 + VIA timer/IFR
 surface (Cuda loud stub), M2 = virtual clock (TB/DEC), M3a = exception core + DEC delivery
 (**complete 2026-06-10; no patches retired in M3a — all RETIRE@M3 rows below are M3b work**),
-M3b = OpenPIC + Cuda/ADB + external-source wiring + patch retirements (the RETIRE@M3 cluster),
+M3b = OpenPIC + Cuda/ADB + external-source wiring + patch retirements (the RETIRE@M3 cluster;
+**Wave 1 complete 2026-06-11** — `cuda_init_dat` + `adb_init_dat` retired with the live
+dev_cuda model + adb_stub; the via_int cluster + `tm_task_dat` await Wave 2's real delivery),
 M4 = NVRAM + MacIO, M5 = supervisor environment + trampoline (publishes device tree),
 M6 = PPC→68k handoff + shim triage.
 
@@ -49,7 +51,7 @@ All rows are in `patch_68k()` unless noted. "Line" = `rom_patches.cpp` as of mac
 | `timek_dat` (SetupTimeK) | 2136–2155 | Replaces the VIA-timed DBRA calibration loops with fixed TimeDBRA/TimeSCCDBRA/TimeSCSIDBRA/TimeRAMDBRA constants. | KEEP | — (DBRA calibration against an emulated clock yields meaningless constants on any profile; the fake values are the right answer under JIT) |
 | `gc_mask_dat` | 2269–2286 | NOPs four writes to the Grand Central interrupt-mask register (via 0x262). OldWorld-only (`ROMType != ROMTYPE_NEWWORLD` guard — not applied on NewWorld ROMs). | RETIRE@M3 | M3 (OpenPIC/interrupt-controller model; only relevant if an OldWorld ROM ever runs on the fidelity profile) |
 | `gc_mask2_dat` | 2288–2316 | NOPs the longer GC interrupt-mask write sequences (5–11 sites depending on ROMType). OldWorld-only. | RETIRE@M3 | M3 (same) |
-| `cuda_init_dat` | 2320–2333 | NOPs 7 words of the Cuda init (VIA shift-register / handshake setup, via 0x274) — guest never brings up Cuda. | RETIRE@M3 | M3 (full Cuda: timers via M2 scheduler, ADB, RTC). **Loud-stub tension:** in M1 Cuda is deliberately a *loud stub* — if this patch were retired at M1, the un-patched init's shift-register traffic hits the stub and aborts/log-spams every boot. The patch must stay until M3 even though the VIA it programs arrives (partially) at M1. |
+| `cuda_init_dat` | 2320–2333 | NOPs 7 words of the Cuda init (VIA shift-register / handshake setup, via 0x274) — guest never brings up Cuda. | **✅ RETIRED@M3b-Wave1** (commit `8c7f6796`) — the dev_cuda protocol model landed (`143f66e7`…) and the un-patched init runs against it. **Observed-traffic evidence (the audit's DoD rule):** acceptance boots show the init + probe sequence driving the model — `packets=9529 responses=9529 syncs=734 pram_rd=2199 pram_wr=733 i2c=6597 unknown=0`, the M6a 18338-read ORB sync frontier crossed (recon doc "M3b Wave 1 acceptance"). **m7 framing:** on the 9.0.1 parcels ROM this is a no-op by construction — the pattern misses its window (cuda_init @0x9be2, outside 0xa000..0x12000), the init always ran unpatched there; the retirement changes behavior on 1.1/OldWorld-window ROMs only. Profile-gated (`[M3b] cuda_init ROM patch retired` banner reports pattern found/absent); paravirtual keeps the patch forever. The M1 loud-stub tension note resolved exactly as anticipated: retirement landed WITH the model. | M3b Wave 1 ✅ |
 | `cpu_speed_dat` (×2 occurrences) | 2336–2354 | Replaces GetCPUSpeed (via 0x27a) with `move.l #configured-MHz,d0` + RTS. | KEEP | — (reports configured `CPUClockSpeed`; identity/config, no device behind it) |
 | `time_via_dat` | 2357–2366 | Early-returns the InitTimeMgr routine that pokes VIA timer registers — Time Manager never calibrates against VIA T1/T2. | **✅ RETIRED@M6a-Wave2 (gate)** — the row's own *"possible early retirement … if the VIA timer/IFR surface proves sufficient"* condition is met: the M2 clock + scheduler VIA timers (T1/T2 state machines, eager IFR latch) are live. `MachineProfileIsNewWorld()` gate at the site (`[M6a] time_via ROM patch retired` line); paravirtual keeps the early-return. Retired together with the via_init cluster. | M6a Wave 2 ✅ |
 | `open_firmware_dat` | 2370–2383 | Replaces a read of the OF/Name-Registry pointer at `0xFF800000` with `#0xdeadbeef` and NOPs the FE03 opcode that would jump through it. | RETIRE@M5 | M5 (trampoline handoff publishes the real device tree / OF properties; until then nothing answers at `0xFF800000`) |
@@ -91,11 +93,12 @@ of all 84 `find_rom_data` patterns (concept, EMUL_OP, search range, 9.0.1-parcel
 | `via_int_dat` | Patches the VIA Level-1 interrupt handler (inline `moveq #2,d0` + NOPs) | VIA | REPLACE@M3 | M3 (paravirtual stand-in for real VIA interrupt decode; retired when the PIC routes a real VIA IFR) |
 | `via_int2_dat` | Patches the 60 Hz VIA handler to `M68K_EMUL_OP_IRQ` + tst/beq | VIA | REPLACE@M3 | M3 (the host-injection IRQ path is deleted on the fidelity profile per MACHINE-LAYER-PLAN M3) |
 | `via_int3_dat` | Redirects the CHRP Level-1 handler (`M68K_JMP` to level1_int; NW only) | VIA | REPLACE@M3 | M3 |
-| `adb_init_dat` | NOPs the wait in ADBInit (via 0x36c) — guest doesn't wait for ADB/Cuda to respond | Cuda/ADB | RETIRE@M3 | M3 (Cuda model answers ADB; until then the wait would spin on the M1 loud stub) |
+| `adb_init_dat` | NOPs the wait in ADBInit (via 0x36c) — guest doesn't wait for ADB/Cuda to respond | Cuda/ADB | **✅ RETIRED@M3b-Wave1** (commit `8c7f6796`) — the wait now gets real TREQ responses from dev_cuda + adb_stub (kbd@2/mouse@3, Talk R3, Listen-R3 address-move). Same m7 framing as `cuda_init_dat`: no-op on the 9.0.1 parcels ROM (pattern @0x2b780, outside 0x31000..0x3d000); live change on 1.1/OldWorld-window ROMs only; profile-gated banner; paravirtual keeps the patch. Evidence: the cuda_init row's acceptance counters (the unpatched inits ran and drove the model; ADB counters still 0 — the boot's probe loop has not reached the ADB scan, see recon frontier note). | M3b Wave 1 ✅ |
 | `nvram1`–`nvram7`, `nvram4_loc`/`nvram5_loc` | NVRAM/XPRAM HLE EMUL_OP replacements | NVRAM | REPLACE@M4 | (main table above) |
 | `scc_init_caller_dat`/`scc_init_dat` | SCC init suppression | SCC | RETIRE@M1 | (main table above) |
 | `via_init`/`via_init2`/`via_init3`, `time_via_dat` | Boot-time VIA-init suppression | VIA | ✅ RETIRED@M6a-Wave2 | (main table above) |
-| `tm_task_dat`, `cuda_init_dat`, `gc_mask`/`gc_mask2` | Boot-time device-init suppression | VIA/Cuda/GC | RETIRE@M3 | (main table above) |
+| `cuda_init_dat`, `adb_init_dat` | Boot-time Cuda/ADB init suppression | Cuda/ADB | ✅ RETIRED@M3b-Wave1 | (main table above / this table's adb_init row) |
+| `tm_task_dat`, `gc_mask`/`gc_mask2` | Boot-time device-init suppression | VIA/GC | RETIRE@M3 (Wave 2: tm_task needs real delivery) | (main table above) |
 
 Non-device shims (drivers, Resource Manager, scrap, memory sizing, gestalt, …) are
 deliberately out of scope here — see the inventory + M6.

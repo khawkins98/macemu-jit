@@ -2522,7 +2522,31 @@ static bool patch_nanokernel(void)
 	*lp++ = htonl(0x81400000 + XLM_IRQ_NEST);	// lwz	r10,XLM_IRQ_NEST
 	*lp++ = htonl(0x394affff);					// subi	r10,r10,1
 	*lp++ = htonl(0x91400000 + XLM_IRQ_NEST);	// stw	r10,XLM_IRQ_NEST
-	*lp = htonl(0x48000000 + ((npc - 0x31800c) & 0x03fffffc));	// b		ROMBase+0x312c2c
+	if (MachineProfileIsNewWorld() && MachineEnvFlag("SS_NW_EE_RISER")) {
+		// W2-4 step 1 (SS_NW_EE_RISER=1, default OFF — the flip is W2-4 final
+		// acceptance): the EE riser. EE-only MSR compose consuming r11, the SRR1
+		// image the raw tail would have latched via mtspr SRR1,r11 (EE-CHAIN-RECON
+		// "W2-4 entry decision" D-1, [PROBE check] r11=0xd032 survives to this stub).
+		// MSR := (MSR & ~0x8000) | (r11 & 0x8000) — per coordinator sign-off item 3
+		// (EE-only first; full-image mtmsr r11 is the follow-up shape). r10 is dead
+		// here (value already in CTR via the patched mtctr r10; nest use above is
+		// its last read) and the reload region at npc reloads r10-r13 from ctx(r6)
+		// [PATCH evidence: 0x3244fc lwz r10,0x154(r6) / 0x324500 lwz r11,0x15c(r6)].
+		// mtmsr is interpreter-executed, block-ending, and carries the EE 0->1
+		// edge re-raise (ppc-execute.cpp execute_mtmsr) — delivery rides the exact
+		// machinery W2-0/W2-1 proved; no new delivery mechanism.
+		// Word budget (sign-off item 5, verified against rom901_inventory.bin
+		// [RAW-ROM]): 0x318000 sits in the NK AltiVec element-load thunk table
+		// (8-byte lvebx vN + b pairs, 0x317e20..0x318628); the upstream 4-word stub
+		// already clobbers the v28/v29 entries, these 3 words extend into v30 +
+		// the first word of v31 — same dispatcher, same reachability class as the
+		// long-accepted upstream clobber.
+		*lp++ = htonl(0x7d4000a6);				// mfmsr	r10
+		*lp++ = htonl(0x516a0420);				// rlwimi	r10,r11,0,16,16 (insert MSR[EE]=0x8000 from r11)
+		*lp++ = htonl(0x7d400124);				// mtmsr	r10
+		fprintf(stderr, "[ROMPATCH] trap_return EE riser ARMED (SS_NW_EE_RISER=1): stub 0x318000 = 7 words, EE-only compose from r11\n");
+	}
+	*lp = htonl(0x48000000 + ((npc - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		reload region (npc)
 	} else fprintf(stderr, "[ROMPATCH] SKIP trap_return (absent in parcels)\n");
 
 	// Patch FEOA opcode, selector 0x0A (virtual->physical page index)

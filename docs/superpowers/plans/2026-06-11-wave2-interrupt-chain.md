@@ -450,3 +450,90 @@ Known tensions flagged for the red team:
 ## Red-team record
 
 *(empty — a red-team round follows this draft; findings to be folded as rev 2 markers)*
+
+## Rev 2 (2026-06-11) — red-team round folded (BINDING; overrides the body where in conflict)
+
+**Critical fixes (the plan would have failed as written):**
+- **(F1) `SS_EXC_ENTRY` never parses on the harness path** (the parse lives in the boot
+  init block, glue:2223; the harness gate returns at main_unix:1445 before it) — W2-1
+  gains a FOURTH knob (or folds into SS_TEST_EXC_STUB): harness-side entry-table setup
+  inside `ss_run_one_vector`, re-using the parse as a shared helper. The Codebase-facts
+  harness bullet is corrected.
+- **(F2) The delivery hook reads `[XLM_RUN_MODE]` (guest 0x2810) — unmapped in the
+  harness** (only test RAM at 0x10000000 exists) → SIGSEGV on the first delivery
+  attempt. The W2-1 knob must map (or zero-substitute) a lowmem page in harness mode —
+  named scope, not invisible.
+- **(F3) P1/P2 watch address corrected: `SS_JIT_WATCH_ADDR=2818`** (the parser is HEX,
+  ppc-cpu.cpp:909; the body's `10264` would watch 0x10264 and read "balanced" as
+  silence). The Codebase-facts decimal gloss is corrected.
+
+**Major fixes:**
+- **(F6 + tension 3) EXT entry-point discrimination is the EXPECTED verdict, not the
+  surprise**: the NK publishes a per-vector handler table at KDP+0x360 (DEC
+  [KDP+0x384]=0x50313200 ≠ EXT [KDP+0x374]=0x50314880 ≠ SC [KDP+0x390]=0x50314ac0,
+  all [PROBE✓] in the syscall milestone), and a bounded capstone look confirms
+  0x314880 is a distinct EXT body (shared 0x50313d40 save prologue, then SRR1-bit +
+  selector dispatch into the bounce family). **W2-3 pre-positions `external_entry` as
+  a THIRD ExcEntryTable field (appended last), Q-W2-gated, default candidate
+  0x50314880 (primary copy per the publication precedent).** U12 re-worded to test
+  mask parity, not the shared-entry shape. The addendum also records the implied
+  follow-up: whether DEC's 0x50412b1c target (vs published 0x50313200) is long-term
+  right — out of W2 scope, named not silent.
+- **(F4) The SCC has NO interrupt-condition state** (dev_scc8530 models raw WR bytes +
+  an Rx queue only): the SCC→0x25 edge is NEW device-model code (Rx-available ∧ WR1
+  Rx-int-enable ∧ WR9 MIE, assert/deassert at enqueue/drain/enable-writes) with unit
+  checks in the SCC suite; the VIA summary-output edge is also new (small — ifr/ier
+  exist). W2-3's sizing notes this sub-scope explicitly.
+- **(F5) The EXT output needs a CPU-thread KICK + an atomicity contract**: the
+  bound-output callback's asserted edge calls the existing cross-thread trigger
+  (the DEC-expiry TriggerInterrupt idiom); the output flag is a single-copy-atomic
+  word (written under the PIC region lock from fault/pump threads, read lock-free at
+  the CPU-thread poll) — never a plain bool.
+- **(F7 + tension 4) The W2-0 ratchet gains the missing leg**: the 353-vector suite
+  exercises only paravirtual arms; W2-2 P1 therefore carries an explicit gate — the
+  boot-baseline `exc=` tuple class unchanged vs the pre-W2-0 capture (a transposed
+  gate/counter shows as a tuple-class change; rides the already-budgeted boot).
+- **(F8) Evidence-staleness rule vs the concurrent FE1F milestone**: each W2-2 pinned
+  answer records the frontier signature it was pinned at; a frontier-moving FE1F
+  landing before W2-3 starts triggers one bounded re-confirmation boot (or a written
+  still-valid-by-argument note) per affected pin.
+- **(F9) Probe-spec repairs**: P1 adds `[0x68ffe67c]` ([KDP+0x67c]) and P2 watches its
+  resolved target (hex); P3 is explicitly a SECOND bounded session (build+boot after
+  P2 — "P2 last" applies per-session); the R-14 signature regains its instruments
+  (`[ECB+0xfc]`/`[MMCB+0xfc]` probe fields); P2 adds the 0x16a watch for the
+  Ticks-frozen leg.
+- **(F10) W2-3 budget restated**: the four named boots are bring-up (+byte-lane FRR
+  probe co-scheduled), acceptance env-on, gated-off A/B, post-flip acceptance re-run;
+  the fix-iteration boot is a conditional +1 (≤5 total).
+
+**Adjudications adopted:**
+- **(Tension 1) Forced-unmask is allowed as a NAMED DIAGNOSTIC** (`[DIAG-FORCED]` tag,
+  one boot inside the cap, only after "PIC initialized: NO" is recorded) — it
+  distinguishes wiring-broken from guest-hasn't-initialized, which CTPR logging alone
+  cannot; it is never acceptance. Trigger 3 consumes it.
+- **(Tension 2) DEC-before-EXT kept WITH the starvation guards**: new unit case U13
+  (dual-pending → DEC delivered, EXT survives) + an EXT-starvation tripwire (EXT
+  pending across >N DEC deliveries with no EXT delivery → loud line) symmetric to the
+  re-delivery runaway guard.
+- **(Tension 5) P3's `SS_EXC_FORCE_EE_AT` is a DIAGNOSTIC LEVER commit, not
+  capture-only** (it mutates live MSR): env-gated default-off, full gates, queues
+  under the same-files rule like any source edit; W2-2's "boots + docs only" sentence
+  carries this named exception.
+- **(Tension 6) The mechanical same-files guard is approved as Stream-D tooling**:
+  `docs/superpowers/.claims/<milestone>.claim` files + `tools/check-claims.sh` in a
+  pre-commit hook (fails commits staging another live claim's files; no-op when no
+  claims exist). Until it lands, each W2 task preamble runs
+  `git log --oneline -5 -- <shared files>` with "unexpected foreign commit ⇒ stop
+  and re-sync".
+
+**Factual corrections (F11/F12/F13/F14/F15/F16/F17):** the harness clock is NOT dead
+(VirtClockInitHost at main_unix:1443 initializes it; only `dec_pending=1` is missing —
+knob 1 shrinks accordingly; ":1817" was the scheduler block); H5-unresolved's
+observable is the FATAL capture + exit code, run process-isolated (never in a batch
+file); U11/U6 retained with the caller-obligation doc-comment carrying the real
+contract; W2-4's entry-gate evidence list gains the VIA lazy-settle/IER-push deadlock
+risk (the header's own warning); stop-rule middles added — a W2-1 interp-vs-JIT
+divergence is a codegen bug (systematic-debugging route, not re-pin mechanics), and
+the byte-lane decision defaults to [STATIC-oracle] (QEMU's LE ops table ⇒ value-swap)
+with the first live FRR read as the FALSIFIER (the guest-evidence framing was
+circular under CTPR-15 silence). All other cited facts verified (F17).

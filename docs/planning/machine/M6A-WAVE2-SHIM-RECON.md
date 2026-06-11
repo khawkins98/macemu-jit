@@ -462,3 +462,36 @@ is cycling a Cuda probe sequence (sync + PRAM rd/wr + ~9 I2C probes per ~80 ms c
 734 cycles in 60 s) without handing off to ADB/RTC. The next wall is whatever ends that
 probe loop — likely NOT Cuda-command-side (the 48M IER/SCC polls point at Wave-2
 interrupt-delivery/timer territory, per the plan's stop-rule).
+
+### Loop-ender hypothesis (a) FALSIFIED twice (2026-06-11, coordinator + SS_CUDA_TRACE)
+
+`SS_CUDA_TRACE=1` (commit 11d88094, adopted from the limit-killed recon attempt) decoded
+the probe cycle byte-for-byte — 13 packets, repeated verbatim every ~80 ms:
+
+```
+01 02 00 a1        READ_MCU_MEM  0x00A1 (MCU internal RAM - event/status byte?)
+01 08 00 a1 00     WRITE_MCU_MEM 0x00A1 = 0x00 (read-and-clear pattern)
+01 02 0b 00        READ_MCU_MEM  0x0B00 (unmapped middle window)
+01 02 0f 00        READ_MCU_MEM  0x0F00 (FW version blob - served)
+01 22 {41,4f,b5,91,c1,71,9d} + 01 22 80 05 c0     8 simple-I2C probes (absent)
+01 25 28 00 29     COMB_FMT_I2C dev 0x28 sub 0x00 (the Athens clock-chip read)
+```
+
+Two decisive experiments, both with the cycle repeating IDENTICALLY afterward:
+1. **MCU-RAM fix (committed, dc604756):** sub-0x100 and middle-window reads previously
+   returned header-only EMPTY replies (Task-1's "the boot never reads them" comment —
+   falsified). Now a real 256-byte MCU RAM (writes stick) + finite zeros for unmapped
+   windows, per the DingusPPC open-ended-zeros oracle. Oracle-correct; cycle unchanged.
+2. **Athens success experiment (temporary, reverted):** answering the per-cycle clock-chip
+   read `01 25 28 00 29` with a success byte (`01 00 25 00`) — accepted by the boot,
+   cycle unchanged.
+
+**Verdict: the probe cycle is NOT gated on Cuda reply content.** It is a paced (~80 ms)
+polled side-task; the boot's MAIN thread blocks on something non-Cuda. Hypothesis (b)
+(timer/interrupt starvation) is now primary, with one sharp new datum: SOMETHING paces
+the cycle at ~12.5 Hz even though the tick chain is supposedly dead — either a dbra
+delay-loop calibrated in emulated instructions, or a time source we do serve (VIA T2 via
+the model?). Open questions for the next recon: (1) what paces the 80 ms (T2 reads are
+absent from the VIA histogram - so likely a delay loop); (2) what does the main 68k
+thread wait on (the 48M IER + SCC polls are the idle signature); (3) which low-mem
+flag/time state would unblock it (Ticks 0x16a seeding is the direct experiment).

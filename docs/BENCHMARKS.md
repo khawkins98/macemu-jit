@@ -32,6 +32,7 @@ codegen change. (There is no interpreter column here — this measures JIT codeg
 |------|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-06-06 | 5.00 | 12.00 | 1.00 | 4.00 | 5.00 | 2.81 | 1.00 | — | — | — | post P3a + 0f-sweep + 0h. `shift` 2.00→1.00 (slwi/srwi 0h); `compute` 2.98→2.81 (divw 0f). |
 | 2026-06-07 | 5.00 | 12.00 | 1.00 | 4.00 | 5.00 | 2.81 | 1.00 | **4.00** | **5.00** | **5.00** | + AltiVec kernels (`vadduwm`/`vmaddfp`/`vperm` → NEON `ADD.4S`/`FMLA.4S`/`TBL`). ns/insn on the M5: 2.89 / 3.12 / 2.85 (~30× the integer `alu`, like the pre-RA FP kernels). |
+| 2026-06-11 | 5.00 | 12.00 | 1.00 | **1.00** | **1.00** | 2.81 | 1.00 | 4.00 | 5.00 | 5.00 | perf-sentinel check after the Machine Layer M1 wave (see dated entry below). fp-add/fp-fma 4/5→1.00 is the **P5b FP RA** landing (2026-06-07, documented in §3 text but never recorded as a table row). All other kernels byte-identical to 2026-06-07 — zero codegen drift. |
 
 Standout: **`rc1`=12** — CR0 generation (~11 insns) on every `.`-form/compare is the
 broadest remaining lever (lazy-CR0 §0g, currently disabled). `alu`=1 and `shift`=1 are
@@ -40,6 +41,46 @@ every guest vector op spills its VRs to/from the regs struct (load 2–3 NEON q-
 store 1) — the exact round-trip the FP-RA removed for FPRs. A **VR register allocator**
 (the FP-RA analog) is the lever to drive these toward 1.0; logged in OPTIMIZATION-PLAN.
 This is the "from not running at all → running (unoptimized)" baseline for AltiVec.
+
+#### 2026-06-11 perf sentinel — post-Machine-Layer-M1 drift check
+
+**Verdict: CLEAN — no codegen or timing drift detected.** Context: ~199 commits landed
+2026-06-10/11 (machine-layer exception surfaces, MMIO bus/devices, MixedMode/syscall/FE1F
+seams, JIT MMIO backpatch `ab1d008c`/`0ae3affa`). Standalone `make bench` (no emulator
+boot), binary verified fresh against HEAD (`c9af7089`), 3 runs:
+
+| kernel | ns/insn (3-run median) | spread (min–max) | a64/op | vs last recorded |
+|---|---|---|---|---|
+| carry-chain | 0.983 | 0.868–1.020 (run 3 cv 7.5%, NOISY-flagged) | 5.000 | a64/op identical |
+| rc1 (`add.`) | 0.520 | 0.514–0.530 | 12.000 | identical |
+| alu | 0.097 | 0.096–0.099 | 1.000 | identical |
+| fp-add | 0.206 | 0.206–0.217 | 1.000 | identical (post-P5b FP RA) |
+| fp-fma | 0.340 | 0.334–0.351 | 1.000 | identical (post-P5b FP RA) |
+| compute | 0.299 | 0.292–0.304 | 2.812 | identical |
+| shift | 0.096 | 0.094–0.097 | 1.000 | identical |
+| av-add | 2.822 | 2.821–2.824 | 4.000 | identical; ns 2.89→2.82 (within noise) |
+| av-fma | 3.096 | 3.095–3.098 | 5.000 | identical; ns 3.12→3.10 (within noise) |
+| av-perm | 2.815 | 2.813–2.817 | 5.000 | identical; ns 2.85→2.82 (within noise) |
+
+- **a64/op (deterministic, zero-noise): all 10 kernels exactly match the last recorded
+  values** — no emitted-code change from the M1 wave reached these codegen paths.
+- **ns/insn: at or slightly below the 2026-06-07 M5 figures** — no timing regression.
+  Per-round cv% was ≤2.5% except one noisy carry-chain round (7.5%, host jitter).
+- **Coverage note (what this sentinel can and cannot see):** the bench links ONLY
+  `ppc-jit.cpp` + the harness (`rom-harness/Makefile` SRCS). So it covers the JIT
+  codegen side of the M1 wave (the MMIO-backpatch emitters live in `ppc-jit.cpp` and
+  are linked in, but only engage on faulting loads/stores — these register-only kernels
+  never fault, and unchanged a64/op proves the non-MMIO emit paths are untouched). It
+  CANNOT see the interp-side changes (`ppc-cpu.cpp`/`ppc-execute.cpp` newworld arms in
+  `execute_syscall`/`execute_illegal`, machine layer, heartbeat `exc=` fields) — those
+  are profile-gated/boot-only and not linked into this binary; any interp icache/branch
+  effects need a paravirtual `make e2e` A/B, out of this sentinel's scope.
+- **Baseline disposition:** no prior machine-readable baseline existed (`/tmp/bb*`
+  empty; baselines are per-machine and never committed, per `docs/TESTING.md` and the
+  rom-harness README). Today's run is saved as the dated baseline at
+  **`/tmp/bench-baseline-2026-06-11.txt`** (`make bench BARGS=--save-baseline=…` format:
+  `kernel ns a64op` per line; compare with `make bench BARGS=--compare=/tmp/bench-baseline-2026-06-11.txt`).
+  /tmp is ephemeral — the durable record is this table (a64/op exact, ns medians for the M5).
 
 ### 2. Run-profile throughput (`guest-MIPS`, empirical) — `SS_JIT_PROFILE`
 

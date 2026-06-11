@@ -442,6 +442,20 @@ task out as its own follow-on milestone: capture, name the frontier, stop.** No 
   with the full HB/CUDA/ring baseline — the next milestone's opening evidence either way.
 - [ ] Env-gated + flip-last + revert-on-red, same discipline as W2-3. Commit per sub-step.
 
+**W2-4 progress (the EE-riser staging per EE-CHAIN-RECON "W2-4 entry decision", coordinator-signed):**
+- [x] **Step 0 — DEC re-point to the published handler** (`181efc02`): live `[KDP+0x384]`=0x50313200
+  verified first; `SS_NW_DEC_PUBLISHED` gate (default OFF) selects the 2-SPR shim, gate-off path
+  byte-inert; harness lane H8 pins the SPRG round-trip (12/12); gated-off live A/B md5-identical.
+  Review: **APPROVED-WITH-NOTES** — carry-forward: (P2) run-exc.sh wants a guard/comment for
+  gate-ON-without-SS_EXC_ENTRY (2-SPR shim toward the unmapped legacy default) before any
+  default-ON flip; (P3) stub=1 writes 6 words not 4 (inert, fresh-process zero RAM). Flip-risk
+  note: the first end-to-end execution of 0x50313200 arrives with step 1's riser — it reads
+  NK-maintained [KDP-0x10]/[KDP-0x14] state never exercised under emulated delivery.
+- [ ] **Step 1 — the `mtmsr r11` insert in the 0x318000 stub** (candidate (a), partial-rfi;
+  env-gated, default OFF; EE-only compose first). HELD until the tmtask-fix agent releases
+  its rom_patches.cpp claim.
+- [ ] **Step 2 — scored boot against the W2-2 READY/BROKEN table** (discharges the deferred P3).
+
 ### Task Z: docs
 
 - [ ] DIAGNOSTICS.md: `SS_NW_PIC`, `SS_TEST_DEC_PENDING`/`SS_TEST_MSR`/`SS_TEST_EXC_STUB`,

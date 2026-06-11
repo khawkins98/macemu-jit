@@ -11,6 +11,73 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
+### [SheepShaver] Machine Layer M6 — FE1F service surface: the "placeholders" were trap trampolines; the THIRD exception class (0x700) delivered; the first DR native callout round trip — newworld DEFAULT (`46649a23`…`03222907`)
+
+**Headline — unknown ≠ dead:** the 16 entry-vector "placeholder" slots that rung-2 Task U
+overwrote with loud parked stops (on the theory they were dead) turned out to BE the
+design — each raw `twi 31,r31,N` word is a **trap-to-NK-dispatch trampoline** encoding its
+slot id. Executing one raises a **program interrupt (vector 0x700, the third real
+exception class after interrupt and syscall)**, which the NK's own published handler
+(`[KDP+0x37c]`=0x50314700 [PROBE✓]) decodes into the exit-pointer dispatch — the same
+selector-service gateway the sc surface traverses. With the placeholders restored and
+0x700 delivered, **the DR emulator's FE1F native callout completes its first round trip
+ever**: 68k `dc.w $FE1F` selector $31 → marshal → `blrl` into slot 8 → trap → 0x700 →
+NK gateway 0x5031aca0 → the 'EVNT' kernel-object service 0x5031d204 → return r3=0 (noErr)
+/ r4=0x00120001 (kernel-object ID handle, `(dir-index<<16)|generation`) → the 68k tail
+stores the handle into the ExpandMem slot `[0x100037dc]` and the CFM-prep routine
+proceeds to the $36 sibling callout. The boot transforms: **839k → 4.48M ring records**
+past the old 0x5000f248 park. **`SS_NW_FE1F_SURFACE` is the newworld profile DEFAULT**
+(`=0` opt-out, SS_NW_SC_SURFACE polarity). Plan:
+`docs/superpowers/plans/2026-06-11-fe1f-service-surface.md` (revs 2/3 — two red-team
+rounds, then the Task-0 re-scope ratified); full evidence:
+`docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C
+results. **Zero falsifications milestone-wide** (Task B's two corrections judged honest
+predicate REFINEMENTS — the mechanism held; the slot recipe +4 and handle-not-pointer
+mis-pins were static misreads corrected in the same evidence boot).
+
+The arc (all gates green throughout — batch+plain test-jit 353/353 score=100, machine
+suite 12/12 incl. test_exc_core 25→37 checks, e2e-test 122, gated-off A/B byte-identical):
+
+- **Plan + red teams + rev-3 re-scope** (`46649a23`, `103c7def`, `eba8f0a3`): rev 2
+  settled the two load-bearing contracts statically (the seed theory wrong; the success
+  predicate un-inverted); rev 3 ratified Task 0's bigger falsification — restore the
+  placeholders + deliver 0x700, superseding the population framing.
+- **Task 0 recon** (`74fdc067`): all blocking answers pinned in 3/8 boots — the
+  trap-placeholder mechanism, the 0x700 handler + exit-pointer publication (closing
+  rung-2's `[ECB+0x9e0]`-writer mystery: the NK cold-init publication cluster at file
+  0x3117xx), the selector-$31 'EVNT' service fully staged (seed-class fix list EMPTY —
+  the fix is route-class), the H1 park named (blrl → slot-8 stop, never returns).
+- **Task A** (`89a28c15` EXC_PROGRAM in exc_core, `669ccf7a` restore + delivery,
+  `3b27fb9c` results, APPROVED review): raw `twi` restore over slots {4,6–15}
+  (verify-EXPECTED), trap-taken `twi`/`tw` → `ExcEnter(EXC_PROGRAM)` →
+  `program_entry=0x50314700` + the 2-SPR shim (the sc-shim sibling); SRR1 trap bit
+  0x00020000 test-pinned; `delivered_program` as the 6th `exc=` heartbeat field.
+  **Rung-2's "dead slots get loud stops" policy RETIRED** (dated notes in the design
+  doc + rom_patches site); slot-15 exhaustion diagnostics moved to delivery telemetry.
+- **Task B** (`9443a568`, evidence-only): round trip PASS end-to-end with **two honest
+  predicate refinements** (slot = base + 4·index, so the watch word is 0x100037dc;
+  r4 = the ID handle, not the EVNT pointer — the sc ID-directory precedent); all
+  rung-2 + sc-surface invariants carried; the DSAT wall named.
+- **Task C acceptance + flip** (`2949ec32` per-selector sc counter, `be0e02cb` flip,
+  `03222907` records): battery green pre/post-flip, revert-on-red not invoked.
+  **Fix-budget finding: the baseline "5 sc deliveries" was always the cap-5 PRINT
+  artifact** — true totals are 8/7-distinct parked, 13/9-distinct FE1F-armed
+  (0x3f, 0x19×2, 0x14, 0x0f×3, 0x27, 0x40, 0x42×2, 0x50, 0x4d).
+
+**THE new frontier (stop-rule trigger 2 — captured + named, recon in flight): the DSAT
+stack-underflow wall.** Right after the $36 callout's return path, a 68k System Error
+ID 10 is raised (saved PC `[$C70]`:=0x5000e448, record-for-record reproducible) and the
+Deep-Shit-Alert machinery itself underflows RAMBase from a 0x100000a0 fallback stack →
+host SIGSEGV `ea=0x…0fffff42`. Capture:
+`docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "Frontier update (FE1F Task C closeout)".
+
+Knob reference (`SS_NW_FE1F_SURFACE`, the dependency matrix, the `[EXC] PROGRAM` /
+per-selector lines): `SheepShaver/docs/DIAGNOSTICS.md` "Machine Layer M6 — FE1F service
+surface". Registered ticket (rev 2 T-M2, out of this milestone): glue's ECB halfword-table
+loop (`sheepshaver_glue.cpp:2163-2166` era) is dead-on-arrival AND latently buggy
+(`hw | page_base` OR-corrupts page bits; primary-world base) — a real builder overwrites
+it; fix deferred.
+
 ### [SheepShaver] Machine Layer M6 — NK syscall surface: the FIRST GUEST SYSCALL EVER RESOLVED; vector 0xC00 runs real NK code, newworld DEFAULT (`dad9a557`…`52928958`)
 
 **Headline:** MPLibrary's first kernel service call — `sc` at pc=0x500d638c, selector

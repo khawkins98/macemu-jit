@@ -11,7 +11,91 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
-### [SheepShaver] Machine Layer M6a rung 2: first complete MixedMode 68k→PPC round trip — switch is the newworld DEFAULT (`c8178095`…`296c3661`)
+### [SheepShaver] Machine Layer M6 — NK syscall surface: the FIRST GUEST SYSCALL EVER RESOLVED; vector 0xC00 runs real NK code, newworld DEFAULT (`dad9a557`…`52928958`)
+
+**Headline:** MPLibrary's first kernel service call — `sc` at pc=0x500d638c, selector
+r0=0x3f, the wall every boot died on since the MixedMode round trip closed — now
+**delivers into the staged NK's own syscall handler and returns r3=0 to the caller**.
+Vector 0xC00 is resolved to `syscall_entry=0x50314ac0` (the PRIMARY copy, NK-published at
+`[KDP+0x390]` — a deliberate cross-copy asymmetry vs `interrupt_entry=0x50412b1c`
+staged-copy, recorded per plan P-m5), delivered through bare `ExcEnter(EXC_SC)` plus a
+**2-SPR shim** transcribed from the real 0xC00 vector stub's postconditions: exactly
+`SPRG1 := caller r1`, `SPRG2 := caller LR` — nothing else. Five syscalls delivered per
+boot (selectors 0x3f/0x19/0x14/0x19/0xf), every sampled resume r3=0 with full register
+continuity; **MPLibrary's MixedMode excursion RETURNS to the 68k world**. The surface is
+the **newworld profile DEFAULT** (`SS_NW_SC_SURFACE=0` opt-out). Plan:
+`docs/superpowers/plans/2026-06-11-nk-syscall-surface.md` (rev 2, two red-team rounds);
+full evidence: `docs/planning/machine/M3A-ENTRY-TABLE.md` "Syscall entry resolution" +
+Task B/C results — **the M3a `syscall_entry=0` descope is formally CLOSED**.
+
+The arc (all gates green throughout — batch+plain test-jit 353/353 score=100, machine
+suite 12/12 incl. the new test_dev_openpic 206 checks, e2e-test 122, paravirtual
+`make e2e` PASS byte-identical; **zero falsifications, zero fix-budget consumed**):
+
+- **Plan + two red teams** (`dad9a557`, `3e9682c9`): rev 2 folded both rounds — the
+  probe-PC fix (probe the block at 0x500d6388, not the sc), the blocking-answer map,
+  static-RE/boot budgets, the env matrix as Task-A *behavior*, and the free static wins
+  (selector 0x3f pre-pinned, result register r3 / error r3≠0, the 12-byte-stride
+  syscall-stub table).
+- **Task 0 recon** (`780bbc34` telemetry + `3e7b04ca` addendum): the FATAL capture
+  extended with r0/r3..r10 (the dying sc samples its own conformance vector); all
+  blocking answers pinned in 2/8 boots — the NK's per-vector handler table at
+  `KDP+0x360` (indexed `vector>>6`, via SPRG3), `[KDP+0x390]=0x50314ac0` [PROBE✓],
+  the handler-entry ABI table, the shim verdict (two SPRs, host-side per the DEC-shim
+  precedent), the save-target finding (**the syscall path saves into the `[KDP-0x14]`
+  ctx — NOT `[KDP+0x65c]`** — so the DEC-shim's KDP logic does NOT transfer), exit via
+  the scheduler restore (SRR0=sc+4 never re-incremented), and the Q-S5 staged-surface
+  audit: the no-shim probe boot ran selector 0x3f END-TO-END on staged state (r3=0) —
+  stop-rule NOT fired.
+- **Task A** (`bcce26c2`): `NW_SYSCALL_ENTRY_DEFAULT` + the `SheepExcSyscallShim` glue
+  helper (env-gated `SS_NW_SC_SURFACE=1` bring-up), the P-M1 env-matrix as behavior —
+  **fixed the no-comma `SS_EXC_ENTRY=0xINT` trap** (it used to zero the syscall entry;
+  now PRESERVES the default), override×gate 2×2 pinned, loud inert-`legacy` warning —
+  plus the delivered-sc counter as the **5th `exc=` heartbeat field**. Handler-entry
+  probe conformed exactly to the Q-S2 register table; gated-off boot byte-identical
+  to the FATAL baseline.
+- **Task B** (`c41b9ea3`, evidence-only): first-sc round trip PASS — no FATAL,
+  handler conformance re-asserted, resume at 0x500d6390 with r3=0 and r1/LR/r4..r10
+  preserved; rung-2 invariants carried (cold-once, guest[0]/[4] stable, slot-15
+  unvisited, delivered-DEC=0); bounded selector map (the full `li r0,SEL / sc` stub
+  table file 0xd6298..0xd6d3c statically enumerates selectors 0x00..0x84 —
+  per-selector resume probes pre-answered).
+- **Task C acceptance + default flip** (`7a079079` + records `52928958`): full battery
+  green env-on, then **the flip** (explicit-"0"-only opt-out, SS_NW_MM_SWITCH
+  polarity), then the battery re-run with NO env vars — all green, no revert.
+  Opt-out boot reproduces the sc-wall FATAL baseline byte-identically (diff-verified).
+
+**THE new frontier (stop-rule trigger 2 — captured + named, not chased):** after sc #5
+the boot parks 68k-side at **0x5000f248** — the instruction after an **F-line NK/DR
+service trap `$FE1F` with selector d0=0x31** (a CFM/accelerator slot-fill request into
+an ExpandMem-anchored array), issued by the ROM's CFM-prep routine via the A-line trap
+dispatcher at 0x5000dfa2. The FE1F service surface is the next milestone's named wall —
+not another sc selector, not an MMIO poll. Capture:
+`docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "Frontier update (Task C closeout)".
+
+Knob reference (`SS_NW_SC_SURFACE`, the env matrix, the legacy reproduction recipe):
+`SheepShaver/docs/DIAGNOSTICS.md` "Machine Layer M6 — NK syscall surface".
+
+### [SheepShaver] Parallel landings: M3b Wave-2 OpenPIC model + tests (`b86449c9`); EE-chain recon memo (`89fd0642`)
+
+- **OpenPIC (KeyLargo MPIC) model + 206-check unit suite** (`b86449c9`, + target
+  pre-wire `884586a5`): pure module + tests only per the Wave-2 stop-rule disposition —
+  no live consumer; EXC_EXTERNAL wiring stays gated on the W2.0 NK-handler recon
+  (`OpenPICBindOutput` is the future seam). Behavioral reimplementation against the
+  QEMU oracle (`hw/intc/openpic.c` @ `de5d8bfd`, OPENPIC_MODEL_KEYLARGO), with the
+  oracle's corrections baked in: **the KeyLargo register file is mapped
+  little-endian** (documented in the header for the wiring task) and **CTPR resets
+  to 15** (all sources masked until the guest lowers it). Boot-critical surface
+  (BRR1/FRR/GCR/VIR/PIR/SPVE, per-source IVPR+IDR, CPU0 CTPR/WHOAMI/IACK/EOI) with
+  QEMU's quirks matched (edge-clear on bad IACK, EOI re-raise without CTPR recheck);
+  absent-device-consistent timers/IPI holes. Machine suite is now **12 suites**;
+  mutation probes 5/5 killed.
+- **EE-chain recon memo** (`89fd0642`, `docs/planning/machine/EE-CHAIN-RECON.md`):
+  the honest 11-link chain map (real through delivery, fictional after it), the
+  first-EE-rise verdict (**EE rises by `rfi`, not guest `mtmsr` — the NK forces
+  EE=1 via `ori r11,r11,0x8000` at 0x50313bf8; the pending DEC latch makes the first
+  rise an instant delivery**), a 3-level test spec, and the Wave-2 reorder
+  recommendation: verification rungs W2-0..W2-2 BEFORE construction W2-3..W2-4.
 
 **Headline:** the 68k→PPC Mixed Mode switch works in BOTH directions on the newworld
 profile and is now the profile **default** (`SS_NW_MM_SWITCH=0` opt-out). MPLibrary's

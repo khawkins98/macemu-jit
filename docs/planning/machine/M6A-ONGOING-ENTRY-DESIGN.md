@@ -352,3 +352,289 @@ design (R3 target choice) depends on facts only rungs 0–1 produce.
 5. The slot-4 "Interrupt" vector is ILLEGAL by paravirtual design; if the real NK's
    posting path ever branches through it (instead of the CR/level mechanism), it will
    trap loudly — treat such a trap as signal, not noise.
+
+---
+
+## Rung 2 contracts (Task 0 recon addendum, 2026-06-11 — BINDING for Tasks T..X)
+
+> Recon for plan `docs/superpowers/plans/2026-06-11-m6a-rung2-mixedmode-switch.md`.
+> Three bounded probe boots (≤50 s each, `SS_NW_MM_POOL=1 SS_JIT_NO_CHAIN=1`,
+> `/tmp/m2accept.prefs`; logs `/tmp/t0_boot{1,2,3}.log`) + static capstone of the
+> patched dump. Tags: **[RAW-ROM]** = `/tmp/rom901_inventory.bin` (verified raw:
+> `twi` slot placeholders at 0x36e8c0), **[PATCH]** = our patch source,
+> **[STATIC]** = disassembly of the patched dump, **[PROBE✓]** = live-verified.
+
+### Provenance (rev 2 C9 — resolved)
+
+- `/tmp/rom901.bin` **is PATCHED** (entry table at file 0x36e8c0 = `48001040 4800113c …`),
+  as is `/tmp/rom901_decompressed.bin`. A fresh `SS_DUMP_ROM` dump this session
+  (`/tmp/rom901_patched_t0.bin`) is **byte-identical** to `/tmp/rom901.bin`
+  (md5 `e432df64122a5a89ec1c08d0bdf01609`) — so `rom901.bin` = current-binary post-PatchROM
+  state and all prior file-offset reads against it are [PATCH]-tagged, not [RAW-ROM].
+- `/tmp/rom901_inventory.bin` is the genuine **UNPATCHED** image (slot placeholders
+  `0fff0000…000f` — note: **16** placeholders, confirming the 16-slot table in the raw ROM
+  too) — the only [RAW-ROM] source on disk.
+- The 4 MB dump covers the primary copy only; the **mirror region (host offset 0x400000+:
+  trampoline 0x429b40, table[0] redirect 0x46e8c0, pool seed) is NOT in any dump** — mirror
+  facts are [PATCH] (source) or [PROBE✓] only. Primary↔mirror: mirror = primary+0x100000
+  via the rom_patches.cpp:699 memcpy, which runs **after** patch_68k_emul and **before**
+  PatchROM_NW_trampoline.
+
+### The opcode-service map (file 0x3ff000+ = mirror dispatch slots, 8 B/opcode) [STATIC]
+
+| Opcode | Slot prologue | Service body |
+|---|---|---|
+| FE01 | `lwz r5,0x9e0(r31)` | `b 0x5046de10` → `mtlr r5; lwz r7,0(r1); blr` → **[ECB+0x9e0]=0x5046de1c** [PROBE✓] = RoutineDescriptor parser |
+| FE02 | `lwz r4,0x714(r31)` | `b 0x5046e120` (same save/switch protocol as FE01's PPC path, continuation r4=[ECB+0x714]) |
+| FE07 | `rlwimi r29,r27,3,0xd,0x1c` (pre-computes next dispatch) | `b 0x5046e380` (frame validator — see Q-C) |
+
+### Q-A — the 0x220 save record [STATIC + PROBE✓] — **PINNED**
+
+- **The DR itself writes only the 0x10-byte trailer**: `[rec+0x210]=r0`,
+  `[rec+0x214]=in-use bitmask bit`, `[rec+0x218]=previous record (chain)` (alloc site
+  0x5046e324–e358). The body `+0x000..0x20F` is the **NK's 68k-emulator-context save area**:
+  the record's *physical* address is registered at `[MMCB+0xd8]` (MMCB=[ECB+0x710]
+  =0x68fff400 [PROBE✓]) so the NK can save the 68k context there while the world is
+  switched out. The *virtual* pointer rides in the switch frame at frame+0xE8
+  (= the stack copy of MMCB+0xd8).
+- **Allocation is conditional**: the allocator runs only when `[MMCB+0xd8] ≠ 0` (beq cr7 at
+  0x5046e300 skips it). Live: `[MMCB+0xd8]=0x68ffb8e0` [PROBE✓] — the NK ECB build supplies
+  an **initial record at 0x68ffb8e0** (NK-owned, outside our pool) — so every switch
+  allocates. Free is exact LIFO (Q-F): observed `[ECB+0xEC]=0` at every allocator entry
+  across 10M iterations [PROBE✓] ⇒ **max concurrent depth observed = 1**.
+- **Record-count answer for Task T (the blocking part): keep 4 records + the slot-15
+  (`+0x3c`) loud stop.** Depth is bounded by MixedMode nesting (68k→PPC→68k→…); the boot's
+  real nesting past the spin is unknowable until Task V — the plan's fallback (4 + loud
+  stop, never guess bigger) is adopted as the pinned sizing. Residue R-1: true nesting
+  depth, re-measured at Task Y via the loud stop never firing.
+
+### Q-B — post-allocator control flow + consumed slots [PROBE✓] — **PINNED**
+
+- **Consumed entry-vector slots under the live FE01 path: slot 1 ONLY** (stub 0x5046fa00:
+  10M visits; slots 2/3/5 stubs 0x5046fb00/fc00/fd00: **zero** visits; slot 0: exactly 1
+  visit = cold start; slot 15 (+0x3c): never under pool-on). Call site: FE01 service
+  `bnel cr2, 0x5046e8c4` (0x5046e19c) after saving D0-D7/A0-A6 → `[ECB+0x708]`=0x68fff740
+  block (+0x00..0x38, +0x3c=68k PC, +0x40=r0) and populating the MMCB **as an NK context
+  block**: `+0xfc`=resume PC=[ECB+0x700]=**0x500ebc20**, `+0x10c`=r1(68k A7),
+  `+0x114`=r2=[ECB+0x704]=0x10025864 (native glue RTOC), `+0x1ec`=r29=routineRecord ptr
+  (0x10024df4), `+0x1f4`=r30=RD (0x10024de8), `+0x1fc`=r31=[ECB+0x708] save block — i.e.
+  **FE01 manufactures the MixedMode context's register file in the ctx GPR slots the NK
+  scheduler restore reads** (ctx+0x174+8·(n−14) for r14–r31; doc §2.1).
+- Slot-1 stub register state at entry [PROBE✓]: r3=0x68fff400 (MMCB = the switch-target
+  context ID), r4=0x00200000, r5=0x68fff740, r7=RD 0x10024de8, r24=0x100266f2,
+  r25=0x0827 (0x800 = in-MixedMode), r29=0x504ff008, r30=0x50460000, r31=ECB,
+  LR=0x5046e1a0 (service return), CR=0x40100000 (cr2eq clear ⇒ bnel taken).
+- **8-vs-16 resolution recorded**: the table is 16 slots [RAW-ROM: 16 `twi` placeholders;
+  PATCH: slots 0–3,5 branches, 4 and 6–15 `POWERPC_ILLEGAL==0` per emul_op.h:26]. The
+  design-doc §1.2 "8 slots" was a truncation. Slot 15 (+0x3c) = allocator-exhaust target;
+  slot 4 = the deliberately-dead interrupt vector; no collision.
+- **Advance parked-PC enumeration (Task U gate: live parked PCs ⊆ this set)** — unique
+  `bra.s *`-class loud stops in the mirror zero run above 0x429c30, one per non-consumed
+  slot: slot 4→0x50429c40, 6→0x50429c50, 7→0x50429c60, 8→0x50429c70, 9→0x50429c80,
+  10→0x50429c90, 11→0x50429ca0, 12→0x50429cb0, 13→0x50429cc0, 14→0x50429cd0,
+  **15→0x50429cf0 (Task T's exhaust stop)**. (These are PPC slots — stops are PPC parked
+  branches `b *`, written verify-zero-first at PatchROM time.) Slots 0–3,5 keep their
+  static branches; only slot 1 is live-consumed; slots 2/3/5 stay as-is (static stubs,
+  unconsumed ≠ parked).
+
+### Q-C — the retry pivot / FE07 semantics [PROBE✓ + STATIC] — **PINNED; stop-rule NOT fired**
+
+The live spin circuit (all legs probe-verified, 10M visits each):
+`e1a0` (return from NK, command byte 0) → `e2a0` switch: stack→supervisor
+(`[ECB+0x4c]` via helper 0x5046d7a8), push 0x310 frame on the 68k stack
+(`+0`=68k PC 0x100266f0, `+4`=PPC return 0x5046e244, `+8`=CR composite, `+0xc`=marker
+`0x1300xxxx`, `+0x10..0x310`= MMCB copy), allocate record, then via the d7a8 LR-trick fall
+into the **68k exception raiser 0x5046d7cc**: push 8-byte format-E frame
+(`SR,PC,fmt/vec=0xe05c`) and dispatch the 68k through **vector 0x5c = 0x10008fb0**
+[PROBE✓ `[0x5c]`] (installed by MixedMode parcel init) → stub `FE07; bne.b; rte / jmp
+0x500049c4` → FE07 (0x5046e380) **validates the frame and tests the copied command byte**:
+
+- fmt nibble ([A7+6]>>12) must be 0xb or 0xe; marker [A7+0x14]==0x1300; then
+  **r4 = lbz [A7+0x18] = the frame's copy of the command byte [MMCB+0]**:
+  `0` → CR0(68k Z)=EQ → `rte` → DR's format-E RTE service **0x5046e408**: restore MMCB
+  from the frame, free the record, pop 0x318, resume at frame+4 (0x5046e244) via
+  `b 0x5046c3ec; bctr [ECB+0x818]=0x5046c410` → **retry loop** (`b 0x5046e154`: re-save,
+  re-call slot 1). `0xc`/`0x14` → page-touch probes through [MMCB+0xfc]/[MMCB+0x34] then
+  same CR0 logic; **non-zero else** → NE → `jmp 0x500049c4` (the 68k-side continuation).
+- Observed forever: command byte = 0x00 ([MMCB+0] word = 0x00000006 = [ECB+0x7a8] re-seeded
+  at 0x5046e35c each pass; big-endian byte 0 = 0) [PROBE✓ frame dump].
+
+**The root cause sits one level down: the NK switch-to-context service.** The slot-1 stub
+exits via `[KDP+0x5f4] = 0x503143a0` [PROBE✓] (and `[KDP+0x5f0]=0x50313bf8` — both NK
+addresses; the §1.3 "0x366080" claim is corrected: on the live newworld boot the slot exits
+go to the **staged NK**, not the primary emulator). 0x503143a0 [STATIC]:
+
+```
+mtcrf 0x3f, r7            ; r7 = stub-composed [KDP+0x660] flags word
+bnel  cr2, 0x50312cb0     ; cr2eq==0 ⇒ "not from emulator" ⇒ bounce back, nothing done
+and.  r8, r4, r13 ; bne 0x50312cb0   ; caller-CR bit 0x00200000 must be CLEAR
+r8 = r3 & ~0x3F           ; r3 = 0x68fff400 = the requested context ID (the MMCB)
+MRU lookup [KDP+0x340/348/350/358] (paired ctx ptrs at +0x344/34c/354/35c)…
+  hit → [0x2810]=1; [pairctx+0x5c]=[KDP+0x648]; [KDP-0x14]=pairctx; b 0x50312b0c (NK SAVE)
+  miss → slow path: cmpw vs r6, page-table validate (bl 0x503154b8), [KDP+0xea4]++,
+         install into MRU, loop to hit path; validation failure → r8=2; b 0x50312ab4
+```
+
+**Live: the spin takes the FIRST branch** — 0x50312cb0 visits = 10M; hit path 0x503143c4,
+slow path 0x5031440c, error 0x50312ab4, save 0x50312b0c: **all ZERO** [PROBE✓].
+`[KDP+0x660]=0` ⇒ r7=0 ⇒ cr2eq=0 ⇒ every slot-1 call is classified "not from the
+emulator" and returns having done nothing ⇒ command byte stays 0 ⇒ FE07 EQ ⇒ unwind ⇒
+retry. The MRU cache is uninitialized poison (`-1/0` ×4 pairs [PROBE✓]); `[0x2810]`=0,
+`[KDP+0xea4]`=0.
+
+**The spin-breaking condition Task V must satisfy (in scope — slot/seed/record plumbing +
+pinned conventions; the machinery itself is the staged NK's own):**
+1. `[KDP+0x660]` bit **0x00200000** set (the stub's rlwimi chain only touches bits
+   0x80000000 and 0x20, so the bit passes straight into cr2eq) — this is also
+   [PROBE-O4]'s answer (see probe pack).
+2. The context lookup for ID 0x68fff400 must succeed: either the slow-path page-table
+   validation passes on the flat model (unverified — falsifiable live), or Task V
+   **pre-seeds an MRU pair** `[KDP+0x340]=0x68fff400, [KDP+0x344]=<ctx>` (the pair value
+   is consumed as `[pair+0x5c]:=[KDP+0x648]` and `[KDP-0x14]:=pair`; the natural value is
+   the MMCB itself — one-iteration rule applies if falsified).
+3. Then the NK's own save (0x50312b0c) + scheduler switch resume the MixedMode context at
+   `[MMCB+0xfc]=0x500ebc20` — **the TVector entry is performed by the ROM's native
+   MixedMode glue, not by hand-rolled trampoline code**. No new NK surface, no L-class
+   Trampoline, no FE07-side service is missing (FE07 is complete in the DR). The
+   stop-rule does **not** fire.
+
+FE07 ownership note for Task V: FE07 needs **no implementation** — its `bne` falls through
+exactly when the command byte the completion path writes is nonzero (and the 0xc/0x14
+probe classes behave as above). What Task V owes FE07 is only a correct command byte.
+
+### Q-D — TVector entry convention [STATIC + PROBE✓] — **PINNED**
+
+- RoutineDescriptor @0x10024de8 [PROBE✓]: `aafe 07 00 | 00000000 | 00 00 0000` →
+  goMixedModeTrap, version 7, rdFlags 0, routineCount=0 (single routine);
+  routineRecords[0] @+0xC: procInfo=0x000000E1 (**cc = kCStackBased(1)**), ISA=1 (PPC),
+  routineFlags=0x0004, procDescriptor=0x10024758. TVector [PROBE✓]: code=**0x500cef8c**,
+  RTOC=**0x10024754**. (Rev 2 C7 confirmed: RD=0x10024de8, procDescriptor field
+  =0x10024758.) The FE01 parser reads exactly these fields (version path: routineCount==0
+  + ISA==1 → the switch path; ISA==0 would just redirect the 68k PC to procDescriptor).
+- The native glue at **0x500ebc20** [STATIC] is entered as the restored MixedMode context
+  (register file = the ctx slots FE01 wrote, Q-B): expects **r30=RD** (validates
+  version==7; else `b 0x500ef75c` fallback), **r29=routineRecord**, **r1=68k A7**
+  (args base; r28=r1+4 walks caller args), **r2=its own RTOC (0x10025864)**, **r31=the
+  68k register save block 0x68fff740** (e.g. `[r31+0x38]`=A6 staged to `[r1-4]`). It
+  aligns a PPC frame (`stwux r1,r1,-N`, 64-byte aligned, back-chain tagged `|1`) and
+  dispatches per procInfo cc through its TOC table `[r2+0x16c+cc*4]; bctr`.
+- **Task V probe-gate table at `SS_PROBE_PC=0x500cef8c`** (exact conformance per plan
+  rev 2 P7; classes where a literal is not architecturally fixed):
+
+| Register | Expected | Class |
+|---|---|---|
+| CTR | 0x500cef8c | exact (bctr entry) |
+| r2 | 0x10024754 | exact (TVector[1] RTOC) |
+| r1 | < 0x103ffe5c, 64-byte aligned, `[r1]` = back-chain tagged `\|1` | class: PPC frame on the 68k stack |
+| LR | 0x500exxxx (ROM glue return) | class: MixedMode glue region |
+| r30 | 0x10024de8 (RD) | class: glue-preserved, non-gating |
+| MSR (stored) | per-context (NK switch srr1), EE state recorded not gated | diagnostic |
+
+  (The cc=1 dispatch leg that loads CTR/r2 from the TVector is [STATIC]-inferred from the
+  `[r2+0x16c+cc*4]` table; the r2/CTR literals above are pinned from the probed TVector
+  contents, so the gate is falsifiable regardless.)
+
+### Q-E — MSR across the switch (time-boxed) — **VERDICT + recorded fallback**
+
+- **Verdict (new, supersedes the SS_M6A_USER_MSR framing):** the architectural MSR
+  transition for the MixedMode excursion is **per-context, carried by the NK context
+  switch** (the resumed ctx's SRR1 slot) — not a trampoline-side `mtmsr`. Task V should
+  need **no** SS_M6A_USER_MSR involvement for FE01 completion; the trampoline mtmsr block
+  stays what it is — a table[0]-cold-start diagnostic. **SS_M6A_USER_MSR remains
+  quarantined default-OFF** (known-broken diagnostic; document in Task Z).
+- The ctx MSR slot's live value for the manufactured MixedMode context is **unverified**
+  (which ctx offset the NK rfi takes SRR1 from on this path was not chased within the
+  time-box). If the resumed context runs EE=1, the deferred-DEC backlog delivers during
+  the native excursion through M3a plumbing — Task V watch item, not a blocker.
+- **Zero-page slide (SS_M6A_USER_MSR=1): NOT root-caused** within budget (0 of its 2 boots
+  spent — deliberately, since the verdict removes it from the critical path). Named
+  residue R-2; explicitly NOT a Task V blocker (plan rev 2 P5 fallback adopted).
+- **PR=1 re-verification (rev 2 C10):** the rung-1 night-run datum stands as the post-M3a
+  evidence: a real DEC delivery with `srr1=0xd032` (PR=1) round-tripped through the NK and
+  **resumed the guest correctly** (M6A-WAVE2-SHIM-RECON "Wave 2 night-run results").
+  Sustained PR=1 execution under the JIT remains untested at scale — residue R-3, gated
+  naturally by Task V's probe sub-contract (the TVector excursion runs under the
+  ctx MSR; any PR-intolerance surfaces there loudly).
+
+### Q-F — FE02 / switch-back mechanics [STATIC + PROBE✓] — **PINNED (with a re-scope)**
+
+- **Who frees the pool bit:** the DR's format-E RTE service **0x5046e408** [PROBE✓ 10M]:
+  validates marker `[A7+0x14]==0x1300` (else `b 0x5046c6d8` error), copies the frame's
+  MMCB image back over the MMCB, and if the restored `[MMCB+0xd8]` chain head ≠ 0:
+  `[MMCB+0xd8] := [rec+0x218]` (pop) and `[ECB+0xEC] &= ~[rec+0x214]` (free). Resume:
+  `mtlr [frame+4]; b 0x5046c3ec → bctr [ECB+0x818]=0x5046c410` (status recompute →
+  back into the service's retry/continuation at 0x5046e244).
+- **Where the 68k resumes on completion:** the command-byte 0xff path (0x5046e1f4):
+  r24 := `[saveblk+0x3c]` (the saved 68k PC), r25 &= ~0x800, dispatch — i.e. the 68k
+  resumes at the instruction after the $AAFE site with D/A registers reloaded from the
+  save block (results written there by the native side).
+- **Re-scope finding:** the **FE02 opcode is NOT the forward switch-back** on the
+  MPLibrary path. FE02's service (0x5046e120) is the *same* save/slot-1 context-switch
+  protocol with continuation `[ECB+0x714]=0x500ef258` [PROBE✓] — it is the
+  **PPC-calls-68k direction** (native glue parks itself, dispatches a 68k routine; the
+  68k completion re-switches to the native ctx which resumes at 0x500ef258). Task W's
+  real deliverable is therefore: the native completion path (glue, after the TVector
+  returns) switching **back to the 68k-emulator context** through the same NK
+  switch-to-context service, with the command byte set so FE07 falls through (or 0xff so
+  e1f4 resumes). Residues: R-4 — the exact command byte the genuine native completion
+  writes (0xff per the e1f4 semantics is the design-consistent value; verify at Task W
+  live); R-5 — the emulator-side resume point after the NK re-switch (the saved emulator
+  ctx from 0x50312b0c resumes inside the slot-1 stub return → 0x5046e1a0; verify with
+  the r24 ring per rev 2 C5).
+
+### Probe pack results
+
+- **[PROBE-O1] table[0] census (BASELINE, pool-on)** [PROBE✓]: visit=1 per boot —
+  the cold start — and **never re-entered**; the FE01 spin lives entirely inside the
+  DR service + NK bounce. Entry signature: all-zero file except r5=0x68ff4000,
+  r24=0x5000002a, r29=0x50480000, CTR=0x5046e8c0, LR=0, r1=0 — the §2.5 context-restore
+  signature, now probe-verified. (Task X re-censuses post-W per plan rev 2 P1.)
+- **[PROBE-O2] who built the restored ctx** [PROBE✓]: CTR=0x5046e8c0 (≠ glue's ctx+0xfc
+  seed 0x5046f900) and r1=0 (≠ `mfspr r1,SPRG0` restore tail) ⇒ **glue's ECB ctx
+  pre-population is dead scaffolding confirmed**; the first dispatch is an NK
+  ConfigInfo-derived direct dispatch (r5=0x68ff4000=NKSystemInfo-shaped), not the
+  steady-state scheduler restore.
+- **[PROBE-O4] `[KDP+0x660]` consumption** [PROBE✓ — **pinned, R4 unblocked**]: the
+  0x50412bbc-region probe never fired (no NK interrupt deliveries this boot), but the
+  flags word's live consumer was caught elsewhere: the slot-stub composes r7 from
+  `[KDP+0x660]` and **0x503143a0's `mtcrf 0x3f,r7; bnel cr2,…` consumes it as the
+  from-emulator classification — the consumed bit is 0x00200000 (cr2eq)**. R4's seed =
+  set bit 0x00200000 (the rlwimi-composed bits 0x80000000/0x20 are separately derived
+  flag bits, not preconditions). Caveat: the *interrupt handler's* flag tests (the
+  original O4 target) remain unexercised — same bit family, verify when deliveries run.
+
+### Blocking-answer status (plan rev 2 P3 gate)
+
+| Blocker | Status |
+|---|---|
+| Task T ← Q-A record count / pool sizing | **PINNED** (4 records + slot-15 loud stop; depth-1 observed; fallback rule adopted) |
+| Task U ← Q-B consumed-slot map + parked-PC enumeration | **PINNED** (slot 1 only; enumeration above; 16-slot resolution recorded) |
+| Task V ← Q-C pivot + Q-D register table | **PINNED** (flags bit 0x00200000 + MRU/ctx lookup + NK-native switch; FE07 needs nothing; TVector gate table above) |
+| Task V ← Q-E verdict-or-fallback | **VERDICT** (per-context MSR via NK switch; SS_M6A_USER_MSR quarantined; slide = residue R-2, not a blocker) |
+| Task W ← Q-F | **PINNED** (free site, resume site, marker contract; FE02-direction re-scope recorded; R-4/R-5 are verify-at-W residues, not unknowns about *whether* the surface exists) |
+| Task X ← O1 baseline + O4 | **PINNED** (O1 baseline = 1 cold entry, 0 re-entries; O4 bit pinned ⇒ R4 actionable) |
+
+**Stop-rule: NOT fired.** FE01 completion requires only: two KDP seeds
+(`[KDP+0x660]` bit 0x00200000; MRU pair `[KDP+0x340/0x344]` — or a live-validated
+slow-path pass), the already-staged pool (Task T), and the staged NK's own
+switch/save/restore machinery — squarely "slot population + save-record plumbing +
+pinned conventions". The one structural surprise is *favorable*: the TVector call is
+made by the ROM's own native glue (0x500ebc20), so Task V writes seeds, not call glue.
+
+### Residue register (explicit)
+
+- **R-1**: true MixedMode nesting depth (pool sizing evidence) — re-measured at Task Y
+  via the slot-15 loud stop.
+- **R-2**: SS_M6A_USER_MSR zero-page slide — not root-caused; quarantined diagnostic.
+- **R-3**: sustained PR=1 execution under the JIT — single-delivery datum only.
+- **R-4**: the exact command byte the genuine native completion writes (0xff expected).
+- **R-5**: the emulator-side resume point after the switch-back (expect slot-1 stub
+  return → 0x5046e1a0; r24-ring verification at Task W).
+- **R-6**: the slow-path page-table validation (`bl 0x503154b8`) behavior on the flat
+  model — bypassed if the MRU pre-seed is used; verify whichever route Task V takes.
+- **R-7**: the ctx SRR1 slot/value the NK rfi uses for the manufactured MixedMode
+  context (EE state during the native excursion).
+- **R-8**: `[ECB+0x7a8]`(=6)/`[MMCB+0]` word sub-bytes and the `0x7df2f700` constant
+  written at 0x5046e35c — semantics unknown; restored by e408 each cycle, inert so far.
+- **R-9**: the interrupt-handler-side `[KDP+0x660]` flag tests (original O4 probe
+  target) — unexercised this boot; same bit family as the pinned consumer.

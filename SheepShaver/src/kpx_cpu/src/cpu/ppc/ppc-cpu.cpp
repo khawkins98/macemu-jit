@@ -143,28 +143,54 @@ static int s_probe_count = -1; // -1 = not yet parsed
 // env var is unset (-1 -> parse once -> 0 forever, same pattern as probes).
 #define R24RING_SIZE (1u<<21)  /* 2M entries = ~2 probe cycles at instr granularity */
 static uint32_t s_r24ring[R24RING_SIZE];
+// Per-slot suppressed-repeat count (instrument-batch item 4): the last-4 dedup
+// was MASKING recurrence evidence (the Q-F4 confound — an A/B/A/B loop records
+// A and B once, then silently swallows every later recurrence). Each suppression
+// now increments the matched slot's count; the dump prints "PC*count" when the
+// count exceeds 1 (count = 1 + number of suppressed dispatcher-entry repeats,
+// covering BOTH consecutive same-r24 dispatches and last-4 loop suppression).
+static uint32_t s_r24ring_cnt[R24RING_SIZE];
 static uint32_t s_r24ring_idx = 0;       // monotonically increasing; wraps modulo size at use
 static uint32_t s_r24_last = 0;
+static uint32_t s_r24_last_slot = 0;     // ring slot holding s_r24_last (valid when idx > 0)
 static int s_r24ring_enabled = -1;       // -1 unparsed, 0 off, 1 on
 
 static void r24ring_dump_atexit(void) {
 	uint32_t n = s_r24ring_idx < R24RING_SIZE ? s_r24ring_idx : R24RING_SIZE;
 	uint32_t start = s_r24ring_idx < R24RING_SIZE ? 0 : s_r24ring_idx; // oldest entry
-	fprintf(stderr, "[R24RING] %u transitions recorded (showing last %u, oldest first)\n",
+	fprintf(stderr, "[R24RING] %u transitions recorded (showing last %u, oldest first; PC*N = N-1 dedup-suppressed repeats)\n",
 	        s_r24ring_idx, n);
 	// Single buffered write: a per-value fprintf raced the timeout-kill and
 	// truncated the dump mid-line on the first live capture.
-	char *buf = (char *)malloc((size_t)n * 9 + n / 8 + 16);
+	// Worst-case per record: " %08x*%u" = 9 + 11 chars.
+	char *buf = (char *)malloc((size_t)n * 20 + n / 8 + 16);
 	if (!buf) return;
 	char *w = buf;
 	for (uint32_t i = 0; i < n; i++) {
-		w += sprintf(w, " %08x", s_r24ring[(start + i) % R24RING_SIZE]);
+		uint32_t slot = (start + i) % R24RING_SIZE;
+		w += sprintf(w, " %08x", s_r24ring[slot]);
+		if (s_r24ring_cnt[slot] > 1)
+			w += sprintf(w, "*%u", s_r24ring_cnt[slot]);
 		if ((i & 7) == 7) *w++ = '\n';
 	}
 	*w++ = '\n';
 	fwrite(buf, 1, (size_t)(w - buf), stderr);
 	fflush(stderr);
 	free(buf);
+}
+
+// Crash-path bridge (instrument-batch item 1): atexit never runs on SIGSEGV, so
+// the r24 ring was lost on exactly the boots that need it most. The SIGSEGV
+// handler (sheepshaver_glue.cpp) already calls ppc_jit_dump_trace_ring(); that
+// dump now also flushes the r24 ring through this once-guarded hook. The guard
+// means a watch-triggered mid-run trace dump consumes the one shot (the normal
+// atexit dump still fires separately on clean/SIGTERM exits, so a double print
+// is possible on non-crash runs — harmless, both are labeled).
+static void r24ring_dump_on_crash(void) {
+	static bool done = false;
+	if (done || s_r24ring_enabled != 1) return;
+	done = true;
+	r24ring_dump_atexit();
 }
 
 static inline void r24ring_record(uint32_t r24) {
@@ -174,18 +200,97 @@ static inline void r24ring_record(uint32_t r24) {
 		if (s_r24ring_enabled)
 			atexit(r24ring_dump_atexit);
 	}
-	if (!s_r24ring_enabled || r24 == s_r24_last)
+	if (!s_r24ring_enabled)
 		return;
+	if (r24 == s_r24_last) {
+		// Consecutive repeat (same 68k PC across dispatcher entries): count it
+		// on the slot that holds it. s_r24_last always lives in one of the
+		// last-4 slots (it was either recorded there or matched there, and no
+		// record has been added since), so the slot cannot have been recycled.
+		if (s_r24ring_idx)
+			s_r24ring_cnt[s_r24_last_slot]++;
+		return;
+	}
 	// Suppress short-loop ping-pong: skip if r24 matches any of the last 4
-	// recorded values (a 2-3 block loop would otherwise flood the ring).
-	for (uint32_t k = 1; k <= 4 && k <= s_r24ring_idx; k++)
-		if (s_r24ring[(s_r24ring_idx - k) % R24RING_SIZE] == r24) {
+	// recorded values (a 2-3 block loop would otherwise flood the ring) —
+	// but count the suppressed recurrence on the matched slot.
+	for (uint32_t k = 1; k <= 4 && k <= s_r24ring_idx; k++) {
+		uint32_t slot = (s_r24ring_idx - k) % R24RING_SIZE;
+		if (s_r24ring[slot] == r24) {
 			s_r24_last = r24;
+			s_r24_last_slot = slot;
+			s_r24ring_cnt[slot]++;
 			return;
 		}
+	}
 	s_r24_last = r24;
-	s_r24ring[s_r24ring_idx % R24RING_SIZE] = r24;
+	s_r24_last_slot = s_r24ring_idx % R24RING_SIZE;
+	s_r24ring[s_r24_last_slot] = r24;
+	s_r24ring_cnt[s_r24_last_slot] = 1;
 	s_r24ring_idx++;
+}
+
+// ---------------------------------------------------------------------------
+// SS_PROBE_68K=0x68KPC[:N] (instrument-batch item 2): 68k-PC probe at the DR
+// dispatch hook — the same JIT-dispatcher block-entry point the r24 ring records
+// from. 68k PCs are PPC-probe-blind (SS_PROBE_PC keys on PPC block-entry PCs);
+// this fires when guest r24 (the DR emulator's 68k PC) TRANSITIONS to the target
+// value, dumping the 68k register file (DR map: D0-D7 = r8-r15, A0-A6 = r16-r22,
+// A7 = r1) plus the PPC dispatch context. First N matches (default 8), LINEAR
+// (every match), edge-triggered: consecutive dispatcher entries with r24 still
+// at the target count as ONE match (the DR executes several PPC blocks per 68k
+// insn). NOTE the r24 word+2 convention: while the DR executes the 68k word at
+// X, r24 reads X+2 — pass the value you expect r24 to HOLD (e.g. to catch
+// execution of 0x5000f246, probe 0x5000f248). Zero cost unset (-1 -> parse
+// once -> 0 forever, same pattern as the rings).
+static int s_probe68k_state = -1;        // -1 unparsed, 0 off, 1 armed, 2 exhausted
+static uint32_t s_probe68k_pc = 0;
+static uint32_t s_probe68k_max = 8;
+static uint32_t s_probe68k_hits = 0;
+static uint32_t s_probe68k_prev = 0;     // previous r24 seen at the hook (edge trigger)
+
+static void probe68k_check(powerpc_registers *r, uint32_t bpc) {
+	if (__builtin_expect(s_probe68k_state < 0, false)) {
+		const char *e = getenv("SS_PROBE_68K");
+		s_probe68k_state = 0;
+		if (e && *e) {
+			s_probe68k_pc = (uint32_t)strtoul(e, NULL, 16);
+			const char *colon = strchr(e, ':');
+			if (colon) {
+				unsigned long nmax = strtoul(colon + 1, NULL, 0);
+				if (nmax) s_probe68k_max = (uint32_t)nmax;
+			}
+			if (s_probe68k_pc) {
+				s_probe68k_state = 1;
+				fprintf(stderr, "[PROBE68K] armed: r24=0x%08x, first %u matches (linear, edge-triggered)\n",
+				        s_probe68k_pc, s_probe68k_max);
+			}
+		}
+	}
+	if (s_probe68k_state != 1)
+		return;
+	uint32_t r24 = r->gpr[24];
+	uint32_t prev = s_probe68k_prev;
+	s_probe68k_prev = r24;
+	if (r24 != s_probe68k_pc || prev == s_probe68k_pc)
+		return;
+	s_probe68k_hits++;
+	fprintf(stderr, "[PROBE68K 0x%08x match=%u/%u]\n"
+	        "  d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x d6=%08x d7=%08x\n"
+	        "  a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x\n"
+	        "  ppc: block=0x%08x r24=%08x r27=%08x r29=%08x lr=%08x ctr=%08x cr=%08x\n",
+	        s_probe68k_pc, s_probe68k_hits, s_probe68k_max,
+	        r->gpr[8],  r->gpr[9],  r->gpr[10], r->gpr[11],
+	        r->gpr[12], r->gpr[13], r->gpr[14], r->gpr[15],
+	        r->gpr[16], r->gpr[17], r->gpr[18], r->gpr[19],
+	        r->gpr[20], r->gpr[21], r->gpr[22], r->gpr[1],
+	        bpc, r24, r->gpr[27], r->gpr[29],
+	        r->lr, r->ctr, r->cr.get());
+	fflush(stderr);
+	if (s_probe68k_hits >= s_probe68k_max) {
+		s_probe68k_state = 2;
+		fprintf(stderr, "[PROBE68K] cap reached (%u) — disarmed\n", s_probe68k_max);
+	}
 }
 
 // SS_INTERP_RING=1 (or =/path.bin): capture-only telemetry (M6a Wave 2 recon,
@@ -303,8 +408,27 @@ static inline void iring_record(powerpc_cpu *cpu, uint32_t ipc, uint32_t op) {
 }
 
 static bool probe_should_log(uint64_t v) {
-	// Log at powers of 10: 1, 10, 100, 1000, ...
+	// SS_PROBE_LINEAR=1 (instrument-batch item 3): fire on EVERY visit up to a
+	// cap (default 32, SS_PROBE_CAP=N, decimal or 0x-hex) instead of the
+	// logarithmic default — visit counts and sequences become readable.
+	// Parse-once, zero cost difference when unset.
+	static int s_linear = -1;
+	static uint64_t s_cap = 32;
+	if (__builtin_expect(s_linear < 0, false)) {
+		const char *e = getenv("SS_PROBE_LINEAR");
+		s_linear = (e && atoi(e)) ? 1 : 0;
+		const char *c = getenv("SS_PROBE_CAP");
+		if (c && *c) {
+			uint64_t n = strtoull(c, NULL, 0);
+			if (n) s_cap = n;
+		}
+		if (s_linear)
+			fprintf(stderr, "[PROBE] linear sampling: every visit up to %llu (SS_PROBE_LINEAR)\n",
+			        (unsigned long long)s_cap);
+	}
 	if (v == 0) return false;
+	if (s_linear) return v <= s_cap;
+	// Log at powers of 10: 1, 10, 100, 1000, ...
 	uint64_t p = 1;
 	while (p <= v) {
 		if (v == p) return true;
@@ -826,7 +950,19 @@ struct jit_ring_rec {
 	uint32 opcode;
 	char   type;
 };
-#define JIT_RING_SIZE 0x40000  /* 256K records; power of 2 */
+/* Default 256K records. SS_RING_WINDOW=0xN (instrument-batch item 1) overrides
+ * the ring CAPACITY (records; rounded up to a power of two, clamped to
+ * [0x1000, 0x800000]). Retention math: the dump shows the last min(idx, size)
+ * records, so a record #R is retained at crash record #C iff C - R < size.
+ * The DSAT-wall boot crashes at idx ~4.48M with the desync window at ~3.39M —
+ * a lookback of ~1.09M records: the default 0x40000 (256K) misses by ~830K,
+ * 0x100000 (1M) still misses by ~40K, 0x200000 (2M) is the smallest power of
+ * two that retains it (~1.0M margin). Memory: sizeof(jit_ring_rec)=108 B/record
+ * (0x200000 ~= 226 MB, 0x400000 ~= 453 MB) — pair big windows with
+ * SS_RING_DUMP_FROM to keep the dump file readable. */
+#define JIT_RING_SIZE_DEFAULT 0x40000  /* 256K records; power of 2 */
+static uint32 jit_ring_size = JIT_RING_SIZE_DEFAULT;
+static uint32 jit_ring_mask = JIT_RING_SIZE_DEFAULT - 1;
 static jit_ring_rec *jit_ring = NULL;
 static uint32 jit_ring_idx = 0;
 
@@ -867,14 +1003,29 @@ static void jit_ring_init_once(void) {
 	if (done) return;
 	done = true;
 	const char *e = getenv("SS_JIT_TRACE_RING");
-	if (e && *e == '1')
-		jit_ring = (jit_ring_rec *)calloc(JIT_RING_SIZE, sizeof(jit_ring_rec));
+	if (e && *e == '1') {
+		// SS_RING_WINDOW=0xN: ring-capacity override (see retention math above).
+		const char *w = getenv("SS_RING_WINDOW");
+		if (w && *w) {
+			uint32 req = (uint32)strtoul(w, NULL, 0);
+			if (req) {
+				uint32 sz = 0x1000;            // min 4K records
+				while (sz < req && sz < 0x800000) sz <<= 1;  // pow2, max 8M records
+				jit_ring_size = sz;
+				jit_ring_mask = sz - 1;
+				fprintf(stderr, "[RING] SS_RING_WINDOW=%s: trace ring %u records (%u MB)\n",
+				        w, jit_ring_size,
+				        (uint32)(((uint64)jit_ring_size * sizeof(jit_ring_rec)) >> 20));
+			}
+		}
+		jit_ring = (jit_ring_rec *)calloc(jit_ring_size, sizeof(jit_ring_rec));
+	}
 }
 
 static inline void jit_ring_record(powerpc_registers *r, char type,
                                    uint32 from_pc, uint32 to_pc, uint32 opcode) {
 	if (!jit_ring) return;
-	jit_ring_rec *rec = &jit_ring[jit_ring_idx & (JIT_RING_SIZE - 1)];
+	jit_ring_rec *rec = &jit_ring[jit_ring_idx & jit_ring_mask];
 	jit_ring_idx++;
 	rec->type = type; rec->from_pc = from_pc; rec->to_pc = to_pc; rec->opcode = opcode;
 	rec->r1 = r->gpr[1];
@@ -1098,7 +1249,7 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
                                            uint32 d0, uint32 d1, uint32 sp, const uint32 *a_regs) {
 	if (!jit_ring) return;
-	jit_ring_rec *rec = &jit_ring[jit_ring_idx & (JIT_RING_SIZE - 1)];
+	jit_ring_rec *rec = &jit_ring[jit_ring_idx & jit_ring_mask];
 	jit_ring_idx++;
 	rec->type = type; rec->from_pc = pc68k; rec->to_pc = op; rec->opcode = op;
 	rec->r1 = sp;
@@ -1127,13 +1278,57 @@ extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
 }
 
 extern "C" void ppc_jit_dump_trace_ring(void) {
+	// Crash-path bridge: the SIGSEGV handler reaches this dump but not atexit —
+	// flush the r24 ring too (once-guarded; no-op unless SS_DR_R24_RING=1).
+	r24ring_dump_on_crash();
 	if (!jit_ring || jit_ring_idx == 0) return;
+	uint32 n = jit_ring_idx < jit_ring_size ? jit_ring_idx : jit_ring_size;
+	uint32 start = jit_ring_idx - n;          /* oldest retained record # */
+	/* SS_RING_DUMP_FROM=0xSTART[:0xEND] (instrument-batch item 1): clip the dump
+	 * to ABSOLUTE record numbers (the #N anchors in [WATCH]/recon notes; decimal
+	 * or 0x-hex, END exclusive, default END = newest). Records older than the
+	 * retained window are gone regardless (see the retention math at
+	 * JIT_RING_SIZE_DEFAULT) — the clip start is clamped to the oldest retained
+	 * record, and the stderr summary says when that happened. Useful with big
+	 * SS_RING_WINDOW values (a 2M-record dump is ~700 MB unclipped). */
+	uint32 clip_lo = start, clip_hi = jit_ring_idx;
+	{
+		static int df_state = -1;
+		static uint32 df_start = 0, df_end = 0xffffffff;
+		if (df_state < 0) {
+			df_state = 0;
+			const char *e = getenv("SS_RING_DUMP_FROM");
+			if (e && *e) {
+				df_start = (uint32)strtoul(e, NULL, 0);
+				const char *c = strchr(e, ':');
+				if (c) df_end = (uint32)strtoul(c + 1, NULL, 0);
+				df_state = 1;
+			}
+		}
+		if (df_state == 1) {
+			if (df_start > clip_lo) clip_lo = df_start;
+			if (df_end < clip_hi) clip_hi = df_end;
+			if (clip_lo >= clip_hi) {
+				fprintf(stderr, "JIT trace ring: SS_RING_DUMP_FROM range #%u..#%u not retained "
+				        "(retained #%u..#%u of %u total) — dumping full retained window\n",
+				        df_start, df_end, start, jit_ring_idx - 1, jit_ring_idx);
+				clip_lo = start; clip_hi = jit_ring_idx;
+			} else if (clip_lo > df_start) {
+				fprintf(stderr, "JIT trace ring: SS_RING_DUMP_FROM start #%u already evicted "
+				        "(oldest retained #%u) — clipped\n", df_start, clip_lo);
+			}
+		}
+	}
 	FILE *f = fopen("/tmp/ss_jit_ring.txt", "w");
 	if (!f) return;
-	uint32 n = jit_ring_idx < JIT_RING_SIZE ? jit_ring_idx : JIT_RING_SIZE;
-	uint32 start = jit_ring_idx - n;
+	/* Header line ('#'-prefixed, ignored by jit-analyze.py): absolute record
+	 * numbers so line K of the dump = record #(first + K - 1). */
+	fprintf(f, "# records #%u..#%u (of %u total; ring %u records, oldest retained #%u)\n",
+	        clip_lo, clip_hi - 1, jit_ring_idx, jit_ring_size, start);
+	n = clip_hi - clip_lo;
+	start = clip_lo;
 	for (uint32 i = 0; i < n; i++) {
-		const jit_ring_rec *rec = &jit_ring[(start + i) & (JIT_RING_SIZE - 1)];
+		const jit_ring_rec *rec = &jit_ring[(start + i) & jit_ring_mask];
 		fprintf(f, "%c %08x %08x op=%08x sp=%08x r24=%08x r27=%08x r29=%08x lr=%08x ctr=%08x cr=%08x "
 		           "a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x a6=%08x a7=%08x "
 		           "d0=%08x d1=%08x d2=%08x d3=%08x d4=%08x d5=%08x d6=%08x d7=%08x\n",
@@ -1145,8 +1340,8 @@ extern "C" void ppc_jit_dump_trace_ring(void) {
 		        rec->d[4], rec->d[5], rec->d[6], rec->d[7]);
 	}
 	fclose(f);
-	fprintf(stderr, "JIT trace ring: %u records (of %u total) dumped to /tmp/ss_jit_ring.txt\n",
-	        n, jit_ring_idx);
+	fprintf(stderr, "JIT trace ring: %u records (#%u..#%u of %u total) dumped to /tmp/ss_jit_ring.txt\n",
+	        n, start, start + n - 1, jit_ring_idx);
 }
 
 void powerpc_cpu::jit_interp_one(uint32 opcode, uint32 pc_val)
@@ -1979,6 +2174,9 @@ void powerpc_cpu::execute(uint32 entry)
 							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
 						// SS_DR_R24_RING: capture-only 68k-PC transition ring (M6a Wave 2 recon).
 						r24ring_record((uint32_t)gpr(24));
+						// SS_PROBE_68K: 68k-PC probe at the same DR dispatch hook.
+						if (__builtin_expect(s_probe68k_state != 0, false))
+							probe68k_check(regs_ptr(), (uint32_t)jit_block_start_pc);
 						// SS_INTERP_RING: RAM-block JIT entry capture (see iring_jit_block).
 						if (__builtin_expect(iring_check_enabled() > 0, false))
 							iring_jit_block(this, (uint32_t)jit_block_start_pc, (uint32_t)lr());
@@ -2511,6 +2709,9 @@ void powerpc_cpu::execute(uint32 entry)
 							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
 						// SS_DR_R24_RING: capture-only 68k-PC transition ring (M6a Wave 2 recon).
 						r24ring_record((uint32_t)gpr(24));
+						// SS_PROBE_68K: 68k-PC probe at the same DR dispatch hook.
+						if (__builtin_expect(s_probe68k_state != 0, false))
+							probe68k_check(regs_ptr(), (uint32_t)jit_block_start_pc);
 						// SS_INTERP_RING: RAM-block JIT entry capture (see iring_jit_block).
 						if (__builtin_expect(iring_check_enabled() > 0, false))
 							iring_jit_block(this, (uint32_t)jit_block_start_pc, (uint32_t)lr());

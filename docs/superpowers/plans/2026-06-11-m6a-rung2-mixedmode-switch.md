@@ -375,3 +375,46 @@ rom901.bin provenance drift → Task 0 re-establishes. **C10** PR=1 tolerance ad
 **C11** switch⇒pool dependency stated. Verified clean: FE01 facts faithful, mtmsr EE-edge
 contract real (ppc-execute :1321–1347), paravirtual gating complete, design-doc
 representation accurate.
+
+## Rev 3 re-scope (2026-06-11, post-Task-W stop-rule)
+
+Task W fired stop-rule trigger 1 on the second falsification of the switch-back
+contract — correctly. The full corrected contract is PINNED with live evidence in the
+addendum ("Task W results", commit 3dd1550b): the architectural switch-back works
+through table[0]/slot-0 with r3=0xff as the NK selector (R-4 resolved), and the ONE
+missing surface is the **`[KDP+0x65c]` current-world flip discipline** (R-12): the
+word must hold ECB while the 68k world runs and the MMCB during native excursions; no
+NK code maintains it — it is a Trampoline-init surface (on real HW the real slot-stub
+bodies plausibly encode the flip).
+
+### Task W2: the world-flip discipline (re-scoped from W; supersedes W's remaining scope)
+- [ ] Warm arm (0x50429d00 region): set `[KDP+0x65c] := MMCB (0x68fff400)` before
+  `b 0x5046f900`. Slot-1 stub body (ours, patch_68k_emul): prepend
+  `[KDP+0x65c] := ECB (0x68fff000)` (idempotent on the first call). Both env-gated
+  with `SS_NW_MM_SWITCH` (the slot-1 prepend must be structurally inert when the
+  switch is off — same table/stub write discipline as T/U: verify-before-write,
+  PatchROM-time only; if the prepend cannot be gated at patch time without changing
+  the switch-off stub bytes, gate it at RUNTIME inside the stub via a guarded load —
+  document the choice).
+- [ ] **RED-TEAM-FIRST risk (blocking)**: the M3a DEC shim also consumes
+  `[KDP+0x65c]` (the KDP register-save shim saves through r6=[KDP+0x65c]) — the flip
+  is architecturally right for it (the interrupted world's ctx is exactly what the
+  shim should save into) but UNVERIFIED: a DEC delivery during a native excursion
+  would now save into the MMCB instead of the ECB. Verify the shim's full consumption
+  chain (and the scheduler-restore side) tolerates MMCB-parked state, or fence DEC
+  delivery during native excursions (EE is per-context anyway per Q-E — check what
+  MSR the native ctx runs with), BEFORE implementing.
+- [ ] Round-trip sub-contract (carried from W, now expected to PASS): TVector visit +
+  68k resume at 0x5000fcf2 in the r24 ring; e1f4/e408 visits nonzero; cold-once +
+  guest[0]/[4] stability maintained.
+- [ ] Gates: canonical set + switch-off byte-identical boot.
+- [ ] One-iteration rule re-arms for THIS contract (the W falsifications are spent;
+  a NEW falsification of the flip contract = stop-rule, full re-plan).
+
+Task X's remaining scope after W's partial landing: R3 choice is MADE (warm arm →
+`b 0x5046f900` stub route landed in W; the [KDP+0x5f0/4] retarget question must be
+re-checked — W's warm arm uses the displaced original slot-0 stub which exits via
+[KDP+0x5f0]); R4 ([KDP+0x660] flags) landed in V; R2 (discriminator) landed in W
+(Task X refines the scratch-word protocol if needed). Task X collapses into: the
+[KDP+0x5f0/4] mirror-retarget verification + the post-W2 re-census + the X
+sub-contracts. Then Y (acceptance + flip-last) and Z (docs) as planned.

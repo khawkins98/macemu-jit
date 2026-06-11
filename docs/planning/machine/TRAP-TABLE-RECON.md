@@ -168,6 +168,19 @@ concurrent w2-4 stream undisturbed).
 
 ## FIX RECORD — instime-fix (2026-06-12, Stream A)
 
+> **Review (2026-06-12): APPROVE** — stub bodies upstream-verbatim (byte-matched against
+> the deleted in-place code in the same diff); patch space 0x2fd240 collision-free (the
+> ADDR_MAP memset ends exactly at 0x2fd240 exclusive; raw dump shows kckc filler); image
+> offset arithmetic independently derived from find_rom_trap's OS leg; the .Sony lift
+> gated on g_rom_904_lenient only and dormant on 1.1 (lookup succeeds); paravirtual
+> doubly unreachable. P2 nits: the lineage citation at the patch-space site lacks the
+> upstream commit SHA (standing rule — fix on the next rom_patches touch); stub bodies
+> are written before the per-entry zero check (harmless, verified kckc space).
+> **P1 forwarded to the P-M5 recon**: lr=0x504ff348 = mirror slot 0xfe69 =
+> OP_NAME_REGISTRY / fall-through from OP_INSTALL_DRIVERS (0xfe68), NOT the TM cluster
+> (0xfe60-0xfe63) — the newly-live tail EMUL_OPs (ADBOp/PowerOff/scrap) are a co-equal
+> P-M5 hypothesis beside the TM-expiry leg.
+
 The Q5 recommendation shipped: commits `f808a7fb` (implementation, gate default-OFF +
 .Sony-abort lift + tail guards) and the flip commit (newworld-default-ON). Six slot
 boots (≤6 budget) + live paravirtual `make e2e`.

@@ -75,6 +75,8 @@ they are guest-visible DRVRs whose bodies are host code, not a parallel universe
 This is the recon's central negative result.
 
 **(i) `find_rom_resource()` cannot walk the 9.0.1 combined resource map.**
+**[RETRACTED 2026-06-11 — see §7: the walker is correct and enumerates all 157 resources;
+the layout delta below does not exist. (ii) and (iii) stand.]**
 The walker (rom_patches.cpp:154–180) reads the next-link at **entry+0**, then applies
 `header_size` (byte at `map+5`) to find the data/type/id fields. On the 9.0.1 image the
 combined-map entry layout moved the next-link **into** the 8-byte header:
@@ -235,6 +237,8 @@ Do **not** discard (a): the `find_rom_resource` 9.x-layout fix is required regar
 other patch sites silently depend on it), it is small, and it is statically verifiable
 against `/tmp/rom901_decompressed.bin` (corrected walk ⇒ 157 entries). Fix it early, keep
 the EMUL_OP DRVRs as the fallback if the ndrv route hits a Startup-gate wall.
+**[SUPERSEDED 2026-06-11 — §7: no layout fix exists to make; the surviving residues are
+the sony-anchor redesign and the miss-guards, folded into the disk milestone's Task A.]**
 
 (b) activates only on evidence: if a tripwire shows the boot **gating on real ATA-bus
 presence** (ATA Manager refusing to enumerate any drive absent an `ata` node with real
@@ -352,3 +356,196 @@ further EMUL_OP traffic for the remaining ~49 s).
   ops is untested empirically; their slots carry the same verified write pattern.
 
 Boots used: 1 of 3 budgeted (50 s).
+
+---
+
+## §7. find_rom_resource combined-map "fix" spec (2026-06-11) — **§1.4(i) FALSIFIED: there is nothing to fix**
+
+> Stream-C follow-up, tasked to spec the corrected-walk fix that §1.4(i)/§5 banked as
+> shared infrastructure ("six other patch sites silently depend on it"). The spec work
+> falsified its own premise on the first evidence pass: **`find_rom_resource()`
+> (rom_patches.cpp:154–180, re-verified) walks the 9.0.1 combined map correctly today —
+> all 157 resources** — statically on both dumps AND live (proof below). Per the
+> one-iteration rule this section is the dated re-pin; §1.4(i) is retracted in place.
+> What §1.4 keeps: (ii) the anchors really are absent and (iii) `patch_68k()` really does
+> abort at the sony block — the abort is an *inventory* problem, not a *walker* problem.
+
+### 7.1 The layout, pinned — 1.1 and 9.0.1 share ONE format; no discriminator exists or is needed
+
+The recon's claimed layout delta ("9.x moved the next-link from entry+0 to entry+8")
+does not exist. Both ROMs use the identical combined-map entry record; the walker never
+reads entry+0 at all.
+
+Map header (`map` = R32(image+0x1a); 9.0.1: 0xaa2d0, 1.1: 0xd2f90):
+
+```
+map+0:  link to FIRST entry (entry start)
+map+4:  0x04
+map+5:  header_size byte = 0x08 (both ROMs)
+```
+
+Entry record (identical bytes-for-fields on both ROMs; [RAW-ROM] 9.0.1 entry #1 @0x257370,
+[STATIC] 1.1 entry #1 @0x2115a0 — same `78 00 00 00 | 00 00 00 00` first 8 bytes):
+
+```
+entry+0:   0x78000000   header word (combo/attr field — NEVER read by the walker)
+entry+4:   0x00000000   header word 2 (never read)
+entry+8:   next-link    -> next entry START (0 terminates)
+entry+12:  data offset
+entry+16:  type (FOURCC)
+entry+20:  id (int16)
+entry+22:  attr byte (0x58 throughout)
+entry+23:  pname (pascal string)
+```
+
+What the code actually does (rom_patches.cpp:154–180): position `rsrc_ptr` at
+`entry + header_size` (= entry+8, the "body"), then read next-link at body+0 (= entry+8),
+data at body+4 (= entry+12), type at body+8 (= entry+16), id at body+12 (= entry+20).
+Every field lands exactly on the layout above. The §1.4(i) mis-trace assumed the link
+read happens at entry+0; it happens at body+0. The recon's throwaway probe script was
+wrong, not the ROM and not the code.
+
+### 7.2 Validation — the EXISTING algorithm, three ways
+
+1. **[RAW-ROM]** exact-arithmetic simulation of rom_patches.cpp:154 against
+   `/Users/Shared/macemu/dumps/rom901_inventory.bin` (md5 7b1378be…, manifest --check OK):
+   walks **157/157** resources, 39 types, clean 0-link termination at 0xaa338. No wild
+   reads, no early exit.
+2. **[PATCH]** same walk on `rom901.bin` (md5 e432df64…): 157/157 — no patch disturbs the map.
+3. **[STATIC]** same walk on the 1.1 image (decoded offline from
+   `/Users/Shared/macemu/1998-07-21 - Mac OS ROM 1.1.rom` via the rom_decode.hpp LZSS
+   algorithm; NK id "NewWorld v1.0"): **123/123** resources — proving the classic ROM the
+   code has always worked on uses the same record format.
+4. **LIVE proof the walker works at runtime on 9.0.1** (this is decisive): the hpchk/macpgm
+   patch (rom_patches.cpp:3267) derives its search window from
+   `find_rom_resource('nlib', 10)`. The section-6 boot's trace
+   (`/tmp/ss-slots/slot0/runs/20260611-192832.64083/boot.log`) shows
+   `find_rom_data [16a290,16d290) … pat=80800316 -> HIT @16cb64` — window base 0x16a290
+   IS StdCLib's data offset, reachable only by walking 48 entries deep. And
+   `rom901.bin` @0x16cb64 reads `80 80 28 50` (lwz r4,XLM_ZERO_PAGE) vs raw `80 80 03 16`
+   — the patch **applied**. The recon's "every find_rom_resource-relative patch has always
+   no-op'd on 9.0.1" was wrong: macpgm works today; dsl is merely ROMType-gated off on
+   NEWWORLD (:3221); SERD is simply never reached (sony abort comes first).
+
+### 7.3 The 157-resource inventory (raw 9.0.1 image; id 'name' @data-offset)
+
+Disk recon answers up front: **.ATALoad (DRVR -20175), .ATADisk (DRVR 53), .EDisk
+(DRVR 48) all present** as §2.2 said; **no DRVR 4 and no ndrv -20196** (so §1.4-ii stands
+and the sony anchor abort is real). Display-shaped, for the framebuffer milestone:
+**ndrv -16515 '.BCScreen'** (a ROM-resident video ndrv, data 0xc97e0, extent ≤0x3810),
+nlib VideoServicesLib (-16403) + VideoServicesGlobals (-16405), 'gama' StdGamma, 7 cluts.
+Also notable: nlib -20186 'ATAManager', nlib -16402 'DriverLoaderLib', nsrd 1 'SerialDMA',
+ndrv 'USBUnitTableStorageDriver'. Absent vs 1.1: SERD, sl05, thng (all three), DRVR 4 x2.
+
+| type | n | resources |
+|---|---|---|
+| `ndrv` | 8 | -20994 'sbp609e,104d8' @0x248120 · -21143 'fw609e,10483' @0x243770 · -20777 'USBUnitTableStorageDriver' @0x227ce0 · -20776 'pciclass,0c0310' @0x1fb0a0 · -20164 'media-bay' @0x1cd6e0 · -20181 'pccard-ata' @0x1ca970 · -20166 'DefaultPCCardEnabler' @0x1c9ec0 · -16515 '.BCScreen' @0x0c97e0 |
+| `gpch` | 1 | 1207 'Main' @0x248060 |
+| `frag` | 3 | -21142 'sbp609e,104d8' @0x245f20 · -21141 'FWExpertRegistration' @0x245b60 · -21140 'FWPCIScanner' @0x2459a0 |
+| `fexp` | 2 | -21141 'GenericDriverFamilyExpert' @0x2456e0 · -21140 'ComponentDriverExpert' @0x2447e0 |
+| `usbd` | 7 | -20782 'USBMassStorageVSDriver' @0x23f980 · -20781 'USBMassStorageClassDriver' @0x23bad0 · -20780 'USBCompositeDriver' @0x222e10 · -20779 'USBHIDMouseModule' @0x220520 · -20778 'USBHIDKeyboardModule' @0x21d640 · -20777 'USBHubDriver1' @0x214220 · -20776 'USBHubDriver0' @0x20ade0 |
+| `usbs` | 3 | -20776 'USBMassStorageLoader' @0x238600 · -20782 'USBShimMouse' @0x226860 · -20781 'USBShimKeyboard' @0x224e20 |
+| `usbf` | 1 | -20776 @0x224dc0 |
+| `nlib` | 21 | -20778 'USBManagerLib' @0x1fa6b0 · -20777 'USBFamilyExpertLib' @0x1e89a0 · -20776 'USBServicesLib' @0x1d7ec0 · -20186 'ATAManager' @0x1d2a20 · -16411 'PowerMgrLib' @0x197000 · -16405 'VideoServicesGlobals' @0x196ef0 · -16403 'VideoServicesLib' @0x195710 · -16404 'PCILib' @0x191570 · -16402 'DriverLoaderLib' @0x18ae50 · -16401 'DriverServicesLib' @0x182fc0 · -16407 'DSLGlobalsLib' @0x182950 · -16400 'NameRegistryLib' @0x17ed40 · -20264 'CursorDevicesLib' @0x17dd10 · -16420 'Math64Lib' @0x17d070 · 10 'StdCLib' @0x16a290 · 9 'MathLib' @0x14ea50 · 8 'MathLibGlobals' @0x148290 · 7 'BootStdCLib' @0x142c90 · 6 'PrivateInterfaceLib' @0x134990 · 5 'InterfaceLib' @0x0f17d0 · 3 'MPSharedGlobals' @0x0dad00 |
+| `code` | 1 | -20164 'Main' @0x1d25a0 |
+| `gcko` | 1 | 43 'Main' @0x1c8f50 |
+| `nitt` | 1 | 43 'Native 4.3' @0x1b9730 |
+| `ncod` | 5 | 50 'NativeNub' @0x19de70 · 8 'ProcessMgrSupport' @0x0f0c40 · 1 'MixedMode' @0x0eb880 · 0 'CodeFragmentMgr' @0x0db240 · 2 'MPLibrary' @0x0ce7b0 |
+| `DRVR` | 3 | -20175 '.ATALoad' @0x19c6e0 · 53 '.ATADisk' @0x198a60 · 48 '.EDisk' @0x0b60d0 |
+| `scod` | 2 | -20984 @0x1988b0 · -20961 @0x1987e0 |
+| `ntrb` | 1 | -16400 'NameRegistryTraps' @0x17e4f0 |
+| `cfrf` | 1 | 0 @0x0db1f0 |
+| `GARY` | 1 | 1 'Main' @0x0ccff0 |
+| `dfrg` | 1 | -20722 '.LANDisk' @0x0c1ec0 |
+| `nsrd` | 1 | 1 'SerialDMA' @0x0bac70 |
+| `PACK` | 3 | 7 'Main' @0x0ba6f0 · 5 'Main' @0x0b94b0 · 4 'Main' @0x0b7400 |
+| `mitq` | 1 | 0 @0x0b73c0 |
+| `gama` | 1 | 0 'StdGamma' @0x0b7280 |
+| `clut` | 7 | 127 @0x0b7200 · 8 @0x0b69c0 · 4 @0x0b6900 · 2 @0x0b68a0 · 1 @0x0b6850 · 9 @0x0b39f0 · 5 @0x0b3930 |
+| `PICT` | 12 | 106 'DiskMode 6' @0x0b5fc0 · 105 'DiskMode 5' @0x0b5eb0 · 104 'DiskMode 4' @0x0b5da0 · 103 'DiskMode 3' @0x0b5c90 · 102 'DiskMode 2' @0x0b5b80 · 101 'DiskMode 1' @0x0b5a70 · 100 'DiskMode 0' @0x0b5960 · 99 'DiskMode Battery' @0x0b5850 · 98 'DiskMode Arrow3' @0x0b56e0 · 97 'DiskMode Arrow2' @0x0b5570 · 96 'DiskMode Arrow1' @0x0b5400 · 95 'DiskMode SCSI' @0x0b4c80 |
+| `pixs` | 12 | -10208 @0x0b4bc0 · -10207 @0x0b4b10 · -10206 @0x0b4a50 · -10205 @0x0b4990 · -10204 @0x0b48d0 · -10203 @0x0b4810 · -10202 @0x0b4750 · -10201 @0x0b4690 · -10200 @0x0b45d0 · -10199 @0x0b4510 · -14334 @0x0b4490 · -14335 @0x0b4410 |
+| `ppat` | 2 | 18 @0x0b4320 · 16 @0x0b4230 |
+| `cicn` | 4 | -20020 @0x0b3540 · -20021 @0x0b3170 · -20022 @0x0b2da0 · -20023 @0x0b29d0 |
+| `ics8` | 1 | -16386 @0x0b28a0 |
+| `ics4` | 1 | -16386 @0x0b27f0 |
+| `ics#` | 1 | -16386 @0x0b2780 |
+| `accl` | 9 | 9 @0x0b2230 · 8 @0x0b2050 · 7 @0x0b1fb0 · 6 @0x0b1f10 · 5 @0x0b1eb0 · 4 @0x0b1e50 · 2 @0x0b1db0 · 1 @0x0b1d10 · 0 @0x0b1cb0 |
+| `KCAP` | 13 | 206 @0x0b1940 · 205 @0x0b1600 · 204 @0x0b12c0 · 200 @0x0b0f90 · 199 @0x0b0c80 · 198 @0x0b0990 · 17 @0x0b0780 · 16 @0x0b0580 · 14 @0x0b0420 · 5 @0x0b0100 · 4 @0x0afe90 · 2 @0x0afb80 · 1 @0x0af910 |
+| `KMAP` | 9 | 206 @0x0af850 · 205 @0x0af790 · 204 @0x0af6d0 · 200 @0x0af610 · 199 @0x0af550 · 198 @0x0af490 · 27 @0x0af3d0 · 2 @0x0af310 · 0 @0x0af250 |
+| `vadb` | 6 | 5 'ANSI Andy' @0x0af200 · 4 'JIS Andy' @0x0af1c0 · 3 'ISO Andy' @0x0af180 · 2 'ANSI Cosmo' @0x0af130 · 1 'JIS Cosmo' @0x0af0e0 · 0 'ISO Cosmo' @0x0af090 |
+| `KCHR` | 1 | 0 'U.S.' @0x0aead0 |
+| `snd ` | 1 | 1 'Simple Beep' @0x0ad490 |
+| `FONT` | 4 | 521 @0x0acab0 · 396 @0x0abe10 · 393 @0x0ab3b0 · 12 @0x0aa560 |
+| `CURS` | 4 | 4 @0x0aa4e0 · 3 @0x0aa460 · 2 @0x0aa3e0 · 1 @0x0aa360 |
+| `rovm` | 1 | 0 @0x0aa2f0 |
+(Reproducible from the manifest dumps with the §7.1 walk: start = R32(0x1a); repeat
+{next = R32(p); stop if 0; entry = next; p = entry+8; fields at entry+12/16/20/23}.)
+
+### 7.4 Blast radius — all find_rom_resource callers, re-dispositioned
+
+All call sites in rom_patches.cpp (grep-verified, 2026-06-11). "Reached" = on a 9.0.1
+NEWWORLD lenient boot today, where patch_68k aborts at the sony block (:3413).
+
+| # | Site (line) | Lookup | 9.0.1 result | Reached? | Disposition |
+|---|---|---|---|---|---|
+| 1 | dsl_pvr/dsl_bus (:3222) | nlib -16401 | FOUND (DriverServicesLib @0x182fc0) | no — ROMType gate excludes NEWWORLD/GOSSAMER | none; correct as-is |
+| 2 | InterruptTreeTNT (:3261) | nlib -16408 | ABSENT | no — ZANZIBAR-only | latent unguarded write (`+0x16c` from offset 0) on a hypothetical Zanzibar map miss; out of scope |
+| 3 | hpchk/macpgm (:3267) | nlib 10 | FOUND (StdCLib @0x16a290) | **yes — patch APPLIES today** (7.2 item 4) | none; working |
+| 4 | sony anchor (:3407–3417) | DRVR 4 (x2, cont), then ndrv -20196 | ALL ABSENT | yes — **the abort point** | the real disk-milestone work: anchor redesign (7.5) |
+| 5 | SERD (:3455) | SERD 0 | **ABSENT** (present in 1.1 @0xe43e0) | no (post-abort) | **HAZARD**: result used unguarded — a miss writes `M68K_RTS` at `ROMBaseHost+0` (68k reset-vector area). Becomes LIVE the moment the sony abort is fixed. Needs a guard + profile decision |
+| 6 | sl05 (:3458, :3464) | sl05 2 | ABSENT | no — other ROMType branch | unguarded too (writes at +0xc4/+0x8ee from offset 0) but branch never taken on NEWWORLD |
+| 7 | nsrd rename (:3467) | nsrd 1 | FOUND (SerialDMA @0xbac70) | no (post-abort) | will fire once sony is fixed: renames type to 'xsrd' via `rsrc_ptr+8` (= entry+16, correct on this layout). Same intent as classic (suppress native SerialDMA so HLE serial wins) — wanted on newworld only if serial stays HLE; flag for the M-profile review |
+| 8 | thng sound sifters (:3617, :3628, :3634) | thng any | ABSENT (no thng at all) | no (post-abort) | benign: loop body never entered, num_sifters stays 0 — ROM carries no sound components; audio comes from the System file |
+
+Net blast radius of "lookups start succeeding": **zero today** — they already succeed.
+The behavior change everyone should plan for is the **sony-abort fix** (whatever form it
+takes): it un-dams sites 5–8, of which site 5 is a guaranteed ROM-offset-0 corruption on
+9.0.1 unless guarded first.
+
+### 7.5 What the disk milestone's Task A actually inherits
+
+The §4 option-(a) "What's missing" column loses its first item and gains precision:
+
+1. ~~find_rom_resource 9.x-layout fix~~ — **does not exist; retracted.**
+2. **Anchor redesign** (unchanged, now with measured candidates). The sony block needs
+   ~0xf02 contiguous bytes (drivers at +0x000/+0x100/+0x200, serial +0x300–0x700, icons
+   +0x800–+0xe00+258). Candidate carve-outs on 9.0.1, by data-offset extent:
+   `.ATADisk` ≤0x3c80 (but destroys the LLE/ndrv-path ATA driver), `.BCScreen` ≤0x3810
+   (destroys the ROM video ndrv — collides with the framebuffer milestone),
+   `.ATALoad` ≤0x1790 (destroys the ATA probe INIT); `.EDisk` ≤0x780 is TOO SMALL.
+   None is free; synthesizing a new map entry over unused ROM space (the map format is
+   now fully pinned, §7.1 — append an entry record + relink) is the clean option and
+   needs a free-space census, which is Task A work.
+3. **Miss-guards** for sites 5/6/2 (S-class, ~10 lines): treat lookup==0 as
+   skip-with-warning under lenient mode, mirroring the find_rom_data pattern. Must land
+   BEFORE or WITH any sony-abort fix (7.4 site 5).
+
+### 7.6 Test contract (for the residual S-class work above)
+
+- **Walker regression pin** (pure-function, no boot): `rom-inspect`
+  (SheepShaver/rom-inspect/, shares rom_decode.hpp) grows a `--resources` enumeration
+  subcommand using the §7.1 walk; offline asserts: 9.0.1 raw dump => 157 resources /
+  39 types / terminates at a 0-link (no out-of-image read); 1.1 => 123. Guards against
+  anyone "fixing" the walker per the retracted §1.4(i).
+- **Miss-guard gate**: lenient 9.0.1 A/B — patched ROM dump byte at offset 0 unchanged
+  (`4e` never written) once sites 5/6 are guarded and the sony abort is lifted; plus the
+  standard per-commit tier (build-ss, test-jit 353/353, machine tests).
+- **Paravirtual-unchanged gate**: 1.1 path must stay byte-identical — `SS_DUMP_ROM` A/B
+  md5 on the 1.1 config before/after the guards (guards are miss-paths; 1.1 lookups all
+  hit, so the dump must not move).
+
+### 7.7 Recommendation
+
+**Do not open a standalone "combined-map fix" task — it has no content.** Fold the two
+real residues into the disk milestone's Task A: (i) the miss-guards (7.5 item 3, gated by
+the 7.6 contract) as Task A's first commit, since the sony-anchor work that Task A exists
+to do is exactly what arms the site-5 hazard; (ii) the anchor redesign with the 7.5
+candidate table as its starting point. The walker regression pin in rom-inspect is
+optional-but-cheap (S); bank it with Task A, not before. Update reads of this doc: §1.4(i)
+and the §5 "fix it early" paragraph are superseded by this section; §1.4(ii)/(iii)
+conclusions stand and the §5 option-(c) recommendation is unaffected (it never depended
+on the walker).
+
+Falsification bookkeeping (one-iteration rule): contract falsified once (the §1.4(i)
+premise), re-pinned here with three independent evidence classes (7.2); no second
+iteration needed. Boots used: 0 (static; live evidence reused from the §6 run's log).

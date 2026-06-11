@@ -52,7 +52,8 @@
    `test_dev_openpic.cpp` do not exist yet (Wave-2 deferred model). Individual targets
    build and pass (test_exc_core 25 checks, test_virt_clock 26 checks, verified this
    session). The owner should drop the target from `TESTS` until the model lands, or land
-   the model.
+   the model. *(Update 2026-06-11: RESOLVED the same day — the OpenPIC model + 206-check
+   suite landed (`b86449c9`); the suite is 12/12 ALL PASS.)*
 
 ---
 

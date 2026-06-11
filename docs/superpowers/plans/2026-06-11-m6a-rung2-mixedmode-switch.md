@@ -180,16 +180,18 @@ before its residue status is decided.
   reset transitions in the r24 ring. Commit.
 
 ### Task U: NK entry-vector slot population (the Q-B consumed set)
-- [ ] Per Q-B's pinned consumed-slot map: real handlers for consumed slots (guest-side
+- [x] Per Q-B's pinned consumed-slot map: real handlers for consumed slots (guest-side
   stubs in the mirror zero run, **written at PatchROM time — rev 2 C4**; verify-zero-first
-  on every new site, rev 2 C6).
-- [ ] Slots NOT consumed stay as loud stops with unique PCs (never zeros) — the expected
+  on every new site, rev 2 C6). *(Q-B: the only consumed slot is slot 1, which already
+  has its real static branch from patch_68k_emul — NO new real handlers needed.)*
+- [x] Slots NOT consumed stay as loud stops with unique PCs (never zeros) — the expected
   parked-PC set is **Q-B's advance enumeration; the gate is parked-PCs ⊆ that list**
-  (rev 2 P7 — no post-hoc "expected").
-- [ ] Each handler comments cite the addendum section. All inside newworld/lenient gating.
-- [ ] Gates: full gates (e2e delta: e2e-test only, reason: no emulator-behavior change
-  for paravirtual beyond prior tasks' verified inertness); diagnostic boot: `+0x3c` stop
-  not hit; parked-PC subset check. Commit.
+  (rev 2 P7 — no post-hoc "expected"). *(Zero slots 4, 6-14 → unique `b *` stops at
+  0x50429c40..0x50429cd0 per the addendum table; live parked-PC set observed = ∅ ⊆ list.)*
+- [x] Each handler comments cite the addendum section. All inside newworld/lenient gating.
+- [x] Gates: full gates (ran the FULL canonical set including paravirtual `make e2e`
+  PASS + log clean); diagnostic boot: `+0x3c` stop not hit; parked-PC subset check
+  (none of the new stops nor slot-15 in the r24 ring). Commit.
 
 ### Task V: FE01 switch completion — enter the TVector (+ FE07 ownership)
 - [ ] Implement the 68k→PPC switch per Q-A/Q-B/Q-D/Q-E: complete the save-record contents

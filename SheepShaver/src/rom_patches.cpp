@@ -870,7 +870,8 @@ bool PatchROM(void)
 		// 68k execution routes the first DEC delivery through unverified NK
 		// save/restore plumbing; Boot A (off) = clean stall capture, Boot B (on) =
 		// rung-2 recon.  When OFF the trampoline is byte-identical to the
-		// no-MSR-write layout (27 insns since Wave 2, same branch word).
+		// no-MSR-write layout (37 insns with the default pool, 27 with
+		// SS_NW_MM_POOL=0; branch slot tracks b_idx).
 		const bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
 		uint32 b_idx = idx + 1;
 		if (user_msr) {
@@ -887,7 +888,8 @@ bool PatchROM(void)
 		// M6a Wave 2 item #2 (M6A-WAVE2-SHIM-RECON.md §2 quick-win): the 68k
 		// "diagnosable stop" stubs the vectors above point at — one `bra.s *`
 		// (0x60FE) self-loop per vector, 0x10 apart in the same mirror zero run,
-		// safely past the trampoline code (ends ≤ ROM+0x429bb8):
+		// safely past the trampoline code (ends ≤ ROM+0x429be0 (pool+msr
+		// maximal layout)):
 		//   0x50429c00  illegal-instruction stop (vector offset 0x10)
 		//   0x50429c10  A-line stop              (vector offset 0x28)
 		//   0x50429c20  F-line stop              (vector offset 0x2C)
@@ -933,6 +935,65 @@ bool PatchROM(void)
 			                ((exhaust_stub_offset - slot15_offset) & 0x03FFFFFCu));
 			fprintf(stderr, "[NW-TRAMP] T: slot 15 (+0x3c, allocator exhaustion) → "
 			        "loud stop 0x50429cf0 (b *)\n");
+		}
+
+		// Rung 2 Task U (plan rev 2; Q-B pinned consumed-slot map,
+		// M6A-ONGOING-ENTRY-DESIGN.md "Rung 2 contracts" → Q-B): under the
+		// live FE01 path ONLY slot 1 is consumed (10M visits; slots 2/3/5
+		// zero visits; slot 0 = the one cold start) and slot 1 ALREADY has
+		// its real static branch from patch_68k_emul — so Task U plants NO
+		// new real handlers.  The remaining ZERO slots (4 — the
+		// deliberately-dead interrupt vector — and 6-14, all
+		// POWERPC_ILLEGAL == 0x00000000) were zero-slides: any future
+		// fall-through would slide through zeros into table[0] → cold start
+		// → the reboot-loop signature.  Plant one UNIQUE parked-PC PPC
+		// `b *` self-loop per dead slot, at exactly the Q-B
+		// advance-enumeration addresses (the Task-U gate is live
+		// parked-PCs ⊆ this set — expected EMPTY in the current regime):
+		//   slot  4 → 0x50429c40    slot 10 → 0x50429c90
+		//   slot  6 → 0x50429c50    slot 11 → 0x50429ca0
+		//   slot  7 → 0x50429c60    slot 12 → 0x50429cb0
+		//   slot  8 → 0x50429c70    slot 13 → 0x50429cc0
+		//   slot  9 → 0x50429c80    slot 14 → 0x50429cd0
+		// (slot 15 → 0x50429cf0 is Task T's exhaust stop above.)
+		// Same idiom as slot 15: verify-zero-first on BOTH the table slot
+		// and the stub site (rev 2 C6), PatchROM-time only (rev 2 C4),
+		// after the mirror memcpy.  Slots 0-3,5 keep their static branches
+		// (unconsumed ≠ parked).
+		{
+			static const struct { uint8 slot; uint32 stub; } u_slots[] = {
+				{  4, 0x429c40u }, {  6, 0x429c50u }, {  7, 0x429c60u },
+				{  8, 0x429c70u }, {  9, 0x429c80u }, { 10, 0x429c90u },
+				{ 11, 0x429ca0u }, { 12, 0x429cb0u }, { 13, 0x429cc0u },
+				{ 14, 0x429cd0u },
+			};
+			uint32 u_mask = 0;
+			for (size_t i = 0; i < sizeof(u_slots) / sizeof(u_slots[0]); i++) {
+				const uint32 slot_offset = 0x46e8c0u + u_slots[i].slot * 4u;
+				const uint32 u_stub_offset = u_slots[i].stub;
+				uint32 *slot_p = (uint32 *)(ROMBaseHost + slot_offset);
+				uint32 *stub_p = (uint32 *)(ROMBaseHost + u_stub_offset);
+				if (ntohl(*stub_p) != 0) {
+					fprintf(stderr, "[NW-TRAMP] U: slot-%u stub site ROM+0x%x "
+					        "not zero (%08x) — skipping loud stop\n",
+					        u_slots[i].slot, u_stub_offset, ntohl(*stub_p));
+					continue;
+				}
+				if (ntohl(*slot_p) != 0) {
+					fprintf(stderr, "[NW-TRAMP] U: entry-vector slot %u ROM+0x%x "
+					        "not zero (%08x, expected POWERPC_ILLEGAL=0) — "
+					        "skipping loud stop\n",
+					        u_slots[i].slot, slot_offset, ntohl(*slot_p));
+					continue;
+				}
+				*stub_p = htonl(0x48000000u);  // b *  (parked self-loop)
+				*slot_p = htonl(0x48000000u |
+				                ((u_stub_offset - slot_offset) & 0x03FFFFFCu));
+				u_mask |= 1u << u_slots[i].slot;
+			}
+			fprintf(stderr, "[NW-TRAMP] U: dead entry-vector slots {4,6-14} → "
+			        "unique loud stops 0x50429c40..0x50429cd0 "
+			        "(written mask=0x%04x, expected 0x7fd0)\n", u_mask);
 		}
 
 		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "

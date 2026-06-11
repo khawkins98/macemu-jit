@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core
+TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_dev_cuda test_adb_stub
 
 test: $(TESTS)
 	./test_machine_profile
@@ -15,6 +15,8 @@ test: $(TESTS)
 	./test_virt_clock
 	./test_event_sched
 	./test_exc_core
+	./test_dev_cuda
+	./test_adb_stub
 
 test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/machine_profile.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_machine_profile.cpp machine_profile.cpp
@@ -45,6 +47,14 @@ test_event_sched: test_event_sched.cpp event_sched.cpp ../include/event_sched.h
 
 test_exc_core: test_exc_core.cpp exc_core.cpp ../include/exc_core.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_exc_core.cpp exc_core.cpp
+
+# M3b Wave 1 (Tasks 1+2). test_dev_cuda mocks the ADB handler (injected callback)
+# so it does NOT link adb_stub.cpp — the two modules build/test independently.
+test_dev_cuda: test_dev_cuda.cpp dev_cuda.cpp event_sched.cpp ../include/dev_cuda.h ../include/event_sched.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_cuda.cpp dev_cuda.cpp event_sched.cpp
+
+test_adb_stub: test_adb_stub.cpp adb_stub.cpp ../include/adb_stub.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_adb_stub.cpp adb_stub.cpp
 
 clean:
 	rm -f $(TESTS)

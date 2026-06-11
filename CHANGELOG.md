@@ -11,7 +11,64 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
-### [SheepShaver] Machine Layer M3b Wave 2 W2-3 — OpenPIC bus wiring + EXC_EXTERNAL delivery: the interrupt chain's first construction, shipped gated-off (`SS_NW_PIC`, flip HELD) (`b2e0d718`, `7cafd6ae`, `95d3fc53`)
+### [SheepShaver] Machine Layer M6 — 68k PC-desync: DR r0≡0 invariant re-assert; DSAT wall PASSES; boot 0.16s→4.8s, sc 13→169; newworld DEFAULT (`c8429b23`, `ac50b2c9`, `959e209e`, `86b1b1f7`, `25be4342`, `2024a835`)
+
+The 68k PC-desync wall (post-FE1F frontier, System Error ID 10 → DSAT underflow) is
+**resolved**. Root cause (Task 0, `c8429b23`): the DR's **r0≡0 invariant is poisoned by the
+FE1F `twi`-delivery ctx save**. The NK's exception prologue (0x313d40) saves the in-flight
+r0=selector (0x31/0x36 for the two FE1F callouts) into the 68k ctx slot +0x104 — but the
+NK's save-and-switch (0x312b0c) deliberately omits r0 (it is protected by invariant, not
+slot), so the ctx slot retains the stale selector. The merged restore tail then re-poisons
+r0=0x36 on every subsequent switch-in, and the e388 selector shim's `addco.`-class writeback
+mis-dispatches: 0x5c + 0x36 = 0x92 → jmp at e380+0x92 = 0xe412 → line-1111 → SysError 10.
+On real hardware the slot-8 callout is a parcels-patched direct call (no exception, no ctx
+save) — the placeholder-twi delivery is what introduces the poisoned save. The patched chain
+constants (`trap_return` / `m68k_excp_tbl` / `sprg3`) are all **exonerated** [RING✓].
+
+Fix (Task A, `ac50b2c9`): 3-word stub at rom ROM+0x429da0 (verify-zero-first) —
+`li r0,0; lwz r1,0x10c(r3); b 0x5046e1a4` — patched at the slot-exit re-entry site
+0x5046e1a0 (the `SS_NW_DR_R0_INVARIANT` gate, polarity MachineEnvFlag, `be0e02cb`-style
+bring-up). Apple's own db7c idiom; NW-gated; legacy patch bodies untouched.
+
+**Boot transformation (Task B evidence `86b1b1f7`, Task C acceptance `25be4342`+`2024a835`):**
+- Boot time: 0.16s (old DSAT wall) → **~4.8s** JIT-time (new frontier)
+- PROGRAM deliveries: 2 → **4** (both FE1F invocations' $31/$36 pairs, all conformant)
+- `sc` deliveries: 13/9-distinct → **169/16-distinct** (new: 0x1b/0x1c/0x07/0x0c/0x08 ×3;
+  0xfffffffe ×17; 0xffffffff ×103 — the negative-selector candidate surface, flagged)
+- `deferred_ee=5`, CUDA quiet (13 packets), VIA/SCC MMIO traffic — machine layer composing
+
+**New frontier (stop-rule 2 captured, NOT chased):** `pc=0x505bb060` — beyond the staged-copy
+end 0x50500000; control flow slides through zeros to 0x55590000 → host SIGSEGV. Captured in
+`DSAT-WALL-RECON.md` Task A results section.
+
+**`SS_NW_DR_R0_INVARIANT` is the newworld profile DEFAULT** since Task C (`25be4342`);
+`=0` opt-out restores the byte-identical DSAT baseline. All gates green throughout
+(batch+plain test-jit 353/353 score=100, machine 13/13, e2e-test 122; paravirtual
+byte-identical by inertness argument + gated-off A/B boot). Zero falsifications,
+one-iteration rule never invoked. Plan: `docs/superpowers/plans/2026-06-11-68k-pc-desync.md`.
+
+### [SheepShaver] Machine Layer tooling: gates.sh tiered runner + ss-slot-boot --expect + ring-walk analysis script + §6b dispatch economics (`50ba9eb5`, `5859c729`, `5f7cae93`, `7d7ae3ae`)
+
+Workflow and analysis tooling landed alongside the desync and W2-3 milestones:
+
+- **`tools/gates.sh` tiered gate runner** (`50ba9eb5`): `gates.sh <inner|task|full> [--reason "…"]`
+  runs the appropriate gate tier (inner = build+batch-jit+machine; task = +plain-jit+e2e-test;
+  full = +paravirtual-e2e). Prints one `GATE …: PASS|FAIL` line per gate and a final
+  `GATES <tier>: PASS|FAIL` verdict; on FAIL, prints the failing gate's last 20 lines. Per-gate
+  logs preserved in the printed tmpdir. Agents read the summary lines, not raw gate output.
+- **`tools/ss-slot-boot.sh --expect`/`--absent`** (`5859c729`): boot-log assertion contract —
+  `--expect 'PAT;;…' [--absent 'PAT;;…']` checks grep patterns against the boot log, prints
+  `EXPECT: n/m present, k absent-violations` + `BOOT-VERDICT: PASS|FAIL` (exit 0/3). Agents
+  grep targets, not log reads.
+- **`tools/ring-walk.py` trace-ring analysis** (`5f7cae93`): dump-analysis script for
+  trace-ring + R24RING output — `--window START:END`, `--r24-flow` (68k-PC transitions;
+  odd-PC/odd-delta flagged DESYNC-CANDIDATE), `--find-pc 0xPC`, `--regs-at REC`. Agents stop
+  reading raw ring text — point at a boot log or slot rundir.
+- **`docs/MILESTONE-WORKFLOW.md` §6b dispatch economics** (`7d7ae3ae`): model tiering (economy
+  tier for doc sweeps/read-only recon; pro tier for implementation; ultra for adversarial review
+  only), task-card pattern, verdict-over-logs principle.
+
+### [SheepShaver] Machine Layer M3b Wave 2 W2-3 — OpenPIC bus wiring + EXC_EXTERNAL delivery: the interrupt chain's first construction, shipped gated-off (`SS_NW_PIC`, flip HELD) (`b2e0d718`, `7cafd6ae`, `95d3fc53`, `81e3ea4a`)
 
 The EE-chain ladder's first construction (links 1 + 11 of EE-CHAIN-RECON.md §A): the
 already-landed OpenPIC model (206 checks) registered on the M1 bus at 0xF3040000+0x40000

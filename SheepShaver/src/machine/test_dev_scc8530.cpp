@@ -112,6 +112,92 @@ int main()
 	CHECK(bx == 'X');
 	CHECK(scc.rx_count[SCC_CH_B] == 0);
 
+	// --- Wave-2 W2-3 (rev 2 F4): interrupt-condition state ---------------------
+	// Predicate: Rx-available ∧ WR1 Rx-int-enable (0x18) ∧ WR9 MIE (0x08).
+	// Seam fires on per-channel TRANSITIONS only.
+	{
+		static int edges_n = 0;
+		static int edge_ch[16];
+		static bool edge_lvl[16];
+		struct Seam {
+			static void fn(void *, int ch, bool asserted) {
+				if (edges_n < 16) { edge_ch[edges_n] = ch; edge_lvl[edges_n] = asserted; }
+				edges_n++;
+			}
+		};
+
+		SCCReset(&scc, BASE);
+		SCCBindIRQOutput(&scc, Seam::fn, 0);
+
+		// Disabled chip: data alone asserts nothing (WR1=0, WR9 MIE=0).
+		SCCInjectRx(&scc, SCC_CH_A, 0x0D);
+		CHECK(!SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 0);
+
+		// WR1 Rx-int-on-all (0x10) alone: still gated by MIE.
+		wr_pair(1, 0x10);
+		CHECK(!SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 0);
+
+		// WR9 MIE: the last gate opens -> assert edge on ch A.
+		wr_pair(9, 0x08);
+		CHECK(SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 1 && edge_ch[0] == SCC_CH_A && edge_lvl[0]);
+		CHECK(scc.irq_raises[SCC_CH_A] == 1);
+
+		// Second byte: level held, NO second edge (transitions only).
+		SCCInjectRx(&scc, SCC_CH_A, 0x0A);
+		CHECK(edges_n == 1);
+
+		// Drain one byte: still non-empty -> level held, no edge.
+		(void)SCCRead(&scc, BASE + 6, 1);
+		CHECK(edges_n == 1);
+		// Drain the last byte -> deassert edge.
+		(void)SCCRead(&scc, BASE + 6, 1);
+		CHECK(!SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 2 && edge_ch[1] == SCC_CH_A && !edge_lvl[1]);
+		CHECK(scc.irq_lowers[SCC_CH_A] == 1);
+
+		// Re-assert via enqueue, then disable at WR1 -> deassert edge.
+		SCCInjectRx(&scc, SCC_CH_A, 0x33);
+		CHECK(edges_n == 3 && edge_lvl[2]);
+		wr_pair(1, 0x00);
+		CHECK(!SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 4 && !edge_lvl[3]);
+
+		// WR1 Rx-int-first-char (0x08) also counts as enabled.
+		wr_pair(1, 0x08);
+		CHECK(SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 5 && edge_lvl[4]);
+
+		// MIE off (WR9 write w/o bit 3) -> deassert.
+		wr_pair(9, 0x00);
+		CHECK(!SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 6 && !edge_lvl[5]);
+
+		// WR9 is CHIP-WIDE: enabling MIE through the ch B port gates ch A too.
+		SCCWrite(&scc, BASE + 0, 1, 9);          // ch B ctrl: point at WR9
+		SCCWrite(&scc, BASE + 0, 1, 0x08);       // MIE on, via ch B
+		CHECK(SCCIRQCondition(&scc, SCC_CH_A));
+		CHECK(edges_n == 7 && edge_ch[6] == SCC_CH_A && edge_lvl[6]);
+
+		// Channels independent: ch B asserts its own line once enabled.
+		SCCWrite(&scc, BASE + 0, 1, 1);          // ch B WR1
+		SCCWrite(&scc, BASE + 0, 1, 0x10);       //   Rx-int-on-all
+		SCCInjectRx(&scc, SCC_CH_B, 'Y');
+		CHECK(SCCIRQCondition(&scc, SCC_CH_B));
+		CHECK(edges_n == 8 && edge_ch[7] == SCC_CH_B && edge_lvl[7]);
+
+		// Force-hardware-reset (WR9 cmd 0xC0) clears MIE -> both lines drop.
+		wr_pair(9, 0xC0);
+		CHECK(!SCCIRQCondition(&scc, SCC_CH_A) && !SCCIRQCondition(&scc, SCC_CH_B));
+		CHECK(edges_n == 10);                    // two deassert edges
+
+		// SCCReset clears the binding (Reset-then-Bind order contract).
+		SCCReset(&scc, BASE);
+		CHECK(scc.irq_fn == 0 && scc.irq_cond[0] == 0 && scc.irq_cond[1] == 0);
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

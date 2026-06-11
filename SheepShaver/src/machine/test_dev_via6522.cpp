@@ -210,6 +210,69 @@ int main()
 	wr(0x1400, 0x55); CHECK(rd(0x1400) == 0x55);   // stored sr echo
 	CHECK(via.cuda_touches == 2);                  // SR write + SR read touched
 
+	// --- Wave-2 W2-3: summary interrupt output (ifr & ier & 0x7F seam) --------
+	{
+		static int edges_n = 0;
+		static bool edge_lvl[16];
+		struct Seam {
+			static void fn(void *, bool asserted) {
+				if (edges_n < 16) edge_lvl[edges_n] = asserted;
+				edges_n++;
+			}
+		};
+
+		fake_ticks = 0;
+		VIAReset(&via, BASE, fake_clock, 0);
+		VIABindIRQOutput(&via, Seam::fn, 0);
+
+		// IFR flag with IER disabled: NO output (the summary gate).
+		wr(0x1c00, 0x00);                  // IER: nothing enabled (bit7=0 noop form)
+		wr(0x1000, 0x10); wr(0x1200, 0x00);   // T2 = 0x0010, start
+		fake_ticks += 0x20;
+		CHECK((rd(0x1a00) & 0x20) == 0x20);   // T2 flag latched (lazy poll)
+		CHECK(via.irq_out == 0 && edges_n == 0);
+
+		// Enable T2 in IER -> assert edge at the IER write itself.
+		wr(0x1c00, 0xA0);
+		CHECK(via.irq_out == 1);
+		CHECK(edges_n == 1 && edge_lvl[0]);
+		CHECK(via.irq_raises == 1);
+
+		// W1C of the T2 flag -> deassert edge.
+		wr(0x1a00, 0x20);
+		CHECK(via.irq_out == 0);
+		CHECK(edges_n == 2 && !edge_lvl[1]);
+		CHECK(via.irq_lowers == 1);
+
+		// Lazy expiry observed through a read recomputes the output too:
+		wr(0x1000, 0x08); wr(0x1200, 0x00);   // T2 = 8, IER.T2 still on
+		fake_ticks += 0x10;
+		(void)rd(0x1a00);                     // poll latches + raises
+		CHECK(via.irq_out == 1 && edges_n == 3 && edge_lvl[2]);
+		// T2CL read acks (N6) -> deassert through the read path.
+		(void)rd(0x1000);
+		CHECK(via.irq_out == 0 && edges_n == 4 && !edge_lvl[3]);
+
+		// Eager scheduler expiry fires the seam OUTSIDE any read/write:
+		{
+			EventScheduler sched;
+			sched.set_time_now_cb(fake_sched_ns);
+			sched.set_notify_changes_cb([]() {});
+			VIABindScheduler(&via, &sched, direct_call);
+			wr(0x1000, 0x04); wr(0x1200, 0x00);   // T2 = 4
+			fake_ticks += 0x10;                   // pass the deadline
+			sched.process_timers();               // eager latch -> assert edge
+			CHECK(via.irq_out == 1);
+			CHECK(edges_n == 5 && edge_lvl[4]);
+			sched.cancel_all_timers();            // drain before the lambda's &via dies
+			VIABindScheduler(&via, 0, 0);
+		}
+
+		// VIAReset clears the binding + level (Reset-then-Bind contract).
+		VIAReset(&via, BASE, fake_clock, 0);
+		CHECK(via.irq_fn == 0 && via.irq_out == 0);
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

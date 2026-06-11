@@ -87,6 +87,29 @@ void VIABindCuda(VIA6522 *v, CudaDevice *c)
 	v->cuda = c;
 }
 
+// --- Wave-2 W2-3: summary interrupt output (predicate + contract in header) ---
+// Recompute the 6522 IRQ-pin summary from the LATCHED state (no lazy timer
+// re-poll here — the mutating entry point that just ran already settled any
+// relevant timer; re-polling would recurse into timer_fire). Fires the seam
+// on transitions only, under the caller's lock. No malloc/stdio (§2g).
+static void via_update_irq(VIA6522 *v)
+{
+	uint8_t out = ((v->ifr_latched & v->ier & 0x7F) != 0) ? 1 : 0;
+	if (out == v->irq_out)
+		return;
+	v->irq_out = out;
+	if (out) v->irq_raises++;
+	else     v->irq_lowers++;
+	if (v->irq_fn)
+		v->irq_fn(v->irq_opaque, out != 0);
+}
+
+void VIABindIRQOutput(VIA6522 *v, void (*fn)(void *opaque, bool asserted), void *opaque)
+{
+	v->irq_fn = fn;
+	v->irq_opaque = opaque;
+}
+
 const char *VIATakePendingWarning(VIA6522 *v)
 {
 	const char *w = v->cuda_warn_what;
@@ -209,8 +232,13 @@ static void via_expiry_locked(void *opaque)
 	VIATimerEvent *ev = (VIATimerEvent *)opaque;
 	VIA6522 *v = ev->v;
 	uint32_t cur = ev->t1 ? v->t1_gen : v->t2_gen;
-	if (cur == ev->gen)
+	if (cur == ev->gen) {
 		timer_fire(v, ev->t1);
+		// W2-3: the eager expiry latches IFR outside any VIARead/VIAWrite —
+		// recompute the summary output here too (runs under the region lock
+		// via locked_call, same contract).
+		via_update_irq(v);
+	}
 }
 
 static void timer_arm(VIA6522 *v, bool t1, uint16_t count)
@@ -231,9 +259,8 @@ static void timer_arm(VIA6522 *v, bool t1, uint16_t count)
 	}
 }
 
-uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
+static uint64_t via_read_inner(VIA6522 *v, uint32_t addr, unsigned size)
 {
-	VIA6522 *v = (VIA6522 *)opaque;
 	(void)size;   // consumers are byte-wide; wider reads return the low byte
 	unsigned reg = ((addr - v->base) >> 9) & 0xF;
 	v->reg_reads[reg]++;   // M6a Wave 2 #4: read histogram (under the bus lock)
@@ -276,6 +303,16 @@ uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
 	case R_IER:       return 0x80 | v->ier;   // bit7 always set on reads (6522 spec)
 	}
 	return 0;
+}
+
+uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
+{
+	VIA6522 *v = (VIA6522 *)opaque;
+	uint64_t r = via_read_inner(v, addr, size);
+	// W2-3: reads mutate IFR (timer-count acks, Cuda settle/SR clear, lazy
+	// timer polls) — recompute the summary output after every access.
+	via_update_irq(v);
+	return r;
 }
 
 void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
@@ -343,4 +380,7 @@ void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 		else          v->ier &= ~(b & 0x7F);
 		break;
 	}
+	// W2-3: writes mutate IFR/IER (W1C, timer loads, IER enables, Cuda seam)
+	// — recompute the summary output after every access.
+	via_update_irq(v);
 }

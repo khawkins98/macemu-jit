@@ -52,6 +52,23 @@ struct VIA6522 {
 	// the paravirtual/unit-test default). See VIABindCuda below for the seam
 	// contract and the rev 2 M4 timing decision.
 	CudaDevice *cuda;
+	// --- Wave-2 W2-3: summary interrupt output (fields APPENDED LAST) ---
+	// Level = ((ifr_latched & ier & 0x7F) != 0) — the 6522 IRQ-pin summary
+	// (the same composition R_IFR's bit 7 reports). Recomputed at the end of
+	// every VIARead/VIAWrite and at the scheduler expiry transition; the seam
+	// fires on TRANSITIONS only, under the caller's lock (prod: the VIA bus
+	// region lock). Cross-region lock order: device -> pic (the callback may
+	// take the PIC region lock; never the reverse).
+	// LAZY-DELIVERY CAVEAT (the header's own Wave-2 warning, now load-bearing):
+	// Cuda SR-int delivery is settle-on-IFR-read — for a guest that stops
+	// polling, that edge fires only on the next VIA access. Timer expiries DO
+	// fire eagerly via the bound scheduler. Recorded; W2-4's IER-push decision
+	// owns the remainder.
+	void   (*irq_fn)(void *opaque, bool asserted);
+	void    *irq_opaque;
+	uint8_t  irq_out;       // current summary level (0/1)
+	uint64_t irq_raises, irq_lowers;   // telemetry: transitions
+	// (append any future fields HERE, last)
 };
 
 extern void VIAReset(VIA6522 *v, uint32_t base,
@@ -96,6 +113,13 @@ extern void VIABindScheduler(VIA6522 *v, EventScheduler *sched,
 // Unbound (NULL/never called): M1 behavior exactly — cuda_touch loud stub,
 // stored sr/orb echo. The ORB write-value trace (orb_wtrace) runs in BOTH modes.
 extern void VIABindCuda(VIA6522 *v, CudaDevice *c);
+
+// Wave-2 W2-3: bind the summary-interrupt output seam AFTER VIAReset (reset
+// clears the binding). fn fires on summary-level transitions (see the struct
+// comment for the predicate, recompute points, lock order, and the lazy-
+// delivery caveat). NULL fn unbinds.
+extern void VIABindIRQOutput(VIA6522 *v,
+                             void (*fn)(void *opaque, bool asserted), void *opaque);
 
 // Return-and-clear the pending Cuda loud-stub warning text (static string), or NULL.
 // Device handlers can run on the Mach exception-handler thread, where stdio is

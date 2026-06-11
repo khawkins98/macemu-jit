@@ -19,6 +19,41 @@ static int decode_ch(uint32_t off, bool *is_data)
 	return (off & 2) ? SCC_CH_A : SCC_CH_B;
 }
 
+// --- Wave-2 W2-3 (rev 2 F4): the interrupt-condition state machine -----------
+// Predicate + seam contract in the header. No malloc/stdio (bus-lock paths).
+
+bool SCCIRQCondition(const SCC8530 *s, int ch)
+{
+	return s->rx_count[ch] > 0 &&
+	       (s->wr[ch][1] & 0x18) != 0 &&     // WR1 Rx-int mode != 00 (disabled)
+	       (s->wr9_shared & 0x08) != 0;      // WR9 MIE (chip-wide copy)
+}
+
+// Recompute both channels; fire the seam on TRANSITIONS only (assert AND
+// deassert edges). Called at the end of every mutating entry point
+// (enqueue / drain / WR1 / WR9 / reset commands).
+static void scc_update_irq(SCC8530 *s)
+{
+	for (int ch = 0; ch < 2; ch++) {
+		uint8_t cond = SCCIRQCondition(s, ch) ? 1 : 0;
+		if (cond == s->irq_cond[ch])
+			continue;
+		s->irq_cond[ch] = cond;
+		if (cond) s->irq_raises[ch]++;
+		else      s->irq_lowers[ch]++;
+		if (s->irq_fn)
+			s->irq_fn(s->irq_opaque, ch, cond != 0);
+	}
+}
+
+void SCCBindIRQOutput(SCC8530 *s,
+                      void (*fn)(void *opaque, int ch, bool asserted),
+                      void *opaque)
+{
+	s->irq_fn = fn;
+	s->irq_opaque = opaque;
+}
+
 void SCCInjectRx(SCC8530 *s, int ch, uint8_t byte)
 {
 	// Caller holds the MMIOBus region lock.  No malloc, no stdio.
@@ -30,6 +65,7 @@ void SCCInjectRx(SCC8530 *s, int ch, uint8_t byte)
 	s->rx_queue[ch][tail] = byte;
 	s->rx_count[ch]++;
 	s->rx_injected++;
+	scc_update_irq(s);     // F4: enqueue can assert the Rx condition
 }
 
 static uint8_t read_rr(SCC8530 *s, int ch, uint8_t rr)
@@ -54,6 +90,7 @@ uint64_t SCCRead(void *opaque, uint32_t addr, unsigned size)
 			s->rx_head[ch] = (s->rx_head[ch] + 1) % SCC_RX_QUEUE_MAX;
 			s->rx_count[ch]--;
 			s->rx_consumed++;
+			scc_update_irq(s);     // F4: draining the last byte deasserts
 			return v;
 		}
 		return 0;
@@ -84,15 +121,22 @@ void SCCWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 	s->wr[ch][ptr] = v;
 	s->wr_writes++;
 	if (ptr == 9) {
+		// F4: WR9 is chip-wide on real silicon — track the shared copy the
+		// interrupt predicate consults (per-channel storage stays for
+		// read-back compat; see the header note).
+		s->wr9_shared = v;
 		if ((v & 0xC0) == 0xC0) {          // force hardware reset
 			memset(s->wr, 0, sizeof(s->wr));
 			s->reg_ptr[0] = s->reg_ptr[1] = 0;
+			s->wr9_shared = 0;             // hw reset clears MIE too
 		} else if ((v & 0xC0) == 0x80) {   // channel A reset
 			memset(s->wr[SCC_CH_A], 0, sizeof(s->wr[SCC_CH_A]));
 		} else if ((v & 0xC0) == 0x40) {   // channel B reset
 			memset(s->wr[SCC_CH_B], 0, sizeof(s->wr[SCC_CH_B]));
 		}
 	}
+	if (ptr == 1 || ptr == 9)
+		scc_update_irq(s);                 // F4: enable-writes assert/deassert
 }
 
 bool SCCReadIsIdle(void *opaque, uint32_t addr, uint64_t value)

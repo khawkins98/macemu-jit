@@ -11,6 +11,21 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] NewWorld 9.0.1 — SysError-12 wall (P-M4) cleared: HLE Time Manager via trap-table image population (`f808a7fb`, `adea99bc`)
+
+The 9.0.1 ROM ships NULL trap-table-image entries for the TM cluster {0x58
+InsTime/InsXTime, 0x59 RmvTime, 0x5a PrimeTime, 0x93 Microseconds}; upstream's exact
+EMUL_OP stub bodies now live in new ROM patch space (TIME_MANAGER_PATCH_SPACE=0x2fd240)
+with the image entries populated verify-zero-first, so the guest's own installer
+(ROM 0xe0c8) installs them at boot. Gate `SS_NW_TM_TRAPS`: newworld default-ON ("0"
+opt-out). Also lifts the `patch_68k()` .Sony DRVR-4 hard abort (lenient mode) that
+silently dropped the whole EMUL_OP tail (ADBOp/PowerOff/scrap now apply on 9.0.1);
+every resumed-tail write site is verify-target-first (14-site audit in `f808a7fb`;
+the SERD-0 ROM-offset-0 clobber hazard guarded). Enable60HzInts now completes; new
+frontier **P-M5** = SIGSEGV guest pc=0x100000 ~0.13s in (suspected host-TM-expiry
+Execute68k delivery — see TRAP-TABLE-RECON.md fix record). Paravirtual: live
+`make e2e` PASS.
+
 ### [SheepShaver] Machine Layer W2-4 — DEC reload storm RESOLVED: NK scheduler timebase-frequency global was never staged (`21704614`, `f31d475e`)
 
 The D-6 EE-riser DEC storm (250K deliveries/s, 68k world starved) is fixed. Root

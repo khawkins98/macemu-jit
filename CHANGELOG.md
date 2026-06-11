@@ -11,6 +11,73 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
+### [SheepShaver] Machine Layer M6a rung 2: first complete MixedMode 68k→PPC round trip — switch is the newworld DEFAULT (`c8178095`…`296c3661`)
+
+**Headline:** the 68k→PPC Mixed Mode switch works in BOTH directions on the newworld
+profile and is now the profile **default** (`SS_NW_MM_SWITCH=0` opt-out). MPLibrary's
+PPC TVector (`0x500cef8c`) executes for the first time; the boot is transformed —
+jNK collapses **116M (FE01↔NK bounce spin) → 4104**, comp unfreezes 3573 → 3672, the
+boot advances through TWO full MixedMode round trips (literal 68k resume PCs observed
+in the r24 ring, e.g. completion-written `[saveblk+0x3c]=0x50033776`) and the CFM
+parcel-by-name caller region runs. Plan:
+`docs/superpowers/plans/2026-06-11-m6a-rung2-mixedmode-switch.md`; full results in
+`docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md` (Task T…Y results sections).
+
+The arc (all gates green throughout — batch+legacy test-jit 353/353 score=100, machine
+suite 11/11, e2e-test 122, paravirtual `make e2e` PASS byte-identical):
+
+- **Task 0 contract recon** (`c8178095`): FE01/FE02 contracts pinned from static RE +
+  bounded probe boots — the retry-spin root cause named (`[KDP+0x660]` classification
+  gate: every slot-1 call classified "not from emulator"), the TVector entry-register
+  table, the 16-slot entry-vector resolution, FE02's direction re-scope (it's
+  PPC-calls-68k, not the switch-back).
+- **Task T pool default + collision fix** (`735f775c`): `SS_NW_MM_POOL` → newworld
+  default-ON, and the staged pool base `0x68ff5000` — claimed "free gap, no other
+  users" — was **falsified by our own Hnfo-scratch seed** (machine-detect writes landed
+  inside MM save record 0). Pool relocated to `0x68ff5800`; the sub-KDP **occupancy
+  map** is now the authoritative tracked table; slot-15 allocator-exhaustion loud stop.
+- **Task U slot stops** (`b271f161`): dead NK entry-vector slots get unique parked-PC
+  loud stops (zeros never silently consumed again).
+- **Task V the switch seeds** (`1c10d968`): the entire forward switch reduced to TWO
+  trampoline-resident KDP seeds (`[KDP+0x660]|=0x00200000` + MRU pair-0
+  `[KDP+0x340/0x344]=MMCB`) — the DR's FE01 service + the staged NK's own
+  switch/save/scheduler + the ROM's native glue do everything else. **The TVector
+  executes** (probe: exact Q-D register conformance); the FE01 retry spin is GONE.
+- **Task W stop-rule + discriminator** (`3dd1550b`): verify-first caught
+  the illusion — pre-W, every "TVector excursion running" was actually a **68k reset
+  per excursion** through the always-cold table[0] (a faster reboot loop, not
+  progress). Landed the table[0] cold/warm discriminator + `[KDP+0x658]` cold seed;
+  the second falsification (the `[KDP+0x65c]` self-switch) correctly fired the
+  stop-rule → rev 3 re-scope.
+- **Rev 3/3.1 red-team** (`cc8302f8`, `b468b07d`): the W2 design GO-WITH-CHANGES —
+  including **striking the `[KDP+0x5f0/4]` retarget that every prior doc recommended**
+  (live values are NK-rebuilt staged addresses; retargeting would have destroyed both
+  switch directions) and pulling the DEC fence forward.
+- **Task W2 the world-flip** (`43d42b83`): `[KDP+0x65c]` current-world flip discipline
+  (warm arm := MMCB; retargeted slot-1 region := ECB) — **the round trip CLOSES**: the
+  parked FE01 service resumes, FE07 reads command byte 0xff live, the 68k resumes at
+  the completion-written PC. Plus the **DEC fence**: `deliver_pending_dec_exception`
+  defers while `[XLM_RUN_MODE]` (0x2810) != 0 — new `deferred_native` counter, the
+  `exc=` heartbeat tuple is now 4-wide (`delivered/deferred_ee/deferred_depth/`
+  `deferred_native`).
+- **Task X verify-and-leave + re-census** (`aaaa9a02`): `[KDP+0x5f0/4]` probed at cold
+  AND warm entry = the NK staged pair (glue's primary-world seeds are dead-on-arrival,
+  comment-only); post-W2 census ratifies the R3 stub route — the only warm entrant is
+  the legitimate completion signature (r3=0xff).
+- **Task Y acceptance + default flip** (`296c3661`): all five PASS/FAIL gates green
+  pre- AND post-flip; opt-out boot reproduces the pre-switch baseline byte-identically;
+  fix budget consumed: zero.
+
+**THE new frontier (stop-rule trigger 2 — captured, not staged):** MPLibrary's first NK
+syscall — `sc` at `pc=0x500d638c` with unresolved syscall_entry (`SRR0=0x500d6390
+SRR1=0x00007072 lr=0x500cf108 r1=0x103ffb50`), identical pre- and post-flip. Vector
+0xC00 / the NK syscall surface is the next milestone. Baseline at the wall: comp=3672,
+jNK=4104, exc=0/1/0/0, CUDA quiet (13 packets / 9 i2c — the V-era "MMIO storm" reading
+was the reset cycle, now dead).
+
+Knob reference (incl. the `SS_M6A_USER_MSR` quarantine and the `SS_DR_R24_RING` /
+`SS_INTERP_RING` capture rings): `SheepShaver/docs/DIAGNOSTICS.md` "Machine Layer M6a".
+
 ### [SheepShaver] Machine Layer M3b Wave 1: Cuda protocol model + minimal ADB stub live on newworld (`143f66e7`…`21b6410a`)
 
 M3b Wave 1 (the live consumer half of MACHINE-LAYER-PLAN M3b) landed on the newworld profile:

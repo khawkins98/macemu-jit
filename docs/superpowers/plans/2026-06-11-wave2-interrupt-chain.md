@@ -473,6 +473,18 @@ task out as its own follow-on milestone: capture, name the frontier, stop.** No 
   Default stays OFF in tree. Falsifications: NONE (storm = the predicted intended risk).
   Side evidence (boot 3): riser WITHOUT SS_NW_DEC_PUBLISHED → SIGTRAP crash at
   0x50412be0 (the legacy-KDP r9 hazard) — step 0's re-point is load-bearing, as designed.
+- [x] **Item 1b — run-mode fence vs deferral starvation: RESOLVED as the post-DEFER_NATIVE
+  wake-up edge** (`3cb3b16e`, 2026-06-12, with `34d3d441` Execute68k staging as prerequisite):
+  per the pm5-recon CORRECTION (INTERRUPT-INJECTION-RECON.md Q4 — D-7's "[0x2810] never
+  cleared in the cold 68k world" mechanism FALSIFIED by the balanced 151/151 NK-writer
+  watch; fence semantics correct, run-mode clearing a non-fix), the fix is a HANDLE-spcflag
+  re-arm on EXC_DECIDE_DEFER_NATIVE — re-pinned once to a bounded per-episode budget
+  (cap 65536; the recon's "bounded by window length" claim falsified at the post-P-M5-fix
+  frontier, which parks inside a never-exiting native window). Riser-on acceptance:
+  **delivered_dec=3, the first live published-route deliveries (0x50313200, 2-SPR);
+  pending drained to 0; mtspr_dec=25 (no storm); sc/program at baseline; Ticks still
+  frozen (expected — consumption is the item-3 EXC_EXTERNAL/Ticks work).** Full record:
+  INTERRUPT-INJECTION-RECON.md "RESULTS" section.
 
 ### Task Z: docs
 

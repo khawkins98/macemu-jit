@@ -137,3 +137,85 @@ accrue in the first ~0.13s; D-7's 60s boot then parked with nothing further happ
   gpr(30)'s actual consumption inside the mirror emulator was not traced.
 - **R-II5**: whether 97 deferrals = polls strictly inside windows was inferred from the
   DEFER_NATIVE decision predicate (requires run_mode≠0), not per-poll correlated.
+
+---
+
+## RESULTS — M7-critical items 1+2 implemented (2026-06-12, label inj-s-fixes)
+
+Both S items landed (`34d3d441` item 1, `3cb3b16e` item 2). Boots: **6 of ≤6** (slot
+protocol, all rundirs under /tmp/ss-slots/slot0/runs/: fix1-default 013238.91687,
+fix1-probe 013523.91973, fix1-emulop 013720.92236, fix2-riser-unbounded 014035.93239,
+fix2-repin 014505.94241, fix2-default-ab 014705.94513). Gates: inner per commit, task
+tier on final (test-jit plain 353/353, machine suite 13/13, e2e-test 122 passed).
+Claim: `docs/superpowers/.claims/inj-s-fixes.claim`.
+
+### Item 1 — Execute68k newworld port (`34d3d441`)
+
+Staged exactly the Q5-item-1 pair in the trampoline staging block (beside the f31d475e
+KDP+0xf28/0xf2c staging): `[KDP+0x1074]:=0x50480000`, `[KDP+0x1078]:=0x50460000`.
+
+**THE NEW DEFAULT-BOOT BASELINE (fresh capture, boot 1, no env):** P-M5 SIGSEGV
+**eliminated** (no SIGSEGV, no pc=00100000 — BOOT-VERDICT PASS with `--absent`); 44.4s
+full-window JIT session (blocks=7354 / 98.4% coverage); terminal frontier =
+**`PROGRAM #5 srr0=50324fec word=0fff0005 slot=5 r1=0 lr=0 -> entry=50314700`**, sc
+selector storm `0xffffffff x233` (16 distinct), VIA ORB=3341, mtspr_dec=18,
+dec_expiries=1 pending=1, SIGTERM park. This is byte-for-byte the recon's seed-boot
+frontier (R-II3) — now reproduced as the unconditional default. R-II3 remains the
+first recon target for M7 proper.
+
+Instrument notes (honest misses, neither gating): (a) the acceptance sketch's
+`SS_PROBE_68K=0x50510002` did **NOT** fire post-fix (boot 2) — the probe hook sits on
+the top-level JIT dispatcher only; Execute68k's nested `execute()` path is probe-blind.
+Completion evidence is the frontier itself: the sequencer continues past
+OP_NAME_REGISTRY/OP_INSTALL_DRIVERS to the sc-storm park, which sits *after* the old
+0.11s crash point. (b) `SS_EMULOP_COUNTS` (boot 3) still shows `1=1` only — the
+mirror-slot EmulOp path bypasses `execute_emul_op`'s counter; the recon's "op-1
+identity" cosmetic residue is unchanged, now with a mechanism candidate.
+
+### Item 2 — post-DEFER_NATIVE wake-up edge (`3cb3b16e`)
+
+**FALSIFICATION (dated addendum, one-iteration rule applied).** Q4's bounding claim —
+"self-terminating, bounded by window length (~10²-10³ records)" — is **FALSIFIED at the
+post-item-1 frontier**: the riser-on boot now parks INSIDE a native window that never
+exits. The unbounded re-arm (boot 4) spun at ~107M re-polls/s —
+`deferred_native=5,295,253,877` == executed blocks over 50s, `delivered_dec=0`, and the
+frontier REGRESSED (sc=81 vs 173). Note the recon's Q4 watch predates item 1; the
+deeper post-fix frontier runs native where the old one parked at run_mode 0. Boot-4 vs
+boot-5 delivery difference is expiry *phase* (whether the latch lands during the
+transient-window phase or the parked phase) — both consistent with this finding.
+**ONE re-pin:** per-episode re-arm budget `EXC_NATIVE_REARM_CAP=65536` (>> transient
+window length), reset on any non-native decision; exhaustion leaves the latch set, logs
+once, returns to kick-driven polling. Consumption side: a re-armed HANDLE skips the
+legacy HandleInterrupt fall-through in check_spcflags (else it would re-poll
+SDL_PumpEvents + the unfenced MODE_EMUL_OP Execute68k arm per block boundary — Q3
+item 5). Host-side only; exc_core/ExcDeliveryDecision untouched, test_exc_chain needs
+no extension. Tuple note: `deferred_native` now counts every re-poll (cost meter).
+
+**Acceptance (boot 5, riser-on `SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1`, 60s):**
+- **delivered_dec=3 — THE FIRST LIVE PUBLISHED-ROUTE DEC DELIVERIES EVER** (all
+  `-> entry=50313200 (2-SPR)`; restarts 504b8008/504d5f58/504a73a8). dec_expiries=3,
+  terminal **pending=0** — every expiry delivered, latch fully drained. Delivery #1
+  landed inside the budget (a transient window exited); one cap exhaustion; #2/#3
+  kick-driven on the post-delivery re-arm cycle.
+- **No storm regression**: mtspr_dec=25 (zero-writes 0; D-7 cadence fix intact —
+  healthy reload values incl. 0x017d7840/0x65c2-family). sc/program EXACTLY at the
+  item-1 baseline (`0xffffffff x233`, PROGRAM #5 srr0=50324fec).
+- **Ticks [0x16a] = 0** (probe at the parked hot PC 0x500e1ff4; `[0x2810]=1` there —
+  direct confirmation of the parked native window). Frozen Ticks is per Q5 item 4 NOT a
+  failure here — consumption arrives with item 3. Moving Ticks would have been headline
+  news; it did not move.
+- Re-poll cost: ≤65537 slow-path block boundaries per episode (~ms-scale); the
+  unbounded variant's 100M/s spin is the documented counterfactual.
+- Default-boot A/B (boot 6, riser off): item-1 baseline signature reproduced
+  (PROGRAM #5, sc x233, mtspr_dec=18); cap line fires once on the undeliverable
+  legacy-route latch — bounded, no spin, full 45s window.
+
+**M7 item-3 entry state**: the EXC_EXTERNAL/PIC routing milestone now starts from a
+**delivering DEC chain** (expiry → latch → bounded re-poll/kick → published-route
+delivery → NK reprogram → next expiry) and a **working Execute68k** (OP_IRQ's
+TimerInterrupt task calls are de-mined). New named residue:
+- **R-II6**: the post-item-1 park holds `[0x2810]=1` indefinitely (boot-5 probe) — the
+  fence permanently defers any latch that lands in the parked phase. The published
+  route retires the KDP save shim (the fence's original corruption rationale), so
+  whether DEFER_NATIVE should apply on the 2-SPR route at all is an open design
+  question for item 3.

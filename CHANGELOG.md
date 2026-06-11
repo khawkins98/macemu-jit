@@ -11,6 +11,41 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] NewWorld 9.0.1 — P-M5 SIGSEGV cleared: Execute68k ported to the trampoline boot via [KDP+0x1074]/[KDP+0x1078] staging (`34d3d441`)
+
+M7-critical item 1 (INTERRUPT-INJECTION-RECON.md Q1/Q5). The P-M5 crash (guest
+pc=0x100000 ~0.11s in) was NOT the suspected host-TM-expiry injection: the boot
+sequencer's OP_NAME_REGISTRY step calls FindLibSymbol → Execute68k, which reads the
+kernel-data emulator pair `[KDP+0x1074]` (68k opcode dispatch table) / `[KDP+0x1078]`
+(emulator code base) — both NULL on the trampoline boot, so `execute(0x558f*8)` ran
+zeroed low RAM into the 0x100000 fetch fault. Fix: stage the mirror-world values
+(0x50480000 / 0x50460000 — the mirror equivalents of `patch_nanokernel_boot`'s
+LA_DispatchTable/LA_EmulatorCode pair, rom_patches.cpp:1514-1515) in the newworld
+trampoline staging block. **New default-boot baseline**: 44s full-window session
+parking at `PROGRAM #5 srr0=50324fec slot=5` with the sc-selector storm
+(0xffffffff x233) — the recon's seed-proven frontier, now unconditional. Also de-mines
+the MODE_EMUL_OP injection arm and OP_IRQ's TimerInterrupt task calls (Execute68k as a
+synchronous tool now works on newworld). Structurally inert on paravirtual (newworld
+trampoline block). Gates: inner.
+
+### [SheepShaver] Machine Layer W2-4 item 1b — post-DEFER_NATIVE wake-up edge: first live published-route DEC deliveries (`3cb3b16e`)
+
+M7-critical item 2 (INTERRUPT-INJECTION-RECON.md Q4 option (c)). A native-window
+deferral consumed the HANDLE spcflag and nothing re-asked — the latched DEC starved
+(D-7: deferred_native=97, delivered_dec=0). The delivery hook now re-arms
+`SPCFLAG_CPU_HANDLE_INTERRUPT` on `EXC_DECIDE_DEFER_NATIVE`, **bounded** by a
+per-episode budget (cap 65536, reset on any non-native decision) after the recon's
+"bounded by window length" claim was falsified live — the post-item-1 frontier parks
+inside a native window that never exits (unbounded variant: 5.3e9 re-polls in 50s,
+regressed frontier; falsification + re-pin recorded in the recon's RESULTS addendum).
+check_spcflags (newworld branch) skips the legacy HandleInterrupt fall-through on a
+re-armed flag (no SDL_PumpEvents / MODE_EMUL_OP-arm amplification). Host-side only —
+exc_core untouched. Riser-on acceptance: **delivered_dec=3, the first live deliveries
+on the published 0x50313200 (2-SPR) route; pending drained to 0; mtspr_dec=25 (no
+storm); sc/program exactly at the item-1 baseline. Ticks still frozen (expected —
+consumption is item 3, the EXC_EXTERNAL/PIC routing).** Default-boot A/B: baseline
+signature reproduced, cap fires once, no spin. Gates: task tier; boots 6/6.
+
 ### [SheepShaver] NewWorld 9.0.1 — SysError-12 wall (P-M4) cleared: HLE Time Manager via trap-table image population (`f808a7fb`, `adea99bc`)
 
 The 9.0.1 ROM ships NULL trap-table-image entries for the TM cluster {0x58

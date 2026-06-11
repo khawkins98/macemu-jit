@@ -871,16 +871,19 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > records; sc deliveries 13/9-distinct (the old "5" = cap-5 print artifact; per-selector
 > counter `2949ec32`). **Newworld profile DEFAULT** (`SS_NW_FE1F_SURFACE=0` opt-out);
 > zero falsifications.
-> **▶ THE named frontier: the DSAT stack-underflow wall** — System Error ID 10 from the
-> $36-callout return path (saved PC 0x5000e448, record-for-record reproducible); the
-> alert machinery itself underflows RAMBase → host SIGSEGV. Captured per the stop-rule
-> (`M6A-WAVE2-SHIM-RECON.md` "Frontier update, FE1F Task C closeout"); recon in flight.
-> M3b Wave 2: **OpenPIC model + 206-check suite landed** (`b86449c9`; LE register file,
-> CTPR=15 oracle corrections); **EE-chain recon** (`89fd0642`, `EE-CHAIN-RECON.md`)
-> recommends verification-first reorder W2-0..W2-4; external-source wiring +
-> SDL_PumpEvents relocation + tm_task/via_int retirements + deliverability harness
-> vector + nested-execute path completion + boot-past-console question remain
-> parallel backlog.
+> **68k PC-desync ✅ 2026-06-11** (`c8429b23`…`2024a835`, flip `25be4342`): DSAT wall PASSED
+> — DR r0≡0 invariant re-assert at slot-exit re-entry (`SS_NW_DR_R0_INVARIANT` default ON);
+> boot 0.16s→4.8s JIT-time, sc 13→169/16-distinct; paravirtual byte-identical.
+> **▶ THE named frontier: 0x505bb060 off-ROM PC slide** — control flow reaches beyond
+> staged-copy end 0x50500000, slides through zeros → SIGSEGV; captured in
+> `DSAT-WALL-RECON.md` Task A + `M6A-WAVE2-SHIM-RECON.md` frontier update (desync Task C).
+> **Negative-selector candidate surface** (0xfffffffe ×17, 0xffffffff ×103 in the sc census)
+> also named; evidence `DSAT-WALL-RECON.md` Task B.
+> **W2-3 shipped gated-off** (`b2e0d718`/`7cafd6ae`/`95d3fc53`/`81e3ea4a`): OpenPIC wired,
+> EXT delivery harness-proven (H6/H7 9/9), flip HELD per stop-rule 3 (no EE riser on boot
+> path); W2-4 evidence-gated next for Stream B. EE-chain recon (`89fd0692`, `EE-CHAIN-RECON.md`);
+> SDL_PumpEvents relocation + deliverability harness vector + nested-execute path completion
+> + boot-past-console question remain Wave-2 backlog.
 > **Deferred (tracked, donor study §7.2 item 4):** full **host-input-over-ADB** — real
 > autopoll packets driving the guest's ADB stack replace `adb_stub` behind the same
 > interface (`SheepShaver/src/include/adb_stub.h` documents the seam; pickup requirements

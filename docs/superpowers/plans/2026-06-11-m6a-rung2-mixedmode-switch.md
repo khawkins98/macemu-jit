@@ -1,38 +1,37 @@
 # M6a rung 2 — Mixed Mode switch completion: FE01 68k→PPC context switch, FE02 switch-back, NK entry-vector slots, real ongoing entry at table[0]
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — Tasks T/U/V/W/X edit the same trampoline/glue functions; NOTHING in this plan parallelizes (rev 2 P12).**
 
 **Goal:** Complete the DR Emulator's Mixed Mode switch on the newworld profile so MPLibrary's
 PPC TVector (`0x500cef8c`) actually EXECUTES: the $AAFE RoutineDescriptor → FE01 service
 allocates a 0x220-byte save record from a **provisioned** pool (Task T promotes
-`SS_NW_MM_POOL` to the profile default), the FE01 service's continuation runs through **real
-NK entry-vector slots** instead of falling through zeros into the table[0] reset (Tasks U+V:
-save the 68k state per the 0x220-record contract, enter PPC at the TVector under the
-MixedMode register/MSR convention), the PPC code returns via the **FE02 switch-back** (Task
-W: restore the 68k context, free the record, resume past the $AAFE site), and table[0] gets
-a **real ongoing entry** (Task X: retire the always-cold-start diagnostic per
-M6A-ONGOING-ENTRY-DESIGN R2/R3/R4). Milestone acceptance DIAGNOSTIC (not a gate): the
+`SS_NW_MM_POOL` to the profile default, RELOCATED off the Hnfo scratch — rev 2 C1), the
+FE01 continuation proceeds through the NK surface it expects — **(rev 2 C2: the exact
+mechanism is a HYPOTHESIS pending Q-B/Q-C; under pool-on there are already zero reset
+transitions, so the dead pre-pool zero-slot fall-through is NOT the live spin mechanism)** —
+the 68k state is saved per the 0x220-record contract and PPC entered at the TVector under
+the MixedMode register/MSR convention (Tasks U+V), the PPC code returns via the **FE02
+switch-back** (Task W), and table[0] gets a **real ongoing entry** (Task X, decided on a
+POST-Task-W re-census — rev 2 P1). Milestone acceptance DIAGNOSTIC (not a gate): the
 FE01-retry-spin (68k stub `0x10008fb0` ↔ FE01, ~55M blocks/s) disappears and the 'pwpc'
-parcel-init chain proceeds (CodeFragmentMgr lookup at `0xf46e` reached). PASS/FAIL gates are
-the regression invariants plus the verifiable sub-contracts in Task Y. Paravirtual
-byte-identical throughout (every touched site is newworld/lenient-gated guest-side patching
-or profile-gated glue).
+parcel-init chain proceeds (the CodeFragmentMgr lookup — the parcel-by-name caller region
+ROM file offset `0xf46e`, observed via the SS_DR_R24_RING 68k-PC ring, NOT SS_PROBE_PC:
+68k PCs are PPC-probe-blind — rev 2 P12). PASS/FAIL gates are the regression invariants
+plus the verifiable sub-contracts in Task Y. Paravirtual byte-identical throughout.
 
 **Architecture:** All switch machinery is **guest-side code in the mirror zero run**
 (ROM+0x429xxx, the established [NW-TRAMP] idiom) plus glue-side seeds — no new host-side
 delivery mechanism and no powerpc_cpu changes. The DR's own FE01 service (allocator at
 staged `0x5046e304`, glue blocks `0x5046e1a0..e2ec`) already does the heavy lifting; our
 obligation is the surface the NK provides on real hardware: the ECB pool words
-(`[ECB+0xE0..0xEC]`), the NK-populated entry-vector slots (base `0x5046e8c0`; the zero
-slots `+0x10`, `+0x18..+0x3c`), and a table[0] that distinguishes cold start from ongoing
-entry (design doc R2 discriminator + R3 ongoing arm + R4 `[KDP+0x660]` flags seed, with the
+(`[ECB+0xE0..0xEC]`), the NK entry-vector slots the FE01 path actually consumes (Q-B), and
+a table[0] that distinguishes cold start from ongoing entry (design doc R2/R3/R4, with the
 `[KDP+0x5f0/0x5f4]` mirror retarget if the stub route is chosen). **Task 0 is a BINDING
-pre-implementation recon**: the design doc decides the ongoing-entry shape but deliberately
-leaves the FE01-specific contracts open (0x220 record layout, post-allocator control flow,
-per-slot semantics, FE07/FE02 mechanics, TVector register/MSR convention) — those get
-pinned in writing before Tasks U/V/W freeze. New machinery is env-gated during bring-up
-(`SS_NW_MM_SWITCH=1`, default OFF) and flipped to the profile default only by Task Y's
-gates.
+pre-implementation recon gating Tasks T..X (rev 2 P2)**: it pins the open contracts in
+writing before implementation freezes. New machinery is env-gated during bring-up
+(`SS_NW_MM_SWITCH=1`, default OFF) and flipped to the profile default only as Task Y's
+LAST step with an explicit rollback rule (rev 2 P6). `SS_NW_MM_SWITCH` implies the pool
+(rev 2 C11 — switch-without-pool is not a supported config; the code asserts or implies it).
 
 ---
 
@@ -40,226 +39,296 @@ gates.
 
 | Doc | What it fixes |
 |---|---|
-| `docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md` | THE ongoing-entry design: table[0]/slot semantics (§1.2–1.3), NK save/restore protocol (§2), R1–R6 requirement list (§4), rung ladder (§5), PROBE-O1/O2/O4; the R3 ongoing-arm decision and the `[KDP+0x5f0/4]` mirror wrinkle |
-| `docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` — "MPLibrary bail NAMED" section (commit 36f048a0) + the main-thread-recon section before it (b3a947e4) | THE FE01 facts: allocator `0x5046e304`, ECB+0xE0..0xEC pool contract, entry-vector zero slots (`+0x10`, `+0x18..+0x3c`; `+0x40` fallback ends `b table[0]`), the FE01→retry-spin frontier under SS_NW_MM_POOL=1, the 68k retry stub `0x10008fb0` (`dc.w $FE07; bne.b +2; rte`/`jmp 0x500049c4`), the TVector `0x500cef8c`, `[r3+0xd8]` current-record link at `[ECB+0x710]+0xd8`, the SS_M6A_USER_MSR zero-page-slide note, the r24-ring/probe methodology |
+| `docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md` | THE ongoing-entry design: table[0]/slot semantics (§1.2–1.3), NK save/restore protocol (§2), R1–R6 requirement list (§4), rung ladder (§5), PROBE-O1/O2/O4; the R3 ongoing-arm decision and the `[KDP+0x5f0/4]` mirror wrinkle. **Task 0's addendum lands here.** |
+| `docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` — "MPLibrary bail NAMED" section (commit 36f048a0) + the main-thread-recon section before it (b3a947e4) | THE FE01 facts: allocator `0x5046e304`, ECB+0xE0..0xEC pool contract, the entry-vector table, the FE01→retry-spin frontier under SS_NW_MM_POOL=1, the 68k retry stub `0x10008fb0` (`dc.w $FE07; bne.b +2; rte`/`jmp 0x500049c4`), the TVector `0x500cef8c`, `[r3+0xd8]` current-record link at `[ECB+0x710]+0xd8`, the SS_M6A_USER_MSR zero-page-slide note, the r24-ring/probe methodology + its corrections (SS_JIT_WATCH_ADDR parses hex, needs SS_JIT_TRACE_RING=1) |
 | `docs/planning/machine/M6A-DR-HANDOFF-ANALYSIS.md` | DR dispatch geometry + register map (r24/r29/r30/r31/r1/r25/r27, cr2), UserModeMSR `0x0000D032` history, scheduler/restore anatomy (§2.4), rung-1 results |
 | `docs/planning/machine/M3A-ENTRY-TABLE.md` | KDP-shim entry contract, `[KDP+0x65c]/[0x660]` live values, EE deferral semantics, carry-forwards (syscall_entry unresolved — descope active) |
-| `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` §2.8 | Background obstacle map only (Phase 1–2 framing; the sc anomaly context) — NOT a spec for this plan |
-| `SheepShaver/src/rom_patches.cpp` (`PatchROM_NW_trampoline` :714–889, SS_NW_MM_POOL block :794–826, SS_M6A_USER_MSR block :829–858, vector stop stubs :862–875) + `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` (`[NW-TRAMP]` :1737–2090, KDP/ECB seeds :1973–2069, `deliver_pending_dec_exception` :768ff) | The live scaffolding every task edits; the guest-side-survives-ECB-rebuild idiom |
+| `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` §2.8 | Background obstacle map only — NOT a spec for this plan |
+| `SheepShaver/src/rom_patches.cpp` (`PatchROM_NW_trampoline` :714–889, SS_NW_MM_POOL block :794–826, SS_M6A_USER_MSR block :829–858, vector stop stubs :862–875) + `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` (`[NW-TRAMP]` ~:1746–2090, KDP/ECB seeds :1973–2069, Hnfo seeding :1882–1898, `deliver_pending_dec_exception` :768ff) | The live scaffolding every task edits; the guest-side-survives-ECB-rebuild idiom |
 
 ## Codebase facts (carried; implementers re-verify sites before editing)
 
 - **The reboot loop is dead under the pool; the frontier is the retry spin.** With
   `SS_NW_MM_POOL=1`: allocator success path executes (`0x5046e324`), `[0xEC]` cycles free,
-  zero reset transitions; FE01 → NK roundtrip → record allocated → return to the 68k stub
-  `0x10008fb0` → FE01 again (~55M blocks/s, comp frozen 3573, exc=0/52/0 DEC deferrals).
-  The TVector `0x500cef8c` never executes (probe: 0 visits). `SS_M6A_USER_MSR=1` on top
-  reproduces the zero-page-slide crash (pc marches to 0x100000) — EE alone is not the unblock.
-- **Pool seeding is guest-side per-entry by necessity**: NK cold-init rebuilds the ECB every
-  cycle, so glue-time seeds don't survive (the Hnfo re-assert precedent). The current seed
-  zeroes `[ECB+0xEC]` (in-use bitmap) on EVERY table[0] entry — harmless under always-cold,
-  **state-destroying once warm re-entry exists**: Task X must keep pool (re)seeding on the
-  COLD arm only.
-- **Entry-vector table** (`0x5046e8c0`, published at `[KDP+0x648]` — glue seeds the mirror
-  value): static branches at `+0x00/04/08/0c/14` (slot semantics per design doc §1.2:
-  start/MM-switch/reset/FE0A/FE0F); `+0x10` and `+0x18..+0x3c` observed zero live;
-  `+0x40` fallback stub ends `b table[0]` (`0x5046e960: 4bffff60`). The design doc's 8-slot
-  table (§1.2, POWERPC_ILLEGAL at 4/6/7) and the recon's 16-slot reading (`+0x3c` is the
-  allocator's no-free-bit target) are NOT fully reconciled — Task 0 owns this (see plan-level
-  contradiction list in the self-review record).
+  **zero reset transitions** — so the FE01 success path already returns to the 68k stub
+  WITHOUT falling through zero slots into table[0] (rev 2 C2: whether ANY zero slot is
+  consumed in the live spin is Q-B/Q-C's question, not a premise). FE01 → NK roundtrip →
+  record allocated → return to `0x10008fb0` → FE01 again (~55M blocks/s, comp frozen 3573,
+  exc=0/52/0 DEC deferrals). The TVector `0x500cef8c` never executes (probe: 0 visits).
+  `SS_M6A_USER_MSR=1` on top reproduces the zero-page-slide crash — EE alone is not the
+  unblock.
+- **(rev 2 C1 — CONFIRMED COLLISION, Task T must fix):** the staged pool base
+  `0x68ff5000` IS the Hnfo scratch (`sheepshaver_glue.cpp:1896–1898` writes
+  `[hnfo_rec+0x08] = irp_base+0x1000 = 0x68ff5000`), and the ROM machine-detect copy-out
+  (ROM+0xAC20 family) writes scratch bytes `+0x10..+0x17` — inside MM save record 0.
+  The "free gap, no other users" comment (rom_patches :805–807) is falsified by the
+  repo's own Hnfo seed. Latent today (machine detect precedes FE01 each cold cycle);
+  corrupting once records hold live contexts. Task T relocates the pool (e.g.
+  `0x68ff5800`) and delivers a **sub-KDP occupancy map** (NKSystemInfo `0x68ff4000+0x120`,
+  IRP banks `+0xDF0..0xEBC`, Hnfo `0x68ff4f00`, Hnfo scratch `0x68ff5000+`, pool, the
+  Task-X scratch word) as a tracked doc table.
+- **(rev 2 C8 — contradiction 1 RESOLVED statically):** the entry-vector table is
+  **16 slots**; `patch_68k_emul` (rom_patches :1524–1539) writes branches at slots
+  0–3 and 5, `POWERPC_ILLEGAL` at 4 and 6–15, and **`POWERPC_ILLEGAL == 0x00000000`**
+  (`include/emul_op.h:26`) — the observed zeros ARE the placeholder. Dump-confirmed at
+  table base (file 0x36e8c0): `48001040 4800113c 48001238 48001334 00000000 4800142c` +
+  ten zero words. `+0x3c` = slot 15 = the allocator's no-free-record target; slot 4
+  (+0x10) is the design doc's "deliberately dead interrupt vector". No collision between
+  those two stories. The design doc's "8 slots" was a truncation — Task 0 Q-B records
+  this resolution in the addendum and focuses on WHICH slots the FE01 success path
+  consumes.
+- **Pool seeding is guest-side per-entry by necessity** (NK cold-init rebuilds the ECB
+  every cycle; the Hnfo re-assert precedent). **(rev 2 C3: the cold-arm-only restriction
+  on zeroing `[ECB+0xEC]` lands IN TASK T**, not X — until X exists, cold-only == every
+  entry, so it's free now and removes the V/W warm-re-entry corruption window.)
 - **The slot-0 stub exits via `[KDP+0x5f0]` = primary-world `0x366080`** (dormant
-  cross-world constant, glue :1986–1987, deliberately left by Wave-1 finding 6). Any rung
-  that makes a stub route live must retarget `[KDP+0x5f0]/[0x5f4]` → `0x50466080` (mirror).
+  cross-world constant, glue :1986–1987). Any rung that makes a stub route live must
+  retarget `[KDP+0x5f0]/[0x5f4]` → `0x50466080` (mirror).
 - **NK save/restore is resume-correct with the M3a shim** (design doc §2): shim saves
   r7–r13, NK saves r14–r31/r1/CR/XER/CTR through r6=ECB; scheduler restore resumes at
-  `r10=r12=restart`. Table[0] is only the first-dispatch/fault route today.
-- **R1 (r1-independent UserModeMSR load) is ALREADY LANDED** in the trampoline
-  (immediates, rom_patches :852–854) — yet MSR-on still crashes; the MSR story across the
-  MM switch is an OPEN question for Task 0, not a settled input.
-- **Trampoline budget**: the 222KB mirror zero run at ROM+0x329b40 has ample room; current
-  code ends ≤ ROM+0x429bb8, stop stubs at 0x429c00/10/20 — new handlers/stubs go above
-  0x429c30, each site verified zero before writing (the existing skip-if-nonzero idiom).
-- **Suite shapes**: machine suite 11/11 binaries; `make test-jit` 353/353 (batch
-  `SS_HARNESS_BATCH=1` inner loop, plain legacy run authoritative per task); e2e-test 122;
-  paravirtual `make e2e` PASS + byte-identical logs.
-- **Standing rules**: per-task commits; §2g locking (no stdio/malloc on bus-lock paths —
-  largely moot here, all guest-side); struct fields appended LAST (c0e33d2b precedent);
-  clean-rebuild awareness — machine-header deps exist since c0e33d2b, but treat any absurd
-  counter as a stale-.o symptom first; boots authorized; no worktrees (one shared checkout —
-  the controller pre-resolves conflicts; NOTE: Tasks T/U/V/W/X all edit
-  `PatchROM_NW_trampoline` and the glue `[NW-TRAMP]` block — run them SEQUENTIALLY).
+  `r10=r12=restart`.
+- **R1 (r1-independent UserModeMSR load) is ALREADY LANDED** (immediates, rom_patches
+  :852–854) — yet MSR-on still crashes; the MSR story is Q-E's, with a TIME-BOX and
+  fallback (rev 2 P5). **(rev 2 C10:** Q-E must also re-verify the PR=1 tolerance —
+  0xd032 sets PR=1; the design doc's residue 4 says JIT tolerance is "assumed benign by
+  precedent, not re-verified post-M3a/M5".)
+- **Trampoline budget (rev 2 C6 corrected):** with pool ON + user_msr ON the trampoline
+  is 40 words ending `0x429be0` — 8 words below the `0x429c00` stop stubs. New
+  handlers/stubs go above `0x429c30`; **every new site gets a real zero check before
+  writing** (the existing idiom only checks tp[0]/tp[1]; the stop stubs were written
+  unchecked — do not copy that).
+- **(rev 2 C4) Table/stub code writes happen at PatchROM time (host-side) ONLY.** The
+  JIT compiles ROM-mirror pages and does not invalidate ROM-range blocks on guest stores;
+  the ROM mirror is not NK-wiped, so the runtime re-assert idiom is unnecessary there.
+  Any runtime code write requires an explicit invalidation story in the task text.
+- **(rev 2 C9) `/tmp/rom901.bin` provenance:** the current file contains the PATCHED
+  entry table (it postdates the trampoline patches). Task 0 re-establishes provenance
+  (fresh SS_DUMP_ROM dump labeled patched; raw-ROM reads need the original .rom or a
+  pre-patch dump) before tagging anything [RAW-ROM].
+- **Canonical gate set (rev 2 P9 — "full gates" below means exactly this):**
+  `make build-ss`; `SS_HARNESS_BATCH=1 make test-jit` AND plain `make test-jit` (both
+  353/353, legacy authoritative); `make -C src/machine test` 11/11 ALL PASS;
+  `make e2e-test` (122); paravirtual `make e2e` PASS + byte-identical (no [NW-*]/pool/
+  switch lines). A task may name a SMALLER set only with a stated reason.
+- **Standing rules**: per-task commits; struct fields appended LAST; stale-.o awareness
+  (machine-header deps exist since c0e33d2b — but rom_patches/glue are NOT covered by
+  those; clean-rebuild after header changes there); boots authorized; one shared checkout.
 
 ## Tasks
 
-### Task 0: FE01/FE02 contract recon (BINDING gate for U/V/W/X — static RE + one probe session, boots authorized)
-The design doc pins the ongoing-entry shape but the MM-switch contracts are open. Pin each
-in a written addendum (append to M6A-ONGOING-ENTRY-DESIGN.md, "Rung 2 contracts" section)
-BEFORE any implementation task freezes:
+### Task 0: FE01/FE02 contract recon (BINDING — gates Tasks T..X; static RE + bounded probe boots)
+Pin each contract in a written addendum (M6A-ONGOING-ENTRY-DESIGN.md, "Rung 2 contracts"
+section). Budget honesty (rev 2 P5): this is N bounded diagnostic boots (probe-PC limit is
+8/run), not "one session" — but each boot ≤60s and each question gets at most 2 boots
+before its residue status is decided.
+- [ ] **(rev 2 C9 first)** Re-establish ROM-dump provenance (patched vs raw) before any
+  [RAW-ROM] tag.
 - [ ] **(Q-A) The 0x220 save-record layout**: capstone the FE01 service from the allocator
   success path (`0x5046e324` onward, glue blocks `0x5046e1a0..e2ec` and beyond) — what the
-  DR itself writes into the record vs what it expects the slot handlers to write; the
-  `[ECB+0x710]+0xd8` current-record link discipline.
-- [ ] **(Q-B) Post-allocator control flow + per-slot semantics**: which entry-vector slots
-  the FE01 success path branches to, in what order, with what register state; reconcile the
-  8-slot vs 16-slot table reading (is POWERPC_ILLEGAL == 0, explaining the observed zeros?
-  re-read `patch_68k_emul` :1426–1448 and the raw-ROM placeholders); name the minimum slot
-  set Task U must populate and what each must do.
-- [ ] **(Q-C) The retry loop's pivot**: why FE01 currently retries — trace the bail after
-  allocation success (zero slot? a flag the stub at `0x10008fb0` polls? FE07 semantics —
-  what opcode service is FE07 and what does its `bne` test?). This names the exact
-  condition Task V must satisfy to break the spin.
+  DR itself writes vs what it expects the NK/slot side to write; the `[ECB+0x710]+0xd8`
+  current-record link discipline; how many records the boot's nesting needs.
+- [ ] **(Q-B) Post-allocator control flow + consumed-slot map**: which entry-vector slots
+  (of the 16; resolution in Codebase facts) the FE01 success path actually consumes, in
+  what order, with what register state. Deliverable includes the **advance enumeration of
+  expected parked-PC stubs** (rev 2 P7) and records the 8-vs-16 resolution.
+- [ ] **(Q-C) The retry loop's pivot**: why FE01 currently retries — trace the live spin
+  (FE07 semantics: what opcode service is FE07, what does its `bne` test, who sets that
+  state). **This names the exact condition Task V must satisfy — and if that condition is
+  an NK surface beyond slot population + record plumbing + the pinned conventions, the
+  STOP-RULE fires here** (rev 2 P4).
 - [ ] **(Q-D) The TVector entry convention**: MixedMode 68k→PPC calling convention at
-  `0x500cef8c` (TVector = entry+RTOC: which registers carry procInfo args per
-  procInfo=0xE1, where the return address points, what r1/stack the PPC code gets) — from
-  the FE01 service disassembly + the RoutineDescriptor at `0x10024758`.
-- [ ] **(Q-E) MSR across the switch**: what MSR the PPC code must run under (UserModeMSR
-  `0xD032` family? EE state?), where the transition executes, and the interaction with
-  `SS_M6A_USER_MSR` (root-cause its zero-page slide far enough to decide whether Task V
-  subsumes, fixes, or sidesteps it). Decide guest-side trampoline vs host-side glue for the
-  switch site (default expectation: guest-side, per the architecture note — justify if not).
-- [ ] **(Q-F) FE02 switch-back mechanics**: where FE02 is issued (the MixedMode glue the
-  PPC code returns into?), what it reads from the record, where the 68k resumes, who frees
-  the pool bit.
-- [ ] **Design-doc probe pack rolled in**: [PROBE-O1] table[0] entry census (now in the
-  pool-on regime), [PROBE-O2] who built the restored ctx / is glue's ECB ctx pre-population
-  dead, [PROBE-O4] `[KDP+0x660]` flag consumption — these size Task X's R3 choice.
-- [ ] Gate: the addendum exists, every Q-A..Q-F answer is tagged [RAW-ROM]/[PATCH]/[STATIC]/
-  [PROBE✓] per the house caveat idiom, and open residues are explicitly listed. Capture-only
-  telemetry commits allowed (gates: build-ss; batch + legacy test-jit 353/353; machine 11/11;
-  paravirtual byte-identical). Commit.
+  `0x500cef8c` — registers/procInfo args, return address, r1/stack — from the FE01 service
+  disassembly + the **RoutineDescriptor at `0x10024de8`** (the procDescriptor/TVector
+  pointer is `0x10024758` — rev 2 C7). **Deliverable MUST include a register →
+  expected-value/class table; Task V's probe gate is exact conformance to it** (rev 2 P7).
+- [ ] **(Q-E) MSR across the switch — TIME-BOXED (rev 2 P5)**: what MSR the PPC code runs
+  under, where the transition executes (guest-side default; justify if not), the PR=1
+  tolerance re-verification (rev 2 C10), and the SS_M6A_USER_MSR zero-page slide. Budget:
+  the standard 2 boots + static analysis. **Fallback if not root-caused in budget:** Task V
+  implements switch-local MSR handling per the FE01 disassembly only; SS_M6A_USER_MSR stays
+  quarantined as a known-broken diagnostic (default off, so documented in Task Z); the
+  slide is a named residue and explicitly NOT a Task V blocker.
+- [ ] **(Q-F) FE02 switch-back mechanics**: where FE02 is issued, what it reads from the
+  record, where the 68k resumes, who frees the pool bit.
+- [ ] **Probe pack**: [PROBE-O1] table[0] entry census (pool-on regime — BASELINE only;
+  Task X re-censuses post-W, rev 2 P1), [PROBE-O2] who built the restored ctx, [PROBE-O4]
+  `[KDP+0x660]` flag consumption.
+- [ ] **Gate (rev 2 P3 — the blocking-answer table):** the addendum exists; every answer
+  tagged [RAW-ROM]/[PATCH]/[STATIC]/[PROBE✓]; and the BLOCKING answers are pinned (not
+  residues): **Task T blocks on Q-A's record-count answer (pool sizing); U blocks on Q-B;
+  V blocks on Q-C + Q-D (+ Q-E verdict-or-fallback); W blocks on Q-F; X blocks on O1
+  baseline + O4 (O4 residue ⇒ R4 deferred, recorded — non-blocking).** A residue on a
+  blocking answer invokes the stop-rule — no improvisation. Capture-only telemetry commits
+  allowed (full gates). Commit the addendum.
 
-### Task T: SS_NW_MM_POOL → profile-provisioned default
-- [ ] Promote the pool seed from env-gated diagnostic to the newworld profile default
-  (flag inverts to an opt-OUT override `SS_NW_MM_POOL=0` for A/B; paravirtual/OldWorld
-  untouched — gate on `MachineProfileIsNewWorld()` as today).
-- [ ] ECB-rebuild-survival story stays: guest-side trampoline seeding, but RESTRUCTURED for
-  Task X compatibility — pool base/existence words may re-assert per cold entry; the
-  in-use bitmap `[ECB+0xEC]` is zeroed on the COLD arm only (document the invariant at the
-  seed site; until Task X lands, cold-only == every entry, unchanged behavior).
-- [ ] Pool sizing: re-verify 4 records suffices for the boot's nesting (Task 0 Q-A's
-  record-link discipline informs; if unclear, keep 4 + a loud allocator-exhaustion stop via
-  Task U's `+0x3c` handler rather than guessing bigger).
-- [ ] Gates: build-ss; batch + legacy test-jit 353/353; machine 11/11; e2e-test 122;
-  paravirtual `make e2e` PASS + byte-identical (no `[NW-TRAMP]`/pool lines on paravirtual);
-  one newworld diagnostic boot confirming default-on pool = no reboot loop (zero reset
-  transitions in the r24 ring). Commit.
+### Task T: SS_NW_MM_POOL → profile-provisioned default (+ the collision fix + the safety stop)
+- [ ] **(rev 2 C1) Relocate the pool** off the Hnfo scratch per the occupancy map (e.g.
+  base `0x68ff5800`); write the **sub-KDP occupancy map** into the Task-0 addendum doc
+  section (tracked, with the Task-X scratch word reserved); fix the falsified "no other
+  users" comment at the seed site.
+- [ ] Promote the pool seed to the newworld profile default (env flips to opt-OUT
+  `SS_NW_MM_POOL=0` for A/B; paravirtual/OldWorld untouched). **(rev 2 P11/Task-Z hook:**
+  `SS_NW_MM_POOL=1` remains valid explicit-on — document the disposition.)
+- [ ] **(rev 2 C3) The `[ECB+0xEC]` zeroing moves inside the cold-arm-only guard NOW**
+  (cold-only == every entry until Task X lands — free today, removes the V/W warm
+  re-entry corruption window). Document the invariant at the seed site.
+- [ ] **(rev 2 P2) The `+0x3c` (slot 15) allocator-exhaustion LOUD STOP lands HERE** (one
+  verify-zero-first branch write to a unique parked-PC stub above 0x429c30) — T's pool
+  sizing fallback is then self-contained: if Q-A's nesting answer is unclear, keep 4
+  records + the loud stop, never guess bigger.
+- [ ] Gates: full gates + one newworld diagnostic boot confirming default-on pool = zero
+  reset transitions in the r24 ring. Commit.
 
-### Task U: NK entry-vector slot population
-- [ ] Per Task 0's pinned slot map, write real handlers for the consumed slots (guest-side
-  stubs in the mirror zero run, branches written into the table — same verify-zero-first
-  idiom). **Minimum regardless of recon outcome**: the allocator's no-free-record target
-  `+0x3c` becomes a loud diagnosable stop (`bra/b *`-style unique parked PC + probe-able),
-  never a silent zero-fall-through into table[0].
-- [ ] Slots NOT consumed by the FE01 path stay as loud stops (unique PCs), not zeros —
-  every future fall-through becomes signal (the slot-4 "treat a trap as signal" note,
-  design doc §6.5).
-- [ ] Each slot handler comments cite the Task-0 addendum section. All inside
-  newworld/lenient gating.
-- [ ] Gates: build-ss; batch + legacy test-jit 353/353; machine 11/11; paravirtual
-  byte-identical; diagnostic boot shows the `+0x3c` path no longer reached (pool provisioned)
-  and no NEW parked PCs (or: parked PCs are the expected pre-Task-V stops, recorded). Commit.
+### Task U: NK entry-vector slot population (the Q-B consumed set)
+- [ ] Per Q-B's pinned consumed-slot map: real handlers for consumed slots (guest-side
+  stubs in the mirror zero run, **written at PatchROM time — rev 2 C4**; verify-zero-first
+  on every new site, rev 2 C6).
+- [ ] Slots NOT consumed stay as loud stops with unique PCs (never zeros) — the expected
+  parked-PC set is **Q-B's advance enumeration; the gate is parked-PCs ⊆ that list**
+  (rev 2 P7 — no post-hoc "expected").
+- [ ] Each handler comments cite the addendum section. All inside newworld/lenient gating.
+- [ ] Gates: full gates (e2e delta: e2e-test only, reason: no emulator-behavior change
+  for paravirtual beyond prior tasks' verified inertness); diagnostic boot: `+0x3c` stop
+  not hit; parked-PC subset check. Commit.
 
-### Task V: FE01 switch completion — enter the TVector
-- [ ] Implement the 68k→PPC switch per Task 0 Q-A/Q-B/Q-D/Q-E: complete the save-record
-  contents the DR doesn't write itself (if any), establish the MixedMode register state,
-  perform the MSR transition at the pinned site (riding execute_mtmsr's EE-edge re-raise if
-  EE rises — the M3a deferral machinery contract), branch to the TVector. Env-gated
+### Task V: FE01 switch completion — enter the TVector (+ FE07 ownership)
+- [ ] Implement the 68k→PPC switch per Q-A/Q-B/Q-D/Q-E: complete the save-record contents
+  the DR doesn't write itself, establish the MixedMode register state, perform the MSR
+  transition at the pinned site (riding execute_mtmsr's EE-edge re-raise — verified
+  contract, ppc-execute.cpp:1321–1347), branch to the TVector. Env-gated
   `SS_NW_MM_SWITCH=1`, default OFF until Task Y.
-- [ ] Resolve the SS_M6A_USER_MSR interaction per Q-E's verdict (subsume/fix/retire the
-  flag — documented either way; the zero-page slide must be explained, not papered over).
-- [ ] Controlled-probe sub-contract (PASS/FAIL within this task's power): on a diagnostic
-  boot with the switch on, `SS_PROBE_PC=0x500cef8c` shows ≥1 visit with a sane register
-  dump matching the Q-D convention. (What the TVector code DOES afterward is diagnostic.)
-- [ ] Gates: build-ss; batch + legacy test-jit 353/353; machine 11/11; e2e-test 122;
-  paravirtual byte-identical; the probe sub-contract above. Commit.
+- [ ] **(rev 2 P8) FE07 is THIS task's scope**: whatever the FE07 service must return for
+  the retry stub's `bne` to fall through, per Q-C — if Q-C named an out-of-scope NK
+  surface, the stop-rule already fired in Task 0.
+- [ ] Resolve the SS_M6A_USER_MSR interaction per Q-E's verdict-or-fallback (subsume / fix
+  / quarantine — documented either way).
+- [ ] Probe sub-contract (PASS/FAIL): `SS_PROBE_PC=0x500cef8c` shows ≥1 visit with the
+  register dump conforming to **Q-D's expected-register table** (rev 2 P7 — "sane"
+  deleted). What the TVector code DOES afterward is diagnostic.
+- [ ] Gates: full gates + the probe sub-contract. Commit.
 
 ### Task W: FE02 switch-back
-- [ ] Per Task 0 Q-F: the return path — restore the 68k context from the record, clear the
-  in-use bit, resume the 68k after the $AAFE site with the convention's result registers.
-  Same gating as Task V (`SS_NW_MM_SWITCH` covers the pair).
-- [ ] Round-trip sub-contract (PASS/FAIL): one full FE01→TVector→FE02 round trip observed
-  (probe pair: TVector visit + post-$AAFE 68k PC visit), `[ECB+0xEC]` returns to its
-  pre-call value, guest[0]/[4] unmodified across the round trip
-  (`SS_JIT_WATCH_ADDR=0,4`).
+- [ ] Per Q-F: restore the 68k context from the record, clear the in-use bit, resume the
+  68k after the $AAFE site with the convention's result registers. `SS_NW_MM_SWITCH`
+  covers the pair.
+- [ ] Round-trip sub-contract (PASS/FAIL): one full FE01→TVector→FE02 round trip — TVector
+  probe visit + **the post-$AAFE 68k PC observed in the SS_DR_R24_RING tail** (rev 2 C5 —
+  68k PCs are not probe-able); `[ECB+0xEC]` returns to its pre-call value; guest[0]/[4]
+  unmodified (`SS_JIT_WATCH_ADDR` — hex values, with SS_JIT_TRACE_RING=1).
 - [ ] Gates: as Task V. Commit.
 
 ### Task X: real ongoing entry at table[0] (design doc R2+R3+R4)
-- [ ] R2 discriminator: scratch word in the sub-KDP pool (mapped+zeroed, data-only — NOT
-  the ROM zero run, SMC/JIT-invalidation hazard per design doc), cold-once semantics; pool
-  in-use-bitmap zeroing moves strictly inside the cold arm (Task T invariant).
-- [ ] R3 ongoing arm: target per Task 0's [PROBE-O1] census + Q-B — stub route
-  (`b 0x5046f900` + retarget `[KDP+0x5f0]/[0x5f4]` → `0x50466080`, nest-protocol balanced)
-  vs direct re-dispatch (`b 0x50466080`); the design doc's decision rule applies (if
-  census says nobody legitimately re-enters, keep always-cold + tripwire counter — record
-  the choice). R4: seed `[KDP+0x660]` per [PROBE-O4]'s pinned bit.
-- [ ] R5 (nest protocol) only if the chosen route requires balance — otherwise note as
-  residue (design doc says cosmetic today).
-- [ ] Sub-contracts (PASS/FAIL): cold path runs exactly once per boot (scratch-flag probe);
+- [ ] **(rev 2 P1) PRECONDITION: post-Task-W re-census** — re-run the PROBE-O1 pack with
+  the switch on; the R3 decision applies to the RE-CENSUS, not Task 0's baseline (the
+  fault-path re-entries the baseline saw are removed by U–W).
+- [ ] R2 discriminator: scratch word in the sub-KDP pool **at the occupancy-map-reserved
+  address** (mapped+zeroed, data-only — NOT the ROM zero run, SMC/JIT hazard), cold-once
+  semantics; the Task-T cold-arm invariant now becomes load-bearing.
+- [ ] R3 ongoing arm per the re-census + Q-B: stub route (`b 0x5046f900` + retarget
+  `[KDP+0x5f0]/[0x5f4]` → `0x50466080`; nest protocol: slot-0 saves caller r7–r13 and
+  increments the nest counter — the decrement site is part of Q-F's answer) vs direct
+  re-dispatch (`b 0x50466080`) vs keep-always-cold + tripwire counter if the re-census
+  says nobody legitimately re-enters. Record the choice + evidence. R4: seed
+  `[KDP+0x660]` per [PROBE-O4]'s pinned bit (O4 residue ⇒ R4 deferred, recorded).
+- [ ] R5 (nest balance) only if the chosen route requires it — else named residue.
+- [ ] Sub-contracts (PASS/FAIL): cold path exactly once per boot (scratch-flag probe);
   guest[0]/[4] never rewritten after first entry (watch); jDR/comp still growing across
-  any table[0] re-entries.
-- [ ] Gates: as Task V, plus `SS_M6A_USER_MSR`/MSR-state regression per Task V's verdict.
-  Commit.
+  re-entries.
+- [ ] Gates: as Task V + MSR-state regression per V's verdict. Commit.
 
-### Task Y: rung-2 acceptance (boots authorized) — honest gating
-- [ ] Flip `SS_NW_MM_SWITCH` machinery to the newworld profile default (env opt-out kept);
-  re-run the full gate set.
-- [ ] **PASS/FAIL gates (in the plan's power):** (a) build-ss; batch + legacy test-jit
-  353/353; machine 11/11; e2e-test 122; paravirtual `make e2e` PASS + byte-identical;
-  (b) pool provisioned by default (allocator success path, no `+0x3c` stop hit);
-  (c) consumed entry-vector slots populated and executed (probe counters nonzero);
-  (d) the controlled FE01→TVector→FE02 round trip (Task V/W sub-contracts) holds on the
-  default-config boot; (e) cold-start exactly once + guest[0]/[4] stable (Task X
-  sub-contracts).
-- [ ] **DIAGNOSTIC OUTCOMES (recorded, NOT gates):** the FE01 retry spin gone;
-  MPLibrary's parcel init returns; the chain reaches the CodeFragmentMgr lookup
-  (`0xf46e`); boot advances past the parcel calls. Competing next walls are already named
-  and EXPECTED: (i) MPLibrary's real init work is NK syscalls — the unresolved
-  `syscall_entry` (vector 0xC00, currently `SS_EXC_SC=abort`) plausibly fires immediately
-  (that abort is SIGNAL: capture SRR0/SRR1 + the sc site, per the M3a descope note);
-  (ii) EE/DEC delivery during PPC-native execution (the deferral counters say);
-  (iii) further unprovisioned NK surfaces. On non-advancement the deliverable is a
-  root-caused frontier in the recon-doc idiom (ring tail + probes + capstone of the bail).
+### Task Y: rung-2 acceptance (boots authorized) — honest gating + rollback (rev 2 P6)
+- [ ] **PASS/FAIL gates first, flip LAST.** Run with `SS_NW_MM_SWITCH=1` env-on:
+  (a) full gates; (b) pool provisioned by default, no `+0x3c` stop hit; (c) **the slots
+  Q-B named consumed (if any) executed** (probe counters nonzero; vacuous-pass not
+  allowed — if Q-B found none consumed, gate (c) is N/A and recorded as such — rev 2 C2);
+  (d) the FE01→TVector→FE02 round trip holds (V/W sub-contracts) on this config;
+  (e) cold-start exactly once + guest[0]/[4] stable (X sub-contracts).
+- [ ] **Fix budget (rev 2 P6):** telemetry/capture commits freely; at most ONE small
+  in-scope fix iteration per falsified contract (consistent with the one-iteration rule),
+  full gates re-run after any fix. Acceptance-time unlocks (the CV-10 pattern) are
+  expected, not violations — but each gets its own gated commit + addendum falsification
+  entry.
+- [ ] **THEN flip** `SS_NW_MM_SWITCH` to the newworld profile default (env opt-out kept)
+  and re-run (a)-(e). **Any gate failure after the flip ⇒ the flip is REVERTED in the
+  same task (machinery stays env-gated), the failure recorded — the milestone does not
+  ship default-on with red gates.**
+- [ ] **DIAGNOSTIC OUTCOMES (recorded, NOT gates):** the FE01 retry spin gone; MPLibrary's
+  parcel init returns; the chain reaches the CodeFragmentMgr lookup (caller region file
+  0xf46e, observed via the r24 ring); boot advances past the parcel calls. Named expected
+  next walls: (i) MPLibrary's real init work hitting the unresolved `syscall_entry`
+  (vector 0xC00 — the abort is SIGNAL: capture SRR0/SRR1 + the sc site); (ii) EE/DEC
+  delivery during PPC-native execution; (iii) further unprovisioned NK surfaces. On
+  non-advancement: a root-caused frontier in the recon-doc idiom.
 - [ ] Record results in M6A-ONGOING-ENTRY-DESIGN (results section) + M6A-WAVE2-SHIM-RECON
   (frontier update). Commit.
 
 ### Task Z: docs
-- [ ] DIAGNOSTICS.md: new/changed knobs (`SS_NW_MM_POOL` polarity flip, `SS_NW_MM_SWITCH`,
-  SS_M6A_USER_MSR disposition); CHANGELOG (acceptance numbers); MACHINE-LAYER-PLAN M6 row
-  (rung 2 landed; next = syscall staging / shim wave per Task Y's captured frontier);
-  ROADMAP cross-check; LEARNINGS if non-obvious; cross-tracker grep for stale
-  "always-cold"/"SS_NW_MM_POOL default OFF" statements. Commit.
+- [ ] DIAGNOSTICS.md: knob changes (`SS_NW_MM_POOL` default flip + the `=1` explicit-on
+  disposition — rev 2 P11; `SS_NW_MM_SWITCH`; SS_M6A_USER_MSR disposition per Q-E);
+  CHANGELOG (acceptance numbers, the pool-collision fix); MACHINE-LAYER-PLAN M6 row;
+  ROADMAP cross-check; LEARNINGS (the pool-collision lesson: "free gap" claims need an
+  occupancy map, and the falsifying writer was our own earlier commit); cross-tracker
+  grep for stale "always-cold"/"SS_NW_MM_POOL default OFF"/8-slot-table statements.
+  Commit.
 
-## Stop-rule
-Two triggers, per MACHINE-LAYER-PLAN §9: (1) if Task 0 shows FE01 completion requires the
-NK's full emulator-context-creation surface (the handoff memo's rung-5 synthesized
-Trampoline, L-class) rather than slot population + record plumbing, STOP after the addendum
-and re-scope — no tunneling. (2) If Task Y's diagnostic shows MPLibrary advances past FE01
-but dies on the syscall entry or another NK service, that is the NEXT milestone's named
-frontier — capture and stop; do not extend this plan into vector-0xC00 staging beyond the
-existing abort-with-capture. Within tasks: one design-iteration maximum per pinned contract
-(if a Q-A..Q-F answer proves wrong live, record the falsification and return to Task 0
-scope, don't guess twice).
+## Stop-rule (rev 2 P4/P10 — broadened + operationalized)
+Triggers, per MACHINE-LAYER-PLAN §9:
+1. **(broadened)** If Task 0 shows FE01 completion requires **any NK surface beyond slot
+   population + save-record plumbing + the pinned register/MSR conventions** (whether the
+   full L-class context-creation Trampoline or an unscoped M-class service behind FE07/
+   Q-C), STOP after the addendum and re-scope — the recon itself is the tripwire.
+2. If Task Y's diagnostic shows MPLibrary advances past FE01 but dies on the syscall entry
+   or another NK service, that is the NEXT milestone's named frontier — capture and stop;
+   no vector-0xC00 staging beyond the existing abort-with-capture.
+3. **(P3)** A residue on a BLOCKING Task-0 answer (the blocking-answer table) invokes
+   trigger 1's re-scope, not improvisation.
+
+Within tasks — the one-iteration rule, operationalized (P10): if a pinned contract is
+falsified live, (a) reopen the addendum with a dated falsification entry; (b) ONE
+additional bounded probe boot to re-pin; (c) resume the falsified task with the corrected
+contract. A SECOND falsification of the same contract escalates to the stop-rule.
 
 ## Self-review record
-Spec coverage: all six authoritative inputs consumed; the coordinator's T/U/V/W/X seams map
-to Tasks T/U/V/W/X with Task 0 carrying every open design question as recon (Q-A..Q-F +
-PROBE-O1/O2/O4). Honest gating separates suite/probe sub-contracts (PASS/FAIL) from boot
-advancement (diagnostic). Wave-2-deferred backlog (OpenPIC model+tests, tm_task/via_int
-dispositions, io_poll retirement, the shim wave) is explicitly OUT — parallel backlog, not
-this plan. **Contradictions flagged for the red team:** (1) design doc §1.2's 8-slot table
-with POWERPC_ILLEGAL at slots 4/6/7 vs the recon's 16-slot reading with zeros at
-`+0x18..+0x3c` and `+0x10` listed among NK-populated slots — possibly reconciled by
-POWERPC_ILLEGAL==0, but slot 4's "deliberately dead interrupt vector" story and the
-fail-slot `+0x3c` story must not collide (Task 0 Q-B). (2) The design doc's "table[0]
-re-entry is probably rare-to-never" ([PROBE-O1] framing) is superseded by the recon: the
-FE01 zero-slot fall-through re-enters table[0] constantly — but that route is the FAULT
-path this plan removes, so the census question revives in the post-fix regime. (3) Design
-doc R1 is already landed (r1-independent MSR load in rom_patches) yet `SS_M6A_USER_MSR=1`
-still dies (zero-page slide) — the doc's "R1 un-blocks Boot B" prediction is falsified;
-the MSR story is reopened as Q-E. (4) Naming: this plan's "rung 2" (coordinator scope) is
-strictly larger than the design doc's Rung 2 (R2+R3+R4); the mapping is stated in Task X.
-Sequencing risk named: T/U/V/W/X all edit the same trampoline/glue functions — sequential
-execution mandated.
+Spec coverage: all six authoritative inputs consumed; coordinator seams T/U/V/W/X mapped;
+every open design question carried as Task-0 recon with a blocking-answer table. Honest
+gating separates suite/probe sub-contracts (PASS/FAIL, each falsifiable in advance) from
+boot advancement (diagnostic). Wave-2-deferred backlog (OpenPIC model+tests, tm_task/
+via_int dispositions, io_poll retirement, the shim wave) is OUT — parallel backlog.
+Sequencing: strictly one task at a time (shared trampoline/glue sites).
 
 ## Red-team record
-_To be filled (red-team round happens after this draft)._
+
+**Round 1 (pre-implementation, two reviewers, 2026-06-11) — verdict: restructure-then-GO;
+all findings folded as rev 2 markers in-line.**
+
+*Process reviewer* (2 Critical, 6 Major, 4 minor): **P1** Task X's R3 decision used a
+census Tasks U–W invalidate → post-W re-census precondition. **P2** "gates U/V/W/X" was
+dishonest (T depends on Q-A; T's fallback cited U's stub) → Task 0 gates T..X; the +0x3c
+loud stop moved into T. **P3** no must-pin vs may-be-residue distinction → the
+blocking-answer table in Task 0's gate. **P4** stop trigger 1 too narrow (the FE07
+M-class-service middle case) → broadened, recon as tripwire. **P5** Q-E unbounded → time-box
++ written fallback + honest boot budget. **P6** Task Y had no flip rollback or fix budget
+(the CV-10 lesson) → flip-last + revert-on-red + one-fix-per-falsified-contract budget.
+**P7** unfalsifiable gates ("sane registers"; post-hoc "expected" parked PCs) → Q-D
+expected-register table; parked-PCs ⊆ Q-B's advance enumeration. **P8** FE07 had no
+implementation owner → Task V. **P9** inconsistent gate sets → canonical set + named
+deltas. **P10** return-to-Task-0 operationalized. **P11** SS_NW_MM_POOL polarity
+disposition documented. **P12** reviewability: 0xf46e observation method, nest-protocol
+clause, dispatch-one-task-at-a-time line.
+
+*Contracts reviewer* (1 Critical, 4 Major, 7 minor; all load-bearing recon numbers
+byte-verified — allocator/fallback/table contents dumped and matched): **C1 CRITICAL —
+the 0x68ff5000 pool/Hnfo-scratch collision is REAL** (glue :1896–1898; machine-detect
+writes scratch +0x10..0x17 inside record 0) → Task T relocates the pool + occupancy map.
+**C2** the Goal's spin mechanism was the dead pre-pool fault path → reworded as
+hypothesis; gate (c) made conditional. **C3** V/W-before-X warm-re-entry window with the
+every-entry [0xEC] wipe → cold-arm guard pulled into Task T. **C4** runtime code writes
+into JIT-compiled ROM pages → PatchROM-time-only constraint. **C5** Task W's second
+probe leg was a 68k PC (not probe-able) → r24-ring observation. **C6** trampoline budget
+corrected (40 words → 0x429be0 with both flags); real zero checks mandated. **C7**
+RoutineDescriptor address corrected (0x10024de8). **C8** the 8-vs-16-slot contradiction
+RESOLVED statically (16 slots; POWERPC_ILLEGAL==0; no slot-4/slot-15 collision). **C9**
+rom901.bin provenance drift → Task 0 re-establishes. **C10** PR=1 tolerance added to Q-E.
+**C11** switch⇒pool dependency stated. Verified clean: FE01 facts faithful, mtmsr EE-edge
+contract real (ppc-execute :1321–1347), paravirtual gating complete, design-doc
+representation accurate.

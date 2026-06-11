@@ -136,6 +136,7 @@ before construction streams hit them).
 | Oracle SHA citation + documented divergences | Behavioral extraction is reviewable only if every divergence from the donor is written at the site |
 | Instrument subtleties get documented AND fixed | Ring dedup masked round-trip evidence and nearly produced a wrong park-shape verdict |
 | The baseline is part of the gate | "Byte-identical" must enumerate its fields (jitter counters excluded) or it's unfalsifiable |
+| Verify a slot is truly dead before stopping it — "unknown" ≠ "dead" | M6a rung-2 Task U replaced the mirror entry-vector slots' raw `twi` words with loud parked stops on the theory the slots were dead/unwritten; FE1F Task 0 (rev 3) falsified it — the `twi` placeholders ARE the design (trap-to-0x700 NK-dispatch trampolines, each encoding its slot id), so the stops had replaced load-bearing trap instructions. The "dead slots get loud stops" policy is retired; restore-and-route is the fix (FE1F plan rev 3) |
 
 ## 5. Roles and report contracts
 

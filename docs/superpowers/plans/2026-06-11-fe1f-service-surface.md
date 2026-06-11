@@ -510,3 +510,53 @@ pivoted recon (what the real init installs), PatchROM-time, env-gated; Task 0's 
 pack confirms the static chain ([ECB+0x9dc]=0x5046e8e0, slot 8 zero, body route) and
 pins the slot-8 service contract. Everything else (gates, flip-last, stop-rule)
 carries with the corrections above.
+
+## Rev 3 (2026-06-11) — Task-0 re-scope RATIFIED: the trap-placeholder mechanism (BINDING; supersedes the rev-2 population framing)
+
+Task 0 (addendum `74fdc067`) falsified the population framing entirely and pinned the
+real mechanism: **nobody writes slot 8 — the raw ROM's `twi 31,r31,8` placeholder IS
+the design.** On real HW the slot traps vector 0x700 (program) → NK handler
+`[KDP+0x37c]`=0x50314700 [PROBE✓] → exit-pointer dispatch `[KDP+0x610]`=0x5031aca0
+[PROBE✓, NK-published, already runs on our boot] = the same NK selector-service
+gateway the sc surface traverses 5×/boot. The 16 placeholder slots are
+trap-to-NK-dispatch trampolines (each `twi` encodes its slot id); this also closes
+rung 2's `[ECB+0x9e0]`-writer mystery (the exit-pointer publication cluster at file
+0x3117xx is the real builder). Q-F5: the selector-0x31 service (0x5031d204, 'EVNT'
+kernel-pool allocator) is fully staged; seed-class fix list EMPTY — **the fix is
+route-class.**
+
+**Ratified Task A re-shape (the coordinator/plan-owner decision, trigger-1
+discipline observed):**
+1. **Restore the raw `twi` words** in the mirror entry-vector slots that rung-2
+   Task U overwrote with parked stops (slots 4, 6–14; slot 15 keeps Task T's
+   allocator-exhaustion stop only if Q-F2's evidence says slot 15 is NOT a
+   trap-placeholder on real HW — re-verify against the raw image; if it is one,
+   restore it too and the exhaustion diagnostics move to telemetry). The
+   verify-EXPECTED discipline applies (current bytes == the Task-U stop branches).
+   Rung-2's "dead slots get loud stops" policy is RETIRED with a dated note in the
+   design doc — the slots were never dead; the raw placeholders are load-bearing.
+2. **The 0x700 delivery surface** (the sc-surface idiom one vector over):
+   `EXC_PROGRAM` in exc_core (entry table gains `program_entry`, appended last;
+   masks per PEM — same LAW discipline), `NW_PROGRAM_ENTRY_DEFAULT = 0x50314700`
+   ([KDP+0x37c]'s published value, primary copy per the publication precedent), and
+   the powerpc_cpu seam: the `twi`/trap-instruction execute path gains a
+   profile-gated newworld arm (the `execute_syscall` precedent EXACTLY — §2d
+   honesty: a slow-path seam, no JIT changes; verify where twi currently lands —
+   likely the illegal/program default — and route trap-taken to
+   `ExcEnter(EXC_PROGRAM)`). SRR1 trap-bit semantics per PEM (program-exception
+   SRR1 flags: trap bit 0x00020000-class — pin from the PEM/oracle during
+   implementation, test-pinned in exc_core).
+   Env-gated `SS_NW_FE1F_SURFACE=1` covers the pair (restore + delivery).
+3. Task A's probe gate (rev-2 P-C2 carried, re-aimed): the callout-entry conformance
+   (baseline-true, annotated) PLUS the CHANGE observables — the slot-8 word ==
+   0x0fff0008 (probe field), and ≥1 `[EXC] PROGRAM delivered` with
+   SRR0=the twi address, entry=0x50314700.
+4. Task B unchanged in spirit (the round trip through the REAL gateway; the return
+   predicate r4=EVNT-pointer/r3=0; the ExpandMem slot 0x100037d8 fill — the pinned
+   watch address), plus the H1-park-gone observable (db6c unmarshal visits ≥1).
+5. The body's "no powerpc_cpu changes" line is SUPERSEDED by this rev (the seam is
+   the precedented sc-class change); the HLE prohibition stands unchanged.
+
+Mirror-slot typo corrected: the FE1F dispatch slot's live mirror address is
+**0x504FF0F8** (0x50480000 | 0xFE1F<<3); rev-2's 0x504F70F8 was a transcription slip
+(the static file offset 0x3ff0f8 and body 0x36db44 were always correct).

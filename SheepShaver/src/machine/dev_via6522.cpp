@@ -2,8 +2,10 @@
  *  dev_via6522.cpp - VIA 6522 timer/IFR surface, M2 scope (SPIKE-S3 §1.5/§4.2).
  *  Timers use an explicit state machine (IDLE -> RUNNING -> FIRED). RUNNING->FIRED
  *  latches the IFR bit exactly once — eagerly via a bound EventScheduler callback,
- *  or lazily on the next register read (idempotent backstop). Cuda SR protocol =
- *  loud stub. Conformance notes N6/N7/N8 + T1CL-read ack (rev 2 S9) resolved.
+ *  or lazily on the next register read (idempotent backstop). Cuda SR protocol:
+ *  forwarded to a bound CudaDevice (M3b Task 3, VIABindCuda — seam contract in
+ *  the header); unbound keeps the M1 loud stub exactly (paravirtual/unit tests).
+ *  Conformance notes N6/N7/N8 + T1CL-read ack (rev 2 S9) resolved.
  *
  *  MacIO register layout: reg N at base + N*0x200 (stride 0x200, 16 registers).
  *  Reachable from the Mach handler thread: no malloc, no stdio (MACHINE-LAYER-PLAN
@@ -25,6 +27,7 @@
  */
 
 #include "dev_via6522.h"
+#include "dev_cuda.h"
 #include "event_sched.h"
 #include <stdio.h>    // snprintf only (buffer formatting — no FILE* I/O; §2g note in header)
 #include <string.h>
@@ -33,6 +36,7 @@
 enum { R_ORB=0, R_ORA=1, R_DDRB=2, R_DDRA=3, R_T1CL=4, R_T1CH=5, R_T1LL=6, R_T1LH=7,
        R_T2CL=8, R_T2CH=9, R_SR=10, R_ACR=11, R_PCR=12, R_IFR=13, R_IER=14, R_ORA_NH=15 };
 
+#define IFR_SR 0x04
 #define IFR_T2 0x20
 #define IFR_T1 0x40
 
@@ -60,6 +64,26 @@ static void cuda_touch(VIA6522 *v, const char *what)
 		v->cuda_warned = true;
 		v->cuda_warn_what = what;   // static string; pending until taken
 	}
+}
+
+// --- M3b Task 3: Cuda attachment seam (full contract in the header) -------------
+// Apply seam flags to the IFR DIRECTLY (M6: every seam call already runs under
+// the non-recursive bus region lock — locked_call would deadlock). Clear before
+// raise: CudaSRRead/Written return CLEAR, the mutators' consume-once latch
+// returns RAISE; the two never arrive together today, but the order is safe
+// if they ever do (a raise must not be lost to a stale clear).
+// Timing (plan rev 2 M4, the seam-side record): lazy-only — dev_cuda arms no
+// scheduler one-shots, CudaSettle on the two poll surfaces (R_ORB/R_IFR reads)
+// is the primary completion mechanism, and no allocation happens on fault paths.
+static inline void cuda_apply(VIA6522 *v, uint8_t flags)
+{
+	if (flags & CUDA_SEAM_CLEAR_SR_INT) v->ifr_latched &= ~IFR_SR;
+	if (flags & CUDA_SEAM_RAISE_SR_INT) v->ifr_latched |= IFR_SR;
+}
+
+void VIABindCuda(VIA6522 *v, CudaDevice *c)
+{
+	v->cuda = c;
 }
 
 const char *VIATakePendingWarning(VIA6522 *v)
@@ -213,7 +237,12 @@ uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
 	unsigned reg = ((addr - v->base) >> 9) & 0xF;
 	v->reg_reads[reg]++;   // M6a Wave 2 #4: read histogram (under the bus lock)
 	switch (reg) {
-	case R_ORB:       return v->orb;
+	case R_ORB:
+		if (v->cuda) {
+			cuda_apply(v, CudaSettle(v->cuda));        // C2: poll-surface backstop
+			return CudaDeriveORB(v->cuda, v->orb);     // C1: bit 3 recomputed
+		}
+		return v->orb;
 	case R_ORA:
 	case R_ORA_NH:    return v->ora;
 	case R_DDRB:      return v->ddrb;
@@ -228,10 +257,19 @@ uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
 	                    v->ifr_latched &= ~IFR_T2;          // N6: T2CL read acknowledges T2
 	                    return r & 0xFF; }
 	case R_T2CH:      { uint16_t r = timer_count_now(v, false); return r >> 8; }
-	case R_SR:        cuda_touch(v, "SR read");  return v->sr;
+	case R_SR:
+		if (v->cuda) {
+			uint8_t val;
+			cuda_apply(v, CudaSRRead(v->cuda, &val));  // M4: SR access clears IFR.2
+			return val;                                // Cuda's SR replaces stored sr
+		}
+		cuda_touch(v, "SR read");  return v->sr;
 	case R_ACR:       return v->acr;
 	case R_PCR:       return v->pcr;
-	case R_IFR:       return ifr_now(v);
+	case R_IFR:
+		if (v->cuda)
+			cuda_apply(v, CudaSettle(v->cuda));        // C2: the other poll surface
+		return ifr_now(v);
 	case R_IER:       return 0x80 | v->ier;   // bit7 always set on reads (6522 spec)
 	}
 	return 0;
@@ -246,13 +284,17 @@ void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 	case R_ORB:
 		// Cuda handshake lines live in ORB bits 3/4/5 (M3b C3: TREQ=3 input,
 		// TACK=4, TIP=5, active-LOW — donor study §3.2 prose had 3/4; corrected).
-		if ((v->orb ^ b) & 0x38) cuda_touch(v, "ORB handshake bits 3/4/5");
-		// C3 polarity forensics: trace value TRANSITIONS (capture-only, §2g).
+		// Loud stub only while UNBOUND (M1 behavior); bound forwards to the model.
+		if (!v->cuda && ((v->orb ^ b) & 0x38)) cuda_touch(v, "ORB handshake bits 3/4/5");
+		// C3 polarity forensics: trace value TRANSITIONS (capture-only, §2g;
+		// runs in both bound and unbound modes).
 		v->orb_write_count++;
 		if (v->orb_wtrace_n < sizeof(v->orb_wtrace) &&
 		    (v->orb_wtrace_n == 0 || v->orb_wtrace[v->orb_wtrace_n - 1] != b))
 			v->orb_wtrace[v->orb_wtrace_n++] = b;
 		v->orb = b;
+		if (v->cuda)
+			cuda_apply(v, CudaORBWritten(v->cuda, b, v->acr));
 		break;
 	case R_ORA:
 	case R_ORA_NH:    v->ora = b; break;
@@ -276,7 +318,9 @@ void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 		timer_arm(v, false, (uint16_t)((b << 8) | v->t2l_l));
 		v->ifr_latched &= ~IFR_T2;
 		break;
-	case R_SR:        cuda_touch(v, "SR write"); v->sr = b; break;
+	case R_SR:
+		if (v->cuda) { cuda_apply(v, CudaSRWritten(v->cuda, b)); break; }
+		cuda_touch(v, "SR write"); v->sr = b; break;
 	case R_ACR:       v->acr = b; break;
 	case R_PCR:       v->pcr = b; break;
 	case R_IFR:

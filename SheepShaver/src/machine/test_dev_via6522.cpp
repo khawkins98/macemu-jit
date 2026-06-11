@@ -3,6 +3,7 @@
  * write-1-clear without timer disarm (N8), T1CL-read ack (S9), and eager IFR
  * latch via a bound EventScheduler with a fake time source. */
 #include "dev_via6522.h"
+#include "dev_cuda.h"
 #include "event_sched.h"
 #include <assert.h>
 #include <stdio.h>
@@ -143,6 +144,71 @@ int main()
 	VIARegisterDiagInstance(&via);
 	CHECK(VIAFormatTopReads(top, sizeof(top)) > 0);
 	CHECK(strcmp(top, "(IFR=3,T2CL=1)") == 0);        // top-2, descending
+
+	// --- M3b Task 3: Cuda attachment seam (bind a REAL CudaDevice) -------------
+	// All checks above ran UNBOUND (M1 loud-stub behavior verified intact).
+	// Now script CV-0 + a full GET_TIME through the VIA register surface.
+	static CudaDevice cu;
+	VIAReset(&via, BASE, fake_clock, 0);
+	CudaReset(&cu, 0, 0);                  // no time source: GET_TIME returns 0
+	VIABindCuda(&via, &cu);
+	wr(0x0400, 0x30);                      // DDRB = 0x30 (bits 4/5 out, bit 3 in)
+	wr(0x0000, 0x38);                      // ORB idle (TACK+TIP negated)
+	CHECK((rd(0x0000) & 0x08) == 0x08);    // CV-1: derived bit 3 high (idle)
+	CHECK(via.cuda_touches == 0);          // loud stub replaced when bound
+	// CV-0 sync/attention: ORB 0x28 (TACK asserted-low, TIP negated)
+	wr(0x0000, 0x28);
+	CHECK((rd(0x0000) & 0x08) == 0);       // TREQ asserted: the 18338 poll terminates
+	CHECK((rd(0x1a00) & 0x04) == 0x04);    // IFR bit 2 raised (seen via R_IFR read)
+	(void)rd(0x1400);                      // SR read clears IFR.2 (M4)
+	CHECK((rd(0x1a00) & 0x04) == 0);
+	wr(0x0000, 0x38);                      // host negates TACK: sync done
+	CHECK((rd(0x0000) & 0x08) == 0x08);    // back to idle
+	CHECK((rd(0x1a00) & 0x04) == 0x04);    // raise from the sync-end edge
+	wr(0x1a00, 0x04);                      // IFR write-1-clear works on bit 2 too
+	CHECK((rd(0x1a00) & 0x04) == 0);
+	CHECK(cu.syncs == 1);
+	// Full GET_TIME via the register surface (proves ORB writes forward the
+	// live ACR and the Cuda SR byte replaces the VIA's stored sr both ways).
+	wr(0x1600, 0x10);                      // ACR bit 4: shift out (host->Cuda)
+	wr(0x1400, 0x01);                      // SR = PSEUDO packet type
+	wr(0x0000, 0x18);                      // assert TIP: byte 0 captured
+	CHECK((rd(0x1a00) & 0x04) == 0x04);    // capture raises IFR.2
+	wr(0x1400, 0x03);                      // SR = GET_TIME
+	wr(0x0000, 0x08);                      // TACK toggle: byte 1 captured
+	wr(0x0000, 0x38);                      // negate TIP: commit (C2, synchronous)
+	CHECK((rd(0x0000) & 0x08) == 0);       // response queued: TREQ low at commit
+	wr(0x1600, 0x00);                      // ACR: shift in (Cuda->host)
+	wr(0x0000, 0x18);                      // assert TIP: byte 0 -> SR
+	{
+		static const uint8_t expect[7] = { 0x01, 0x00, 0x03, 0, 0, 0, 0 };
+		uint8_t tack = 0x10;
+		for (int i = 0; i < 7; i++) {
+			CHECK(rd(0x1400) == expect[i]);
+			if (i < 6) {
+				CHECK((rd(0x0000) & 0x08) == 0);   // more bytes: TREQ stays low
+				tack ^= 0x10;
+				wr(0x0000, (uint8_t)(0x08 | tack));
+			}
+		}
+	}
+	CHECK((rd(0x0000) & 0x08) == 0x08);    // TREQ negated after the last byte
+	wr(0x0000, 0x38);                      // end transaction
+	CHECK(cu.cmd_get_time == 1);
+	CHECK(via.cuda_touches == 0);          // never touched the loud stub while bound
+	CHECK(VIATakePendingWarning(&via) == 0);
+	// orb_wtrace keeps working in bound mode (CV-0 + GET_TIME wrote ORB above).
+	CHECK(via.orb_write_count > 0);
+	{
+		char trace[256];
+		CHECK(VIAFormatOrbTrace(&via, trace, sizeof(trace)) > 0);
+		CHECK(strstr(trace, "ddrb=30") != 0);
+	}
+	// Unbound again (fresh reset zeroes the binding): loud-stub behavior returns.
+	VIAReset(&via, BASE, fake_clock, 0);
+	CHECK(via.cuda == 0);
+	wr(0x1400, 0x55); CHECK(rd(0x1400) == 0x55);   // stored sr echo
+	CHECK(via.cuda_touches == 2);                  // SR write + SR read touched
 
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;

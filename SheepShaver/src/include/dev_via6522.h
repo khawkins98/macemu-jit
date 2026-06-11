@@ -18,6 +18,7 @@
 enum VIATimerState { VIA_TIMER_IDLE = 0, VIA_TIMER_RUNNING = 1, VIA_TIMER_FIRED = 2 };
 
 class EventScheduler;   // event_sched.h not required by pure users
+struct CudaDevice;      // dev_cuda.h not required by pure users (M3b seam)
 
 struct VIA6522 {
 	uint32_t base;
@@ -47,6 +48,10 @@ struct VIA6522 {
 	uint8_t  orb_wtrace[32];
 	uint32_t orb_wtrace_n;
 	uint64_t orb_write_count;
+	// M3b Task 3: bound Cuda model (NULL = unbound -> M1 loud-stub behavior,
+	// the paravirtual/unit-test default). See VIABindCuda below for the seam
+	// contract and the rev 2 M4 timing decision.
+	CudaDevice *cuda;
 };
 
 extern void VIAReset(VIA6522 *v, uint32_t base,
@@ -59,6 +64,30 @@ extern void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 // a direct-call shim. ticks->ns conversion is internal (VIA_CLOCK_HZ).
 extern void VIABindScheduler(VIA6522 *v, EventScheduler *sched,
                              bool (*locked_call)(uint32_t addr, void (*fn)(void *), void *opaque));
+
+// --- M3b Task 3: Cuda attachment seam -------------------------------------------
+// Bind the Cuda protocol model behind the SR/ORB surface (replaces the M1 loud
+// stub). When bound:
+//   - R_ORB writes forward to CudaORBWritten (written byte + current ACR);
+//   - R_SR read/write forward to CudaSRRead/CudaSRWritten — the Cuda's SR byte
+//     replaces the VIA's stored sr on those paths;
+//   - R_ORB reads run CudaSettle then CudaDeriveORB (bit 3 = TREQ recomputed
+//     from Cuda state on EVERY read — C1, the ROM does RMW on ORB; bits 4/5
+//     pass through from the stored byte);
+//   - R_IFR reads run CudaSettle first (C2 lazy backstop, the second poll
+//     surface).
+// Returned CUDA_SEAM_* flags are applied to ifr_latched bit 2 DIRECTLY (M6:
+// the bus region lock is non-recursive — every seam call already runs under
+// it, so locked_call would deadlock; the Cuda module itself is lock-free).
+// Timing decision (plan rev 2 M4, documented at the seam): lazy-only. dev_cuda
+// arms NO scheduler one-shots — the VIA header's "config-time, not hot fault
+// paths" deferral rationale does not hold for per-SR-byte timing (first-touch
+// reachable from the Mach handler thread), so the settle-on-read backstop is
+// the PRIMARY mechanism and no allocation can occur on fault paths. The
+// poll-driven boot protocol (S3 §1.5) works lazy-only by design.
+// Unbound (NULL/never called): M1 behavior exactly — cuda_touch loud stub,
+// stored sr/orb echo. The ORB write-value trace (orb_wtrace) runs in BOTH modes.
+extern void VIABindCuda(VIA6522 *v, CudaDevice *c);
 
 // Return-and-clear the pending Cuda loud-stub warning text (static string), or NULL.
 // Device handlers can run on the Mach exception-handler thread, where stdio is

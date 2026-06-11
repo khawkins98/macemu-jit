@@ -27,9 +27,9 @@ test_mmio_bus: test_mmio_bus.cpp mmio_bus.cpp ../include/mmio_bus.h
 test_dev_scc8530: test_dev_scc8530.cpp dev_scc8530.cpp mmio_bus.cpp ../include/dev_scc8530.h ../include/mmio_bus.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_scc8530.cpp dev_scc8530.cpp
 
-test_dev_via6522: test_dev_via6522.cpp dev_via6522.cpp event_sched.cpp mmio_bus.cpp \
-                  ../include/dev_via6522.h ../include/event_sched.h ../include/mmio_bus.h
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_via6522.cpp dev_via6522.cpp event_sched.cpp mmio_bus.cpp
+test_dev_via6522: test_dev_via6522.cpp dev_via6522.cpp dev_cuda.cpp event_sched.cpp mmio_bus.cpp \
+                  ../include/dev_via6522.h ../include/dev_cuda.h ../include/event_sched.h ../include/mmio_bus.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_via6522.cpp dev_via6522.cpp dev_cuda.cpp event_sched.cpp mmio_bus.cpp
 
 test_a64_mmio_decode: test_a64_mmio_decode.cpp a64_mmio_decode.cpp ../include/a64_mmio_decode.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_a64_mmio_decode.cpp a64_mmio_decode.cpp

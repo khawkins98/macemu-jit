@@ -1065,3 +1065,240 @@ slot-15 stop never fired through acceptance — 4-record pool sizing stands.
 milestone, newworld default `syscall_entry=0x50314ac0`; current frontier = the FE1F
 service surface. See `M3A-ENTRY-TABLE.md` + `M6A-WAVE2-SHIM-RECON.md` Task C
 frontier update.)*
+
+---
+
+## FE1F native callout (selector 0x31) — fe1f-service-surface plan Task 0 (2026-06-11)
+
+> Recon addendum for `docs/superpowers/plans/2026-06-11-fe1f-service-surface.md`
+> (body + Rev 2, Rev 2 binding). **All blocking answers PINNED.** Boots used:
+> **3 of ≤8 newworld** (`/tmp/fe1f0_{1,2,3}.log`, 45 s SIGTERM + SS_TERM_DUMP,
+> default newworld config `/tmp/m2accept.prefs`); paravirtual donor boot
+> **skipped** (0 of ≤1 — Q-F2(b) pinned statically, the donor datum is moot:
+> the "writer" is not a writer at all, see Q-F2). Tag discipline carried:
+> [RAW-ROM]=/tmp/rom901_inventory.bin, [PATCH]=patch source / patched dump,
+> [STATIC]=capstone of the dumps, [PROBE✓]=live-verified this session.
+
+### Provenance (re-established)
+
+- `/tmp/rom901_inventory.bin` md5 `7b1378be15d99ac1a15ab2fc22bcc56f` (raw; the
+  16 `twi` placeholders `0fff0000..0fff000f` at 0x36e8c0 confirmed, incl. the
+  slot-14-duplicates-0x0d quirk); `/tmp/rom901.bin` md5
+  `e432df64122a5a89ec1c08d0bdf01609` (patched) — both match the recorded anchors,
+  no re-dump needed.
+- The three free static wins re-confirmed raw==patched: file 0xf240 region
+  (`4e56 0000 / 7031 / fe1f / 2d40 000c / 202e 0008 / 6704 / 2240 2288` + the
+  selector-$36 sibling at 0xf260), dispatch slot 0x3ff0f8 (`80bf09dc 4bf6ea48`),
+  service body 0x36db44 (mtlr r5 / marshal / blrl / unmarshal / dispatch-resume).
+  **Provenance NOT falsified — branch (ii) stands; branch (i) stays dead.**
+
+### Q-F1 — the dispatch route [PROBE✓] — PINNED (one address correction)
+
+- **Plan typo corrected**: the mirror dispatch slot is
+  `0x50480000 | (0xFE1F<<3) = 0x504FF0F8`, not the plan's `0x504F70F8`.
+- Live slot words `[0x504FF0F8]=0x80bf09dc [0x504FF0FC]=0x4bf6ea48` [PROBE✓] —
+  exactly the static `lwz r5,0x9dc(r31); b →0x5046db44` pair, relocated.
+- Body `0x5046db44` visited (visit=1) at the park boot with `r5=0x5046e8e0`
+  already loaded by the slot — **route = opcode table slot → body → blrl,
+  [PROBE✓]**. The 0x2C stop-stub did NOT catch it (no falsification; trigger 3
+  not invoked). NK twi decoder 0x50314700: zero visits (expected — see Q-F2).
+
+### Q-F2 — the continuation chain + slot 8's real identity — PINNED (THE finding)
+
+**(a) Confirmation probes [PROBE✓]:** `[ECB+0x9dc]` = `[0x68fff9dc]` =
+**0x5046e8e0** (T-C1 confirmed). Live mirror bytes at 0x5046e8e0..ec =
+`4bfbb390 4bfbb39c 4bfbb3a8 4bfbb3b4` — **NOT zero**: rung-2 Task U's parked-stop
+branches (slot 8 → `b 0x50429c70`, slots 9-11 → their stops). The Rev-2
+"zero/placeholder expected" is amended: slot 8 holds the Task-U loud stop.
+
+**(b) The real installer of slot 8 — STATIC, fully closed: NOBODY writes slot 8.
+The raw `twi 31,r31,8` placeholder IS the mechanism.** On real hardware the
+entry-vector slots are not patched by any init; executing a table slot raises a
+**program interrupt (0x700)**, and the NK's published 0x700 handler decodes it:
+
+- NK 0x700 handler = **0x50314700** [STATIC raw==patched; PROBE✓ live:
+  `[KDP+0x37c]`=`[0x68ffe37c]`=0x50314700 — the vector-handler-table recipe
+  `[KDP+0x360+(vector>>6)]` re-validated against `[KDP+0x390]`=0x50314ac0 = the
+  sc surface's known entry]. The handler checks the faulting PC against
+  `[KDP+0x648]` (=0x5046e8c0 live [PROBE✓]); table offsets {0, 0xc, 0x20, 0x40}
+  and ranges dispatch via the **exit-pointer array `[KDP+0x5f0+4·slot]`** with
+  the per-slot counter `[KDP+0xe40+4·slot]++` and **r10 = caller LR** (= the
+  FE1F body's post-blrl return — the callout protocol). Off-table twi sites
+  decode the instruction word instead (`lwz r8,0(r10); xoris r8,r8,0x0fff`).
+- The exit-pointer array is built by **NK cold-init** (file 0x311770-0x311820
+  [STATIC]): default-fills all 16 entries with NK+0x46d0 (loud "unimplemented,
+  r8=2" exit), then overrides slots 0-8 and 15. **Slot 8 = NK_base+0xaca0 =
+  0x5031aca0** (slots 0/1 = +0x3bf8/+0x43a0 — exactly the rung-2 [PROBE✓] values
+  0x50313bf8/0x503143a0, closing rung 2's "writer never identified" residue for
+  the exit pointers; NK_base = `[KDP+0x64c]` = 0x50310000 [PROBE✓]).
+  **`[KDP+0x610]` = 0x5031aca0 [PROBE✓ live]** — the publication ALREADY runs on
+  our boot.
+- **0x5031aca0 = the NK selector-service gateway** [STATIC]: saves r14+ into the
+  ctx (helper 0x503238ac), reads the **selector from `[ctx+0x104]` = the trapped
+  context's saved r0** (ctx layout +0xfc=PC, +0x104=r0, +0x10c=r1 — Q-B's stride
+  confirms), bounds-checks vs **0x86**, and dispatches through the offset table
+  at NK+0xacb8: `target = table[sel] + NK_base + 4·sel`. **This is the same
+  dispatcher the 5 sc deliveries traverse** ([PROBE✓]: 0x5031aca0 visited on the
+  park boot with r3=0x00050001 = the first sc's register row) — the gateway,
+  common exit (0x5031b124 → ctx restore 0x5032391c → resume), lock idiom, and
+  ExcEnter conventions are all already exercised 5× successfully per boot.
+- **Selector 0x31 body = 0x5031d204** [STATIC] (table entry at 0xacb8+0xc4 =
+  0xd140; 0xd140+0xc4+0x50310000): allocates **0x20 bytes from the NK kernel
+  pool** (bl 0x5032281c), brands it `'EVNT'` with self-pointing list head
+  (+8/+0xc = an empty event queue), takes the kernel lock, **registers it with
+  id 9** (bl 0x503251b0), stores `[SPRG0-8]+0x60` at +0x14, and returns
+  **r4 = the object pointer, r3 = 0 (noErr)**; registration failure frees the
+  block and returns r3=0 with r4 unset; alloc failure → r3=-4. Selector 0x31 =
+  "create/register the EVNT kernel object" — a CFM-prep native service.
+
+**Verdict: V2' (population is the fix; value pinned) — with the route named
+honestly.** The slot-8 service is **staged** (the whole chain is real NK code in
+the staged image; the publication init already runs). The pinned population value
+for mirror vector slot 8 is **the raw placeholder `0x0fff0008` itself**
+(verify-EXPECTED first: current content = Task-U stop branch `0x4bfbb390`), and
+the service contract is reached via **twi → 0x700 program-interrupt delivery to
+the NK-published handler [KDP+0x37c]=0x50314700** — the sc-surface idiom one
+vector over. **STOP-RULE trigger 1 (V3, unstaged service): NOT FIRED.**
+**RE-SCOPE FLAG for the coordinator (recorded, not improvised):** the plan body's
+"no powerpc_cpu changes / no host-side execution seam" assumption is falsified —
+the FE1F surface needs a **0x700 EXC delivery class** (exc_core currently has
+EXC_SC + interrupt only; `twi` is undecoded in the CPU core). This is
+exception-delivery surface (the precedented EXC/sc idiom), NOT an HLE NativeOp
+(the named-wrong fix stays wrong — the service body runs as real guest NK code).
+Task A's shape changes from "seed a pointer" to "restore placeholder + deliver
+0x700"; the plan owner must ratify before Task A starts.
+
+### Q-F3 — selector-0x31 semantics + the conformance vector — PINNED
+
+**Callout-entry register table (body 0x5046db44, block-entry = pre-marshal)
+[PROBE✓ visit=1]:**
+
+| Reg | Value (live) | Class / meaning |
+|---|---|---|
+| r8 (=D0) | **0x00000031** | the selector — MANDATORY exact row |
+| r9 (=D1) | 0x00000002 | the requested id (id=2 at the live park) |
+| r16 (=A0) | 0x100037c0 | the ExpandMem pointer-array base (pointer-class; = `[[0x2b6]+0x310]`) |
+| r17 (=A1) | 0x103ffc74 | stack-class |
+| r24 | 0x5000f248 | 68k PC (post-trap-word) |
+| r5 | 0x5046e8e0 | continuation = [ECB+0x9dc], pre-loaded by the dispatch slot |
+| r0, r3 | 0 / 0x5000e454 | pre-marshal (marshal `mr r0,r8 / mr r3,r16 / …` happens inside the block) |
+
+The DR register-file convention (r8..r15=D0-D7, r16..r22=A0-A6) is
+**probe-confirmed** at the FE1F site (the body's marshal caveat is resolved).
+Post-marshal ABI at the blrl: r0=0x31(selector), r3=A0, r4=D1(id), r5=A1, … .
+NOTE: the NK service consumes the selector from **ctx+0x104 (saved r0)**, not
+from a marshaled GPR — delivery must preserve r0 through the exception save.
+
+**Return predicate (T-C2 confirmed):** r3(→D0) = **0 = noErr** (status stored at
+0xc(a6); error arms store nonzero — 0xffff8d8e availability-check class,
+−50/paramErr class); r4(→A0) = **pointer-class** (the EVNT kernel-pool object) —
+the 68k tail `movea.l d0,a1; move.l a0,(a1)` stores **A0** through the stack-arg
+slot pointer. The 0xf250 `beq.s` is the null-ARG guard (`move.l 8(a6),d0` —
+the pointer arg reload), NOT a result test — T-C2's deletion of the old
+"d0==0 skip-arm" gate stands.
+
+**id→index map (68k table at 0x5000e3a0, 12-byte entries {id, index, flags},
+raw==patched [STATIC]):** id1→idx1(flags 0x8), id3→idx1(0x4), id4→idx1(0x2),
+id5→idx4(0x8000), id2→idx7(0x80000000). Unknown id → error −50.
+
+**THE index for the f240 site: id=2 [PROBE✓ r9] → index 7.**
+
+**Slot-address recipe [PROBE✓ end-to-end]:** `[0x2b6]` = ExpandMem (live
+0x10003420) → `[ExpandMem+0x310]` = array base (live **0x100037c0**, == A0 at the
+callout) → slot = base + 4·(index−1). Live slot for index 7 = **0x100037d8**,
+value 0x00000000 (empty — the `tst.l (a3)` arm that triggers the FE1F call).
+Index-1 slot [0x100037c0]=0x00000002 (pre-filled, non-pointer-class — recorded).
+**Task B's watch address: 0x100037d8** (SS_JIT_WATCH_ADDR hex +
+SS_JIT_TRACE_RING=1; probe-field fallback `[0x100037d8]`).
+
+**Diagnostic map:** the sibling stub at file 0xf260 = selector **$36**
+(`link / movea.l $c(a6),a0 / move.l 8(a6),d1 / moveq #$36,d0 / fe1f`) — called
+by the e3e0 routine right after a successful slot fill (args: slot value +
+table index) — the SECOND callout the advancing boot will issue.
+
+### Q-F4 — the park mechanism, NAMED — PINNED (H1)
+
+- **PRIMARY (probe visit counts):** body 0x5046db44 visit=1 (no visit=10 line);
+  post-return unmarshal 0x5046db6c **ZERO visits** — the callout NEVER returns.
+  blrl target 0x5046e8e0 visit=1, then the Task-U branch; **the park PC is the
+  slot-8 parked stop 0x50429c70 [PROBE✓ visit with r0=0x31, r24=0x5000f248]** —
+  a `b *` self-loop (heartbeat-silent, wall-clock continues: the exact captured
+  baseline signature). Rev-2's prediction ("blrl → 0x5046e8e0") refined by one
+  hop: blrl → slot 8 → `b 0x50429c70` → self-loop.
+- **Ring corroboration:** 5000f242/f246/f248 each appear EXACTLY ONCE in the
+  full 839,284-transition ring (taskC3 + fe1f0_1, identical). Dedup semantics
+  re-verified in writing: the ring skips only values matching the LAST 4
+  recorded (ppc-cpu.cpp r24ring_record) — a genuine e3e0→f240 re-loop would
+  re-record; capacity 2M entries (1<<21), idx monotonic ⇒ 839,284 ⇒ never
+  wrapped. (DIAGNOSTICS.md M6a ring section.) **H1 (one-shot-never-returns)
+  CONFIRMED; H2 (FE07-style poll) dead.**
+- **Exit path:** the body's unmarshal+dispatch-resume (0x5046db6c..db90) is the
+  only return route [STATIC] — Task B's gate (a) (db6c ≥1 visit) is meaningful
+  (H1 regime, P-M5 satisfied).
+- **World-flip/MSR:** the current park performs none (self-loop; no MSR writes
+  in slot/body). The real continuation runs in the NK exception regime — MSR
+  routing identical in class to the sc surface (SRR0/SRR1 save, EXC discipline);
+  the service is allocate+register with **no tick/EE dependency** — EE-chain
+  contingency (trigger 1 via EE-required) NOT invoked. Residues recorded:
+  [KDP+0x65c]/[0x2810]/XLM_IRQ_NEST untouched by the FE1F body [STATIC].
+
+### Q-F5 — staged-surface audit of the slot-8 service — VERDICT: GO
+
+Bounded enumeration (≤12 functions consumed: 0x700 handler 0x314700, init
+cluster 0x3117xx, gateway 0x31aca0 + dispatcher 0x31aed0, ctx-save helper
+0x3238ac, selector body 0x31d204, common exit 0x31b124, pool alloc 0x32281c,
+registration 0x3251b0, pool free 0x3229a0 (by symmetry), lock 0x312700 — all
+[STATIC] on raw==patched bytes):
+
+| Structure | Where | Status |
+|---|---|---|
+| Exit-pointer array `[KDP+0x5f0..0x62c]` + `[KDP+0x610]`=0x5031aca0 | KDP | **published live [PROBE✓]** |
+| Vector-handler table `[KDP+0x37c]`=0x50314700 | KDP | **published live [PROBE✓]** |
+| `[KDP+0x648]`/`[KDP+0x64c]` | KDP | 0x5046e8c0 / 0x50310000 [PROBE✓] |
+| ctx save area (+0x104 = saved r0 = selector) | NK ExcEnter | exercised 5×/boot by the sc surface |
+| NK kernel pool (lock KDP-0xad0, free list KDP-0xab0, counters KDP-0x430) | KDP-rel | free-list head `[0x68ffd558]`=0x68ff7008 ≠ self ⇒ **backed, non-empty [PROBE✓]** |
+| Registration ID table `[KDP-0xa98]` | KDP-rel | =0x68ffd240 nonzero [PROBE✓] (8-byte entries, cap 0x1fa) |
+| `[SPRG0-8]+0x60` per-CPU datum | NK regime | ExcEnter-established (sc-exercised) |
+| Selector counter array `[KDP+0xef4]` | KDP | =0 ⇒ counting skipped [PROBE✓] |
+
+**Verdict in writing: the selector-0x31 service runs on staged state.
+Seed-class fix list for Task A: EMPTY** — no data seeds. The fix is
+**route-class** (two items, pinned): (1) mirror vector slot 8 := raw placeholder
+`0x0fff0008` (verify-EXPECTED: current = 0x4bfbb390 Task-U stop; PatchROM-time,
+env-gated `SS_NW_FE1F_SURFACE`); (2) twi → 0x700 EXC delivery to the published
+`[KDP+0x37c]` (new EXC class + CPU-core twi raise — **the Q-F2 re-scope flag;
+coordinator ratification required before Task A**). The P-C1 V1-with-empty-list
+middle case does NOT apply (a concrete provisioning obligation exists).
+Nothing EE/tick-shaped appears in the service (EE-CHAIN cross-ref: contingency
+only, untriggered).
+
+### Blocking-answer table (Rev-2 P-C1) — ALL PINNED
+
+| Task | Blocks on | Status |
+|---|---|---|
+| A | Q-F1 + Q-F2 (value+installer+route verdict) + Q-F3 (entry table) + Q-F5 verdict (GO + fix list) | **ALL PINNED** — but gated on the Q-F2 re-scope ratification (0x700 delivery surface) |
+| B | Q-F3 (return predicate) + Q-F4 (park mechanism + exit path) | **PINNED** |
+| C | Q-F5 full enumeration | **PINNED** |
+
+### Residues (explicit)
+
+- R-F1: the plan's `0x504F70F8` typo (correct: 0x504FF0F8) — Task Z carries the
+  correction into the plan doc if edited again.
+- R-F2: `[0x100037c0]`=2 (index-1 slot pre-filled with a non-pointer) — meaning
+  unknown, not load-bearing for index 7; revisit if ids 1/3/4 misbehave later.
+- R-F3: the e3e0 routine's post-fill call chain (f260/$36 stub operand
+  alignment hand-decoded, not capstone-verified — capstone-M68K eats fe1f).
+- R-F4: 0x50429c70 probe printed visit=1 only — the self-loop is chain-compiled
+  (no dispatcher re-entry), so visit counts there understate spin; park identity
+  rests on the r0/r24 row + heartbeat silence, which agree.
+- R-F5: the NK pool's grow/backing limits unprobed (free list non-empty today;
+  alloc-failure leg returns r3=-4 — observable, non-fatal).
+
+### Baseline re-confirmation (charged boot 1)
+
+Ring tail exact (`… 5000e43a 5000e43c 5000e43e 5000f242 5000f246 5000f248`,
+839,284 transitions); blocks=3836 complete=3836; MMIO macio 65539 / scc 65540
+w=2 idle=256 / via 70183 w=307; CUDA 13 pkts, 9 i2c absent, pram_rd=3; VCLK
+mtspr_dec=4 dec_expiries=1 pending=1; 5 SC deliveries 0x3f/0x19/0x14/0x19/0xf
+→ entry 0x50314ac0; heartbeat silent. Byte-identical class to the Task-C
+capture.

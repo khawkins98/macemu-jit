@@ -205,6 +205,129 @@ dispatch math (Q-SL2 by-design), or stack handling (no drain exists).
    garbage on an empty stack" — correct those current-state claims to the
    patch-misalignment mechanism when the fix lands.
 
+## Fix record (2026-06-11, label tmtask-fix) — the guard landed
+
+The recommendation-step-1 guard is implemented (rom_patches.cpp, tm_task NW/Gossamer
+arm). **T0-B is ANSWERED** — the 1.1 layout at pattern+28 was pinned by an offline
+decode of the 1.1 .rom (header-only `rom_decode.hpp` in a standalone host tool, no
+boot; decoded image md5 `5895907db063ef0112f19d930fdc9344`): base = **0x2f8**
+(in-window), and base+28 holds exactly the 12 bytes the 6 NOPs cover —
+```
++28: 61ff 0001 5db2   bsr.l 0x500160c8   (Enable60HzInts install)
++34: 61ff 0001 5d74   bsr.l 0x50016090   (second install call)
+```
+**Guard shape**: verify-EXPECTED-first — both NOPed slots must START a `bsr.l`
+(`ntohs(wp[0])==0x61ff && ntohs(wp[3])==0x61ff`); exact displacements deliberately
+not pinned so a Gossamer layout with drifted targets still passes. On mismatch:
+loud `[ROMPATCH] tm_task GUARDED-SKIP (9.0.1 misalignment)` banner + skip.
+Default-on (pure correctness); `SS_NW_TM_TASK_FORCE=1` restores the unguarded
+write for A/B. On 9.0.1 the guard fires (observed bytes at relocated 0x262+28:
+`038e 2e48 90fc 2000 a02d 6100` — the recon's §3 layout, byte-for-byte).
+
+Paravirtual note (honest gating statement): the NW arm is **ROMType-gated**, not
+MachineProfile-gated — the paravirtual 1.1-ROM boot DOES execute the new guard
+code, but the 1.1 pin above proves the guard condition passes there (both words
+are 0x61ff), so the patch applies exactly as before: ROM bytes are identical on
+paravirtual by construction.
+
+### Acceptance evidence (3 slot boots, ≤3 budget)
+
+1. **Guarded boot** (`tmtask-fix-guarded`, rundir 20260611-234604.50440,
+   BOOT-VERDICT PASS): `--expect 'GUARDED-SKIP' --absent 'pc=505bb060'` — the
+   slide region 0x505bb060 never compiles. R24RING (1,019,706 transitions):
+   `50041e52 → 5000027c → 5000060c 50000610 … 50000624 (rts) → 50000282 50000284
+   50000288 50000286 → 5000dfa2…` — **the bsr.l 0x5000060a executes intact**, the
+   movea/suba/_SetApplLimit/bsr.w sequence runs, the sequencer survives. No odd PC.
+2. **FORCE A/B** (`tmtask-fix-force-ab`, rundir 20260611-235103.56185,
+   BOOT-VERDICT PASS): `SS_NW_TM_TASK_FORCE=1 --expect 'pc=505bb060'` reproduces
+   the baseline slide byte-for-byte: SIGSEGV, r24=0x500050ef, lr=r29=0x505bb060,
+   r26=0xfffffffe, r27=0x0200 — the recon's crash tuple exactly.
+3. **Frontier probe** (`tmtask-fix-syserr-code`, rundir 20260611-235229.56362
+   `SS_PROBE_68K=0x50004a10:4`): see frontier section below.
+
+### NEW FRONTIER (P-M4): SysError 12 (dsCoreErr) park at 0x500047ae
+
+With the sequencer intact the boot runs ~22k further records and dies in a
+DELIBERATE guest park, not a crash:
+
+- The boot installs the real trap dispatcher: vector $28 := 0x5000dfa0
+  [RAW-ROM dis 0xe124], and the trap-table installer at 0xe104 fills NULL OS-trap
+  entries with the **dsCoreErr stub 0x5000e12e** (`movem.l →$c30; moveq #$c,d0;
+  bra.l SysError@0x500049e6`) [RAW-ROM dis 0xe100–0xe152].
+- A trap dispatch hits a NULL entry: dispatcher leg `move.w d2,d1; jsr
+  ([$400,d2.w*4])` [RAW-ROM dis 0xdfd8–0xdfec] → stub → SysError with
+  **D0=0x0000000c (system error 12, dsCoreErr — unimplemented core routine)** and
+  **D1=0x0000a458 = trap word _InsXTime** (OS trap #0x58, the extended Time
+  Manager install) [PROBE✓ boot 3, 68k regfile at 0x50004a0e: d0=0000000c
+  d1=0000a458 d3=000002b8 a7=17ffebde].
+- SysError (0x500049e0): stores the code to $af0, no debugger installed →
+  0x50004a9e leg → $2ba=0 → magic check `cmpi.l #$5a932bc7,$db0.w` fails at
+  0x50004646 → **park at 0x500047ae `bra.b *`** (ring tail:
+  `…50004642 50004648 50004650 500047b0*3248990873` — 3.2 BILLION
+  dedup-suppressed spins; HOT-PC 0x504b07f0 = DR slot(0x60fe)).
+
+**The 60Hz / W2-4 note**: Enable60HzInts now RUNS and attempts the TM-task
+install via **_InsXTime ($A458)** — the OS trap table entry for #0x58
+(InsTime) is NULL in this environment, so the task does NOT install yet; it
+dies in dsCoreErr instead. What W2-4 needs from this: the fidelity boot's 60Hz
+path is now demonstrably the guest's own `InsTime → TM task → timer interrupt`
+chain — the missing piece is the trap-table population (guest software level)
++ M3 real delivery, not ROM patching. D3=0x2b8 at the raise matches the
+upstream comment's "Enable60HzInts, via 0x2b8". (W2-4 step 0 owns
+sheepshaver_glue concurrently; this task touched rom_patches.cpp only.)
+T0-A is thereby half-answered: on 9.0.1 the install is NOT one of the
+0x268/0x26e/0x274 sequencer calls — it happens later, via the trap word $A458
+raised from the 0x5000e12e-stub path.
+
+### T0-C sibling sweep — all 25 lenient-RELOCATED patches (boot 1, SS_ROM_PATCH_TRACE=1)
+
+Scope: misalignment requires (relocated anchor) + (fixed-offset write landing
+where the 1.1 layout no longer holds). Writes at base+0 (or inside the matched
+pattern) are anchor-aligned by construction — the pattern IS the instruction(s)
+rewritten. Retired-on-newworld patches never write on the profile where
+relocation occurs (lenient mode is the 9.0.1 diagnostic boot; paravirtual/1.1
+always matches in-window, so relocation never arises there).
+
+| Pattern → relocated@ | Patch | Write shape | Verdict |
+|---|---|---|---|
+| 4e70 @0000ba | reset | base+0 (1 word, in-pattern) | SAFE |
+| 4e7b0002 @0001b6 | ext_cache | indirect: reads live bsr.l displacements at +6/+12, RTS at the TARGETS | SAFE — verified on 9.0.1 [RAW-ROM]: +4/+10 are real `bsr.l`s; RTS lands at routine heads 0xa494/0xe510 (instruction starts) |
+| 303c4e2b @000262 | **tm_task** | base+28, 6 words | **GUARDED** (this fix) |
+| 70ffabeb @0002fa | name_reg | base+0 (in-pattern) | SAFE |
+| 08000002 @00aad8 | via_init | (would be base-relative) | SAFE — retired@M6a on newworld, write not armed where relocation occurs |
+| 24680008 @009584 | via_init2 | 〃 | SAFE (retired, not armed) |
+| 22680008 @009630 | via_init3 | 〃 | SAFE (retired, not armed) |
+| 08a90004 @009be2 | cuda_init | 〃 | SAFE (retired@M3b, not armed) |
+| 082b0005 @02b780 | adb_init | 〃 | SAFE (retired@M3b, not armed) |
+| 4fefffec @00e6a6 | ext_cache2 | base+0 RTS (in-pattern) | SAFE |
+| 3fff0400 @00e198 | univ_info | DATA writes base−0x14..+0x60 (UniversalInfo table, not code) | SAFE — data; operationally validated (AddrMap-served MMIO at 0xf3012000/0xf3016000 + [NW-MODEL] gestalt live in every diagnostic boot) |
+| 4e560000 @018e30 | scsi_mgr_a | block-replace base+0..+0x19 at matched function head; PLUS stub at base+0x20 (assumed second entry) | SAFE-aligned / **SUSPECT-semantic** — on 9.0.1, +0x20 = 0x18e50 IS a function head (`link.w a6,#0` after zero padding) [RAW-ROM dis], so the write is boundary-clean; whether that function is the same second SCSI entry as on 1.1 is UNPINNED. Recorded, not guarded (one-iteration discipline; frontier dies long before SCSI use). |
+| 7001a089 @01921c | scsi_var | base+12 (in-pattern: rewrites the pattern's own `6600`) | SAFE |
+| 4e56fc58 @0193c0 | scsi_var2 | base+0 (in-pattern) | SAFE |
+| 4ab80a50 @0650aa | init_res | base+4 byte (in-pattern: `6e`→`66`) | SAFE |
+| 207807f0 @066328 | check_load | base+0 (in-pattern) + dedicated patch space | SAFE |
+| 354afffc @3106f8 | sr_init (NK, PPC) | base+0 onward (anchor overwrite) | SAFE — PPC word-aligned; the NW kernel-seed block, operationally validated since the M5/M6 milestones |
+| 7d1343a6 @3113b8 | sprg3_mq | base+0/+8/+16 (all in 20-byte pattern) | SAFE |
+| 7dc000a6 @311400 | msr | base+0 (in-pattern) | SAFE |
+| 80c10018 @32451c | trap_return | base+8 (in-pattern) + backward scan for exact word 0x7d5a03a6 (self-verifying) | SAFE |
+| 39010420 @3143c4 | ppc_excp_tbl | base+0..+4 (in 8-byte pattern) | SAFE |
+| 7d1b4378 @314420 | virt2phys | base+8/+16 — BEYOND its 8-byte pattern | SAFE (PPC word-aligned, no mid-instruction class; over-pattern reach noted — operationally validated across M5/M6 MMU work; would be the next candidate for an expected-bytes pin if v2p behavior ever regresses) |
+| 5523a33e @318d00 | fe0a_0a | base−8 after verifying the branch TARGET matches fe0a_dat (verify-EXPECTED already built in) | SAFE |
+| 56070674 @319268 | fe0a_11 | base−4..+8, same built-in branch-target verification | SAFE |
+| 7e044840 @3199fc (×2) | fe0a_dat | not a write — it IS the verification probe used by fe0a_0a/fe0a_11 | SAFE (n/a) |
+
+**Sweep verdict: tm_task was the only mid-instruction corruptor.** One
+SUSPECT-semantic residue recorded (scsi_mgr's +0x20 second-entry identity),
+zero additional guards required.
+
+### T0-E stale-claim note
+
+M6A-WAVE2-SHIM-RECON.md "Frontier update" and DSAT-WALL-RECON.md closeout
+describe this wall as "rts pops garbage on an empty stack" — those files are
+claimed by other labels; the correction (patch-misalignment mechanism, now
+FIXED, frontier moved to the SysError-12 park) should be folded by their
+owners or the next doc-sync sweep. This doc is the current-state source.
+
 ## Residues (named, not load-bearing)
 
 - **R-SL1**: the odd-PC dispatch table 0x50580000+ unstaged (Q-SL2) —
@@ -215,9 +338,9 @@ dispatch math (Q-SL2 by-design), or stack handling (no drain exists).
 - **R-SL3**: why the ×103 −1 poll loop runs at this boot stage (what the
   guest is waiting on) — irrelevant to the wall (the sequencer advanced
   past it); may resurface as the post-fix frontier.
-- **R-SL4**: the 1.1-ROM layout at tm_task pattern+28 (T0-B) — unverified
-  here; the misalignment verdict rests on the 9.0.1 raw≠patched diff +
-  the patch-site code, which is sufficient.
+- **R-SL4**: ~~the 1.1-ROM layout at tm_task pattern+28 (T0-B) — unverified~~
+  CLOSED 2026-06-11 (tmtask-fix): pinned by offline 1.1 decode — two bsr.l
+  install calls at +28/+34 (see "Fix record" above).
 - **R-SL5**: probe note — `SS_PROBE_LINEAR=1` did not linearize the
   0x50314ac0 probe (3 hits at the logarithmic 1/10/100 cadence despite
   SS_PROBE_CAP=200); harmless here, but the linear-mode interaction with

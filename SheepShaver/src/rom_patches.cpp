@@ -3286,12 +3286,37 @@ static bool patch_68k(void)
 		if (base) {
 		D(bug("tm_task %08lx\n", base));
 		wp = (uint16 *)(ROMBaseHost + base + 28);
+		// Verify-EXPECTED-first guard (SLIDE-WALL-RECON.md Q-SL1, tmtask-fix):
+		// the 6 NOPs were calibrated against the 1.1 ROM, where base = 0x2f8
+		// (in the declared window) and base+28 holds exactly two bsr.l install
+		// calls [RAW-ROM 1.1, offline decode md5 5895907db063ef0112f19d930fdc9344]:
+		//   +28: 61ff 0001 5db2   bsr.l  (Enable60HzInts install, -> 0x500160c8)
+		//   +34: 61ff 0001 5d74   bsr.l  (second install call,    -> 0x50016090)
+		// Pin the opcode class (both slots must START a bsr.l, 0x61ff), not the
+		// displacements, so a Gossamer layout with drifted targets still passes.
+		// On 9.0.1 the anchor lenient-relocates to 0x262 and +28 = 0x27e lands
+		// MID-INSTRUCTION (the displacement low word of the boot sequencer's
+		// bsr.l 0x5000060a, value 0x038e) — the unguarded write retargeted that
+		// bsr.l to odd 0x500050ed and beheaded the SetApplLimit sequence (the
+		// 0x505bb060 slide). Guard is default-on; SS_NW_TM_TASK_FORCE=1 restores
+		// the unguarded write for A/B.
+		if (ntohs(wp[0]) != 0x61ff || ntohs(wp[3]) != 0x61ff) {
+			if (MachineEnvFlag("SS_NW_TM_TASK_FORCE")) {
+				fprintf(stderr, "[ROMPATCH] tm_task FORCED write at %05x+28 despite expected-bytes mismatch (SS_NW_TM_TASK_FORCE=1)\n", (unsigned)base);
+			} else {
+				fprintf(stderr, "[ROMPATCH] tm_task GUARDED-SKIP (9.0.1 misalignment): base=%05x, +28 bytes %04x %04x %04x %04x %04x %04x != two bsr.l (61ff .... .... 61ff .... ....) — 60Hz TM task install left intact; SS_NW_TM_TASK_FORCE=1 restores the old write\n",
+				        (unsigned)base, ntohs(wp[0]), ntohs(wp[1]), ntohs(wp[2]), ntohs(wp[3]), ntohs(wp[4]), ntohs(wp[5]));
+				wp = NULL;
+			}
+		}
+		if (wp) {
 		*wp++ = htons(M68K_NOP);
 		*wp++ = htons(M68K_NOP);
 		*wp++ = htons(M68K_NOP);
 		*wp++ = htons(M68K_NOP);
 		*wp++ = htons(M68K_NOP);
 		*wp = htons(M68K_NOP);
+		}
 		} else fprintf(stderr, "[ROMPATCH] SKIP tm_task (absent in parcels)\n");
 	} else {
 		static const uint8 tm_task_dat[] = {0x20, 0x3c, 0x73, 0x79, 0x73, 0x61};

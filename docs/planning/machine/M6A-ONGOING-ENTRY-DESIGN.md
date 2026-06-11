@@ -947,7 +947,9 @@ the NEXT milestone's named problem; no staging beyond the existing abort-capture
 spin at 3672 — the legacy path is not a viable bridge; diagnostic only.)
 *(Update 2026-06-11: RESOLVED by the NK-syscall-surface milestone —
 `syscall_entry=0x50314ac0` is the newworld default; see `M3A-ENTRY-TABLE.md`
-"Syscall entry resolution". The current frontier is the FE1F service surface.)*
+"Syscall entry resolution". The FE1F service surface frontier is in turn RESOLVED
+(FE1F-service-surface milestone, same date, default-on `be0e02cb`); the current
+frontier is the DSAT stack-underflow wall — see "Task C results" below.)*
 
 **Switch-OFF boot:** byte-identical baseline preserved (no W/W2 region writes, no
 slot-1 retarget, 0 TVector visits, the FE01↔NK spin signature) — see
@@ -1062,9 +1064,11 @@ return; vector-0xC00 syscall_entry is THE frontier (stop-rule trigger 2:
 captured, stopped — no staging beyond the abort-capture). R-1 note: the
 slot-15 stop never fired through acceptance — 4-record pool sizing stands.
 *(Update 2026-06-11: the syscall_entry frontier is RESOLVED — NK-syscall-surface
-milestone, newworld default `syscall_entry=0x50314ac0`; current frontier = the FE1F
-service surface. See `M3A-ENTRY-TABLE.md` + `M6A-WAVE2-SHIM-RECON.md` Task C
-frontier update.)*
+milestone, newworld default `syscall_entry=0x50314ac0`; the FE1F service surface
+frontier that followed is ALSO resolved (FE1F-service-surface milestone, default-on
+`be0e02cb`) — current frontier = the DSAT stack-underflow wall. See
+`M3A-ENTRY-TABLE.md` + `M6A-WAVE2-SHIM-RECON.md` "Frontier update (FE1F Task C
+closeout)" + "Task C results" below.)*
 
 ---
 

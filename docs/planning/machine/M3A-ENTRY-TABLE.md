@@ -11,6 +11,15 @@
 |---|---|---|---|
 | `interrupt_entry` | **`0x50412b1c`** | **KDP-SHIM** (see below) | 16 live words at 0x50412b0c–0x50412b48 byte-identical to static 0x312b0c–0x312b48 (`409b001c 92260024 …`) |
 | `syscall_entry` | **`0x50314ac0` — RESOLVED (2026-06-11, NK-syscall-surface Tasks 0/A/B/C; newworld DEFAULT since Task C, opt-out `SS_NW_SC_SURFACE=0`)** | bare ExcEnter + 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR) | Primary copy, NK-published `[KDP+0x390]` [PROBE✓]; see "Syscall entry resolution" + "Task C results" below — the M3a descope is formally CLOSED |
+| `program_entry` | **`0x50314700` — RESOLVED (2026-06-11, FE1F-service-surface Tasks 0/A/B/C; newworld DEFAULT since FE1F Task C `be0e02cb`, opt-out `SS_NW_FE1F_SURFACE=0`)** | bare ExcEnter(EXC_PROGRAM) + the SAME 2-SPR shim (the 0x700 handler opens with the same save helper `bl 0x50313d40` the sc family uses); SRR0 = the trap instruction verbatim, SRR1 trap bit `0x00020000` (PEM, test-pinned) | Primary copy, NK-published `[KDP+0x37c]` [PROBE✓]; evidence: `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C results. Consumers: the raw entry-vector `twi 31,r31,N` trap-placeholders (restored over rung-2's parked stops) — the DR FE1F native-callout route |
+
+**Three exception classes now resolved** (interrupt / syscall / program). **The
+resolution mechanism generalizes**: the NK publishes its per-vector handlers in the
+`[KDP+0x360]` table, indexed `vector>>6` — `[KDP+0x390]` (0xC00 sc) and `[KDP+0x37c]`
+(0x700 program) were each pinned with one probe word. Any FUTURE exception class
+resolves the same way: probe `[KDP+0x360 + (vector>>6)]`, deliver via ExcEnter with the
+PEM mask/SRR semantics for that class, and transcribe only what the handler's save
+helper consumes (so far always the same two SPRs: SPRG1:=caller r1, SPRG2:=caller LR).
 
 ## Findings
 
@@ -497,7 +506,12 @@ stop-rule trigger 2):**
     0x5000f240(&slot).
   - 0x5000f240: `link / moveq #$31,d0 / dc.w $FE1F / move.l d0,$c(a6) …` — an
     **F-line nanokernel/DR service trap `$FE1F` with selector d0=0x31**, result
-    expected back in d0 and stored through the slot pointer.
+    expected back in d0 and stored through the slot pointer. *(CORRECTED by FE1F plan
+    rev 2 T-C2: the tail was misread — `202e 0008` reloads the caller's POINTER ARG
+    from 8(a6), the `beq.s` is a null-arg guard not a result test; **A0** (the success
+    token — live: the NK kernel-object ID handle) lands in the slot via
+    `movea.l d0,a1; move.l a0,(a1)`, while **D0** is the status stored at 0xc(a6),
+    0 = noErr. See M6A-ONGOING-ENTRY-DESIGN.md Q-F3 + Task B results.)*
   - **The park: the ring's final 68k PC 0x5000f248 is the instruction immediately
     after that `$FE1F` trap** — the 68k issues FE1F selector 0x31 and never records
     another transition while wall-clock continues in a non-dispatch regime.

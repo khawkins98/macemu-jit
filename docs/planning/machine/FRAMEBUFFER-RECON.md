@@ -131,14 +131,17 @@ but the exact ROM-side *reader* has not been located.
 
 ### 2.2 Does the current 9.0.1 boot path reach a splash stage? No — and nothing ahead is display-shaped yet
 
-The frontier (M6A-WAVE2-SHIM-RECON "Frontier update", NK-syscall-surface closeout) is the
-**FE1F service surface**: the boot parks at 0x5000f248 after an F-line NK/DR service trap
-selector 0x31. The bounded capstone look there names the loop as **CFM/MixedMode
-accelerator slot-fill** (`_GetToolTrapAddress` on $AA7F + an ExpandMem-anchored pointer
-array) — the e3e0-family routine is CFM-prep, **not video-adjacent**. No probe, ring, or
-MMIO log on any 9.0.1 boot has ever shown a touch of a display-shaped address; the splash
-stage is an unknown number of walls past FE1F. (Same schedule caveat as the disk recon:
-this de-risks the plan, not the timing.)
+The frontier *(as of this recon; the FE1F surface has since SHIPPED, 2026-06-11 — the
+current frontier is the **DSAT stack-underflow wall**, M6A-WAVE2-SHIM-RECON "Frontier
+update, FE1F Task C closeout")* was the **FE1F service surface**: the boot parked at
+0x5000f248 after an F-line NK/DR service trap selector 0x31. The bounded capstone look
+there names the loop as **CFM/MixedMode accelerator slot-fill** (`_GetToolTrapAddress`
+on $AA7F + an ExpandMem-anchored pointer array) — the e3e0-family routine is CFM-prep,
+**not video-adjacent**. The conclusion survives the FE1F advance: no probe, ring, or
+MMIO log on any 9.0.1 boot has ever shown a touch of a display-shaped address (the
+post-FE1F regime dies in the DSAT System Error 10 alert path, still CFM/error-handling
+territory); the splash stage is an unknown number of walls ahead. (Same schedule caveat
+as the disk recon: this de-risks the plan, not the timing.)
 
 ### 2.3 The parcels ROM carries Apple's own generic display ndrv (`cofb`)
 

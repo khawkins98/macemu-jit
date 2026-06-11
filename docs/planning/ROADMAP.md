@@ -860,14 +860,21 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > RETURNS. **Newworld profile DEFAULT** (`SS_NW_SC_SURFACE=0` opt-out); the M3a descope
 > formally closed; zero falsifications, all gates green (12-suite era incl.
 > test_dev_openpic 206 checks).
-> **▶ IN FLIGHT: the FE1F service surface** — the boot parks at 0x5000f248, the instruction
-> after an F-line NK/DR service trap `$FE1F` selector d0=0x31 (CFM/ExpandMem
-> accelerator-slot fill) — captured per the stop-rule
-> (`M6A-WAVE2-SHIM-RECON.md` "Frontier update, Task C closeout"), THE named frontier.
-> Plan `2026-06-11-fe1f-service-surface.md` **rev 3 RATIFIED** (the raw `twi`
-> trap-placeholders are the design: restore them + an `EXC_PROGRAM` 0x700 delivery
-> surface, env gate `SS_NW_FE1F_SURFACE` default OFF); Task A landed (`669ccf7a`,
-> results `3b27fb9c`).
+> **FE1F service surface ✅ 2026-06-11** (plan `2026-06-11-fe1f-service-surface.md`
+> revs 2/3; evidence `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C;
+> arc `46649a23`…`03222907`, flip `be0e02cb`): the entry-vector "placeholders" are raw
+> `twi` **trap-to-NK-dispatch trampolines** (unknown ≠ dead; rung-2's dead-slot-stop
+> policy retired) — restored, plus an `EXC_PROGRAM` (0x700) delivery surface (the THIRD
+> resolved exception class, entry `0x50314700` NK-published `[KDP+0x37c]`, 2-SPR shim).
+> **First DR native callout round trip**: FE1F selector $31 → 0x700 → NK 'EVNT' service →
+> r3=0/r4=handle 0x00120001 → ExpandMem slot `[0x100037dc]` filled; boot 839k→4.48M ring
+> records; sc deliveries 13/9-distinct (the old "5" = cap-5 print artifact; per-selector
+> counter `2949ec32`). **Newworld profile DEFAULT** (`SS_NW_FE1F_SURFACE=0` opt-out);
+> zero falsifications.
+> **▶ THE named frontier: the DSAT stack-underflow wall** — System Error ID 10 from the
+> $36-callout return path (saved PC 0x5000e448, record-for-record reproducible); the
+> alert machinery itself underflows RAMBase → host SIGSEGV. Captured per the stop-rule
+> (`M6A-WAVE2-SHIM-RECON.md` "Frontier update, FE1F Task C closeout"); recon in flight.
 > M3b Wave 2: **OpenPIC model + 206-check suite landed** (`b86449c9`; LE register file,
 > CTPR=15 oracle corrections); **EE-chain recon** (`89fd0642`, `EE-CHAIN-RECON.md`)
 > recommends verification-first reorder W2-0..W2-4; external-source wiring +

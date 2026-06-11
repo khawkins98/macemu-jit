@@ -33,6 +33,12 @@ docs/superpowers/.claims/README.md
 - `CLAIM_LABEL` set: committing a path claimed under a *different* label fails.
 - `CLAIM_LABEL` unset ("no identity"): committing ANY claimed path fails.
 - No claims dir / no `.claim` files: the hook is a silent no-op.
+- **`CLAIM_LABEL` set, staging a path that nobody claims**: the hook **WARNS** to stderr
+  (`[CLAIMS] WARNING: staging unclaimed path <path> — verify it is all yours`). This is
+  NOT a failure: unclaimed paths are normal (most files have no active claim). The warning
+  exists because staging an unclaimed path during a concurrent multi-agent window might
+  include another agent's uncommitted work. When you see it, confirm the diff is yours
+  before proceeding. Post-mortem flag only — does not block the commit.
 
 ## Install / scope
 

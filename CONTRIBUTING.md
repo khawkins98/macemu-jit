@@ -25,7 +25,9 @@ blocking-answer tables → env-gated implementation with falsifiable gates →
 flip-last/revert-on-red acceptance → docs close-out) and its parallel workstream
 layer. Established 2026-06-11; every rule in it cites the incident that earned it.
 Skip it only for trivial mechanical changes. The canonical plan exemplar is
-`docs/superpowers/plans/2026-06-11-nk-syscall-surface.md`.
+`docs/superpowers/plans/2026-06-11-nk-syscall-surface.md`. Standing facts for
+machine-layer agents (boot recipes, instrument caveats, constants, gate tiers) live in
+one pack: `docs/AGENT-CONTEXT.md` — read it once at task start.
 
 ## Before You Start
 
@@ -58,15 +60,16 @@ cd ../../ && make build-ss          # then build as usual
 ```
 
 Each worktree builds its **own** binary/objects (good — no collision). Shared assets in
-`/Users/Shared/macemu/` (ROMs, ISOs) are read-only and safe to use from any worktree. **Only one
-emulator instance can run at a time** (shared SDL window / prefs), so if another agent is launching
-the emulator, restrict yourself to the **harnesses** — `make test-jit` and the standalone
-`rom-harness` exercise the JIT *without* opening the SDL window or booting, so they never collide.
+`/Users/Shared/macemu/` (ROMs, ISOs) are read-only and safe to use from any worktree.
+**Diagnostic boots go through the slot protocol** (`SheepShaver/tools/ss-slot-boot.sh` —
+see **Key Invariants** below): concurrent boots are isolated per-slot, so parallel agents
+no longer serialize on the emulator. The harnesses (`make test-jit`, the standalone
+`rom-harness`) exercise the JIT *without* booting and never collide either.
 To pull a parallel branch's commits in and avoid late surprises: `git merge <other-branch>`.
 
 ## Fast iteration loop
 
-Three tools cut the build→test→investigate cycle from minutes to seconds. Reach for them
+Four tools cut the build→test→investigate cycle from minutes to seconds. Reach for them
 before resorting to a full rebuild or a boot. Each has a canonical deep reference — this
 section is the discovery index, not a second copy of the details.
 
@@ -75,6 +78,7 @@ section is the discovery index, not a second copy of the details.
 | **ccache** | Warm SheepShaver rebuilds ~12× faster (clean-tree ~5.88s cold → ~0.48s warm). Opt in by re-running `configure` with `CC="ccache gcc" CXX="ccache g++"`. Per-checkout config state — each worktree/clone needs its own configure run. | The worktree `configure` recipe above; `CLAUDE.md` SheepShaver build section. |
 | **Batch harness** (`SS_HARNESS_BATCH=1 make test-jit`) | All vectors in one process per mode instead of one process per vector — **~3s vs ~32s**. Use for the inner loop; run plain `make test-jit` as the authoritative gate at least once per task/commit (process-per-vector isolation is the stronger contract). | `SheepShaver/jit-test/README.md` "Batch mode" — mechanics, per-vector reset, the content-vs-score equivalence proof. |
 | **SS_SEED_MEM** | No-recompile guest-memory poke — write a 32-bit word at a fixed address (immediate, at NW-trampoline-end) or at the first JIT visit of a PC (`0xPC:0xADDR=0xVAL`). Probe a fix hypothesis without rebuilding. | `SheepShaver/docs/DIAGNOSTICS.md` env-var table (forms, limits, `[SEED]` output); `CLAUDE.md` "Guest Memory Seeding". |
+| **Slot-protocol boots** (`ss-slot-boot.sh`) | Parallel, isolated diagnostic boots — per-slot prefs/logs/diag/NVRAM, lease-tracked PIDs, SIGTERM at the timeout so atexit dumps fire. Removes the old boot serialization between agents; never `pkill` by name. | `SheepShaver/tools/README-slots.md`; the rule in **Key Invariants** below. |
 
 **The equivalence lesson** (why batch mode's proof compares REGDUMP *content*, not scores):
 a batch run that omitted the FP/VR reset between vectors still passed `score=100` because
@@ -98,9 +102,18 @@ checklists below say *which* gates a given change touches; this table is the men
 | **ROM harness** | `make test-rom` (`SheepShaver/`) | Standalone headless JIT exerciser against a real OldWorld ROM | Broad JIT coverage check | `SheepShaver/rom-harness/README.md` |
 
 From the repo root, `make test` / `make test-jit` delegate to the SheepShaver harness.
-The live gates (`make e2e`, boots) open the shared SDL window — **only one emulator instance can
-run at a time** (see **Key Invariants** below); the harnesses (`test-jit`, `rom-harness`) do **not**
-boot, so they never collide with a running instance or a parallel worktree.
+
+**Which gates on which commit — the gate TIERS** (`docs/MILESTONE-WORKFLOW.md` §6, rev
+2026-06-11): per-commit inner tier (`make build-ss` + `SS_HARNESS_BATCH=1 make test-jit` +
+`make -C SheepShaver/src/machine test`, ~1 min warm); per-task final commit adds plain
+`make test-jit` + `make e2e-test`; risk-based `make e2e` when the change touches
+paravirtual-reachable code; doc-only commits need no gates. The table above is the menu;
+the tiers are the policy.
+
+The live gates (`make e2e`, boots) launch the emulator — diagnostic boots go through the
+**slot protocol** (see **Key Invariants** below), and `make e2e` runs its own isolated
+config; the harnesses (`test-jit`, `rom-harness`) do **not** boot, so they never collide
+with a running instance or a parallel worktree.
 
 ## Commit Style
 
@@ -184,7 +197,7 @@ tiers, new protocols). The sweep checklist:
 | `README.md` (top-level + SheepShaver/) | The project description/status doesn't contradict the trackers |
 | `docs/AGENT-CONTEXT.md` | Constants match code; recipes/knobs match DIAGNOSTICS; gate tiers match MILESTONE-WORKFLOW §6 |
 | `docs/MILESTONE-WORKFLOW.md` | The rules table reflects practice; new earned rules added with their incidents |
-| `docs/MAINTENANCE — MACHINE-LAYER-PLAN.md` header + `ROADMAP.md` status | Current-state lines true; "next" points at the real frontier |
+| `docs/planning/MACHINE-LAYER-PLAN.md` header + `docs/planning/ROADMAP.md` status | Current-state lines true; "next" points at the real frontier |
 | `SheepShaver/docs/DIAGNOSTICS.md` | Every live env knob documented; no documented knob removed from code |
 | CLAUDE.md (local, each contributor's) | Pointers resolve; the binding process section current |
 
@@ -343,10 +356,16 @@ clobbers NZCV. Flag-reading helpers (`emit_write_xer_ca_from_carry`,
 the low word. Safe today (PPC64 ops unreachable from 32-bit guests). Must fix before
 enabling G5/PPC64 paths.
 
-**One emulator instance at a time:** Instances share prefs, disk images, and SDL window.
-Kill strays with `pkill -9 -x SheepShaver`. Agents must not launch an emulator instance
-without asking the user first (the E2E harness — ROADMAP A5 — is the sanctioned, isolated
-exception: it uses its own prefs + a pristine per-run disk, never the user's config).
+**Emulator launches use the slot protocol — never `pkill` by name:** Diagnostic boots go
+through `SheepShaver/tools/ss-slot-boot.sh` (leased slots under `/tmp/ss-slots/`, per-run
+prefs/logs/diag/NVRAM isolation, SIGTERM at the timeout so atexit dumps fire); concurrent
+boots in different slots are safe (acceptance-verified 2026-06-11). **Never
+`pkill`/`killall` SheepShaver** — another agent or the user may own an instance; every
+kill must target a lease-recorded PID (`SheepShaver/tools/ss-reap.sh` does this for you).
+The user's interactive config (`~/.sheepshaver_prefs`, the user's disks) is sacred —
+agents never boot against it. The E2E harness (`make e2e`) runs its own isolated config
+*outside* the slot system (no lease) — never reap or manually kill during an e2e run.
+Full protocol: `SheepShaver/tools/README-slots.md`.
 
 ## Benchmarking
 

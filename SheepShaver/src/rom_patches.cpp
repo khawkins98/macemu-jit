@@ -1407,12 +1407,20 @@ bool PatchROM(void)
 		// (0x429da0, above the 0x429d9c free line, verify-zero-first):
 		// li r0,0; the displaced lwz; b 0x5046e1a4.  Staged copy ONLY (the
 		// primary 0x5036e1a0 image is not executed by the DR regime).
-		// Env-gated SS_NW_DR_R0_INVARIANT (the Task-0 bound name; default
-		// OFF, bring-up polarity).  Gated off, neither region is written —
-		// byte-identical DSAT baseline.  Paravirtual reach: NONE (inside
+		// NEWWORLD DEFAULT since the desync plan's Task C (acceptance battery
+		// green pre/post-flip) — explicit-"0"-only opt-out
+		// SS_NW_DR_R0_INVARIANT=0 (the SS_NW_SC_SURFACE/SS_NW_FE1F_SURFACE
+		// polarity precedent: getenv+strcmp, NOT MachineEnvFlag).  Opted out,
+		// neither region is written — byte-identical DSAT baseline
+		// ([$C70]:=0x5000e448 #3391708, [$AF0]:=0x000A #3391720±1, SIGSEGV
+		// ea=0x40000fffff42 @0x504661a0).  Paravirtual reach: NONE (inside
 		// this MachineProfileIsNewWorld()-early-returning lambda AND the env
 		// gate; legacy patch bodies untouched).
-		if (MachineEnvFlag("SS_NW_DR_R0_INVARIANT")) {
+		const char *r0inv_env = getenv("SS_NW_DR_R0_INVARIANT");
+		if (r0inv_env && strcmp(r0inv_env, "0") == 0) {
+			fprintf(stderr, "[NW-DR-R0] r0-invariant fix OFF (SS_NW_DR_R0_INVARIANT=0 "
+			        "opt-out) — the DSAT 68k PC-desync baseline is reproduced\n");
+		} else {
 			const uint32 site_offset = 0x46e1a0;       // mirror 0x5046e1a0 (slot-exit re-entry)
 			const uint32 site_expected = 0x8023010Cu;  // lwz r1, 0x10c(r3)
 			const uint32 r0_stub_offset = 0x429da0;    // staged zero run (free ≥ 0x429d9c)
@@ -1434,7 +1442,8 @@ bool PatchROM(void)
 				                                       // b 0x5046e1a4 (rejoin past the site)
 				const uint32 site_new = 0x48000000u |
 					((r0_stub_offset - site_offset) & 0x03FFFFFCu);  // b 0x50429da0
-				fprintf(stderr, "[NW-DR-R0] ARMED (SS_NW_DR_R0_INVARIANT): DR r0==0 "
+				fprintf(stderr, "[NW-DR-R0] ARMED (newworld default; opt-out "
+				        "SS_NW_DR_R0_INVARIANT=0): DR r0==0 "
 				        "invariant re-assert at switch-in resume 0x5046e1a0\n");
 				fprintf(stderr, "[NW-DR-R0] rewrite stub ROM+0x%x: 00000000x3 -> "
 				        "%08x %08x %08x (li r0,0; lwz r1,0x10c(r3); b 0x5046e1a4)\n",

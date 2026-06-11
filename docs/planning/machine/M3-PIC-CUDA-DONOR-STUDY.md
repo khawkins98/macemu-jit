@@ -625,6 +625,17 @@ future pick-up, so the seam stays clean:
    `de5d8bfd6105d3dd3ae668df9762df244a6d1506`.
 4. Track the deferred item in ROADMAP (M8+/platform features) when M3b lands.
 
+**Status (2026-06-11, M3b Wave 1 landed):** the minimal stub shipped exactly per this
+decision (`SheepShaver/src/include/adb_stub.h` + `adb_stub.cpp`, kbd@2/mouse@3 Talk R3,
+Listen-R3 address-move, Talk R0 empty; 90-check unit suite), behind the narrow interface
+required by item 1; item 4's ROADMAP obligation is discharged (D3 section, "Deferred
+(tracked)"). The Cuda SR state machine + command table are live (`dev_cuda.cpp` — the
+§3.3 "loud stub becomes real" item is done). One scope correction vs. this study: the
+§3.2 prose ORB bit table was wrong (TREQ=3/TACK=4/TIP=5, active-LOW — see the M3b plan's
+rev 2 C3 correction + boot polarity probe), and the M2-timer dependency softened — the
+shipped model is **lazy-delivery/poll-driven** (CV-10: settle on the VIA R_IFR read path),
+no eager one-shots required for the boot path.
+
 ### 7.3 Summary table
 
 | Component | Approach | Prerequisite | Estimated LOC | Risk |

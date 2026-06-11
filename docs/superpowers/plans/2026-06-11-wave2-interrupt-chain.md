@@ -160,7 +160,22 @@ The recon §C.1 spec, adopted verbatim. **Risk note: exc_core is LAW** — masks
 literal pins; this extraction is behavior-preserving with `test_exc_core`'s existing 25
 checks as the ratchet (zero existing checks change).
 
-- [ ] Extract into exc_core (pure; caller samples guest memory and passes words in):
+> **W2-0 DONE (2026-06-11).** Live-tree adjustments (drift accommodation, recorded in the
+> commits): (a) FE1F landed `program_entry`/EXC_PROGRAM after this plan was written —
+> `external_entry` is the FOURTH ExcEntryTable field (rev 2 F6's "third" is stale), the
+> existing exc_core ratchet is **37** checks (not 25), the exc= tuple is **6** fields, the
+> machine suite was 12 binaries (13 with test_exc_chain); (b) the live tree has FOUR
+> nested-return re-raise sites (interrupt / execute_68k / execute_macos_code / execute_ppc,
+> all the M3a Task 4.4 idiom), not one — all four routed through ExcEdgeReRaise via the
+> synthetic-full-edge form (behavior-identical); (c) the hook caller uses the two-phase
+> run-mode sampling idiom (pinned in the F13 caller-obligation comment) so [XLM_RUN_MODE]
+> is still only read after pending/depth/EE pass (harness lowmem stays untouched pre-W2-1/F2).
+> test_exc_chain = 62 checks (U1–U13; U12 per F6 mask-parity + unconsumed-external_entry pin;
+> U13 per tension 2 with the starvation predicate documented for W2-3). **Addendum pointer:
+> the F7 baseline-tuple gate is NOT discharged here — it rides W2-2's P1 boot** (the pre-W2-0
+> exc= tuple class comparison; W2-0's job was only to not break what it would catch).
+
+- [x] Extract into exc_core (pure; caller samples guest memory and passes words in):
   ```c
   enum ExcDecision { EXC_DECIDE_NONE, EXC_DECIDE_DEFER_DEPTH, EXC_DECIDE_DEFER_EE,
                      EXC_DECIDE_DEFER_NATIVE, EXC_DECIDE_DELIVER };
@@ -170,13 +185,13 @@ checks as the ratchet (zero existing checks change).
   ```
   **The gate ORDER is part of the contract** (pending → depth → EE → native — the `exc=`
   tuple counts per-gate; pin it in the header comment).
-- [ ] Refactor `deliver_pending_dec_exception` (glue:787–817) to call
+- [x] Refactor `deliver_pending_dec_exception` (glue:787–817) to call
   `ExcDeliveryDecision` — behavior-identical: same counters incremented per decision,
   same early-returns, latch untouched on deferral, cleared exactly once on DELIVER.
   Refactor the three re-raise sites (`execute_mtmsr` :1353–1360, `execute_rfi`
   :1644–1655, glue nested-return :744–748) to call `ExcEdgeReRaise` — behavior-identical
   (same `VirtClockDECPending` sampling, same `trigger_interrupt()`).
-- [ ] `test_exc_chain.cpp` (links exc_core + virt_clock; CHECK-counted, test_exc_core
+- [x] `test_exc_chain.cpp` (links exc_core + virt_clock; CHECK-counted, test_exc_core
   style): the recon's **U1–U12 verbatim** — U1 no-pending; U2 depth-outranks-EE; U3
   DEFER_EE; U4 EE-outranks-native; U5 DELIVER; U6 deferral retains the latch /
   delivery consumes exactly once (real VirtClock); U7 edge-predicate truth table
@@ -186,8 +201,8 @@ checks as the ratchet (zero existing checks change).
   round-trip (never double-consumes); U11 the [0x2810]-fence release (mode 1→0);
   U12 EXC_EXTERNAL parity (same decision logic for an EXT-pending input; ExcEnter
   EXC_EXTERNAL hits interrupt_entry with the same masks).
-- [ ] Makefile: add `test_exc_chain` to TESTS (suite ⇒ 13 binaries).
-- [ ] Gates: full gates (machine 13/13; test_exc_core's 25 checks UNCHANGED is the
+- [x] Makefile: add `test_exc_chain` to TESTS (suite ⇒ 13 binaries).
+- [x] Gates: full gates (machine 13/13; test_exc_core's 37 checks (live count; the plan's 25 predates FE1F) UNCHANGED is the
   explicit ratchet assertion; test-jit both modes 353/353 proves the glue/ppc-execute
   refactor is behavior-preserving on the harness surface). Commit.
 

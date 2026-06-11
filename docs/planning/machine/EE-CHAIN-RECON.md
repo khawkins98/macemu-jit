@@ -351,3 +351,263 @@ test-file level — the extraction touches `sheepshaver_glue.cpp`/`ppc-execute.c
 queue behind the current syscall work for the same owner. W2-2's P2 may fire the next
 M3-class surprise *on purpose, in a bounded session* — which is precisely the de-risking
 Re-score #2 asks for: better there than mid-boot during M4/M5.
+
+---
+
+## W2-2 static pre-recon (Q-W1 / Q-W2 / Q-W3 + publication-table bonus) — 2026-06-11
+
+> **Status:** static halves of the Wave-2 plan's Task W2-2 recon questions, front-loaded
+> while W2-0/W2-1 run (the questions don't depend on them). **READ-ONLY session — zero
+> boots used, zero source edits.** The P1/P2 boot legs of W2-2 remain owed; every claim
+> below that needs live confirmation carries an explicit residue.
+> **Provenance:** `/Users/Shared/macemu/dumps/` manifest check PASSED this session
+> (`rom901_inventory.bin` md5 7b1378be… [RAW-ROM]; `rom901.bin` md5 e432df64… [PATCH]).
+> All windows disassembled from the PATCHED image (what the guest executes), capstone PPC
+> BE, base 0x50000000; **every window was raw-vs-patched diffed** — divergent words are
+> called out inline as [PATCH-DIVERGENT] with the owning `rom_patches.cpp` patch named.
+> Staged-copy note: the delivery target 0x50412b1c is the staged (+0x100000) copy of
+> static 0x312b1c; M3A pinned 16 live words byte-identical at 0x50412b0c–48 [PROBE✓].
+> Branches inside the NK are relative ⇒ the staged copy self-references (+0x100000
+> throughout). Per-target byte re-confirmation beyond those 16 words = P1 residue (T-M1).
+
+### W2S-0. The load-bearing frame: the paravirtual patch seams ARE the chain's constants
+
+Diffing every window raw-vs-patched surfaced something the chain map only knew as live
+behavior — **three of the chain's standing mysteries are our own `rom_patches.cpp` edits
+to the NK, not NK design**:
+
+| Site (static) | RAW instruction(s) | PATCHED to | Patch (rom_patches.cpp) | Consequence |
+|---|---|---|---|---|
+| 0x3244d8–e0 (interrupt/trap exit tail) | `mtspr SRR0,r10; mtspr SRR1,r11; rlwinm…` (→ rfi exit) | `mtctr r10; mtcrf 0xff,r13; b 0x318000` | **`trap_return`** (:2417–2437; also rewrites the fast `lwz r6,0x18(r1); lwz r1,4(r1); rfi` at 0x324524 → `bctr`) | **THE EE-parker.** The raw NK resumes interrupted contexts via `rfi` with SRR1=r11 (the 0x313bf8 `ori r11,r11,0x8000`-forced image) — i.e. the kernel's DESIGNED exit raises EE. Our patch reroutes through the 0x318000 stub (`XLM_IRQ_NEST--; b 0x3244e4`) and a `bctr` (CTR=r10=resume PC), never writing MSR. §B's "EE first rises at the NK's first rfi" stands, but the reason no such rfi happens on the interrupt path is THIS patch. [STATIC] |
+| 0x312b00–04 (central-dispatcher save entry) | `addi r8,r1,0x360; mtspr SPRG3,r8` (swap SPRG3 → KDP+0x360 native vector table) | `li r8,0; stw r8,0x2810(0)` | **`m68k_excp_tbl`** (:2370–2381) | The famous `[0x2810]`-clear "switch-back fence write" (U11's modeled input) is a PATCH laid over the NK's **vector-regime swap**. Raw semantics: entering this path re-arms the NATIVE-regime vector table. |
+| 0x31154c (publication sequence) + 0x3113b8–c8 (init) | `mtspr SPRG3,r9` / `mtspr SPRG3,r8` + MQ probe | NOPs | **`sprg3` / `sprg3_mq`** (:1641–1666) | SPRG3 is NOT seeded at NK init on the live image. The M3A line "NK init sets SPRG3=KDP+0x360 ([STATIC] 0x3113b4)" cites a patched-OUT instruction — the +0x360 publication TABLE is real and probed, but live SPRG3 content is unpinned (other mtspr SPRG3 sites survive un-patched, e.g. 0x312db4, 0x312984). Residue W2S-R6. |
+| 0x312bd4 / 0x312c24 (`bnel`→`bl` 0x313ecc / 0x313e20), 0x313ecc/ed4/edc + 0x313e28–38 (mfmsr/mtmsr/isync→NOP) | conditional FP save/restore + MSR[FP] enable | unconditional, MSR untouched | **`save_fpu_caller` / `restore_fpu_caller` / `save_fpu` / `restore_fpu`** (:2304–2404) | FP state always saved/restored across the save/switch path; no MSR writes. Benign for W2; listed for window honesty. |
+
+Everything else cited below is raw==patched unless tagged.
+
+### W2S-1. Q-W1 — the delivery-target decode and the r7-flag tree
+
+**Identity of 0x50412b1c [STATIC]:** it is NOT a published vector handler. Static
+0x312b1c is four instructions into the NK's **context-SAVE-and-SWITCH routine**
+(0x312b0c–0x312bfc): save the interrupted world into the ctx in **r6** (r17–r31,
+r2–r5, XER/CTR via the slots M3A documented; the four pre-entry words 0x312b0c–18 store
+r7/[KDP-0xc] through r6 — the host shim's KDP writes substitute for them), FP save
+(`bl 0x313ecc`, [PATCH-DIVERGENT] unconditional), `stw r11,0xa4(r6)` (the SRR1/MSR
+image parks in **ctx+0xa4** — R-7's static half: THIS is the slot the raw rfi tail
+would consume via r11), then **switch**: `lwz r8,0(r9); stw r9,-0x14(r1)`
+([KDP-0x14] := r9 = the NEW current ctx), `xoris r7,r7,0x80` (toggle flags bit
+0x00800000 — the world-parity bit flips on every switch), `rlwimi r11,r8,0,0x14,0x17`
++ `rlwimi r7,r8,0,0x11,0x1f` (new ctx word[0] supplies MSR-image bits 0x0F00 and the
+**low 15 flag bits**), `mr r6,r9`, then a full register RESTORE from the new ctx
+(0x312c00–0x312cac) falling into the bounce at **0x312cb0**.
+
+**The canonical (non-shim) entry** is the central event dispatcher at **0x312ab4**:
+`mtcrf 0x3f,r7` (CR fields 2–7 := flag bits), `rlwimi r7,r8,0x18,0,7` (**event code
+r8 → r7 top byte**), per-code counter `[KDP+0xdc0+code*4]++`, then:
+`blt cr4 → 0x314a38` (flags bit 0x8000: alternate-space fast return);
+`bne cr2 → 0x312f70` (**bit 0x00200000 CLEAR** ⇒ "not from emulator" leg — task-level
+accounting + lock path); code<0xc → 0x312a28 (extended-state save tail); code==0xc →
+0x312f70; else fall to 0x312af8: `r9 := [KDP+0x658]`, the [PATCH-DIVERGENT] `[0x2810]:=0`
+(raw: SPRG3 swap), `bltl cr2 → 0x312dd4` (**bit 0x00800000 set** ⇒ kernel-notify call),
+then the SAVE-and-SWITCH above. **So on the canonical path, r9 = [KDP+0x658] (the
+scheduled-context slot) and the CR is flags-composed before entry.**
+
+**The r7-flag tree at the bounce (0x312cb0/0x312ccc) — the table:**
+
+| Condition on r7 (post-switch flags) | Arm | What it does |
+|---|---|---|
+| `r7 & 0x30 == 0` | fast resume | `[KDP-0x10]:=r7; [KDP-0x114]:=0; b 0x3242a8` → reschedule gate: if `r7&0x8000` or `[KDP-0x118]==0` → restore tail 0x3244cc (`mtlr r12; mtctr r10; mtcrf 0xff,r13; b 0x318000` [PATCH-DIVERGENT: raw = SRR0/SRR1+rfi] → `XLM_IRQ_NEST--` → reload r0/r6–r13 from ctx → `bctr` to r10); else (`[KDP-0x118]` byte set, set by the EXT 0x8da1 return) → **scheduler**: lock 0x312700, `[KDP+0xee4]++`, `bl 0x324a98` |
+| bit 0x10 set, bit 0x01 clear | post-flags consume | clear 0x10 (+0x20), `blr` back into the fast-resume store |
+| bit 0x10 set, bit 0x01 set (heavy leg 0x312cfc), bit **0x00800000 set** | **68k-interrupt post & dispatch** (0x312d04) | copy ctx volatiles into the KDP frame, r25 := `[KDP+0x650]` composed with r17 (68k SR) / r19 bits, `lhz r26,0xd20(r25)` (pending-level halfword) + `mtcrf 0x10,r26`, `lha r22,0xc00(r25)`+`add r22,r25` (dispatch-offset table), **`mtspr SPRG3, KDP+0x4e0`** (swap to the 68k-regime vector table; old SPRG3 → r24), set MSR[DR] (`ori 0x10` + isync), `bnelr` → the 68k emulator's interrupt dispatch; fall-through → 0x31591c = **`li r0,-3; sc`** (NK self-call, fast-negative selector −3) |
+| heavy leg, bit 0x00800000 CLEAR | kernel-task notify (0x312dd4) | `bl 0x3238ac` (nonvol save), ID-directory lookup `bl 0x325380` on `[r31+0xf4]`, lock 0x312700 — the kernel-object notification family (same lock/directory machinery as the sc services) |
+| bits 0x10 AND 0x20 both set at 0x312ce4's recheck | double-event error | `li r8,8; b 0x312ab4` — re-dispatch as event code 8 |
+
+**The R-9 arm (bit 0x00200000 set) — static behavior:** the bounce tree itself **never
+tests 0x00200000**. The bit is consumed at: (a) 0x3143a0's `bnel cr2` (pinned, rung 2);
+(b) the dispatcher's `bne cr2 → 0x312f70` ("not-from-emulator" leg) and `bltl cr2`
+(that one is cr2.lt = bit 0x00800000); (c) **the NK's own 68k-post service at 0x3254e0**:
+`r23:=[KDP+0x67c]`, compose `r28 := level|0x8000`, **test `rlwinm. r8,r7,0,0xa,0xa`
+(bit 0x00200000) — beq SKIPS the post** — else `sth r28,0(r23)` (store pending level
+through the [KDP+0x67c] pointer — byte-identical in effect to paravirtual
+HandleInterrupt's `WriteMacInt16([[KDP+0x67c]],1)`) and OR `[KDP+0x674]` (CR mask) into
+r13 (the saved CR) / AND `[KDP+0x678]`. Callers: 9 tail-branches from the 0x3258e0–0x326380
+service bodies + init-time `bl 0x3254a0` ×2. **[KDP+0x67c]-target-class answer: the NK
+posts 68k interrupts exactly the paravirtual way — pending-level halfword via the
+[KDP+0x67c] pointer + [KDP+0x674] CR-mask OR into the saved CR — and the V-seed bit
+0x00200000 is a PRECONDITION for that post.** So the armed bit does not change the
+delivery-time arm; it ENABLES the NK's posting of 68k interrupts from its service legs.
+
+**Three shim-vs-canonical mismatches found at the 0x412b1c entry (P1/P2 must watch):**
+1. **r9 is NOT seeded by the M3a shim** (glue:920–957 re-read this session: r1/r6/r7/r8/
+   r10/r11/r12/r13 only). The entry path consumes r9 as the new ctx (`[KDP-0x14]:=r9`,
+   full register restore from it). On the canonical path r9=[KDP+0x658]. A delivery with
+   live-garbage r9 corrupts [KDP-0x14] and restores garbage registers. Delivery #1
+   survived — r9's live value at the trampoline was never probed. **P1 probe upgrade:
+   add `r9` (and `[0x68ffe658]`) to the 0x50412b1c probe fields.**
+2. **cr6/cr7 are caller-CR garbage at shim entry** (the CR splice covers fields 1–3
+   only). The save's `bns cr6` arm (68k extra-register save) and the bounce's first
+   `mtcrf 0x3f,r7` re-derivation mostly mask this, but the pre-bounce conditional saves
+   key off live cr6 — flags-vs-CR consistency is NOT established by the shim.
+3. **Every delivery through the patched restore tail decrements XLM_IRQ_NEST** (the
+   0x318000 stub — staged copy 0x418000) **with no matching increment on the shim path**
+   ⇒ each delivered DEC drifts the nest counter −1 (0xFFFFFFFF → 0xFFFFFFFE → …).
+   Harmless to `HandleInterrupt`'s `>0` early-out (stays negative) but it is the
+   pre-named link-8 drift signature: P1's `SS_JIT_WATCH_ADDR=2818` (hex, F3) should see
+   exactly one −1 step per delivery. [STATIC]
+
+### W2S-2. Q-W2 — IACK/EOI and source discrimination: the verdict
+
+**The EXT body (0x314880, primary; raw==patched) [STATIC]:**
+```
+bl    0x313d40            ; the SHARED save prologue (same as sc/program):
+                          ;   [KDP+4]:=SPRG1, [KDP+0x18]:=r6, r6:=[KDP-0x14] ctx,
+                          ;   r0,r7..r13 -> ctx+0x104/0x13c..0x16c, r10:=SRR0, r11:=SRR1,
+                          ;   r13:=CR, r12:=SPRG2, r7:=[KDP-0x10]  <-- FLAGS SELF-LOADED
+rlwinm. r9,r11,0,0x10,0x10 ; SRR1 bit 0x8000 (EE at interrupt time)
+beq   0x313ab0            ; EE was 0 => PANIC "*** CPU MALFUNCTION - Masked interrupt
+                          ;   punched through. SRR1/0" (ASCII at 0x313ab4) [STATIC]
+lwz   r9,-0x338(r8); lwz r9,0x20(r9); cmpwi r9,2
+blt   0x314660            ; [[KDP-0x338]+0x20] < 2 => fallback: mtlr [KDP+0x5b0]; blr
+bl    0x3238ac            ; save nonvolatiles
+li    r9,9; stw r9,-0x238(r8)   ; *** SOURCE CODE IS A CONSTANT: 9 -> [KDP-0x238] ***
+li    r8,1; bl 0x3148e0   ; dispatch through the REGISTERED-HANDLER table:
+                          ;   index = [KDP-0x238]<<2 (because r8!=0); table base
+                          ;   [[KDP-0x338]+0x38], bound [[KDP-0x338]+0x44];
+                          ;   no table -> r8=0xffff8d9a; index OOB -> 0xffff8d99;
+                          ;   else save r10-r13/XER/CTR/LR/r6/r7 to KDP-0x2d0..-0x2b0,
+                          ;   address-space check [r22+0x4c] vs [KDP-0x1c]
+                          ;   (bl 0x323f78 = space switch), call the handler
+bl    0x32391c            ; restore nonvolatiles
+cmpwi r8 vs 0x8da2/0x8da3/0x8da1:
+  0x8da2 -> 0x314660 (fallback [KDP+0x5b0])      0x8da3 -> b 0x312cb0 (bounce)
+  0x8da1 -> stb 1,[KDP-0x118]; b 0x312cb0 (sets the RESCHEDULE byte -> scheduler)
+  else (incl. 0x8d9a/0x8d99 errors) -> 0x314660 (fallback)
+```
+
+**Verdict (Q-W2):**
+1. **NO IACK read, NO EOI write, anywhere in the NK.** The EXT body and everything
+   reachable ≤2 levels (0x313d40, 0x3238ac, 0x3148e0, 0x32391c, 0x323f78, 0x314660,
+   0x312cb0 family) contain zero loads/stores in the 0xF3040000+0x40000 window. A
+   whole-NK scan (0x310000–0x330000) for `lis` imm 0xF300–0xF3FF found exactly 3 hits
+   (0x3259fc/0x325b3c/0x325c44) — all **segment-register setup** (`mfsrin/mtsrin`) for
+   the 0xF3 space, not device access. **The NK expects the REGISTERED handler (OS-side
+   code, installed via the [[KDP-0x338]+0x38] table) to read the PIC** — on real
+   hardware that is Mac OS's native interrupt dispatcher. The NK's source
+   discrimination is (a) by ENTRY POINT (per-vector published handlers — F6's expected
+   verdict CONFIRMED) and (b) within EXT, a **hardcoded source code 9** indexing the
+   registered-handler table — no hardware query at all.
+2. **DEC reconciliation:** the published DEC handler 0x313200 = same prologue + the same
+   EE-punch-through guard, then: `[KDP+0x5a0]` hook installed? → `bl 0x324a98`
+   (scheduler-class service) + conditional DEC reprogram from `[KDP-0x9d4]`
+   (`mtspr DEC` at 0x313234) → `b 0x312cb0`; no hook → kernel timer service
+   (lock 0x312700, `[KDP+0xe8c]++`, `bl 0x322eac`, unlock 0x3272e0) → `b 0x312cb0`.
+   DEC differs from EXT ONLY in body (timer service vs handler-table dispatch); both
+   share prologue, EE guard, and the bounce exit. **Neither touches r9 or the
+   save-and-switch entry** — the published handlers are self-contained.
+3. **What W2-3's shim must compose for an EXT delivery to `external_entry=0x50314880`:
+   exactly the sc/program 2-SPR shim — SPRG1:=caller r1, SPRG2:=caller LR — and nothing
+   else.** The prologue self-loads r7 from [KDP-0x10] (no [KDP+0x660] composition), the
+   save target is [KDP-0x14] (NK-maintained), and ExcEnter's SRR1 (= interrupted MSR,
+   EE=1 by the delivery gate) satisfies the punch-through guard for free. The DEC-shim's
+   ECB/[KDP+0x65c] register-save logic does NOT transfer (same verdict as sc Q-S2).
+4. **Level-held latch consequence:** since the NK never EOIs, PIC pending retires only
+   when the guest's registered handler (or a mask write) drops it. Pre-installation
+   ([[KDP-0x338]+0x20]<2 or empty/short table) every EXT delivery exits through the
+   **[KDP+0x5b0] fallback pointer** — runtime value unprobed (residue W2S-R3). W2-3's
+   re-delivery tripwire is therefore load-bearing from delivery #1, exactly as rev 2 C1
+   anticipated.
+5. **Implied follow-up, now with static teeth (carried from F6):** the M3a DEC delivery
+   target 0x50412b1c is the save-and-switch body, NOT a handler; the published
+   0x50313200 route is self-contained, r9-free, and ends in the same restore tail.
+   Re-pointing DEC delivery at the published handler (+ the 2-SPR shim instead of the
+   ECB save) is the architecturally clean direction — **out of W2-2 scope, named for
+   W2-3+ consideration** (the asymmetry note in M3A stands).
+
+### W2S-3. Q-W3 — the flags-word bit table
+
+The NK's live flags word is **[KDP-0x10]** (init: `oris r7,r8,0xa0; stw r7,-0x10(r1)`
+at 0x3113f0 ⇒ boots with 0x00800000|0x00200000 set — matching the probed live
+0x00a00006). **[KDP+0x65c]/[KDP+0x660] are the EMULATOR-WORLD interface pair**, written
+together by NK switch code at 0x314640/0x314644 (`stw r6,0x65c(r8); stw r7,0x660(r8)`)
+and read back by the slot-exit stubs; the published handlers never read +0x660 — the
+prologue reads [KDP-0x10]. Bit family ([STATIC] unless noted):
+
+| Bit(s) | CR map (mtcrf 0x3f/0xff) | Meaning (evidence) |
+|---|---|---|
+| 0xFF000000 | — | pending **event code** (top byte): inserted `rlwimi r7,r8,0x18,0,7` at 0x312ac8, read `srwi r9,r7,0x18`; per-code counters [KDP+0xdc0+code*4]. Codes seen: 0 (alt-table EXT body 0x3146e0), 2 (slot-exit default body 0x3146d0), 8 (double-event error), 9 (EXT's registered-table index, via [KDP-0x238] not the flags byte), 0xc (special-cased at 0x312aec/0x312fc0) |
+| 0x00800000 | cr2.lt | **world parity: "current world = emulator ctx"** — init-set, `xoris r7,r7,0x80`-TOGGLED on every save-and-switch (0x312bec); gates the heavy leg's 68k-post-vs-kernel-notify split (0x312cfc) and the `bltl cr2` notify call (0x312b08) |
+| 0x00200000 | cr2.eq | **"from emulator"** — the V-seed; switch-service classifier (0x3143a0), dispatcher leg select (`bne cr2`→0x312f70 when CLEAR), and **precondition of the NK's 68k-interrupt post** (0x325518 test before `sth →[[KDP+0x67c]]`) |
+| 0x00008000 | cr4.lt | fast-return / skip-reschedule (0x3242ac test; 0x3148f4 `blt cr4`→0x314a38 alternate-space return) |
+| 0x00000020 | cr6.eq | post-action secondary flag (cleared in the tree; 0x20+0x10 both set ⇒ code-8 error). Stub-composed: `rlwimi r7,r7,27,0x20` ⇒ bit5 := bit 0x400 of the +0x660 copy |
+| 0x00000010 | cr6.so | **post-action pending** (primary): arms the 0x312ccc tree at all |
+| 0x00000001 | cr7.so | **heavy-post selector**: with 0x10 ⇒ 68k-interrupt post-and-dispatch (0x00800000 set) or kernel-task notify (clear) |
+| low 15 bits (0x7FFF) | cr4–cr7 | per-context bits: REPLACED from new-ctx word[0] on every switch (`rlwimi r7,r8,0,0x11,0x1f`); ctx word[0] bits 0x0F00 also feed the MSR image (`rlwimi r11,r8,0,0x14,0x17`) |
+| 0x80000000 | cr0 (via rlwimi.) | stub-derived mirror of 0x00800000 (`rlwimi. r7,r7,8,0x80000000`) — a COMPUTED bit, not stored state |
+
+**Q-W3 verdict: there is no "external pending" bit.** External-ness is carried by the
+vector (entry point) and, inside the NK, by the constant source code 9 → the
+registered-handler table. **The W2-3 shim sets NO flag bits for EXT** (and none for DEC
+via the published handler); the [KDP+0x660] V-seed stays exactly as Task V left it —
+its job is the switch-service classification and enabling the NK's 68k posting, not
+delivery routing. What the hook composes per class is only the ExcEnter SRR0/SRR1/MSR
+transition + the 2-SPR shim.
+
+### W2S-4. Bonus — the [KDP+0x360] publication: it is a FAMILY of per-regime tables
+
+The publication sequence ([STATIC] 0x311500–0x31178x; one [PATCH-DIVERGENT] word — the
+`mtspr SPRG3,r9` arming at 0x31154c is NOP'd by `sprg3`) builds **five vector tables**
+(48 slots / 0xC0 bytes each, slot = vector>>6, all slots pre-filled with the default
+handler **0x50314b80** = `SRR0+=4; rfi` — unhandled vectors SKIP the faulting
+instruction!) and the 16-slot slot-exit table:
+
+| Table base | Regime (evidence) | Non-default slots (vector → handler, primary copy) |
+|---|---|---|
+| **KDP+0x360** | NK/native (the published table M3A/Q-S1 probed; raw SPRG3 target of the m68k_excp_tbl site) | 0x100→0x503272e0 · 0x200→0x50313a04 · 0x300→0x503132c0 · 0x400→0x50313940 · **0x500→0x50314880** · 0x600→0x50313460 · **0x700→0x50314700** · 0x800→0x50313da0 (FP-unavail: enables MSR[FP], **rfi — un-patched rfi exit**) · **0x900→0x50313200** · **0xC00→0x50314ac0** · 0xD00→0x50314b60 · **0xF00→0x50314240** · 0x1600→0x50317440 · 0x1700→0x50314300 · 0x2000→0x50314b60 |
+| KDP+0x420 | second regime (68k-emulator-resident? — its EXT differs) | same as +0x360 EXCEPT **0x500→0x503146e0** (`bl 0x313d40; mtcrf 0x3f,r7; bnel cr2→(island b 0x3272e0); li r8,0; b 0x312ab4` — EXT-as-event-code-0 into the central dispatcher) |
+| KDP+0x4e0 | **the table SPRG3 is swapped to when dispatching INTO the 68k emulator** (0x312db4 `mtspr SPRG3, KDP+0x4e0`, un-patched) | 0x100→0x503272e0 · 0x200→0x503137c8 · 0x300→0x503135a0 · 0xC00→0x50314ac0; **EXT = the 0x50314b80 skip-and-rfi default** |
+| KDP-0x8d0 | third regime | 0x100→0x503272e0 · 0x300→0x503132c0 · 0x400→0x50313940 · 0x600→0x50313460 (then `bl 0x319ce0` continues init) |
+| KDP-0x750 | fourth regime | 0x100→0x503272e0 · 0x200→0x50313a04 · 0x300→0x50313b40 · 0xC00→0x50314ac0 |
+| KDP+0x5f0 (0x40 bytes, 16 slots) | **slot-exit selector table** | filled with default 0x503146d0 (`bl 0x313d40; li r8,2; b 0x312ab4` — slot-exit-as-event-code-2); live [KDP+0x5f0]=0x50313bf8 / [KDP+0x5f4]=0x503143a0 [PROBE✓ rung 2] ⇒ later init overwrites at least slots 0/1 (writer not located this session — residue) |
+| KDP-0x690 | fifth regime | default-fill only in this sequence |
+
+Menu consequence for future classes: a vector's handler is **per-regime** — "the
+published handler" must name its table. The M3A generalization
+(`probe [KDP+0x360+(vector>>6)]`) reads the NATIVE-regime table; that is the right one
+for ExcEnter-style delivery while [0x2810]=0 (the raw NK would have SPRG3=KDP+0x360
+there — the m68k_excp_tbl patch site's raw arm). Re-publication sites exist (0x316888 /
+0x31697c re-point 0x37c-class slots — debugger/service installs); live table contents
+can drift from this init picture (the probed values match it today).
+
+### W2S-5. Residues (what only P1/P2 boots can pin)
+
+- **W2S-R1 (P1, blocking-adjacent):** r9 and [KDP+0x658] at the 0x50412b1c delivery
+  instant (shim mismatch #1). **Probe-spec upgrade: P1's 0x50412b1c probe should carry
+  `r9,[0x68ffe658],[0x68ffdff0]`** ([KDP-0x10] — the REAL flags input of published
+  handlers; the plan's `[0x68ffe660]` field watches the interface copy, still wanted).
+- **W2S-R2 (P1):** the XLM_IRQ_NEST −1-per-delivery drift signature (watch 2818 hex).
+- **W2S-R3 (P1):** live `[KDP+0x5b0]` (EXT fallback), `[KDP-0x338]` + its +0x20/+0x38/
+  +0x44 fields (registered-handler table state at the frontier — decides whether W2-3's
+  first EXT delivery dispatches or falls back), `[KDP+0x5a0]` (DEC hook), `[KDP-0x118]`
+  (reschedule byte), `[KDP-0x238]`.
+- **W2S-R4 (P2):** whether the storm's deliveries traverse the 68k-post leg (probe
+  0x50412d04-class visits / `[0x68ffe67c]`-target writes — F9's field already rides P1).
+- **W2S-R5:** per-target byte re-confirmation of the staged copies beyond 0x50412b0c–48
+  (0x50413200/0x50414880 windows if W2-3 delivers to staged; PRIMARY copies probed
+  already per Q-S1).
+- **W2S-R6:** live SPRG3 value/regime on the boot path (init arming is patched out;
+  swap sites survive) — matters only if anything ever consumes the vector stubs.
+- **W2S-R7:** the writer that installs 0x50313bf8/0x503143a0 over the KDP+0x5f0/5f4
+  defaults (not located; cheap static follow-up).
+- **W2S-R8:** 0x3272e0 serves both as the slot-0x100 (system reset) table entry and as
+  the syscall memo's "unlock" — one of the two readings is an alias/misattribution;
+  immaterial to W2, flagged for the next static pass.
+
+### W2S-6. Blocking-answer table impact (the W2-2 gate rows, static-half status)
+
+| Blocking answer | Static half | Boot half still owed |
+|---|---|---|
+| Q-W1 r7 tree + R-9 arm | **PINNED** (§W2S-1 table; R-9 arm = enabler of the NK 68k-post, not a delivery-time branch) | r9/cr6 shim-mismatch live values (W2S-R1); P2 storm behavior |
+| Q-W2 IACK/EOI + discrimination | **PINNED** (no NK IACK/EOI; entry-point + constant code 9 + registered table; shim = 2-SPR; F6 external_entry=0x50314880 CONFIRMED static) | [KDP-0x338] table state at frontier (W2S-R3) |
+| Q-W3 [KDP+0x660] encoding | **PINNED** (bit table §W2S-3; no EXT-pending bit; shim composes nothing) | [KDP-0x10] live value at delivery (rides W2S-R1) |
+| P2 chain READY/BROKEN | — | entirely boot-half (P2) |
+| Nest balance (link 8) | drift MECHANISM pinned static (W2S-R2 signature pre-computed) | live confirmation (P1) |

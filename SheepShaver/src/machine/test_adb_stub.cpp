@@ -163,6 +163,22 @@ int main()
 	CHECK(reply[0] == 2 && reply[1] == 1);
 	CHECK(cmd(TALK(13, 3)) == -1);                  // old moved address gone
 
+	// --- Listen R3 address byte: upper-nibble flag bits are masked off
+	//     (oracle: d->devaddr = buf[1] & 0xf) ---
+	static const uint8_t mv_flags[2] = { 0x6A, 0xFE };
+	CHECK(listen(LISTEN(2, 3), mv_flags, 2) == 0);
+	CHECK(adb.kbd_addr == 0x0A);
+
+	// --- Kbd unsupported handler id (5, not in 1/2/3): address moves,
+	//     handler unchanged ---
+	{
+		uint64_t hc0 = adb.handler_changes;
+		static const uint8_t mv_h5[2] = { 0x02, 0x05 };
+		CHECK(listen(LISTEN(10, 3), mv_h5, 2) == 0);
+		CHECK(adb.kbd_addr == 2 && adb.kbd_handler == 1);
+		CHECK(adb.handler_changes == hc0);
+	}
+
 	// --- Reserved cmd group (low nibble 0x2/0x3): present -> 0, absent -> -1
 	//     (oracle: devreq matches neither WRITEREG nor READREG -> olen 0) ---
 	CHECK(cmd((uint8_t)((2 << 4) | 0x02)) == 0);
@@ -175,7 +191,11 @@ int main()
 		CHECK(n <= 1);
 		CHECK(small[1] == 0xAA);                    // byte beyond reply_max untouched
 		n = ADBStubCommand(&adb, TALK(2, 3), NULL, 0, small, 0);
-		CHECK(n <= 0);
+		CHECK(n == 0);
+		// Negative reply_max is clamped to 0 — it must NOT alias the -1
+		// absent-device sentinel for a present device.
+		n = ADBStubCommand(&adb, TALK(2, 3), NULL, 0, small, -1);
+		CHECK(n == 0);
 	}
 
 	// --- ADBStubReset (power-on) zeroes telemetry + autopoll plumbing ---

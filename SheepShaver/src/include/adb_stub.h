@@ -62,7 +62,8 @@ struct ADBStub {
 
 	// --- extra telemetry (appended after the pinned fields; M3b Task 2) ---
 	uint64_t flushes;          // Flush commands to present devices (acked)
-	uint64_t moves;            // Listen R3 address changes applied
+	uint64_t moves;            // Listen R3 address-set commands applied (counted
+	                           //   even if the new address equals the old one)
 	uint64_t handler_changes;  // Listen R3 handler-id changes applied
 	uint64_t listens_ignored;  // Listen R3 payloads rejected (bad length)
 	uint64_t absent_other;     // non-Talk commands addressed to absent devices
@@ -78,6 +79,8 @@ extern void ADBStubReset(ADBStub *a);
 // Fills reply[] with DATA bytes only (no Cuda framing). Returns:
 //   >=0  data length (0 = success, no data — e.g. Talk R0 with no input)
 //   -1   no device at address (Cuda frames as timeout status 0x02)
+// Writes at most reply_max bytes (longer replies are clamped); a negative
+// reply_max is treated as 0 so it can never alias the -1 sentinel.
 extern int ADBStubCommand(ADBStub *a, uint8_t cmd,
                           const uint8_t *listen_data, int listen_len,
                           uint8_t *reply, int reply_max);

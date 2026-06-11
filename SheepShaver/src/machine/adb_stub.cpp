@@ -143,6 +143,9 @@ int ADBStubCommand(ADBStub *a, uint8_t cmd,
 {
 	uint8_t low = cmd & 0x0F;
 
+	if (reply_max < 0)
+		reply_max = 0;          // a negative budget must not alias the -1 sentinel
+
 	// SendReset is bus-wide (oracle do_adb_request: cmd == ADB_BUSRESET resets
 	// every device regardless of the address nibble). Restores default
 	// addresses/handlers; telemetry and autopoll plumbing are untouched.
@@ -180,7 +183,8 @@ int ADBStubCommand(ADBStub *a, uint8_t cmd,
 		return 0;
 	}
 
-	// Reserved low nibbles 0x2/0x3: oracle devreq matches neither WRITEREG nor
-	// READREG -> zero-length success.
+	// Everything else (reserved low nibbles 0x2/0x3 and the unassigned 0x4-0x7
+	// group): oracle devreq matches neither WRITEREG nor READREG -> zero-length
+	// success.
 	return 0;
 }

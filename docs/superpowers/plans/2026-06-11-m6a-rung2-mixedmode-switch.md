@@ -418,3 +418,31 @@ re-checked — W's warm arm uses the displaced original slot-0 stub which exits 
 (Task X refines the scratch-word protocol if needed). Task X collapses into: the
 [KDP+0x5f0/4] mirror-retarget verification + the post-W2 re-census + the X
 sub-contracts. Then Y (acceptance + flip-last) and Z (docs) as planned.
+
+### Rev 3.1 — W2 red-team verdict folded (GO-WITH-CHANGES; the corrected design is BINDING)
+1. Slot-1 side = a retargeted **switch-on-only 7-word region** in PatchROM_NW_trampoline
+   (mirror-only; retarget mirror table word 0x5046e8c4 with **verify-EXPECTED ==
+   0x4800113c** before writing — the verify-zero idiom's sibling for nonzero sites;
+   stub: mtctr r1 / lwz r1,0x2804(0) / lis+ori r0=ECB / stw r0,0x65c(r1) / mfctr r1 /
+   b 0x5046fa00; clobbers r0/CTR only). NOT an in-place prepend, NOT patch_68k_emul.
+2. Warm-arm flip: 5 words ([KDP+0x65c]:=MMCB via explicit r28=KDP re-derive) inserted
+   after the pool re-asserts, before mfctr r28/b 0x5046f900; verify-zero-first over the
+   enlarged 0x429d00 region (~28+5 words).
+3. **DEC fence lands NOW** (cheap, inert while delivered=0): deliver_pending_dec_exception
+   defers while ReadMacInt32(0x2810) != 0 (XLM_RUN_MODE — NK-maintained 1-forward/
+   0-backward on exactly this switch pair). Long-term residue: shim save target →
+   [KDP-0x14] on newworld.
+4. **STRIKE the [KDP+0x5f0/4] retarget from Task X** — live values are NK-rebuilt staged
+   addresses (0x50313bf8/0x503143a0, Q-C probe authoritative); the warm path traverses
+   them correctly; retargeting would destroy both switch directions. Task X verifies-and-
+   leaves; design doc §1.3's wrinkle paragraph gets corrected.
+5. Correct the falsified "no NK writer of 0x658" claims (addendum + rom_patches
+   ~:1031-1033): one cold-init writer at static 0x310834 (the live-garbage source),
+   pre-table[0], cold-arm seed wins; register the reset-re-init residue.
+6. Optional one-word hardening: cold-arm [KDP-0x14]:=ECB.
+7. New residues: stale-MMCB window vs slots 2/3/5 if ever consumed; backward-half
+   mid-switch DEC once EE is live ([0x2810]=0 during the backward save — benign by
+   same-values, recorded).
+[KDP+0x660] stays a persistent OR (both directions need cr2eq). [KDP+0x658] stays
+cold-seed-only (constant emulator-ctx word). MSR: no rfi on the switch path — nothing
+to flip (Q-E re-confirmed).

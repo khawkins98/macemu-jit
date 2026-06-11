@@ -50,8 +50,9 @@ test_exc_core: test_exc_core.cpp exc_core.cpp ../include/exc_core.h
 
 # M3b Wave 1 (Tasks 1+2). test_dev_cuda mocks the ADB handler (injected callback)
 # so it does NOT link adb_stub.cpp — the two modules build/test independently.
-test_dev_cuda: test_dev_cuda.cpp dev_cuda.cpp event_sched.cpp ../include/dev_cuda.h ../include/event_sched.h
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_cuda.cpp dev_cuda.cpp event_sched.cpp
+# (No event_sched link either: dev_cuda is lazy-only, plan rev 2 M4.)
+test_dev_cuda: test_dev_cuda.cpp dev_cuda.cpp ../include/dev_cuda.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_cuda.cpp dev_cuda.cpp
 
 test_adb_stub: test_adb_stub.cpp adb_stub.cpp ../include/adb_stub.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_adb_stub.cpp adb_stub.cpp

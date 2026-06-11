@@ -171,6 +171,8 @@ struct CudaDevice {
 	uint64_t cmd_acked;          // other known commands acked (file server etc.)
 	uint64_t cmd_bad_param;      // known command, wrong arg count/value
 	uint64_t cmd_unknown;        // unknown pseudo command / packet type
+	uint8_t  last_unknown_type;  // packet type of the most recent unknown
+	uint8_t  last_unknown_cmd;   // command byte of the most recent unknown
 	uint64_t resets_latched, powerdowns_latched;   // loud-log, no action
 	// warning latch (unknown command / RESET / POWERDOWN; §2g latch-if-empty:
 	// one pending at a time, taking it re-arms — VIATakePendingWarning pattern)

@@ -361,6 +361,23 @@ int main()
 		std::vector<uint8_t> r = read_response(); // now actually read it
 		CHECK(r.size() == 7);
 	}
+	// Sync arriving MID-pending-response: the TACK-negate edge of the sync
+	// clears TREQ, but the next idle ORB write with the untouched queued
+	// response must RE-assert it (pins the "keep signalling" branch — QEMU
+	// "signal if there is data to read"; carried review follow-up).
+	{
+		static const uint8_t gt_pkt[] = { CUDA_PKT_PSEUDO, CUDA_CMD_GET_TIME };
+		send_packet(gt_pkt, 2);
+		CHECK(treq_bit() == 0);                   // response pending, untouched
+		(void)orb_write(0x28);                    // sync: TACK asserts, TIP negated
+		CHECK(treq_bit() == 0);                   // mirror keeps TREQ low
+		(void)orb_write(0x38);                    // sync end: TACK negates -> TREQ clears
+		(void)orb_write(0x38);                    // idle write, response still queued
+		CHECK(treq_bit() == 0);                   // TREQ re-asserted: host comes back
+		std::vector<uint8_t> r = read_response();
+		CHECK(r.size() == 7);                     // response survived the sync
+		CHECK(treq_bit() == 1);
+	}
 	// No ADB handler bound => absent framing (defensive)
 	{
 		CudaBindADB(&cuda, 0, 0);
@@ -373,7 +390,16 @@ int main()
 		char buf[512];
 		CHECK(CudaFormatStats(&cuda, buf, sizeof(buf)) > 0);
 		CHECK(strstr(buf, "packets=") != 0);
-		CHECK(strstr(buf, "unknown=") != 0);
+		// carried review follow-up: unknown=N(last=T:CC) names the most recent
+		// unknown (the bogus packet type 0x07 above was the last one).
+		CHECK(cuda.cmd_unknown == 3);
+		CHECK(strstr(buf, "unknown=3(last=7:00)") != 0);
+		CHECK(CudaFormatStats(&cuda, buf, 0) == 0);   // zero-length guard
+		// fresh device: plain unknown=0 (no last suffix)
+		CudaDevice fresh;
+		CudaReset(&fresh, 0, 0);
+		CHECK(CudaFormatStats(&fresh, buf, sizeof(buf)) > 0);
+		CHECK(strstr(buf, "unknown=0 ") != 0);
 	}
 
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);

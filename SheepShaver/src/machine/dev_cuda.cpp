@@ -279,6 +279,8 @@ static void pseudo_command(CudaDevice *c, uint8_t cmd, const uint8_t *a, int n)
 		// Unknown command (ONE_SECOND_MODE 0x1B lands here deliberately, plan
 		// m2): well-formed error per both oracles + counter + latched warning.
 		c->cmd_unknown++;
+		c->last_unknown_type = CUDA_PKT_PSEUDO;
+		c->last_unknown_cmd = cmd;
 		warn_latch(c, "Cuda: unknown pseudo command (see cmd_unknown counter)");
 		resp_error(c, CUDA_ERR_BAD_CMD, CUDA_PKT_PSEUDO, cmd);
 		break;
@@ -327,6 +329,8 @@ static void process_packet(CudaDevice *c)
 		break;
 	default:
 		c->cmd_unknown++;
+		c->last_unknown_type = p[0];
+		c->last_unknown_cmd = p[1];
 		warn_latch(c, "Cuda: unsupported packet type");
 		resp_error(c, CUDA_ERR_BAD_PKT, p[0], p[1]);
 		break;
@@ -416,10 +420,19 @@ uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr)
 
 size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen)
 {
+	if (!buflen) return 0;
+	char unk[40];
+	if (c->cmd_unknown)
+		// carried review follow-up: name the most recent unknown (type:cmd, hex)
+		snprintf(unk, sizeof(unk), "%llu(last=%X:%02X)",
+		         (unsigned long long)c->cmd_unknown,
+		         c->last_unknown_type, c->last_unknown_cmd);
+	else
+		snprintf(unk, sizeof(unk), "0");
 	int n = snprintf(buf, buflen,
 	    "packets=%llu responses=%llu syncs=%llu bytes_in=%llu bytes_out=%llu "
 	    "adb=%llu adb_absent=%llu get_time=%llu set_time=%llu autopoll=%llu "
-	    "pram_rd=%llu pram_wr=%llu acked=%llu bad_param=%llu unknown=%llu "
+	    "pram_rd=%llu pram_wr=%llu acked=%llu bad_param=%llu unknown=%s "
 	    "resets=%llu powerdowns=%llu overflows=%llu",
 	    (unsigned long long)c->packets, (unsigned long long)c->responses,
 	    (unsigned long long)c->syncs, (unsigned long long)c->bytes_in,
@@ -428,7 +441,7 @@ size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen)
 	    (unsigned long long)c->cmd_set_time, (unsigned long long)c->cmd_autopoll,
 	    (unsigned long long)c->cmd_pram_read, (unsigned long long)c->cmd_pram_write,
 	    (unsigned long long)c->cmd_acked, (unsigned long long)c->cmd_bad_param,
-	    (unsigned long long)c->cmd_unknown, (unsigned long long)c->resets_latched,
+	    unk, (unsigned long long)c->resets_latched,
 	    (unsigned long long)c->powerdowns_latched, (unsigned long long)c->in_overflows);
 	if (n < 0) return 0;
 	return (size_t)n < buflen ? (size_t)n : buflen - 1;

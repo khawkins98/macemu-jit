@@ -790,7 +790,41 @@ bool PatchROM(void)
 		tp[22] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
 		tp[23] = htonl(0x60004F00u);  // ori  r0, r0, 0x4f00    → r0=0x68ff4f00 ('Hnfo' record)
 		tp[24] = htonl(0x901C0000u);  // stw  r0, 0(r28)        [KDP+0xfd0] = record
-		tp[25] = htonl(0x3B800000u);  // li   r28, 0            (restore trampoline invariant)
+		uint32 idx = 25;
+		// M6a Wave 2 recon (MPLibrary reboot-loop diagnosis): the DR emulator's
+		// Mixed Mode Magic path (opcode 0xFE01, the $AAFE RoutineDescriptor
+		// service) allocates a 0x220-byte 68k-context save record from a pool
+		// the NK provisions in the ECB on real hardware:
+		//   [ECB+0xE0] record array base (virtual)   [ECB+0xE4] base (physical)
+		//   [ECB+0xE8] existence bitmap              [ECB+0xEC] in-use bitmap
+		// Allocator at staged 0x5046e304: cntlzw([0xE8] & ~[0xEC]); if no free
+		// bit it branches to entry-vector slot +0x3c (0x5046e8fc) — ZERO in the
+		// static table — and the zero-fall-through stub re-enters table[0] →
+		// this trampoline's cold start → 68k reset → the ~80 ms reboot loop.
+		// Probe-verified live: all four words read 0 at the bail.
+		// SS_NW_MM_POOL=1 (default OFF) seeds a 4-record pool at 0x68ff5000
+		// (free gap in the mapped+zeroed sub-KDP region, below the NK pool
+		// free-list at KDP-0x7000). V=P flat model → both bases identical.
+		// Guest-side (per-cycle) like the Hnfo re-assert: NK cold-init rebuilds
+		// the ECB every cycle, so glue-time seeds would not survive.
+		// Diagnostic A/B instrument: moves the bail past the allocator so the
+		// NEXT missing NK surface is observable; not a production fix (the
+		// ongoing-entry/table-slot population is Wave-2 — see
+		// M6A-WAVE2-SHIM-RECON.md "MPLibrary bail" section).
+		const bool mm_pool = MachineEnvFlag("SS_NW_MM_POOL");
+		if (mm_pool) {
+			tp[idx++] = htonl(0x3F8068FFu);  // lis  r28, 0x68ff
+			tp[idx++] = htonl(0x639CF000u);  // ori  r28, r28, 0xf000 → r28=ECB
+			tp[idx++] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
+			tp[idx++] = htonl(0x60005000u);  // ori  r0, r0, 0x5000   → 0x68ff5000
+			tp[idx++] = htonl(0x901C00E0u);  // stw  r0, 0xE0(r28)    pool base (virt)
+			tp[idx++] = htonl(0x901C00E4u);  // stw  r0, 0xE4(r28)    pool base (phys, V=P)
+			tp[idx++] = htonl(0x3C00F000u);  // lis  r0, 0xF000       → 4-slot bitmap
+			tp[idx++] = htonl(0x901C00E8u);  // stw  r0, 0xE8(r28)    existence bitmap
+			tp[idx++] = htonl(0x38000000u);  // li   r0, 0
+			tp[idx++] = htonl(0x901C00ECu);  // stw  r0, 0xEC(r28)    in-use bitmap
+		}
+		tp[idx] = htonl(0x3B800000u);  // li   r28, 0            (restore trampoline invariant)
 
 		// M6a Wave 1, UserModeMSR transition (memo §5.2; plan rev 2 findings 1+5).
 		// The unpatched ROM's jump68k dispatch tail does mtsrr0/mtsrr1/rfi with
@@ -813,12 +847,11 @@ bool PatchROM(void)
 		// rung-2 recon.  When OFF the trampoline is byte-identical to the
 		// no-MSR-write layout (27 insns since Wave 2, same branch word).
 		const bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
-		uint32 b_idx = 26;
+		uint32 b_idx = idx + 1;
 		if (user_msr) {
-			tp[26] = htonl(0x3C000000u);  // lis  r0, 0             r1-independent immediate load
-			tp[27] = htonl(0x6000D032u);  // ori  r0, r0, 0xd032    r0 = UserModeMSR (EE=1, PR=1)
-			tp[28] = htonl(0x7C000124u);  // mtmsr r0               (EE-edge re-raise fires)
-			b_idx = 29;
+			tp[b_idx++] = htonl(0x3C000000u);  // lis  r0, 0             r1-independent immediate load
+			tp[b_idx++] = htonl(0x6000D032u);  // ori  r0, r0, 0xd032    r0 = UserModeMSR (EE=1, PR=1)
+			tp[b_idx++] = htonl(0x7C000124u);  // mtmsr r0               (EE-edge re-raise fires)
 		}
 		// b → mirror cold-start 0x5046e964 (offset computed from the b's own slot)
 		tp[b_idx] = htonl(0x48000000u |
@@ -846,7 +879,8 @@ bool PatchROM(void)
 		        tramp_offset, (unsigned)(b_idx + 1));
 		fprintf(stderr, "[NW-TRAMP] fixup: r31=0x68fff000 r30=0x50460000 "
 		        "r29=0x50480000 guest[4]=0x5000002a guest[0]=0x00100000 "
-		        "user-msr=%s\n", user_msr ? "ON (SS_M6A_USER_MSR)" : "off");
+		        "user-msr=%s mm-pool=%s\n", user_msr ? "ON (SS_M6A_USER_MSR)" : "off",
+		        mm_pool ? "ON (SS_NW_MM_POOL: ECB+0xE0/E4=0x68ff5000 E8=0xF0000000)" : "off");
 		fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
 		        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
 		        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "

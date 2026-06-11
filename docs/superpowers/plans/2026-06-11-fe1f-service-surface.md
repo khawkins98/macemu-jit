@@ -405,3 +405,108 @@ backlog stays parallel.
 ## Red-team record
 
 *(empty — a red-team round follows this draft; findings to be folded as rev 2 markers)*
+
+## Rev 2 (2026-06-11) — both red-team rounds folded (BINDING; overrides the body where in conflict)
+
+**The contracts review settled the milestone's two load-bearing contracts STATICALLY —
+the body's Q-F2/Q-F3 theories are corrected as follows:**
+
+- **(T-C1) THE SEED THEORY IS WRONG — `[ECB+0x9dc]` is already filled; the park is an
+  UNPOPULATED ENTRY-VECTOR SLOT.** Glue's 0x97-entry loop (`sheepshaver_glue.cpp:2163-2166`)
+  writes ECB+0x7fc..0xa54 — covering the whole 0x9a0..0x9e0 continuation block — from
+  the ROM halfword table at file **0x36dc42** (raw==patched). Index 0x79 (→0x9e0) =
+  0xde1c → mirror-rebased **0x5046de1c = the rung-2 FE01 [PROBE✓] value** (the
+  "writer never identified" mystery closed). Index 0x78 (→0x9dc, FE1F) = 0xe8e0 →
+  **0x5046e8e0 = entry-vector table slot 8** — a raw `0fff0008` placeholder, ZERO in
+  the patched primary. The park = `blrl` into an unpopulated vector slot. **Task A
+  re-aims: populate mirror vector slot 8 (the table-redirect class move — the Task-T/U
+  idiom: verify-EXPECTED/zero, PatchROM-time) with whatever the real boot installs
+  there — Q-F2 pivots to "what does the real init install in slot 8" (THE stop-rule
+  question: if the slot-8 service body is unstaged, trigger 1).** PROBE-F2 becomes a
+  CONFIRMATION: `[ECB+0x9dc]==0x5046e8e0` + the live mirror bytes at 0x5046e8e0
+  ([PROBE✓] required — mirror is in no dump).
+- **(T-C2) THE SUCCESS PREDICATE WAS INVERTED + the tail misread.** The 0xf240 stub is
+  one Pascal-convention wrapper: arg at 8(a6), result space at 0xc(a6). `202e 0008` =
+  `move.l $8(a6),d0` (the caller's POINTER ARG reload, never zero at the e3e0 site) —
+  the beq.s is a null-arg guard, NOT a result test; the store-through always executes.
+  **A0 (← r4) lands in the ExpandMem slot; D0 (← r3) is the status at 0xc(a6) — and
+  0 = noErr (the error arms store nonzero: 0xffff8d8e, paramErr −50).** Q-F3's
+  conformance table: success = r4(→A0) pointer-class slot value AND r3(→D0) = 0-class
+  status. Task B gate (c)'s "d0==0 skip-arm not taken" is DELETED (vacuous); the
+  conformance observable = the slot-fill (gate (e)) + the e3e0 re-entry arm. The same
+  misreading exists in M3A-ENTRY-TABLE.md "Task C results" — Task Z corrects it.
+- **(T-M1)** "No entry-vector-slot involvement" is FALSE (slot 8 IS the continuation);
+  the no-world-flip conclusion survives (slot 8 = mirror emulator-world code).
+- **(T-M2) The glue table loop is dead-on-arrival AND latently buggy** (`hw | page_base`
+  OR-corrupts page bits; primary-world base) — a real builder (DR cold start, the
+  0x36e964 cluster) overwrites with mirror-base values. Glue-time ECB seeds in this
+  block are the dead-seed class; PatchROM-time mirror vector-slot patching sidesteps
+  the ECB entirely. The latent OR-vs-ADD/wrong-world glue bug gets its own ticket
+  (Task Z registers it; fixing it is OUT of this milestone).
+- **(T-M3) Family shape corrected:** FE10..FE1E (except FE11) share a
+  raise-68k-exception body (0x36d760, vectors 0x2c/0x28); FE11 is `b 0x36da1c`
+  (table word 0xe8dc = vector slot 7); **FE1F is the ONLY marshaled-callout slot, and
+  it has NO null check before `blrl`** — H1 (one-shot-never-returns) structurally
+  corroborated with the park target PREDICTED: blrl → 0x5046e8e0 (zero/placeholder).
+  Q-F4 tests that exact prediction.
+- **(T-minors):** sibling FE1F stub at file 0xf260, selector **$36** (arg in/out via
+  $c/$10(a6)) — the diagnostic map's concrete second selector; the seed-precedent
+  range corrected (glue writes ctx+0xfc/+0x1c4/+0x1ec where ctx=ECB+0x100, + the
+  table at +0x7fc..0xa54); M3A "mismatch⇒error" polarity nit (error fires on EQUALS
+  the $9F unimplemented address); raw slot-id quirk (slot 14 duplicates 0x0d);
+  ctx-save clobber risk on 0x9dc is LOW (the builder, not ctx save, is the writer
+  to respect); capstone-M68K eats `fe1f` as `fsmove` — hand-split required.
+
+**Process findings folded:**
+
+- **(P-C1) Q-F1 joins the blocking set** (Task A blocks on Q-F1+Q-F2+Q-F3+Q-F5-verdict;
+  transitively B/C) and is **probe-mandatory** — no static residue path exists (mirror
+  facts are [PROBE✓]-only); losing its boots IS a trigger-3 residue. The per-task table
+  is a residue-disposition map, not a start-order license (all blocking answers pinned
+  before ANY implementation task).
+- **(P-C2) Task A's gate gains a seed-observing row**: probe memory field at absolute
+  `[0x68fff9dc]` (ECB=0x68fff000, MMCB=0x68fff400 — constants now stated) confirming
+  the continuation, PLUS the live mirror slot-8 words showing the LANDED population
+  (the change itself, not the baseline-true entry conformance — which is annotated
+  baseline-true, validating Q-F3's table only). **The V1-with-empty-fix-list middle
+  case routes to trigger 1** ("recon found no provisioning obligation explaining the
+  park ⇒ re-scope, Task A does not start") — though T-C1 has likely mooted it (the
+  obligation is slot 8).
+- **(P-M1) Task B gate (c) replaced** per T-C2 (the store-through observable is
+  derived from gate (e), not independently instrumented).
+- **(P-M2) Gate (e) gets its tool + address recipe**: Q-F3(b) delivers the id→index
+  map + THE index for the f240 site + the slot-address recipe (probe field `[0x2b6]`
+  → ExpandMem+$310+4·index); instrument = `SS_JIT_WATCH_ADDR` on the resolved slot
+  address (hex, SS_JIT_TRACE_RING=1; the WATCH line beats a point read) with a
+  probe-field fallback.
+- **(P-M3) Q-F4's PRIMARY discriminator = probe visit counts** at 0x5046db44/0x5046db6c;
+  the ring reading is corroboration only, with dedup semantics + capacity re-verified
+  in writing (cite DIAGNOSTICS.md "Machine Layer M6a rung 2" ring section).
+- **(P-M4) World-flip/MSR routing added to Q-F4**: any continuation world-flip/MSR
+  write is BLOCKING for Task B (pin the DEC-fence/EE-conditioning interaction);
+  EE-required-for-progress ⇒ trigger 1.
+- **(P-M5) Task B gate (a) annotated**: meaningful under H1 only; under H2 it is
+  baseline-true → recorded N/A, evidence rests on (d)/(e). (Post-T-M3, H1 is the
+  strong expectation.)
+- **(P-M6) Provenance anchors stated**: raw md5 `7b1378be…` (+ the 16-placeholder
+  fingerprint at 0x36e8c0), patched md5 `e432df64…` (recorded in
+  M6A-ONGOING-ENTRY-DESIGN.md); re-dump re-baselines the PATCHED md5 only — the raw
+  image re-establishes only from the original .rom.
+- **(P-M7) Budget restated honestly**: total recon boots ≤9 = ≤8 newworld + ≤1
+  paravirtual donor (the donor boot is recon, charged against the stated cap; the
+  precedent cite dropped); **(P-m1)** the SS_DUMP_ROM re-dump and the baseline
+  re-confirmation each charge the newworld budget; **(P-m2)** Q-F2(b)'s bound =
+  ≤12 functions TOTAL across all roots (largely mooted by T-C1's static answer);
+  **(P-m3)** absolute-address recipes stated (probe 0x5046db44 with field
+  `[0x504F70F8:0x8]` for the slot words); **(P-m5)** env-matrix shape pre-stated
+  (FE1F surface with MM_SWITCH=0 or SC_SURFACE=0 ⇒ inert + one loud `[NW-FE1F]`
+  misconfig line; Task A confirms, not invents); **(P-m6)** an FE1F-callout counter
+  (the exc=/HB idiom) is the COUNT instrument; probes are the ABI instrument;
+  **(P-m7)** the transition COUNT is jitter-class (excluded from byte-identical),
+  ring-tail PCs are gated.
+
+**Net rev-2 shape change:** Task A = populate mirror entry-vector slot 8 per Q-F2's
+pivoted recon (what the real init installs), PatchROM-time, env-gated; Task 0's probe
+pack confirms the static chain ([ECB+0x9dc]=0x5046e8e0, slot 8 zero, body route) and
+pins the slot-8 service contract. Everything else (gates, flip-last, stop-rule)
+carries with the corrections above.

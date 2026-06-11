@@ -213,4 +213,12 @@ extern const char *CudaTakePendingWarning(CudaDevice *c);
 // into caller buffer; no FILE*).  Returns chars written.
 extern size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen);
 
+// Register the prod Cuda instance for crash-path telemetry (M3b Task 3; same
+// pattern as VIARegisterDiagInstance).  CudaFormatStatsRegistered formats the
+// registered instance's counters — counters-read-only, snprintf into a caller
+// buffer, safe on the SIGSEGV dump path; returns 0 when nothing is registered
+// (paravirtual stays silent by construction).
+extern void CudaRegisterDiagInstance(CudaDevice *c);
+extern size_t CudaFormatStatsRegistered(char *buf, size_t buflen);
+
 #endif

@@ -119,6 +119,8 @@
 #include "mmio_bus.h"
 #include "dev_scc8530.h"
 #include "dev_via6522.h"
+#include "dev_cuda.h"
+#include "adb_stub.h"
 #include "virt_clock.h"
 #include "event_sched.h"
 #if defined(__linux__) && defined(__aarch64__)
@@ -1355,6 +1357,27 @@ static void vclk_dump_stats_atexit(void) { VirtClockDumpStats(&g_virt_clock, std
 // warning at exit. Behavior is otherwise identical to the prior static locals.
 static SCC8530 scc;
 static VIA6522 via;
+// M3b Task 3: Cuda protocol model + minimal ADB stub, bound behind the VIA's
+// SR/ORB surface at bus bring-up (newworld/bus gate only — paravirtual never
+// touches them; the VIA stays in M1 loud-stub mode there).
+static CudaDevice cuda;
+static ADBStub adb;
+// Injected Cuda services. now_mac wraps the paravirtual local-time convention
+// (plan rev 2 m8: macos_util.cpp TimeToMacTime, Mac-epoch LOCAL seconds — do
+// not re-derive UTC). §2g note: this runs at GET_TIME packet commit under the
+// bus region lock, potentially on the Mach handler thread; tzset() ran at
+// startup so localtime_r does not initialize/allocate on this path.
+static uint32_t cuda_now_mac(void *)
+{
+	return TimeToMacTime(time(NULL));
+}
+// Thin adapter onto the Task 2 ADB stub (signatures match by design).
+static int cuda_adb_adapter(void *opaque, uint8_t cmd, const uint8_t *listen_data,
+                            int listen_len, uint8_t *reply, int reply_max)
+{
+	return ADBStubCommand((ADBStub *)opaque, cmd, listen_data, listen_len,
+	                      reply, reply_max);
+}
 static void mmio_dump_stats_atexit(void)
 {
 	MMIOBusDumpStats(stderr);
@@ -1373,6 +1396,18 @@ static void mmio_dump_stats_atexit(void)
 	// engines are PPC-probe-invisible; the written bit pattern is the evidence).
 	if (VIAFormatOrbTrace(&via, via_hist, sizeof(via_hist)))
 		fprintf(stderr, "[VIA] orb: %s\n", via_hist);
+	// M3b Task 3: drain the Cuda's latched warning (same pattern as the VIA's —
+	// latched on fault-reachable paths where stdio is forbidden, §2g) and dump
+	// the protocol counters. This atexit only registers inside the bus gate,
+	// so paravirtual output is untouched.
+	const char *cuda_pending = CudaTakePendingWarning(&cuda);
+	if (cuda_pending)
+		fprintf(stderr, "[CUDA] warning: %s\n", cuda_pending);
+	if (cuda.orb_writes || cuda.sr_reads || cuda.sr_writes) {
+		char cuda_stats[512];
+		if (CudaFormatStats(&cuda, cuda_stats, sizeof(cuda_stats)))
+			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
+	}
 }
 
 // ---
@@ -1827,6 +1862,17 @@ int main(int argc, char **argv)
 		// M6a Wave 2 #4: alarm-killed boots skip atexit, so the heartbeat carries
 		// the top-2 read registers too (hb_append_mmio_suffix -> VIAFormatTopReads).
 		VIARegisterDiagInstance(&via);
+		// M3b Task 3: Cuda + ADB stub behind the VIA SR/ORB seam. Lazy-only
+		// timing (plan rev 2 M4, decision recorded at the seam in dev_via6522):
+		// dev_cuda arms NO scheduler one-shots — the settle-on-read backstop is
+		// the primary mechanism, so nothing on this path can allocate on the
+		// Mach fault path. Reset order: ADB stub first (the Cuda binds it).
+		ADBStubReset(&adb);
+		CudaReset(&cuda, cuda_now_mac, NULL);
+		CudaBindADB(&cuda, cuda_adb_adapter, &adb);
+		VIABindCuda(&via, &cuda);
+		CudaRegisterDiagInstance(&cuda);   // crash-path stats (sheepshaver_glue)
+		fprintf(stderr, "[CUDA] model bound to via6522 SR/ORB seam (lazy-only; ADB stub kbd@2 mouse@3)\n");
 		atexit(mmio_dump_stats_atexit);
 		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000 (%s), scc 0xF3012000, via 0xF3016000\n",
 		        mmio_strict ? "strict fence: abort on unmodeled" : "absent-device stub");

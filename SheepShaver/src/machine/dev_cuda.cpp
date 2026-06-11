@@ -446,3 +446,17 @@ size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen)
 	if (n < 0) return 0;
 	return (size_t)n < buflen ? (size_t)n : buflen - 1;
 }
+
+// Crash-path telemetry instance (M3b Task 3; VIARegisterDiagInstance pattern).
+static CudaDevice *g_diag_cuda;
+
+void CudaRegisterDiagInstance(CudaDevice *c)
+{
+	g_diag_cuda = c;
+}
+
+size_t CudaFormatStatsRegistered(char *buf, size_t buflen)
+{
+	if (!g_diag_cuda) return 0;
+	return CudaFormatStats(g_diag_cuda, buf, buflen);
+}

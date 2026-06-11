@@ -28,6 +28,7 @@
 #include "macos_util.h"
 #include "machine_profile.h"
 #include "mmio_bus.h"
+#include "dev_cuda.h"
 #include "virt_clock.h"
 #include "exc_core.h"
 #include "block-alloc.hpp"
@@ -1244,8 +1245,16 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// the bus telemetry here, before the heavier register/disasm/trace dumps
 	// that can themselves re-fault. The fault PC is a normal guest PC (not a
 	// bus dispatch), so no device lock is held — reading the counters is safe.
-	if (MachineUsesMMIOBus())
+	if (MachineUsesMMIOBus()) {
 		MMIOBusDumpStats(stderr);
+		// Machine Layer M3b (Task 3): Cuda protocol counters on the crash path
+		// too — same reasoning, counters-read-only (CudaFormatStatsRegistered
+		// snprintfs the registered instance's plain counters; returns 0 until
+		// bus bring-up registers it, so paravirtual/early crashes stay silent).
+		char cuda_stats[512];
+		if (CudaFormatStatsRegistered(cuda_stats, sizeof(cuda_stats)))
+			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
+	}
 	// Machine Layer M2 acceptance instrumentation (Task 8): same reasoning for
 	// the virtual-clock telemetry — the [VCLK] atexit dump never runs on the
 	// signal-death path, and the seam DoD asserts mtspr_dec/mfspr_dec counts.

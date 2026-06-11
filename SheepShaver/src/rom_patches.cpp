@@ -1028,25 +1028,52 @@ bool PatchROM(void)
 			// the completion calls table[0] with r3=0xff (THE COMMAND BYTE
 			// rides in r3) and LR=0x500ef258 (its continuation) → 0x50313cc8
 			// `beq cr2` → 0x50312af8 `lwz r9, 0x658(r1)` — the switch-back
-			// TARGET ctx is **[KDP+0x658]**, live-probed GARBAGE (=1): the
-			// NK never writes it (no `stw …,0x658(r1)` in the NK image; on
-			// real hardware the Trampoline/emulator-init seeds it) and the
-			// restore-from-junk resumed at a data address (boot-3 SIGSEGV,
-			// resume PC 0x68fff740).  Semantics = "the 68k-emulator context
-			// block" (the paravirtual CR-injection writes the parked
+			// TARGET ctx is **[KDP+0x658]**, live-probed GARBAGE (=1).
+			// Writer census (W2 rev 3.1 item 5 correction of the original
+			// "no NK writer" claim): ONE cold-init writer exists in the NK
+			// image — `stw r12,0x658(r1)` at static 0x310834 (dump-verified,
+			// the live-garbage source).  It runs during NK cold-init, i.e.
+			// BEFORE table[0] dispatch, so this cold-arm seed wins; there is
+			// NO post-init/switch-path writer.  Residue: an NK reset/re-init
+			// would re-run 0x310834 and re-garbage the word while the
+			// discriminator scratch stays warm (addendum residue R-15).
+			// The restore-from-junk resumed at a data address (boot-3
+			// SIGSEGV, resume PC 0x68fff740).  Semantics = "the 68k-emulator
+			// context block" (the paravirtual CR-injection writes the parked
 			// emulator's saved CR at [[KDP+0x658]]+0xdc — sheepshaver_glue
 			// :2276, main_unix :2678; ECB ctx slot +0xdc = saved r13/CR,
 			// design doc §2.1) → seed [KDP+0x658] = ECB 0x68fff000.
 			// KDP-page state ⇒ trampoline-resident timing like the V seeds;
 			// the trampoline itself is at its 48-word budget, so the seed
 			// lives on THIS cold arm (same once-per-boot, post-NK-init).
+			//
+			// W2 rev 3.1 item 6 (one-word hardening, red-team endorsed):
+			// cold-arm `[KDP-0x14]:=ECB` right after the [KDP+0x658] seed —
+			// [KDP-0x14] is the NK's "current context" word (the forward hit
+			// path writes [KDP-0x14]:=pair); seeding it to the ECB gives the
+			// pre-first-switch window a sane current-ctx instead of NK-init
+			// junk.  Register state verified: r28=KDP, r0=ECB live there.
+			//
+			// W2 rev 3.1 item 2 (THE warm-arm world flip, R-12): the warm
+			// arm now performs the [KDP+0x65c] current-world flip —
+			// [KDP+0x65c] is the slot-stub SAVE TARGET (`lwz r6,0x65c(r1)`,
+			// design doc §1.3) and must hold the OUTGOING world's ctx: ECB
+			// while the 68k world runs (forward switch parks the emulator
+			// there), MMCB during native excursions (the warm switch-back
+			// must park the NATIVE ctx there, not overwrite the parked
+			// emulator — Task-W boot 5's self-switch).  The warm arm runs
+			// exactly when the native completion re-enters via table[0], so
+			// set [KDP+0x65c]:=MMCB (0x68fff400) here, before the slot-0
+			// stub saves through it.  The ECB-restoring half of the flip is
+			// the slot-1 retargeted region below (forward direction).
+			// Region: 30 words, 0x429d00..0x429d74 (end exclusive 0x429d78).
 			static const uint32 w_code[] = {
 				0x7F8903A6u,  // 0x429d00: mtctr r28          stash caller r28 (CTR dead: arrived via bctr)
 				0x3F8068FFu,  // 0x429d04: lis   r28, 0x68ff
 				0x639C6080u,  // 0x429d08: ori   r28, r28, 0x6080 → r28 = R2 scratch 0x68ff6080
 				0x801C0000u,  // 0x429d0c: lwz   r0, 0(r28)
 				0x2C000000u,  // 0x429d10: cmpwi r0, 0         (cr0 only — cr2 is the DR mode field)
-				0x40820024u,  // 0x429d14: bne   +0x24 (warm arm 0x429d38)
+				0x40820028u,  // 0x429d14: bne   +0x28 (warm arm 0x429d3c)
 				// cold arm — r0/r28/CTR free by the cold-start contract:
 				0x38000001u,  // 0x429d18: li    r0, 1
 				0x901C0000u,  // 0x429d1c: stw   r0, 0(r28)    scratch := 1 (cold exactly once)
@@ -1055,18 +1082,25 @@ bool PatchROM(void)
 				0x3C0068FFu,  // 0x429d28: lis   r0, 0x68ff
 				0x6000F000u,  // 0x429d2c: ori   r0, r0, 0xf000   → r0 = ECB
 				0x901C0658u,  // 0x429d30: stw   r0, 0x658(r28) [KDP+0x658] = emulator ctx (NK switch-back target)
-				0x4BFFFE0Cu,  // 0x429d34: b     0x50429b40    → the cold trampoline
+				0x901CFFECu,  // 0x429d34: stw   r0, -0x14(r28) [KDP-0x14] = ECB (item-6 hardening: current ctx)
+				0x4BFFFE08u,  // 0x429d38: b     0x50429b40    → the cold trampoline
 				// warm arm — preserves everything except r0/cr0/CTR:
-				0x3F8068FFu,  // 0x429d38: lis   r28, 0x68ff
-				0x639CF000u,  // 0x429d3c: ori   r28, r28, 0xf000 → r28 = ECB
-				0x3C0068FFu,  // 0x429d40: lis   r0, 0x68ff
-				0x60005800u,  // 0x429d44: ori   r0, r0, 0x5800   → 0x68ff5800 (pool base)
-				0x901C00E0u,  // 0x429d48: stw   r0, 0xE0(r28)  pool virt base re-assert
-				0x901C00E4u,  // 0x429d4c: stw   r0, 0xE4(r28)  pool phys base re-assert (overlay repair)
-				0x3C00F000u,  // 0x429d50: lis   r0, 0xF000     → existence bitmap
-				0x901C00E8u,  // 0x429d54: stw   r0, 0xE8(r28)  existence bitmap re-assert
-				0x7F8902A6u,  // 0x429d58: mfctr r28            restore caller r28
-				0x48045BA4u,  // 0x429d5c: b     0x5046f900     ongoing entry = original slot-0 stub
+				0x3F8068FFu,  // 0x429d3c: lis   r28, 0x68ff
+				0x639CF000u,  // 0x429d40: ori   r28, r28, 0xf000 → r28 = ECB
+				0x3C0068FFu,  // 0x429d44: lis   r0, 0x68ff
+				0x60005800u,  // 0x429d48: ori   r0, r0, 0x5800   → 0x68ff5800 (pool base)
+				0x901C00E0u,  // 0x429d4c: stw   r0, 0xE0(r28)  pool virt base re-assert
+				0x901C00E4u,  // 0x429d50: stw   r0, 0xE4(r28)  pool phys base re-assert (overlay repair)
+				0x3C00F000u,  // 0x429d54: lis   r0, 0xF000     → existence bitmap
+				0x901C00E8u,  // 0x429d58: stw   r0, 0xE8(r28)  existence bitmap re-assert
+				// the world flip (rev 3.1 item 2): [KDP+0x65c] := MMCB
+				0x3F8068FFu,  // 0x429d5c: lis   r28, 0x68ff
+				0x639CE000u,  // 0x429d60: ori   r28, r28, 0xe000 → r28 = KDP
+				0x3C0068FFu,  // 0x429d64: lis   r0, 0x68ff
+				0x6000F400u,  // 0x429d68: ori   r0, r0, 0xf400   → r0 = MMCB
+				0x901C065Cu,  // 0x429d6c: stw   r0, 0x65c(r28) [KDP+0x65c] = MMCB (native excursion = outgoing world)
+				0x7F8902A6u,  // 0x429d70: mfctr r28            restore caller r28
+				0x48045B8Cu,  // 0x429d74: b     0x5046f900     ongoing entry = original slot-0 stub
 			};
 			const size_t w_n = sizeof(w_code) / sizeof(w_code[0]);
 			bool w_zero = true;
@@ -1082,7 +1116,66 @@ bool PatchROM(void)
 				tbl0_target = w_offset;
 				fprintf(stderr, "[NW-TRAMP] W: table[0] → cold/warm discriminator "
 				        "0x50429d00 (scratch 0x68ff6080; cold → trampoline once; "
-				        "warm → pool re-assert + b 0x5046f900 slot-0 stub)\n");
+				        "warm → pool re-assert + [KDP+0x65c]:=MMCB flip + "
+				        "b 0x5046f900 slot-0 stub)\n");
+			}
+
+			// W2 rev 3.1 item 1: the slot-1 (forward-direction) half of the
+			// [KDP+0x65c] world-flip discipline (R-12).  Slot 1 is the
+			// FE01/MixedMode entry the 68k world consumes (Q-B: the only
+			// consumed slot); every traversal means "the 68k-emulator world
+			// is the outgoing world", so [KDP+0x65c] must be ECB before the
+			// stub body saves through it / before the next forward switch
+			// parks the emulator there.  Mechanism (red-team corrected
+			// design — NOT an in-place prepend, NOT patch_68k_emul): a
+			// RETARGETED 7-word region after the enlarged W region, doing
+			// the flip then falling into the ORIGINAL slot-1 stub body at
+			// 0x5046fa00 (= 0x46e8c4 + 0x113c, the displaced static branch
+			// target).  Clobbers r0/CTR only — the same registers the
+			// architectural stub body clobbers in its first words (mtctr r1;
+			// lwz r1,XLM_KERNEL_DATA(0)), so the prepend is
+			// convention-transparent.  Idempotent on every call (stores the
+			// constant ECB).  Switch-off: NEITHER write happens (this whole
+			// block is mm_switch-gated) — the table word keeps its static
+			// 0x4800113c and the region stays zero, byte-identical baseline.
+			// Verify discipline: region verify-zero-first (rev 2 C6); the
+			// table word is NONZERO by design, so it gets the sibling
+			// verify-EXPECTED check (== 0x4800113c) — loud skip otherwise.
+			{
+				const uint32 s1_offset = 0x429d80;            // mirror 0x50429d80
+				const uint32 slot1_offset = 0x46e8c0 + 0x04;  // entry-vector slot 1
+				const uint32 slot1_expected = 0x4800113Cu;    // b +0x113c → 0x46fa00 (static)
+				static const uint32 s1_code[] = {
+					0x7C2903A6u,  // 0x429d80: mtctr r1            stash caller r1 (CTR dead: stub body re-clobbers)
+					0x80202804u,  // 0x429d84: lwz   r1, 0x2804(0) r1 = [XLM_KERNEL_DATA] = KDP
+					0x3C0068FFu,  // 0x429d88: lis   r0, 0x68ff
+					0x6000F000u,  // 0x429d8c: ori   r0, r0, 0xf000 → r0 = ECB
+					0x9001065Cu,  // 0x429d90: stw   r0, 0x65c(r1) [KDP+0x65c] = ECB (68k world = outgoing world)
+					0x7C2902A6u,  // 0x429d94: mfctr r1            restore caller r1
+					0x48045C68u,  // 0x429d98: b     0x5046fa00    → the original slot-1 stub body
+				};
+				const size_t s1_n = sizeof(s1_code) / sizeof(s1_code[0]);
+				uint32 *s1p = (uint32 *)(ROMBaseHost + s1_offset);
+				uint32 *slot1 = (uint32 *)(ROMBaseHost + slot1_offset);
+				bool s1_zero = true;
+				for (size_t i = 0; i < s1_n; i++)
+					if (ntohl(s1p[i]) != 0) { s1_zero = false; break; }
+				if (!s1_zero) {
+					fprintf(stderr, "[NW-TRAMP] W2: slot-1 flip region ROM+0x%x not "
+					        "zero — flip SKIPPED (slot 1 keeps its static stub)\n",
+					        s1_offset);
+				} else if (ntohl(*slot1) != slot1_expected) {
+					fprintf(stderr, "[NW-TRAMP] W2: entry-vector slot 1 ROM+0x%x reads "
+					        "%08x (expected %08x) — flip SKIPPED\n",
+					        slot1_offset, ntohl(*slot1), slot1_expected);
+				} else {
+					for (size_t i = 0; i < s1_n; i++)
+						s1p[i] = htonl(s1_code[i]);
+					*slot1 = htonl(0x48000000u |
+					               ((s1_offset - slot1_offset) & 0x03FFFFFCu));
+					fprintf(stderr, "[NW-TRAMP] W2: slot 1 → flip region 0x50429d80 "
+					        "([KDP+0x65c]:=ECB, then b 0x5046fa00 original stub)\n");
+				}
 			}
 		}
 		*tbl0 = htonl(0x48000000u | ((tbl0_target - 0x46e8c0u) & 0x03FFFFFCu));

@@ -552,8 +552,9 @@ extern void HandleInterrupt(powerpc_registers *r);
  * Returns false when nothing is pending or delivery was deferred (EE off /
  * execute_depth > 1) — the caller then falls through to the legacy path. */
 extern bool SheepExcDeliverPending(void);
-/* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth. */
-extern "C" void SheepExcStats(uint64_t out[3]);
+/* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
+ * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions). */
+extern "C" void SheepExcStats(uint64_t out[4]);
 #endif
 
 #endif /* PPC_CPU_H */

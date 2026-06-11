@@ -2411,11 +2411,11 @@ void powerpc_cpu::execute(uint32 entry)
 								 * M6a Wave 1: + MMIO region read counts (memo §5.5a). */
 								char excbuf[160]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
-									uint64_t exc[3];
+									uint64_t exc[4];
 									SheepExcStats(exc);
-									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu",
+									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu",
 									         (unsigned long long)exc[0], (unsigned long long)exc[1],
-									         (unsigned long long)exc[2]);
+									         (unsigned long long)exc[2], (unsigned long long)exc[3]);
 									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
@@ -2610,11 +2610,11 @@ void powerpc_cpu::execute(uint32 entry)
 								 * M6a Wave 1: + MMIO region read counts (memo §5.5a). */
 								char excbuf[160]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
-									uint64_t exc[3];
+									uint64_t exc[4];
 									SheepExcStats(exc);
-									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu",
+									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu",
 									         (unsigned long long)exc[0], (unsigned long long)exc[1],
-									         (unsigned long long)exc[2]);
+									         (unsigned long long)exc[2], (unsigned long long)exc[3]);
 									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, false, now, interp_block_count,

@@ -99,6 +99,7 @@ ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u };
 static uint64_t exc_stat_delivered_dec  = 0;
 static uint64_t exc_stat_deferred_ee    = 0;
 static uint64_t exc_stat_deferred_depth = 0;
+static uint64_t exc_stat_deferred_native = 0;	// M6a W2: deferred during native excursion ([XLM_RUN_MODE]!=0)
 
 // Emulation time statistics
 #ifndef EMUL_TIME_STATS
@@ -779,6 +780,25 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		exc_stat_deferred_ee++;
 		return false;
 	}
+	// M6a rung-2 W2 DEC fence (plan rev 3.1 item 3; red-team blocking risk):
+	// defer while a MixedMode NATIVE EXCURSION is in flight — [XLM_RUN_MODE]
+	// (0x2810) is maintained 1-forward/0-backward by the NK on exactly the
+	// FE01/FE02 switch pair (MODE_NATIVE=1 during PPC-native windows,
+	// MODE_68K=0 while the 68k world runs).  Rationale: under the W2
+	// [KDP+0x65c] world-flip discipline the word holds the MMCB during a
+	// native window; the KDP register-save shim below saves r7-r13 through
+	// r6=[KDP+0x65c] — a DEC delivered mid-excursion would save into the
+	// MMCB whose slots the NK switch-back save is about to rewrite (ECB-
+	// clobber by symmetry: pre-W2 it would have CLOBBERED the parked
+	// emulator ctx in the ECB).  Same deferral semantics as the depth/EE
+	// paths above: latch stays set, EE-edge re-raises + the block-boundary
+	// poll pick it up once [0x2810] returns to 0.  Newworld-gated by
+	// construction (this function only runs on the newworld profile).
+	// Inert while no native excursions run ([0x2810]=0 ⇒ no behavior change).
+	if (ReadMacInt32(XLM_RUN_MODE) != 0) {
+		exc_stat_deferred_native++;
+		return false;
+	}
 	VirtClockClearDECPending(&g_virt_clock);
 
 	const uint32 restart_pc = pc();
@@ -1096,11 +1116,13 @@ bool SheepExcDeliverPending(void)
 }
 
 // M3a Task 4 telemetry export (heartbeat + crash-path dump).
-extern "C" void SheepExcStats(uint64_t out[3])
+// M6a W2: + out[3] = deferred_native (the native-excursion DEC fence).
+extern "C" void SheepExcStats(uint64_t out[4])
 {
 	out[0] = exc_stat_delivered_dec;
 	out[1] = exc_stat_deferred_ee;
 	out[2] = exc_stat_deferred_depth;
+	out[3] = exc_stat_deferred_native;
 }
 
 // C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
@@ -1266,11 +1288,12 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// signal death, so emit the counters here too. Newworld-only (the hook never
 	// runs on paravirtual; keeps paravirtual crash output byte-identical).
 	if (MachineProfileIsNewWorld()) {
-		uint64_t exc[3];
+		uint64_t exc[4];
 		SheepExcStats(exc);
-		fprintf(stderr, "[EXC] delivered_dec=%llu deferred_ee=%llu deferred_depth=%llu\n",
+		fprintf(stderr, "[EXC] delivered_dec=%llu deferred_ee=%llu deferred_depth=%llu "
+		        "deferred_native=%llu\n",
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
-		        (unsigned long long)exc[2]);
+		        (unsigned long long)exc[2], (unsigned long long)exc[3]);
 	}
 	dump_registers();
 	dump_log();

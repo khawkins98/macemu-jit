@@ -163,3 +163,58 @@ next doc-sync.
 
 No source files were touched; no rebuild performed (existing binary booted as-is,
 concurrent w2-4 stream undisturbed).
+
+---
+
+## FIX RECORD — instime-fix (2026-06-12, Stream A)
+
+The Q5 recommendation shipped: commits `f808a7fb` (implementation, gate default-OFF +
+.Sony-abort lift + tail guards) and the flip commit (newworld-default-ON). Six slot
+boots (≤6 budget) + live paravirtual `make e2e`.
+
+**What shipped** (`SheepShaver/src/rom_patches.cpp`):
+
+1. **.Sony abort lifted** (lenient mode only): no DRVR 4 / PCFloppy ndrv → banner-skip
+   the driver replacement, resume the EMUL_OP tail. Every write site in the resumed
+   tail is now verify-target-first — 14-site audit in the f808a7fb commit message
+   (the banked SERD-0 hazard guard included; on 9.0.1 the tail's other find_rom_trap
+   targets are real: ADBOp=0x2b3fc, PowerOff=0xe5d8, scrap a9fc/fd/fe, abf7=0xbcc0).
+2. **TM cluster**: upstream's exact stub bodies in new `TIME_MANAGER_PATCH_SPACE`
+   = ROM 0x2fd240 (kckc filler, checked at the site): InsTime@+0x00, RmvTime@+0x08,
+   PrimeTime@+0x18, Microseconds@+0x28. Trap-table IMAGE entries at
+   0xa8ed0+0x1000+4·{58,59,5a,93} populated verify-zero-first. Gate: newworld
+   default-ON, `SS_NW_TM_TRAPS=0` opt-out.
+
+**Acceptance evidence** (slot rundirs 20260612-00410?/0043??/0048??/0051??/0054??):
+
+- Installer ran: `[WATCH] pc=50491608 addr=560 value=502fd240 (was ffffffff … r24=5000e112)`
+  — lowmem [0x560] := ROMBase+0x2fd240, written by the guest's own installer loop. ✓
+- Stub dispatch: `SS_PROBE_68K=0x502fd242` (the word+2 probe quirk) fired with
+  d1=0xa458 (_InsXTime), d2=0x58, a1=0x5000bbb8 (the 60Hz task proc), DR slot
+  r29=0x504ff300 = mirror EMUL_OP slot(0xfe60=OP_INSTIME). ✓
+- **Enable60HzInts completes**: sequencer-return probe 0x500002c8 fired (68k PC
+  0x500002c6) with d0=0, a1=0x502fd258 (PrimeTime stub residue) — InsXTime + the
+  `jmp ([$568])` PrimeTime both executed, host TM armed. ✓
+- **SysError-12 park GONE** (no pc=500047ae; baseline HOT-PC 0x50467ed4/r10=0x58 spin absent). ✓
+- Gated-off A/B (`SS_NW_TM_TRAPS` unset pre-flip): baseline park signature reproduced
+  exactly — exc=0/5/0/0/173/4, ALARM stall, HOT-PC 0x50467ed4 r9=50004a9e r10=00000058. ✓
+- **Ticks [0x16a]: did NOT move** — watch on 0x168 saw only the lowmem init fills
+  (ffffffff→0000ffff→00000000); no tick writes before the crash. Flagged loudly.
+
+**NEW FRONTIER (P-M5)**: SIGSEGV ~0.13s into boot, milliseconds after Enable60HzInts
+returns. Signature: guest pc=0x00100000 (= guest[0], the NW-trampoline 68k reset-SSP
+value), ea=0x400000100000 (instruction fetch at guest 0x100000), lr=0x504ff348
+(mirror EMUL_OP slot region), 68k r24=0x50510002 (odd, out-of-range), terminal
+tuple exc=0/1/0/0/173/4. Mechanism hypothesis (UNPINNED — boot budget exhausted):
+the first host TM expiry (~16.6ms after PrimeTime, period −16626µs) delivering
+INTFLAG_TIMER → TriggerInterrupt → host-initiated 68k execution
+(TimerInterrupt→Execute68k of task proc 0x5000bbb8, timer.cpp:609→631) on the
+newworld profile, where Execute68k/interrupt-injection is unported — exactly the
+recon's predicted "M3 delivery interplay". Note OP_IRQ (the paravirtual TimerInterrupt
+caller) is unreachable on 9.0.1 (via_int2 pattern absent → skipped), so the delivery
+path here is the async TriggerInterrupt leg. Next stream owns this wall.
+
+**Rebuild-race note**: boots 4-6 picked up the concurrent dec-cadence stream's
+virt_clock changes (VCLK line changed zero=5/expiries=5 → small/mid/expiries=1
+across builds); the TM crash signature is IDENTICAL across both builds, so the
+verdicts are build-independent.

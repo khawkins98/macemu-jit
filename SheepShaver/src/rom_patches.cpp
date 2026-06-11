@@ -3656,9 +3656,16 @@ static bool patch_68k(void)
 	//      the guest's OWN installer (ROM 0xe0c8) then installs them into lowmem 0x400 at
 	//      boot — both DR dispatch levels consume that same table (recon Q1).
 	{
-		// SS_NW_TM_TRAPS: env-gated, default OFF (FLIP-LAST: flip to newworld-default-ON
-		// with explicit-"0" opt-out after acceptance proves green).
-		const bool tm_traps_on = MachineProfileIsNewWorld() && MachineEnvFlag("SS_NW_TM_TRAPS");
+		// SS_NW_TM_TRAPS: NEWWORLD DEFAULT since the instime-fix acceptance battery
+		// (FLIP-LAST: implemented default-OFF f808a7fb, flipped after acceptance went
+		// green — [0x560]=ROMBase+0x2fd240 installed by the guest installer, InsXTime
+		// dispatches into the stub, Enable60HzInts completes and returns to the boot
+		// sequencer, SysError-12 park cleared; gated-off A/B reproduces the baseline
+		// park signature exactly). Explicit-"0"-only opt-out, the
+		// SS_NW_DR_R0_INVARIANT/SS_NW_SC_SURFACE polarity precedent (getenv+strcmp).
+		const char *tm_traps_env = getenv("SS_NW_TM_TRAPS");
+		const bool tm_traps_on = MachineProfileIsNewWorld() &&
+			!(tm_traps_env && strcmp(tm_traps_env, "0") == 0);
 		bool tm_space_ready = false;	// stub bodies written to patch space?
 		uint32 stub_ofs[4] = {0, 0, 0, 0};	// ROM offsets of the 4 stub bodies
 		struct { uint16 trap; uint8 kind; const char *name; } tm_traps[4] = {

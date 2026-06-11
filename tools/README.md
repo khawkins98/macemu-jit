@@ -1,5 +1,23 @@
 # Development & Debugging Tools
 
+## Index (all current tools)
+
+| Tool | One-liner |
+|---|---|
+| `tools/gates.sh` | Run a MILESTONE-WORKFLOW §6 gate tier (`inner`/`task`/`full`) — one `GATE` summary line per gate + a final `GATES <tier>: PASS\|FAIL` verdict; failing gate's tail on FAIL; non-zero exit on any failure |
+| `tools/check-claims.sh` | Claims-file commit guard — fails commits staging paths claimed by another agent label; warns on unclaimed staged paths (protocol: `docs/superpowers/.claims/README.md`) |
+| `tools/install-claims-hook.sh` | Install the claims guard as a pre-commit hook (idempotent; chains an existing hook) |
+| `tools/m68k-dis.py` | 68k disassembler that boundary-splits A/F-line + `0x0fff` words — use INSTEAD of capstone-M68K, which mis-decodes `fe1f`-style words |
+| `tools/dump-manifest.sh` | ROM-dump provenance check against `/Users/Shared/macemu/dumps/MANIFEST.txt` (`--check` before tagging [RAW-ROM]/[PATCH] evidence) |
+| `tools/ring-walk.py` | Scripted trace-ring analysis (`--window START:END`, `--r24-flow`, `--find-pc`, `--regs-at`) — point it at a boot log, ring dump, or slot rundir; never read raw ring text by eye |
+| `tools/screenshot.sh` | Capture the guest display to PNG via an lldb framebuffer dump (no Screen Recording permission needed) — see below |
+| `SheepShaver/tools/ss-slot-boot.sh` | Parallel-boot slot protocol wrapper (leased per-slot prefs/logs/diag, SIGTERM capture); `--expect 'PAT;;…' [--absent 'PAT;;…']` adds boot-log assertions with a `BOOT-VERDICT: PASS\|FAIL` exit — full doc: `SheepShaver/tools/README-slots.md` |
+| `SheepShaver/tools/ss-reap.sh` | Reap stale slot leases (never global `pkill`) |
+
+Other SheepShaver-side analysis tools (`jit-analyze.py`, `jit-diff-sweep.py`,
+`altivec-xo-audit.py`, `rom-patch-sizing.py`) live in `SheepShaver/tools/`; the
+diagnostic-knob reference is `SheepShaver/docs/DIAGNOSTICS.md`.
+
 ## screenshot.sh — capture the guest display
 
 Captures what the emulated Mac is showing, **without** macOS Screen Recording

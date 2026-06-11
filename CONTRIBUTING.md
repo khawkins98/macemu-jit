@@ -17,6 +17,16 @@ Current pass/fail and boot status lives in `JIT-STATUS.md`; what's next lives in
 To build and run SheepShaver, follow the **Build** section in `README.md` (autogen → configure → `make build`).
 The rest of this guide is *how to work here* — gates, conventions, and where the deep docs are.
 
+## Development Process (default for substantive work)
+
+Larger streams of work follow **`docs/MILESTONE-WORKFLOW.md`** — the multi-agent
+milestone machine (plan → pre-implementation red-team → binding Task-0 recon with
+blocking-answer tables → env-gated implementation with falsifiable gates →
+flip-last/revert-on-red acceptance → docs close-out) and its parallel workstream
+layer. Established 2026-06-11; every rule in it cites the incident that earned it.
+Skip it only for trivial mechanical changes. The canonical plan exemplar is
+`docs/superpowers/plans/2026-06-11-nk-syscall-surface.md`.
+
 ## Before You Start
 
 1. Read `CLAUDE.md` — build commands, test commands, asset locations, architecture overview

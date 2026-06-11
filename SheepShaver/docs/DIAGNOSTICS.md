@@ -260,17 +260,19 @@ the 60 Hz VBL timer and hang early boot (see the lldb/VBL caveat in `CLAUDE.md` 
 M3a adds a compact exception counter to the periodic `[HB]` heartbeat (the `exc=…` suffix):
 
 ```
-[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0
+[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0/0
 ```
 
-The three numbers are `delivered/deferred_ee/deferred_depth` for the DEC exception class,
-accumulated since boot:
+The four numbers are `delivered/deferred_ee/deferred_depth/deferred_native` for the DEC
+exception class, accumulated since boot (the 4th field landed with M6a rung-2 Task W2,
+`43d42b83` — logs older than that show the 3-wide `exc=N/N/N` form):
 
 | Subfield | Meaning |
 |---|---|
 | `delivered` | DEC exceptions delivered to the guest handler (KDP shim + ExcEnter applied) |
 | `deferred_ee` | Deliveries skipped because `MSR[EE]=0` at the poll point (latch held; re-raised at EE 0→1 edges) |
 | `deferred_depth` | Deliveries skipped because `execute_depth > 1` (inside a nested execute context; re-raised on return) |
+| `deferred_native` | Deliveries deferred while a MixedMode **native excursion** is in flight — the M6a W2 DEC fence: `deliver_pending_dec_exception` defers while `[XLM_RUN_MODE]` (guest `0x2810`) `!= 0`. The NK maintains that word 1-forward/0-backward across exactly the MM switch pair, so a DEC cannot save into the MMCB mid-excursion. Known window (residue R-14): the word is 0 during the *backward* save — benign by same-values, recorded not fixed. |
 
 On the paravirtual profile the suffix is omitted (`exc=NULL`). Telemetry rides the heartbeat
 rather than `atexit` because `SIGALRM` from the `perl alarm` wrapper skips `atexit` dumps.
@@ -385,6 +387,15 @@ at exit.
 `[CUDA] model bound to via6522 SR/ORB seam (lazy-only; ADB stub kbd@2 mouse@3)` at startup
 confirms the bring-up (newworld profile only).
 
+### `SS_CUDA_TRACE=1` — first-packets capture (`[CUDA-TRACE]`)
+
+Latches the first 64 complete Cuda packets (command bytes in + response bytes out,
+truncated to 24 bytes each; untruncated lengths recorded) into a static ring. Dumped as
+`[CUDA-TRACE NN] in(LEN): xx xx … out(LEN): xx xx …` lines on the crash/term-dump path
+only (pair with `SS_TERM_DUMP=1` for timeout-killed boots). The capture side is §2g-safe
+(no stdio/malloc/locks — fault-thread reachable). This is the packet-level forensics that
+root-caused the M3b probe-cycle loop; zero cost when unset.
+
 ### `[VIA] orb:` write-value trace (C3 polarity forensics)
 
 Next to the per-register `[VIA] reads:` histogram, the VIA dumps the ORB **write-value
@@ -442,3 +453,29 @@ XPRAM/NVRAM EMUL_OP HLE patches **stay applied** and serve the host-file-backed 
 These are two divergent PRAM stores — a guest writing through one path will not see it
 through the other. This inconsistency window is deliberate and closes at M4 (full
 partitioned NVRAM behind the bus, EMUL_OP HLE retired).
+
+## Machine Layer M6a rung 2 — Mixed Mode switch knobs + capture telemetry
+
+The 68k→PPC Mixed Mode switch (FE01 forward switch → TVector execution → world-flip
+switch-back) is **complete and is the newworld profile DEFAULT** since rung-2 Task Y
+(`296c3661`). Acceptance record: `docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md`
+(Task T/V/W/W2/X/Y results sections). All knobs are newworld-profile-only; paravirtual
+and OldWorld are untouched.
+
+### Switch / pool knobs (`rom_patches.cpp`, `PatchROM_NW_trampoline`)
+
+| Env var | Effect |
+|---|---|
+| `SS_NW_MM_SWITCH=0` | **Opt OUT** of the Mixed Mode switch completion (newworld **default ON**). Restores the pre-switch baseline byte-identically — FE01↔NK retry spin, 0 TVector visits, no W/W2 region writes, no slot-1 retarget — for A/B comparison. The switch **implies the pool** (switch-without-pool is not a supported config). `=1` remains valid explicit-on. |
+| `SS_NW_MM_POOL=0` | **Opt OUT** of the DR Mixed Mode save-record pool seed (newworld **default ON** since Task T, `735f775c`; 4 × 0x220 records at `0x68FF5800` per the sub-KDP occupancy map in M6A-ONGOING-ENTRY-DESIGN). Pool-off under the (default-on) switch is a **MISCONFIGURATION**: a loud `[NW-TRAMP] V: MISCONFIG` line is printed and the pool is forced back on — a pool-off A/B requires `SS_NW_MM_SWITCH=0` as well. With both off, the first FE01 parks loudly at the slot-15 exhaust stop `0x50429cf0` (NOT the old silent ~80 ms reboot loop). `=1` remains valid explicit-on. |
+| `SS_M6A_USER_MSR=1` | **Quarantined known-broken diagnostic** — do not use for new work. The Q-E verdict (rung-2 Task 0) is that the architectural MSR transition is per-context, carried by the NK context switch; no trampoline `mtmsr` is needed, and `=1` reproduces an un-root-caused zero-page slide (residue R-2). Under the (default-on) switch it is **ignored loudly** (`[NW-TRAMP] V: SS_M6A_USER_MSR=1 ignored …`). Default OFF. |
+
+The `[NW-TRAMP]` fixup banner at patch time reports the resolved state
+(`… user-msr=off mm-pool=ON mm-switch=ON …`) — grep it to confirm what a boot ran with.
+
+### Capture-only telemetry rings (M6a Wave-2 recon tools, `ppc-cpu.cpp`; zero cost unset)
+
+| Env var | Effect |
+|---|---|
+| `SS_DR_R24_RING=1` | 68k-PC transition ring: records guest **r24** (the DR emulator's 68k PC) at every JIT dispatcher block entry into a 2M-entry ring, deduped against the last 4 recorded values (loop ping-pong suppressed — beware: a literal resume PC can be dedup-masked if it recurs within 4 entries). Dumped as a `[R24RING] N transitions recorded …` block to stderr at exit (pair with `SS_TERM_DUMP=1` for timeout-killed boots). **This is the only way to observe 68k control flow** — 68k PCs are PPC-probe-blind (`SS_PROBE_PC` keys on PPC block-entry PCs). |
+| `SS_INTERP_RING=1` (or `=2`, or `=/path.bin`) | Interpreted-insn + JIT-block-entry ring (1M entries, 16 MB binary atexit dump, default `/tmp/ss_interp_ring.bin`; `[IRING]` summary line to stderr). Records `{pc, opcode, ea, val}` for every interpreted PPC instruction (`ea`/`val` = effective address + pre-execution guest word for common loads/stores) plus RAM-range JIT block entries (marker records `op=0xffffffff, ea=r24, val=LR`) — built because the 'pwpc' parcel code runs where `SS_PROBE_PC` can't see. Mode `=2`: record EVERY JIT block entry and **freeze** the ring at the first r24 reset transition (`0x5000002c`) once half-full, so the dump ends exactly at a reboot-loop bail; use with `SS_JIT_NO_CHAIN=1` so chained blocks can't bypass the hook. |

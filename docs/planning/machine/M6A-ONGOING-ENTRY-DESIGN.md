@@ -949,3 +949,49 @@ spin at 3672 — the legacy path is not a viable bridge; diagnostic only.)
 **Switch-OFF boot:** byte-identical baseline preserved (no W/W2 region writes, no
 slot-1 retarget, 0 TVector visits, the FE01↔NK spin signature) — see
 `/tmp/w2_boot_off.log`.
+
+### Task X results (2026-06-11) — collapsed scope (plan rev 3/3.1): verify-and-leave + re-census + sub-contracts; R3 ratified
+
+Scope after the W/W2 collapse: the `[KDP+0x5f0/4]` verify-and-leave check, the
+post-W2 re-census (rev 2 P1), fresh re-assertion of the X sub-contracts, the W2
+review-minor fold (slot-1 flip gating), and the scratch-word protocol disposition.
+Evidence boots: `/tmp/taskx_boot1.log` (switch env-on, 6 probes + WATCH 0/4 +
+r24 ring) and `/tmp/taskx_boot2_legacy.log` (SS_EXC_SC=legacy, heartbeat capture).
+
+1. **`[KDP+0x5f0/4]` verify-and-leave [PROBE✓]** (rev 3.1 item 4 — the retarget is
+   STRUCK): at table[0] COLD entry visit=1 — the earliest post-NK-init observable —
+   `[KDP+0x5f0]=0x50313bf8` `[KDP+0x5f4]=0x503143a0` (the NK-rebuilt staged pair),
+   and byte-identically at the first WARM entry (0x50429d3c visit=1). The glue's
+   primary-world seeds (`0x50366080`, sheepshaver_glue.cpp seed site) are therefore
+   **dead on arrival** — NK cold-init overwrites them before the first dispatch.
+   CHOICE: comment-only, seeds kept (a pre-NK-rebuild reader inside NK cold-init
+   cannot be excluded without instrumenting NK init; the known consumers — the
+   slot-stub exits — first run post-rebuild). Documented at the seed site.
+2. **Post-W2 re-census (rev 2 P1) — R3 stub route RATIFIED.** table[0] census with
+   the switch on: COLD exactly once (0x50429d00 visit=1: r3=0, scratch
+   [0x68ff6080]=0 → set to 1). WARM (0x50429d3c) visit=1 carries exactly the
+   legitimate completion signature: **r3=0x000000ff (the command byte / NK
+   selector), r1=0x103ffa2c (native stack), scratch=1** — and no other warm-entry
+   class appears; neither probe reached the visit=10 sample (total table[0]
+   entries < 10 in the boot-to-sc-wall window, consistent with the two known
+   excursions). Slot-15 exhaust stop 0x50429cf0: zero visits; no parked-PC stop
+   entered. **Census verdict: nothing enters table[0] warm besides the completion
+   path — the R3 choice (stub route, landed in W) is ratified.**
+3. **X sub-contracts re-asserted from fresh evidence (all PASS):**
+   - *Cold path exactly once*: one trampoline guest[0]/[4] write pair (WATCH
+     record #4666, pc=50429b40), scratch 0→1 once.
+   - *guest[0]/[4] stable*: the only later writes are the guest's own legit 68k
+     vector install (pc=50490e00, r24=0x500389fe guest code — the known class);
+     no reset transitions.
+   - *jDR/comp growing across re-entries*: fresh legacy-sc heartbeat —
+     comp=3672 (vs 3600 cold-only post-V, 3573 pre-V frozen), jDR=1432M and
+     growing, jNK=4104 flat (no bounce spin), exc=0/1/0/0 (DEC fence inert);
+     JIT first-compiles continue across both excursions in the probe boot.
+4. **W2 review minor FOLDED** (rom_patches.cpp): the slot-1 flip block now arms
+   only when the W discriminator actually landed (`tbl0_target == w_offset`);
+   otherwise a loud `[NW-TRAMP] W2: slot-1 flip SKIPPED` line — a half-armed flip
+   (ECB half with no MMCB half) would re-open the Task-W boot-5 self-switch.
+5. **Scratch-word protocol**: the minimal test-and-set landed in W is CONFIRMED
+   sufficient — the census shows binary cold/warm discrimination is the only
+   consumed semantics; no refinement needed. (The word stays reserved at
+   0x68ff6080 in the occupancy map; R-15's reset-re-init tripwire unchanged.)

@@ -260,24 +260,35 @@ before its residue status is decided.
   see commit; switch-off boots byte-identical (branch encoder reproduces 0x4BFBB280;
   W region unwritten when gated off).)*
 
-### Task X: real ongoing entry at table[0] (design doc R2+R3+R4)
-- [ ] **(rev 2 P1) PRECONDITION: post-Task-W re-census** — re-run the PROBE-O1 pack with
+### Task X: real ongoing entry at table[0] (design doc R2+R3+R4) — COLLAPSED by W/W2 (rev 3); executed as verify-and-leave + re-census + folds
+- [x] **(rev 2 P1) PRECONDITION: post-Task-W re-census** — re-run the PROBE-O1 pack with
   the switch on; the R3 decision applies to the RE-CENSUS, not Task 0's baseline (the
-  fault-path re-entries the baseline saw are removed by U–W).
-- [ ] R2 discriminator: scratch word in the sub-KDP pool **at the occupancy-map-reserved
+  fault-path re-entries the baseline saw are removed by U–W). *(Done post-W2:
+  /tmp/taskx_boot1.log — cold exactly once; the ONLY warm-entry class is the
+  legitimate completion signature (r3=0xff, native stack r1=0x103ffa2c); slot-15 +
+  parked-PC stops zero visits. Addendum "Task X results".)*
+- [x] R2 discriminator: scratch word in the sub-KDP pool **at the occupancy-map-reserved
   address** (mapped+zeroed, data-only — NOT the ROM zero run, SMC/JIT hazard), cold-once
-  semantics; the Task-T cold-arm invariant now becomes load-bearing.
-- [ ] R3 ongoing arm per the re-census + Q-B: stub route (`b 0x5046f900` + retarget
-  `[KDP+0x5f0]/[0x5f4]` → `0x50466080`; nest protocol: slot-0 saves caller r7–r13 and
-  increments the nest counter — the decrement site is part of Q-F's answer) vs direct
-  re-dispatch (`b 0x50466080`) vs keep-always-cold + tripwire counter if the re-census
-  says nobody legitimately re-enters. Record the choice + evidence. R4: seed
-  `[KDP+0x660]` per [PROBE-O4]'s pinned bit (O4 residue ⇒ R4 deferred, recorded).
-- [ ] R5 (nest balance) only if the chosen route requires it — else named residue.
-- [ ] Sub-contracts (PASS/FAIL): cold path exactly once per boot (scratch-flag probe);
+  semantics; the Task-T cold-arm invariant now becomes load-bearing. *(Landed in W;
+  Task X confirms the minimal test-and-set protocol is sufficient — census shows
+  binary cold/warm is the only consumed semantics.)*
+- [x] R3 ongoing arm per the re-census + Q-B: stub route landed in W (`b 0x5046f900`);
+  **RATIFIED by the re-census** (no non-completion warm entrant). The
+  `[KDP+0x5f0]/[0x5f4]` retarget is STRUCK (rev 3.1 item 4) — **verify-and-leave
+  DONE**: live values probed at cold AND warm entry = the NK-rebuilt staged pair
+  0x50313bf8/0x503143a0; the glue's primary-world seeds are dead-on-arrival
+  (comment-only at the seed site, seeds kept — choice documented). R4: landed in V.
+- [x] R5 (nest balance) only if the chosen route requires it — else named residue.
+  *(Not required: observed depth 1, R-1 tripwire stands as the named residue.)*
+- [x] Sub-contracts (PASS/FAIL): cold path exactly once per boot (scratch-flag probe);
   guest[0]/[4] never rewritten after first entry (watch); jDR/comp still growing across
-  re-entries.
-- [ ] Gates: as Task V + MSR-state regression per V's verdict. Commit.
+  re-entries. *(All PASS from fresh evidence — taskx_boot1 + taskx_boot2_legacy HB
+  comp=3672/jDR growing.)*
+- [x] Gates: as Task V + MSR-state regression per V's verdict. Commit. *(Full canonical
+  set green: build-ss; batch + plain test-jit 353/353; machine ALL PASS; e2e-test 122;
+  paravirtual make e2e PASS clean lifecycle. MSR regression: no MSR writes on the
+  switch path (Q-E verdict unchanged); user_msr stays quarantined. Also folded the W2
+  review minor: slot-1 flip gated on the W region having landed.)*
 
 ### Task Y: rung-2 acceptance (boots authorized) — honest gating + rollback (rev 2 P6)
 - [ ] **PASS/FAIL gates first, flip LAST.** Run with `SS_NW_MM_SWITCH=1` env-on:

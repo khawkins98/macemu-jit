@@ -1141,7 +1141,18 @@ bool PatchROM(void)
 			// Verify discipline: region verify-zero-first (rev 2 C6); the
 			// table word is NONZERO by design, so it gets the sibling
 			// verify-EXPECTED check (== 0x4800113c) — loud skip otherwise.
-			{
+			// Task-X fold (W2 review minor): the slot-1 flip only arms when
+			// the W discriminator actually landed (tbl0_target == w_offset).
+			// Half-armed would be the ECB half of the flip with NO MMCB half
+			// (the warm arm lives in the W region): the first native
+			// completion's warm save would then overwrite the parked emulator
+			// ctx again (Task-W boot-5 self-switch) — belt-and-braces over
+			// half-armed discipline.
+			if (tbl0_target != w_offset) {
+				fprintf(stderr, "[NW-TRAMP] W2: slot-1 flip SKIPPED — W "
+				        "discriminator did not land (table[0] stays always-cold; "
+				        "a half-armed flip would re-open the boot-5 self-switch)\n");
+			} else {
 				const uint32 s1_offset = 0x429d80;            // mirror 0x50429d80
 				const uint32 slot1_offset = 0x46e8c0 + 0x04;  // entry-vector slot 1
 				const uint32 slot1_expected = 0x4800113Cu;    // b +0x113c → 0x46fa00 (static)

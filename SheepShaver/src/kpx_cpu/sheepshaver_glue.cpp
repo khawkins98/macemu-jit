@@ -2005,16 +2005,29 @@ void init_emul_ppc(void)
 		const uint32 ecb = kdp + 0x1000;
 		WriteMacInt32(kdp + 0x65c, ecb);          // ECB ptr → EmulatorData at KDP+0x1000
 		WriteMacInt32(kdp + 0x660, 0);
-		// M6a Wave 1 rev-2 finding 6 NOTE (do NOT change in Wave 1): [KDP+0x5a4]
-		// (=0x5036d218, 68k code base, seeded above) and [KDP+0x5f0/+0x5f4]
-		// (=0x50366080, primary EMUL_RETURN) are DORMANT cross-world constants —
-		// PRIMARY-world values in a mirror-world boot, on routes probe-verified
-		// never to execute today (the jump68k dispatch tail / patched entry).
-		// Left intentionally so rung 2 (ongoing-entry contract) doesn't trip on a
-		// silent Wave-1 change; reconcile them when their routes go live
-		// (M6A-DR-HANDOFF-ANALYSIS.md §3 rows "[KDP+0x5a4]" / "[KDP+0x65c]…+0x5f0").
-		WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);  // EMUL_RETURN handler
-		WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);
+		// M6a Wave 1 rev-2 finding 6 NOTE: [KDP+0x5a4] (=0x5036d218, 68k code
+		// base, seeded above) is a DORMANT cross-world constant — PRIMARY-world
+		// value in a mirror-world boot, on a route probe-verified never to
+		// execute today (the jump68k dispatch tail / patched entry).
+		// Reconcile when its route goes live (M6A-DR-HANDOFF-ANALYSIS.md §3).
+		//
+		// Rung-2 Task X RESOLUTION (verify-and-leave, plan rev 3.1 item 4) for
+		// the [KDP+0x5f0/+0x5f4] pair below: these glue seeds are DEAD ON
+		// ARRIVAL.  NK cold-init rebuilds both words to the staged NK pair
+		// 0x50313bf8/0x503143a0 BEFORE the first table[0] dispatch — probe
+		// evidence (/tmp/taskx_boot1.log, 2026-06-11): at table[0] COLD entry
+		// visit=1 (the earliest post-NK observable) [KDP+0x5f0]=0x50313bf8
+		// [KDP+0x5f4]=0x503143a0 already, and identically at the first WARM
+		// (native-completion) entry.  The live warm switch-back path traverses
+		// the NK-rebuilt values correctly (W2 round trip) — do NOT retarget to
+		// the mirror (the once-planned 0x50466080 retarget is STRUCK: it would
+		// destroy both switch directions).  CHOICE: comment-only, seeds kept —
+		// removal can't be fully proven safe (a pre-NK-rebuild reader inside NK
+		// cold-init can't be excluded without instrumenting NK init, and the
+		// known consumers — the slot-stub exits — first run post-rebuild), and
+		// the stale primary-world values are guaranteed overwritten pre-dispatch.
+		WriteMacInt32(kdp + 0x5f0, (uint32)ROMBase + 0x366080);  // EMUL_RETURN handler (dead seed, see above)
+		WriteMacInt32(kdp + 0x5f4, (uint32)ROMBase + 0x366080);  // (dead seed — NK rebuilds pre-dispatch)
 		// M6a Wave 1 (memo §3 row "[KDP+0x648]"; plan rev 2 finding 7): this field
 		// is architecturally the entry-VECTOR table, not the opcode dispatch table —
 		// the skipped NK writer (0x503107fc) computes LA_EmulatorCode + [ConfigInfo

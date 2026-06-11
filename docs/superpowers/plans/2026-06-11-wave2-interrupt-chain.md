@@ -339,6 +339,8 @@ newworld byte-identical).
   while asserted and relies on the handler's PIC service (Q-W2) to retire it. Re-delivery
   runaway guard: a delivered-EXT counter + a loud tripwire if EXT delivers N times with
   no intervening IACK (the Q8 first-IACK record is the discriminator).
+  PLUS the U13 EXT-STARVATION tripwire (rev 2 Tension 2; W2-0 review Minor): EXT
+  pending across >N DEC deliveries with no EXT delivery -> loud line.
   **Priority: DEC before EXT, justified locally per m11/C1** — OEA ranks External ABOVE
   Decrementer, but our DEC latch is one-shot-clear-on-delivery while PIC pending is
   level-held and safely waits one poll; the comment carries this justification verbatim.

@@ -116,6 +116,32 @@ extern "C" {
 #define NW_PROGRAM_ENTRY_DEFAULT   0x50314700u  /* primary copy, NK-published [KDP+0x37c] [PROBE✓] */
 ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u, 0u };
 
+/* Wave-2 W2-1 (plan rev 2 F1): the SS_EXC_ENTRY=0xINT[,0xSC] override parse,
+ * SHARED between the boot path (init_emul_ppc table finalization below) and
+ * the SS_TEST harness path (main_unix's harness gate returns before the boot
+ * parse ever runs — the F1 fix is calling this from the harness knob block in
+ * ss_run_one_vector). The no-comma form PRESERVES syscall_entry (the P-M1
+ * trap fix, carried verbatim — only an explicit ",0xSC" field overrides it).
+ * Returns true iff the env var was present and applied (the caller decides
+ * what to log in the no-override case). */
+static bool exc_entry_table_apply_env_override(void)
+{
+	const char *exc_env = getenv("SS_EXC_ENTRY");
+	if (!(exc_env && exc_env[0]))
+		return false;
+	char *endp = NULL;
+	uint32_t ie = (uint32_t)strtoul(exc_env, &endp, 0);
+	if (endp && *endp == ',')
+		g_exc_entry_table.syscall_entry =
+			(uint32_t)strtoul(endp + 1, NULL, 0);
+	g_exc_entry_table.interrupt_entry = ie;
+	fprintf(stderr, "[EXC] entry table override (SS_EXC_ENTRY): "
+	        "interrupt=0x%08x syscall=0x%08x\n",
+	        g_exc_entry_table.interrupt_entry,
+	        g_exc_entry_table.syscall_entry);
+	return true;
+}
+
 /* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
  * runs the hook). CPU-thread-only writers (check_spcflags context, plan §2g), so
  * plain uint64_t is fine; readers (heartbeat, crash dump) run on the same thread
@@ -285,6 +311,13 @@ public:
 		for (int i = 0; i < 16; i++) sr_reg(i) = 0;
 		msr_reg() = 0xf072;
 	}
+
+	// Wave-2 W2-1 opcode-test helper (SS_TEST_MSR): set the initial MSR for a
+	// deliverability vector. msr_reg() is protected on the base; expose a public
+	// setter here (the reset_*_for_test idiom). Default-off knob — when
+	// SS_TEST_MSR is unset this is never called and the legacy table sees the
+	// reset_supervisor_for_test value (0xf072) exactly as before.
+	void set_msr_for_test(uint32 v) { msr_reg() = v; }
 
 	// Batch opcode-test helper: zero the floating-point and AltiVec state that a
 	// freshly-constructed CPU starts with (FPR=0/FPSCR=0 from init_registers, VR=0/
@@ -1565,6 +1598,143 @@ static uint8             *s_session_ram        = NULL;
 static bool               s_session_jit_inited = false;
 static const size_t       SS_TEST_RAM_SIZE     = 16 * 1024 * 1024;
 
+/* ---- Wave-2 W2-1: deliverability knobs (harness path ONLY; plan
+ * docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md Task W2-1 +
+ * rev 2 F1/F2/F11) ----
+ *
+ * All knobs default OFF; with none set this is one cached-int test per vector
+ * and the legacy 353-vector table is byte-unaffected.
+ *
+ *  SS_TEST_DEC_PENDING=1  arm the DEC latch (dec_pending=1) before EACH vector
+ *                         (re-armed per vector, so batch mode stays isolated).
+ *                         The harness clock itself is already live (rev 2 F11:
+ *                         VirtClockInitHost runs at main_unix's SS_TEST gate
+ *                         before ss_run_opcode_test) — only the latch arm is
+ *                         missing. Also maps guest lowmem (the F2 fix, below).
+ *  SS_TEST_MSR=0xHEX      initial MSR for the vector. Default (unset) is the
+ *                         reset_supervisor_for_test value 0xf072 — byte-
+ *                         compatible with all legacy vectors; the EE-edge
+ *                         vectors start at 0x7072 (EE=0).
+ *  SS_TEST_EXC_STUB=1     plant the capture stub at guest 0x1000C000
+ *                         (re-planted per vector — the per-vector RAM memset
+ *                         would otherwise erase it in batch mode):
+ *                           mfmsr r20; mfspr r21,srr0; mfspr r22,srr1; blr
+ *                         The REGDUMP has no MSR/SRR0/SRR1 — the stub captures
+ *                         them into GPRs the REGDUMP does carry.
+ *  SS_TEST_EXC_STATS=1    print one EXCSTAT line (the exc= 6-tuple) after the
+ *                         vector — the H4 deferral-telemetry observable.
+ *                         Counters are cumulative per process (the exc lane
+ *                         runs one process per vector, so absolute == delta).
+ *  SS_EXC_ENTRY=...       applied HERE via the shared boot-parse helper
+ *                         (rev 2 F1: the boot parse lives in init_emul_ppc,
+ *                         which the harness gate exits main() before reaching
+ *                         — without this the env var silently never parsed).
+ *  SS_MACHINE=newworld    additionally resolves the machine profile here:
+ *                         every link in the delivery chain (check_spcflags
+ *                         hook, mtmsr/rfi EE edges, execute_syscall) is gated
+ *                         on MachineProfileIsNewWorld(), whose resolver
+ *                         MachineProfileInit() is boot-path-only. Prefs are
+ *                         not initialized on the harness path; PrefsFindString
+ *                         returns NULL and the SS_MACHINE env wins (precedence
+ *                         rule 1). Unset => no call, no [MACHINE] stderr line,
+ *                         legacy behavior untouched.
+ *
+ * F2 — the lowmem fix. DECISION: MAP a real zero page (not zero-substitute in
+ * the hook). The delivery hook's two-phase run-mode sampling reads guest
+ * [0x2810] (XLM_RUN_MODE) on a provisional DELIVER — exactly these vectors'
+ * case, so the read is LIVE here — and the harness maps only test RAM at
+ * 0x10000000. We mmap zero-filled guest [0x0, 0x4000) (host NATMEM_OFFSET+0;
+ * fixed length 0x4000 so XLM_RUN_MODE 0x2810 / XLM_IRQ_NEST 0x2818 / Ticks
+ * 0x16a are covered regardless of host page size). Rationale for mapping over
+ * substitution: the hook's code path stays IDENTICAL to the boot path (zero =
+ * MODE_68K = deliverable); a harness-only zero-substitute branch inside the
+ * hook would un-test the very guest read W2-2/W2-3 depend on. The page also
+ * keeps the legacy HandleInterrupt fall-through (deferral case) read-safe
+ * (XLM_IRQ_NEST=0, run_mode=MODE_68K). REAL_ADDRESSING cannot map guest page
+ * 0 (it is the host NULL page) — the knob refuses loudly there. */
+static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
+{
+	static int parsed = 0;
+	static int knob_dec_pending = 0;
+	static int knob_msr_set = 0;
+	static uint32 knob_msr = 0;
+	static int knob_stub = 0;
+	if (!parsed) {
+		parsed = 1;
+		const char *e;
+		e = getenv("SS_TEST_DEC_PENDING");
+		knob_dec_pending = (e && e[0] && e[0] != '0') ? 1 : 0;
+		e = getenv("SS_TEST_MSR");
+		if (e && e[0]) {
+			knob_msr = (uint32)strtoul(e, NULL, 0);
+			knob_msr_set = 1;
+		}
+		e = getenv("SS_TEST_EXC_STUB");
+		knob_stub = (e && e[0] && e[0] != '0') ? 1 : 0;
+		/* F1: harness-side entry-table setup via the shared parse. */
+		exc_entry_table_apply_env_override();
+		/* Profile resolution (see block comment). */
+		e = getenv("SS_MACHINE");
+		if (e && e[0])
+			MachineProfileInit();
+		if (knob_dec_pending) {
+#if REAL_ADDRESSING
+			fprintf(stderr, "SS_TEST_DEC_PENDING: unsupported under REAL_ADDRESSING "
+			        "(guest lowmem page 0 is the host NULL page) — knob ignored\n");
+			knob_dec_pending = 0;
+#else
+			uint8 *lm_host = Mac2HostAddr(0);
+			void *lm = mmap((void *)lm_host, 0x4000, PROT_READ | PROT_WRITE,
+			                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+			if (lm == MAP_FAILED || lm != (void *)lm_host) {
+				fprintf(stderr, "SS_TEST_DEC_PENDING: cannot map guest lowmem page "
+				        "at %p: %s\n", (void *)lm_host, strerror(errno));
+				exit(1);
+			}
+			fprintf(stderr, "[EXC-TEST] guest lowmem [0x0,0x4000) mapped zero (F2); "
+			        "DEC latch armed per vector%s%s\n",
+			        knob_msr_set ? "; SS_TEST_MSR set" : "",
+			        knob_stub ? "; capture stub at 0x1000C000" : "");
+#endif
+		}
+	}
+	/* Per-vector application (batch mode re-arms/replants every vector). */
+	if (knob_dec_pending) {
+		/* The latch word is cross-thread atomic on the boot path; the harness
+		 * is single-threaded, but use the module's idiom anyway. */
+		__atomic_store_n(&g_virt_clock.dec_pending, 1u, __ATOMIC_RELEASE);
+	}
+	if (knob_msr_set)
+		cpu->set_msr_for_test(knob_msr);
+	if (knob_stub) {
+		static const uint32 stub[] = {
+			0x7E8000A6,	/* mfmsr r20      */
+			0x7EBA02A6,	/* mfspr r21,srr0 */
+			0x7EDB02A6,	/* mfspr r22,srr1 */
+			0x4E800020,	/* blr            */
+		};
+		uint8 *p = test_ram + 0xC000;
+		for (size_t i = 0; i < sizeof(stub) / sizeof(stub[0]); i++) {
+			p[4*i + 0] = (stub[i] >> 24) & 0xFF;
+			p[4*i + 1] = (stub[i] >> 16) & 0xFF;
+			p[4*i + 2] = (stub[i] >> 8)  & 0xFF;
+			p[4*i + 3] =  stub[i]        & 0xFF;
+		}
+	}
+}
+
+/* W2-1 H4 observable: the exc= 6-tuple as one greppable line. Cached gate —
+ * zero output (and zero cost beyond one int test) when the knob is unset. */
+static bool ss_test_exc_stats_enabled()
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("SS_TEST_EXC_STATS");
+		cached = (e && e[0] && e[0] != '0') ? 1 : 0;
+	}
+	return cached != 0;
+}
+
 /* Tear down whatever the batch session allocated. Called once after the batch
  * loop finishes. No-op outside batch mode. */
 static void ss_test_session_end(void)
@@ -1767,6 +1937,11 @@ have_ram:
 		}
 	}
 
+	/* Wave-2 W2-1: deliverability knobs (default-off; see ss_test_exc_knobs_apply).
+	 * AFTER all register setup (so SS_TEST_MSR overrides the reset value) and
+	 * AFTER the RAM memset above (so the capture stub survives into this vector). */
+	ss_test_exc_knobs_apply(cpu, test_ram);
+
 	/* Execute */
 	/* Execute — either via JIT or interpreter */
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
@@ -1867,6 +2042,19 @@ regdump:
 			        (unsigned)v.w[0], (unsigned)v.w[1], (unsigned)v.w[2], (unsigned)v.w[3]);
 		}
 		fprintf(stderr, "\n");
+	}
+
+	/* Wave-2 W2-1 (H4 observable): the exc= 6-tuple, one line, knob-gated —
+	 * SS_TEST_EXC_STATS unset => no output, legacy REGDUMP stream unchanged. */
+	if (ss_test_exc_stats_enabled()) {
+		uint64_t exc[6];
+		SheepExcStats(exc);
+		fprintf(stderr, "EXCSTAT: delivered_dec=%llu deferred_ee=%llu "
+		        "deferred_depth=%llu deferred_native=%llu delivered_sc=%llu "
+		        "delivered_program=%llu\n",
+		        (unsigned long long)exc[0], (unsigned long long)exc[1],
+		        (unsigned long long)exc[2], (unsigned long long)exc[3],
+		        (unsigned long long)exc[4], (unsigned long long)exc[5]);
 	}
 
 	/* Batch keeps the CPU + RAM alive for the next vector (torn down once by
@@ -2353,25 +2541,15 @@ void init_emul_ppc(void)
 				fprintf(stderr, "[NW-SC] syscall surface OFF (SS_NW_SC_SURFACE=0 "
 				        "opt-out): syscall_entry=0 — abort-with-capture baseline\n");
 			}
-			const char *exc_env = getenv("SS_EXC_ENTRY");
-			if (exc_env && exc_env[0]) {
-				char *endp = NULL;
-				uint32_t ie = (uint32_t)strtoul(exc_env, &endp, 0);
-				if (endp && *endp == ',') {
-					g_exc_entry_table.syscall_entry =
-						(uint32_t)strtoul(endp + 1, NULL, 0);
-				}
-				/* TRAP FIX (plan rev 2 P-M1): the no-comma SS_EXC_ENTRY=0xINT form
-				 * previously ZEROED syscall_entry — a post-flip trap (overriding the
-				 * interrupt entry would have silently re-broken the resolved syscall
-				 * surface). It now PRESERVES the syscall entry (gate default or 0);
-				 * only an explicit ",0xSC" field overrides it. */
-				g_exc_entry_table.interrupt_entry = ie;
-				fprintf(stderr, "[EXC] entry table override (SS_EXC_ENTRY): "
-				        "interrupt=0x%08x syscall=0x%08x\n",
-				        g_exc_entry_table.interrupt_entry,
-				        g_exc_entry_table.syscall_entry);
-			} else {
+			/* TRAP FIX (plan rev 2 P-M1): the no-comma SS_EXC_ENTRY=0xINT form
+			 * previously ZEROED syscall_entry — a post-flip trap (overriding the
+			 * interrupt entry would have silently re-broken the resolved syscall
+			 * surface). It now PRESERVES the syscall entry (gate default or 0);
+			 * only an explicit ",0xSC" field overrides it.
+			 * W2-1 (rev 2 F1): the parse itself moved to the shared helper
+			 * exc_entry_table_apply_env_override() so the SS_TEST harness path
+			 * (which never reaches this block) applies the same override. */
+			if (!exc_entry_table_apply_env_override()) {
 				fprintf(stderr, "[EXC] entry table: interrupt=0x%08x syscall=0x%08x\n",
 				        g_exc_entry_table.interrupt_entry,
 				        g_exc_entry_table.syscall_entry);

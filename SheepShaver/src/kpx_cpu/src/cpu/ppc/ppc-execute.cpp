@@ -224,16 +224,18 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 				ExcTransition t = ExcEnter(pc(), regs().msr, EXC_PROGRAM,
 				                           &g_exc_entry_table);
 				if (t.pc == EXC_PC_UNRESOLVED) {
-					/* Trap taken with no resolved 0x700 entry (gate off, or a
-					 * stray trap on a gated-off boot): loud capture-abort —
-					 * the execute_syscall FATAL idiom, with the trap word +
-					 * slot-id decode (the entry-vector placeholders encode
-					 * their slot id: twi 31,r31,N = 0x0fff000N). */
+					/* Trap taken with no resolved 0x700 entry (the
+					 * SS_NW_FE1F_SURFACE=0 opt-out — the surface is newworld
+					 * default since Task C — or a stray trap): loud
+					 * capture-abort — the execute_syscall FATAL idiom, with
+					 * the trap word + slot-id decode (the entry-vector
+					 * placeholders encode their slot id:
+					 * twi 31,r31,N = 0x0fff000N). */
 					const bool is_slot = (opcode & 0xFFFF0000u) == 0x0FFF0000u;
 					fprintf(stderr, "[EXC] FATAL: trap (%s) taken at pc=%08x with "
 					        "unresolved program entry (word=%08x slot=%d "
 					        "SRR0=%08x SRR1=%08x msr=%08x lr=%08x r1=%08x) - "
-					        "set SS_NW_FE1F_SURFACE=1\n",
+					        "SS_NW_FE1F_SURFACE=0 opt-out is set (newworld default arms it)\n",
 					        is_twi ? "twi" : "tw", pc(), opcode,
 					        is_slot ? (int)(opcode & 0xFFFFu) : -1,
 					        t.srr0, t.srr1, regs().msr, lr(), gpr(1));

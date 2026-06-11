@@ -1328,13 +1328,16 @@ bool PatchROM(void)
 		// 0x700 delivery path (SheepExcProgramShim's slot-15 loud line +
 		// delivered-program counter, sheepshaver_glue.cpp).
 		//
-		// Restore is gated on SS_NW_FE1F_SURFACE=1 (bring-up default OFF;
-		// the same gate arms the 0x700 delivery surface in init_emul_ppc) —
-		// gated off, the Task-T/U stops above stay and the 0x5000f248 park
-		// baseline is byte-identical.  Verify-EXPECTED discipline: each slot's
-		// current word must be exactly the stop branch Task T/U wrote above
-		// (same branch arithmetic), else skip loudly.
-		if (MachineEnvFlag("SS_NW_FE1F_SURFACE")) {
+		// Restore is NEWWORLD DEFAULT since Task C (acceptance battery green
+		// pre/post-flip); explicit-"0"-only opt-out SS_NW_FE1F_SURFACE=0 (the
+		// SS_NW_SC_SURFACE polarity precedent — the same gate, same polarity,
+		// arms the 0x700 delivery surface in init_emul_ppc).  Opted out, the
+		// Task-T/U stops above stay and the 0x5000f248 park baseline is
+		// byte-identical.  Verify-EXPECTED discipline: each slot's current
+		// word must be exactly the stop branch Task T/U wrote above (same
+		// branch arithmetic), else skip loudly.
+		const char *fe1f_env = getenv("SS_NW_FE1F_SURFACE");
+		if (!(fe1f_env && strcmp(fe1f_env, "0") == 0)) {
 			static const struct { uint8 slot; uint32 stub; uint32 raw; } r_slots[] = {
 				{  4, 0x429c40u, 0x0fff0004u }, {  6, 0x429c50u, 0x0fff0006u },
 				{  7, 0x429c60u, 0x0fff0007u }, {  8, 0x429c70u, 0x0fff0008u },

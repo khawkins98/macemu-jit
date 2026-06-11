@@ -110,8 +110,9 @@ extern "C" {
  * cross-copy note applies: the live value follows what the NK publishes,
  * [KDP+0x37c] = 0x50314700 [PROBE✓], = static file 0x314700 + ROMBase, NO
  * +0x100000; the interrupt entry's staged-copy asymmetry is recorded above).
- * Armed only under SS_NW_FE1F_SURFACE=1 during bring-up (default OFF;
- * flip-last is Task C's job). */
+ * NEWWORLD DEFAULT since Task C (acceptance battery green pre/post-flip);
+ * opt-out with SS_NW_FE1F_SURFACE=0 (explicit-"0"-only, the SS_NW_SC_SURFACE
+ * polarity precedent). */
 #define NW_PROGRAM_ENTRY_DEFAULT   0x50314700u  /* primary copy, NK-published [KDP+0x37c] [PROBE✓] */
 ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u, 0u };
 
@@ -2358,10 +2359,12 @@ void init_emul_ppc(void)
 				        g_exc_entry_table.syscall_entry);
 
 			/* FE1F-service-surface Task A (plan rev 3): the program-interrupt
-			 * (0x700) delivery surface — bring-up gate SS_NW_FE1F_SURFACE=1,
-			 * DEFAULT OFF (MachineEnvFlag polarity: unset/empty/"0" = off; the
-			 * flip to newworld default + SS_NW_SC_SURFACE-style explicit-"0"
-			 * opt-out polarity is Task C's LAST step, revert-on-red).
+			 * (0x700) delivery surface — NEWWORLD DEFAULT since Task C
+			 * (acceptance battery green pre/post-flip); explicit-"0"-only
+			 * opt-out SS_NW_FE1F_SURFACE=0 (the SS_NW_SC_SURFACE polarity
+			 * precedent — NOT MachineEnvFlag, which would read unset as off).
+			 * Opted out, the Task-T/U parked stops stay and the 0x5000f248
+			 * park baseline is byte-identical (Task C gate (e)).
 			 *
 			 * Env-flag matrix (rev 2 P-m5, behavior pinned): this surface is
 			 * MEANINGLESS with SS_NW_MM_SWITCH=0 or SS_NW_SC_SURFACE=0 — the
@@ -2371,26 +2374,33 @@ void init_emul_ppc(void)
 			 * still ARMS (harmless — the twi sites are unreachable on such a
 			 * boot) but logs the misconfig loudly; a pre-FE1F A/B wants the
 			 * upstream knob, not this one. The same gate also controls the
-			 * PatchROM-time placeholder restore (rom_patches.cpp) — gated off,
-			 * the Task-T/U parked stops stay and the 0x5000f248 park baseline
-			 * is byte-identical. */
-			if (MachineEnvFlag("SS_NW_FE1F_SURFACE")) {
-				g_exc_entry_table.program_entry = NW_PROGRAM_ENTRY_DEFAULT;
-				fprintf(stderr, "[NW-FE1F] FE1F surface armed (SS_NW_FE1F_SURFACE=1; "
-				        "bring-up default OFF): program_entry=0x%08x (primary copy, "
-				        "NK-published [KDP+0x37c]); twi/tw trap-taken -> 0x700; "
-				        "shim=SPRG1:=caller r1, SPRG2:=caller LR\n",
-				        g_exc_entry_table.program_entry);
-				const char *mm_env = getenv("SS_NW_MM_SWITCH");
-				const bool mm_on = !(mm_env && strcmp(mm_env, "0") == 0);
-				const bool sc_on = (g_exc_entry_table.syscall_entry != 0);
-				if (!mm_on || !sc_on)
-					fprintf(stderr, "[NW-FE1F] MISCONFIG: FE1F surface armed with "
-					        "%s%s%s OFF — the boot cannot reach the FE1F callout; "
-					        "surface stays armed but inert (P-m5)\n",
-					        !mm_on ? "SS_NW_MM_SWITCH" : "",
-					        (!mm_on && !sc_on) ? " and " : "",
-					        !sc_on ? "the sc surface" : "");
+			 * PatchROM-time placeholder restore (rom_patches.cpp). */
+			{
+				const char *fe1f_env = getenv("SS_NW_FE1F_SURFACE");
+				const bool fe1f_surface = !(fe1f_env && strcmp(fe1f_env, "0") == 0);
+				if (fe1f_surface) {
+					g_exc_entry_table.program_entry = NW_PROGRAM_ENTRY_DEFAULT;
+					fprintf(stderr, "[NW-FE1F] FE1F surface armed (newworld default; "
+					        "opt-out SS_NW_FE1F_SURFACE=0): program_entry=0x%08x "
+					        "(primary copy, NK-published [KDP+0x37c]); twi/tw "
+					        "trap-taken -> 0x700; "
+					        "shim=SPRG1:=caller r1, SPRG2:=caller LR\n",
+					        g_exc_entry_table.program_entry);
+					const char *mm_env = getenv("SS_NW_MM_SWITCH");
+					const bool mm_on = !(mm_env && strcmp(mm_env, "0") == 0);
+					const bool sc_on = (g_exc_entry_table.syscall_entry != 0);
+					if (!mm_on || !sc_on)
+						fprintf(stderr, "[NW-FE1F] MISCONFIG: FE1F surface armed with "
+						        "%s%s%s OFF — the boot cannot reach the FE1F callout; "
+						        "surface stays armed but inert (P-m5)\n",
+						        !mm_on ? "SS_NW_MM_SWITCH" : "",
+						        (!mm_on && !sc_on) ? " and " : "",
+						        !sc_on ? "the sc surface" : "");
+				} else {
+					fprintf(stderr, "[NW-FE1F] FE1F surface OFF (SS_NW_FE1F_SURFACE=0 "
+					        "opt-out): program_entry=0 — twi unresolved (FATAL on "
+					        "trap-taken), parked-stop slot baseline\n");
+				}
 			}
 		}
 	}

@@ -357,3 +357,65 @@ Disposition: root-cause diagnosis dispatched (which loop, which IFR bit, which o
 behavior is missing); per the plan's stop-rule, if the awaited event is NOT
 Cuda-model-side (timer/interrupt delivery), it is Wave-2/M6 territory — no tunneling.
 _Root-cause results to be appended below by the diagnostician._
+
+### Root cause (2026-06-11, diagnostician): deferred SR-int delivery — FIXED (commit d3e60d88)
+
+**One paragraph:** the 68k boot was not waiting for a timer, CB1, or any unmodeled event —
+it was waiting for the Cuda's **post-sync SR interrupt, which our seam had already delivered
+and the ROM had already (unknowingly) cleared**. The executed startup sync is NOT the
+0xd0e0 routine from the symptom record but the routine at **file 0x9584** (guest
+0x50009584; symptom-record item 1's instruction-matching of 0xd0e0 was a coincidence of
+similar choreography — 0xd0e0 does RMW `ori.b` on the ACR, and the read histogram shows
+**ACR reads = 0**, which excludes it). 0x9584's sequence reconciles every counter EXACTLY:
+`ori.b #$30,ORB` (write #1 = 0x38, 1 RMW read) → 3334-read `tst.b ORB` settle delay
+(`dbra #$d05`) → TREQ check (1 read, negated) → SR read #1 → `bclr #4` TACK assert
+(write #2 = 0x28, 1 RMW read; model mirrors TREQ + raises SR int) → TREQ-assert poll
+(1 read) → IFR.2 poll #1 (1 read, satisfied) → `bset #4` TACK negate (write #3 = 0x30,
+1 RMW read; model raises SR int again) → TREQ-negate poll (1 read) → **SR read #2 (the
+sync byte — this read CLEARS IFR.2, M4)** → **IFR.2 wait with `move.l #$3a98,d4` =
+15000-budget `dbra` at 0x960e → 15001 reads → EXPIRES** → `bra.l 0x974a` → park at
+0x9754 `bra.b *`. Totals: ORB = 1+3334+1+1+1+1+1 = **3340** ✓, IFR = 1+15001 = **15002** ✓,
+SR = **2** ✓, ORB writes = 4 ✓ (incl. the wrapper's), syncs = **1** ✓. The parked 68k PC
+was confirmed LIVE: `SS_PROBE_PC=0x50467ed4:r24` → r24 = 0x50009756 = PC+2 of the
+0x9754 self-branch, constant from visit 10 through 1e9.
+
+**The awaited event, per the oracle:** QEMU cuda.c @ de5d8bfd delays EVERY Cuda-raised
+SR int through `cuda_delay_set_sr_int` (`sr_delay_ns` = **20 µs**, timer-fired) — so on
+QEMU/hardware the TACK-negate edge's int lands AFTER the host's immediate sync-byte SR
+read, and the 15000-budget wait at 0x960e sees it. Our seam delivered the raise
+synchronously inside `CudaORBWritten`, so the ROM's SR read at 0x9602 consumed it before
+the wait began. The dev_cuda.h m10 note ("QEMU's 20 µs delay exists for an
+interrupt-delivery race that cannot occur on the IFR-poll-only newworld profile") is
+exactly the falsified assumption — the race occurs on the POLL path too, because the
+poll loop starts after an SR read.
+
+**Fix (model-side, oracle-backed, commit d3e60d88):** deterministic lazy equivalent of
+QEMU's delay — (a) `CudaORBWritten` never returns RAISE (pending stays latched);
+(b) `CudaSettle`, called from the VIA's **R_IFR read path only**, is the single delivery
+surface (ORB reads no longer settle; TREQ derivation stays synchronous); (c) SR
+read/write clear the LATCHED IFR.2 only, never an undelivered pending raise (QEMU does
+not cancel the sr_delay timer on SR access either). TDD: new **CV-10** conformance
+vector scripts the exact 0x9584 sequence (fails red against eager delivery).
+
+**Gates:** machine suite 11/11 ALL PASS; `build-ss`; `SS_HARNESS_BATCH=1 make test-jit`
+AND plain `make test-jit` both 353/353; paravirtual untouched (unbound loud-stub paths
+byte-identical).
+
+**Acceptance boot after the fix** (90 s, same prefs, log /tmp/m3b_accept2.log) — the park
+is GONE and the machine is running:
+
+```
+[CUDA] packets=13156 responses=13156 syncs=1013 bytes_in=48576 bytes_out=55660
+       pram_rd=3036 pram_wr=1012 unknown=9108(last=1:22)
+[VIA]  reads: ORB=3636421 SR=146743 ACR=145729 IFR=249966 IER=66325468
+[MMIO] scc8530 reads=66344657 writes=2026 idle_sleeps=259143
+[HB]   comp 849 -> 4912+ still climbing at 60s; j2i transitions live; no STALL park
+```
+
+**New frontier (next wall, not tunneled):** pseudo command **0x22 = Cuda I2C
+(DingusPPC `READ_WRITE_I2C`)**, rejected as unknown 9108 times (the boot's PMU/clock
+probing retries through it but keeps progressing). Also still zero: `get_time`,
+`autopoll`, `adb` — not yet reached or command-set gaps to revisit when the boot's
+device-probe phase is mapped. The 66M IER/SCC reads are the polled interrupt
+architecture (symptom-record item 3) running hot — Wave-2 idle/interrupt-delivery
+territory as planned.

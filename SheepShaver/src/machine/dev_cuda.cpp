@@ -270,7 +270,13 @@ static void pseudo_command(CudaDevice *c, uint8_t cmd, const uint8_t *a, int n)
 		uint16_t addr = (uint16_t)((a[0] << 8) | a[1]);
 		c->cmd_pram_read++;
 		resp_begin(c, CUDA_PKT_PSEUDO, 0, cmd);
-		if (addr >= CUDA_MCU_PRAM_START && addr < CUDA_MCU_PRAM_START + CUDA_PRAM_SIZE) {
+		if (addr < 0x100) {
+			// MCU internal RAM: the boot's probe cycle reads 0x00A1 (and
+			// writes/re-reads it) every cycle — the previous header-only ack
+			// here was the probe-cycle loop-ender (SS_CUDA_TRACE root cause;
+			// DingusPPC serves open-ended zeros, never an empty reply).
+			resp_append(c, c->mcu_ram + addr, 0x100 - addr);
+		} else if (addr >= CUDA_MCU_PRAM_START && addr < CUDA_MCU_PRAM_START + CUDA_PRAM_SIZE) {
 			resp_append(c, c->pram + (addr - CUDA_MCU_PRAM_START),
 			            CUDA_PRAM_SIZE - (addr - CUDA_MCU_PRAM_START));
 		} else if (addr >= CUDA_MCU_ROM_START) {
@@ -278,14 +284,21 @@ static void pseudo_command(CudaDevice *c, uint8_t cmd, const uint8_t *a, int n)
 			// version major/minor 0x0002/0x0029 (7 bytes).
 			static const uint8_t fw[7] = { 0x00, 0x00, 0x19, 0x00, 0x02, 0x00, 0x29 };
 			resp_append(c, fw, (int)sizeof(fw));
+		} else {
+			// Unmapped middle window (the boot reads 0x0B00): finite run of
+			// zeros — never an empty reply (DingusPPC: open-ended zeros; the
+			// abandon-discard at TIP-negate handles any over-read).
+			static const uint8_t zeros[64] = { 0 };
+			resp_append(c, zeros, (int)sizeof(zeros));
 		}
-		// other regions: header-only ack (DingusPPC sends open-ended zeros;
-		// the boot never reads them — keep the reply finite and well-formed)
 		break; }
 	case CUDA_CMD_WRITE_MCU_MEM: {
 		if (n < 2) goto bad_args;
 		uint16_t addr = (uint16_t)((a[0] << 8) | a[1]);
-		if (addr >= CUDA_MCU_PRAM_START && addr < CUDA_MCU_PRAM_START + CUDA_PRAM_SIZE) {
+		if (addr < 0x100) {
+			for (int i = 0; i < n - 2; i++)
+				c->mcu_ram[(addr + i) & 0xFF] = a[2 + i];
+		} else if (addr >= CUDA_MCU_PRAM_START && addr < CUDA_MCU_PRAM_START + CUDA_PRAM_SIZE) {
 			for (int i = 0; i < n - 2; i++)
 				c->pram[(addr - CUDA_MCU_PRAM_START + i) & 0xFF] = a[2 + i];
 		}

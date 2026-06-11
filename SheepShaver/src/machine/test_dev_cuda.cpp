@@ -329,6 +329,23 @@ int main()
 		// Cuda FW ROM region: version blob (DingusPPC fake, 7 bytes)
 		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_MCU_MEM, 0x0F, 0x00 });
 		CHECK(r.size() == 3 + 7);
+		// --- MCU internal RAM (0x00..0xFF): the live boot's probe cycle reads
+		// 0x00A1, writes it, and re-reads each cycle (SS_CUDA_TRACE evidence,
+		// loop-ender root cause).  An EMPTY reply ("the boot never reads them")
+		// was falsified — replies must carry data; writes must stick. ---
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_MCU_MEM, 0x00, 0xA1 });
+		CHECK((int)r.size() == 3 + 256 - 0xA1);    // window-to-end, zeros
+		CHECK(r[3] == 0x00);
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_WRITE_MCU_MEM, 0x00, 0xA1, 0x5A });
+		CHECK(r.size() == 3 && r[1] == 0);
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_MCU_MEM, 0x00, 0xA1 });
+		CHECK(r[3] == 0x5A);                       // write-then-readback sticks
+		// MCU RAM is NOT the PRAM array (distinct stores)
+		CHECK(cuda.pram[0xA1] == 0x00);
+		// Unmapped middle window (boot reads 0x0B00): non-empty zeros
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_MCU_MEM, 0x0B, 0x00 });
+		CHECK(r.size() > 3);
+		CHECK(r[3] == 0x00);
 	}
 	// Unknown pseudo command: error packet + counter + warning latch
 	{

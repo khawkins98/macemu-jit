@@ -211,6 +211,12 @@ struct CudaDevice {
 	// shows what fit, not necessarily every probed address).
 	uint8_t  i2c_addrs[16];
 	int      i2c_addr_count;
+	// MCU internal RAM 0x00..0xFF (APPENDED LAST per the struct-layout rule).
+	// The 9.0.1 boot's probe cycle does READ_MCU_MEM 0x00A1 / WRITE / re-read
+	// every cycle (SS_CUDA_TRACE evidence) — empty replies for sub-0x100
+	// addresses were the probe-cycle loop-ender (the "boot never reads them"
+	// assumption falsified).  Zero-init; distinct from the PRAM array.
+	uint8_t  mcu_ram[256];
 };
 
 extern void CudaReset(CudaDevice *c,

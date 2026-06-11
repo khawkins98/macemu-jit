@@ -135,6 +135,59 @@ struct probe_entry {
 static probe_entry s_probes[PROBE_MAX];
 static int s_probe_count = -1; // -1 = not yet parsed
 
+// SS_DR_R24_RING=1: capture-only telemetry (M6a Wave 2 recon). Records the
+// 68k PC (DR-emulator convention: guest r24) at every JIT dispatcher block
+// entry, ring-buffered, deduped against the last recorded value so loop
+// ping-pong does not flood the ring. Dumped via atexit (pairs with
+// SS_TERM_DUMP=1 so a timeout-killed boot still dumps). Zero cost when the
+// env var is unset (-1 -> parse once -> 0 forever, same pattern as probes).
+#define R24RING_SIZE (1u<<21)  /* 2M entries = ~2 probe cycles at instr granularity */
+static uint32_t s_r24ring[R24RING_SIZE];
+static uint32_t s_r24ring_idx = 0;       // monotonically increasing; wraps modulo size at use
+static uint32_t s_r24_last = 0;
+static int s_r24ring_enabled = -1;       // -1 unparsed, 0 off, 1 on
+
+static void r24ring_dump_atexit(void) {
+	uint32_t n = s_r24ring_idx < R24RING_SIZE ? s_r24ring_idx : R24RING_SIZE;
+	uint32_t start = s_r24ring_idx < R24RING_SIZE ? 0 : s_r24ring_idx; // oldest entry
+	fprintf(stderr, "[R24RING] %u transitions recorded (showing last %u, oldest first)\n",
+	        s_r24ring_idx, n);
+	// Single buffered write: a per-value fprintf raced the timeout-kill and
+	// truncated the dump mid-line on the first live capture.
+	char *buf = (char *)malloc((size_t)n * 9 + n / 8 + 16);
+	if (!buf) return;
+	char *w = buf;
+	for (uint32_t i = 0; i < n; i++) {
+		w += sprintf(w, " %08x", s_r24ring[(start + i) % R24RING_SIZE]);
+		if ((i & 7) == 7) *w++ = '\n';
+	}
+	*w++ = '\n';
+	fwrite(buf, 1, (size_t)(w - buf), stderr);
+	fflush(stderr);
+	free(buf);
+}
+
+static inline void r24ring_record(uint32_t r24) {
+	if (__builtin_expect(s_r24ring_enabled < 0, false)) {
+		const char *e = getenv("SS_DR_R24_RING");
+		s_r24ring_enabled = (e && atoi(e)) ? 1 : 0;
+		if (s_r24ring_enabled)
+			atexit(r24ring_dump_atexit);
+	}
+	if (!s_r24ring_enabled || r24 == s_r24_last)
+		return;
+	// Suppress short-loop ping-pong: skip if r24 matches any of the last 4
+	// recorded values (a 2-3 block loop would otherwise flood the ring).
+	for (uint32_t k = 1; k <= 4 && k <= s_r24ring_idx; k++)
+		if (s_r24ring[(s_r24ring_idx - k) % R24RING_SIZE] == r24) {
+			s_r24_last = r24;
+			return;
+		}
+	s_r24_last = r24;
+	s_r24ring[s_r24ring_idx % R24RING_SIZE] = r24;
+	s_r24ring_idx++;
+}
+
 static bool probe_should_log(uint64_t v) {
 	// Log at powers of 10: 1, 10, 100, 1000, ...
 	if (v == 0) return false;
@@ -1810,6 +1863,8 @@ void powerpc_cpu::execute(uint32 entry)
 						// dispatch path when no seeds are set (-1 -> parse once -> 0 forever).
 						if (__builtin_expect(s_seed_count != 0, false))
 							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
+						// SS_DR_R24_RING: capture-only 68k-PC transition ring (M6a Wave 2 recon).
+						r24ring_record((uint32_t)gpr(24));
 						// SS_PROBE_PC: dump registers/memory at specified block-entry PCs.
 						// Parsed once; up to PROBE_MAX compares per block when active.
 						{
@@ -2334,6 +2389,8 @@ void powerpc_cpu::execute(uint32 entry)
 						// dispatch path when no seeds are set (-1 -> parse once -> 0 forever).
 						if (__builtin_expect(s_seed_count != 0, false))
 							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
+						// SS_DR_R24_RING: capture-only 68k-PC transition ring (M6a Wave 2 recon).
+						r24ring_record((uint32_t)gpr(24));
 						if (__builtin_expect(s_probe_count > 0, false)) {
 							uint32_t bpc = (uint32_t)jit_block_start_pc;
 							for (int pi = 0; pi < s_probe_count; pi++) {

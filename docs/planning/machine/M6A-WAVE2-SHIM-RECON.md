@@ -495,3 +495,75 @@ the model?). Open questions for the next recon: (1) what paces the 80 ms (T2 rea
 absent from the VIA histogram - so likely a delay loop); (2) what does the main 68k
 thread wait on (the 48M IER + SCC polls are the idle signature); (3) which low-mem
 flag/time state would unblock it (Ticks 0x16a seeding is the direct experiment).
+
+### Main-thread recon (2026-06-11, diagnostician): the boot is a ~80 ms REBOOT LOOP that dies in MPLibrary 'pwpc' parcel init
+
+**One paragraph:** the main 68k thread is not blocked at all — it re-runs the ENTIRE early
+boot every ~80 ms and resets. A new capture-only telemetry (`SS_DR_R24_RING=1`, ppc-cpu.cpp:
+ring of 68k-PC transitions sampled at JIT dispatcher entry, atexit dump) shows a
+deterministic cycle of **exactly 837,054 r24-transitions repeating verbatim**, each pass
+ending with a jump to the ROM reset entry `0x5000002c`. Each cycle is a full re-init: one
+Cuda sync (0x9584, hence syncs == cycles), the ff/00 RAM-test sweep over low memory
+(SS_PROBE_PC absolute-field dumps show Ticks 0x16a, TimeDBRA 0xd00, $af0 toggling
+0xffffffff/0x00000000 with cycle phase), the PRAM reads, and the 9-address I2C sweep. The
+~80 ms pace is the cycle's own execution time — no timer involved.
+
+**The loop-ender (deliverable 1).** Stack-walk probes (`SS_PROBE_PC=...:r24,r18,r1,[r1:0x80]`)
+plus the ring tail locate it at ROM file 0xf3e8–0xf466 (guest +0x50000000): the boot looks
+up **'pwpc' (0x70777063) parcels by pascal-string name** via the helper at 0x10e90 (traps
+$AAFE / $AA5A, selector 0xFFFE) and calls each entry point:
+
+1. `"MixedMode"` (name at 0xf534) — lookup at 0xf412 succeeds, init via 0xfde0 succeeds;
+2. `"MPLibrary"` (name at 0xf528) — lookup at 0xf452 SUCCEEDS (bne 0xf4e0 not taken), the
+   entry point is CALLED through the thunk at 0xfce0 (`jsr (a4)` on the parcel entry)…
+   and **never returns**: the ring tail shows the entry running, then the ROM mini A-trap
+   dispatcher (0xdfa2, tables $e00/$1e00) dispatching to a RAM implementation
+   (SysError-shaped), which jumps straight to ROM reset `0x5000002c` → next cycle;
+3. `"CodeFragmentMgr"` (name at 0xf516, call site 0xf46e) — **never reached**.
+
+The "48M IER + 44M SCC reads / 60 s" idle signature is now fully explained and is NOT a
+gate: the ROM's delay-primitive family at 0x540–0x5de (write VIA T2L/T2H at +$1000/+$1200,
+then a **dbra-budget** `btst #0` poll of the VIA IER page or `$40(a0)` purely as an
+MMIO-paced time-burner, `jmp (a2)` regardless of the bit) plus the TimeDBRA-calibrated
+delay at 0x986a (`move.w $d00.w,d0; lsr #6; dbra`) — delays, not waits. The SCC poller
+trampoline (0x6ea0) contributes the SCC half.
+
+**Unblock experiments (deliverable 2) — two more falsifications:**
+- **Ticks seed**: `SS_SEED_MEM=0x16a=0x00100000` (immediate + PC-triggered, both applied,
+  `[SEED]` confirmed) → cycle byte-identical (sync rate unchanged). Moot twice over:
+  `SS_JIT_WATCH_ADDR=362` shows nothing ever writes Ticks, and the cycle's own RAM-test
+  sweep rewrites low memory every pass. This ROM phase paces by TimeDBRA dbra loops, not
+  Ticks. **Hypothesis (b) in its "tick starvation" form: falsified for this phase.**
+- **Bootable disk**: attaching a scratch copy of e2e-macos9-mini-boot.dsk (`disk` pref) →
+  cycle byte-identical. The reset fires before any boot-volume scan.
+
+**Why MPLibrary init fails — the evidence so far:** the parcel's PPC code runs INTERPRETED
+(jRAM=0 — no RAM JIT blocks; the ring's apparent "RAM PCs" like 0x10024dea are interpreter-
+phase r24 artifacts pointing into a ROM→RAM jump table at 0x10024d00, lldb-verified). It
+fails CLEANLY (deliberate SysError-style trap → reset), not by crash: the M3a sc path
+would `abort()` loudly on a syscall with the unresolved entry (`[EXC] entry table:
+interrupt=0x50412b1c syscall=0x00000000`) and never does — so **MPLibrary bails before its
+first `sc`**, i.e. on a precondition probe. The starved-supervisor facts on the table:
+`[VCLK] mtspr_dec=4 dec_expiries=1 pending=1` + `exc=0/1/0` (the single DEC expiry deferred
+on MSR[EE]=0, never re-raised — the guest never enables EE), syscall vector unstaged, and a
+shim KDP (`[KDP+0xfd0]='Hnfo'` re-asserted by the trampoline). MPLibrary is exactly the
+first boot component that needs the nanokernel's MP service surface to exist.
+
+**Wave-2 verdict (deliverable 3).** The gate is **the NK/supervisor service surface the
+'pwpc' parcels probe — not Cuda, not a timer tick, and not interrupt delivery into the 68k
+world** (the 68k boot world is polled by design; symptom-record item 3 stands). What Wave 2
+must build, in order of evidence:
+1. **The KDP/NK state MPLibrary's precondition probe reads** — next recon should
+   instrument the INTERPRETED PPC path (the fragment runs in the interpreter, so a cheap
+   interpreter-side PC/load trace over the one-per-cycle excursion is bounded) and capture
+   its KDP/lowmem reads up to the bail decision: that names the exact field/check.
+2. **A resolved syscall entry** (vector 0xC00 staging) — required the moment MPLibrary
+   gets past its probe, since its real work is NK syscalls; today that path is an abort().
+3. **EE-enable + DEC delivery chain** — the latched-forever DEC expiry is real starvation,
+   but it is downstream of (1)/(2): EE is enabled by guest supervisor code we never reach.
+VIA T1/T2 interrupt modeling and Ticks-via-trampolines are NOT the unblock for this wall —
+the ROM uses T2 writes only inside bounded delay primitives here.
+
+Telemetry shipped for this recon (separate commit, gates green): `SS_DR_R24_RING=1` —
+2M-entry ring of 68k-PC (r24) transitions at both JIT dispatch sites, ping-pong-deduped
+(last-4), single-fwrite atexit dump (pairs with SS_TERM_DUMP=1). Zero cost when unset.

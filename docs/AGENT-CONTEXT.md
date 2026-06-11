@@ -59,8 +59,15 @@ table 0x5046e8c0 (16 slots) · NK primary 0x5031xxxx / staged +0x100000 · guest
 add NATMEM_OFFSET 0x400000000000. DR 68k register map: r8–r15=D0–D7, r16–r22=A0–A6,
 r1=A7, r24=68k PC.
 
-## Gate tiers (see MILESTONE-WORKFLOW.md §6 for the policy)
+## Gate tiers (see MILESTONE-WORKFLOW.md §6/§6b for the policy)
 
+- **Run tiers via `tools/gates.sh <inner|task|full> [--reason "…"]`** — read its
+  `GATE …: PASS|FAIL` summary lines and the final `GATES <tier>: PASS|FAIL` verdict,
+  NOT the raw gate output (on FAIL it prints the failing gate's last 20 lines; full
+  per-gate logs stay in the printed tmpdir for audit). Boot assertions likewise:
+  `ss-slot-boot.sh --expect 'PAT;;…' [--absent 'PAT;;…']` prints
+  `EXPECT: n/m present, k absent-violations` + `BOOT-VERDICT: PASS|FAIL` (exit
+  0/3) — grep targets, not log reading.
 - **Per-commit (inner)**: `make build-ss` + `SS_HARNESS_BATCH=1 make test-jit` (353/353)
   + `make -C src/machine test` (ALL PASS). ~1 minute warm.
 - **Per-task (final commit)**: + plain `make test-jit` (authoritative) + `make e2e-test`.

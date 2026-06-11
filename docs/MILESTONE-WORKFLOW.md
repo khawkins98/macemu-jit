@@ -148,6 +148,9 @@ before construction streams hit them).
   fix loop → re-review); folds red-teams; enforces serialization; fuses results;
   keeps the workstream map (the task list) current. The coordinator implements
   directly only for small mechanical folds where dispatch overhead exceeds the work.
+  Every dispatch carries two economics decisions (§6b): the **model tier** (stated
+  in the prompt) and a **≤50-line task card** distilled inline (the plan remains
+  the authority; the card is the working spec).
 - **Planner** (read-only): drafts on the template; reports the plan verbatim plus
   open questions converted to Task-0 items and tensions for the red team.
 - **Red-teamers** (read-only, adversarial): findings as Critical/Major/minor with
@@ -176,6 +179,37 @@ The flat "full set on every commit" of the first sessions was correct for trust-
 and is still available on demand; the tiers preserve the authoritative gates at task
 granularity while halving typical task wall-time. Standing facts, recipes, constants and
 instrument caveats live in `docs/AGENT-CONTEXT.md` (agents read ONE pack, not four docs).
+
+**Tiers run via `tools/gates.sh <inner|task|full> [--reason "…"]`** — one summary line
+per gate (`GATE <name>: PASS|FAIL (<detail>, <N>s)`) plus a final machine-readable
+`GATES <tier>: PASS|FAIL` verdict; on FAIL it prints the failing gate's last 20 lines
+and exits non-zero. Agents read the summary lines, not raw gate logs (per-gate logs
+are kept in a tmpdir, path printed, for audit).
+
+## 6b. Dispatch economics (rev 2026-06-11)
+
+Three rules that price each dispatch, earned by the W2-3 single-dispatch blowout and
+the post-mortem's token accounting:
+
+- **Model tiering.** Docs sweeps, checkbox formalization, and evidence-only tasks
+  (transcribe/verify/tabulate against already-pinned facts) dispatch on a **cheaper
+  model tier**. Reviews, recons, LAW-module edits, and construction stay on the
+  **strong tier** — these are the tasks where a missed subtlety is expensive. The
+  coordinator **states the tier choice in each dispatch** so a wrong tiering is
+  visible in the report and correctable next dispatch.
+- **Task cards.** The coordinator distills a **≤50-line task card inline in every
+  dispatch**: deliverables, owned paths (claims), pinned facts the task depends on,
+  the gate tier to run, and the report contract. **The plan remains the authority;
+  the card is the working spec.** Agents read the plan only to resolve ambiguities
+  in the card — not as a default first step. This caps the per-agent context bill
+  and forces the coordinator to notice when a task can't be stated in 50 lines
+  (usually a sign it should be split, per the §4 dispatch-splitting rule).
+- **Verdicts over logs.** Agents consume gates via `tools/gates.sh` and boot
+  assertions via `ss-slot-boot.sh --expect 'PAT;;…' [--absent 'PAT;;…']`
+  (`EXPECT: n/m present, k absent-violations` + `BOOT-VERDICT: PASS|FAIL`,
+  exit-status-bearing). **Agents stop reading full gate/log output** — the raw
+  logs stay on disk (gate tmpdir, slot rundir) and are read only when a verdict
+  is FAIL and the printed tail isn't enough.
 
 ## 7. Why this works (the evidence)
 

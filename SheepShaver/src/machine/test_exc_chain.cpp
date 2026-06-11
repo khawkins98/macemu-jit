@@ -169,8 +169,10 @@ int main()
 
 	/* --- U12: EXC_EXTERNAL parity (reworded per Wave-2 rev 2 F6: MASK parity,
 	 *         not shared-entry-shape) — the decision logic is source-agnostic,
-	 *         ExcEnter(EXC_EXTERNAL) applies the same LAW masks, and the
-	 *         pre-positioned external_entry is NOT yet consumed --- */
+	 *         ExcEnter(EXC_EXTERNAL) applies the same LAW masks, and (SINCE
+	 *         W2-3 — the sanctioned, deliberate U12 flip) external_entry IS
+	 *         consumed when nonzero, with the interrupt_entry fallback when 0.
+	 *         Both arms pinned below. --- */
 	{
 		/* decision parity: an EXT-pending input walks the identical gates */
 		CHECK(ExcDeliveryDecision(1, 2, 0xf072u, 0) == EXC_DECIDE_DEFER_DEPTH);
@@ -185,17 +187,25 @@ int main()
 		CHECK(te.srr1 == td.srr1);
 		CHECK(te.msr  == td.msr);
 
-		/* F6 pre-positioning pin: external_entry is set in the table (0x50314880)
-		 * but ExcEnter(EXC_EXTERNAL) STILL dispatches to interrupt_entry — the
-		 * field is Q-W2-gated and unconsumed until W2-3. Flipping this check is
-		 * W2-3's deliberate change, not drift. */
-		CHECK(te.pc == tbl.interrupt_entry);
-		CHECK(te.pc != tbl.external_entry);
+		/* W2-3 consumption pin (the deliberate U12 flip — pre-W2-3 this pinned
+		 * the UNCONSUMED state; the flip is the sanctioned drift, recorded in
+		 * the Wave-2 plan W2-3 body): EXT now dispatches to external_entry
+		 * (0x50314880, the NK-published [KDP+0x374] per Q-W2) when nonzero. */
+		CHECK(te.pc == tbl.external_entry);
+		CHECK(te.pc != tbl.interrupt_entry);   /* anti-vacuous: targets differ */
 
-		/* zero-table-field robustness unchanged: external_entry=0 alters nothing */
+		/* fallback arm pinned: external_entry=0 -> interrupt_entry (zero-field
+		 * tables / pre-W2-3 aggregate initializers keep the shared-entry shape) */
 		ExcEntryTable tbl_noext = { 0x50412b1cu, 0x50314ac0u, 0x50314700u, 0u };
 		CHECK(ExcEnter(0x50326880u, 0xf072u, EXC_EXTERNAL, &tbl_noext).pc
 		      == tbl_noext.interrupt_entry);
+
+		/* SRR1.EE=1 mandatory at EXT delivery (the NK EXT body's punch-through
+		 * guard PANICS on SRR1 bit 0x8000 clear — EE-CHAIN-RECON §W2S-2): the
+		 * delivery gate admits only EE=1 MSRs, and ExcEnter's SRR1 keeps the
+		 * low 16 bits — so any deliverable MSR yields SRR1.EE=1. Pin it. */
+		CHECK((te.srr1 & 0x8000u) != 0u);          /* boot-real 0xf072 case */
+		CHECK((ExcEnter(0x50326880u, 0x8000u, EXC_EXTERNAL, &tbl).srr1 & 0x8000u) != 0u);
 	}
 
 	/* --- U13 (rev 2 tension 2): dual-pending — DEC and EXT both pending.
@@ -227,7 +237,7 @@ int main()
 		CHECK(ExcDeliveryDecision(ext_pending, 1, 0xf072u, 0)
 		      == EXC_DECIDE_DELIVER);
 		ExcTransition te = ExcEnter(0x50326880u, 0xf072u, EXC_EXTERNAL, &tbl);
-		CHECK(te.pc == tbl.interrupt_entry);  /* shared entry until W2-3/Q-W2 */
+		CHECK(te.pc == tbl.external_entry);   /* W2-3: EXT entry-point discrimination */
 		/* and the DEC latch was not double-consumed by the EXT poll */
 		CHECK(!VirtClockDECPending(&c));
 	}

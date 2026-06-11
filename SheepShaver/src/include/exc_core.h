@@ -86,15 +86,17 @@ struct ExcEntryTable {
 	uint32_t syscall_entry;     /* SC target; 0 = descoped/unresolved */
 	uint32_t program_entry;     /* PROGRAM (0x700) target; 0 = unresolved
 	                             * (FE1F-service-surface Task A, appended last) */
-	uint32_t external_entry;    /* EXT (0x500) target — PRE-POSITIONED, NOT YET
-	                             * CONSUMED (Wave-2 rev 2 F6, appended last).
-	                             * ExcEnter(EXC_EXTERNAL) still dispatches to
-	                             * interrupt_entry until W2-3 resolves the entry-
-	                             * point discrimination via Q-W2 (default candidate:
-	                             * the NK-published [KDP+0x374]=0x50314880, primary
-	                             * copy). Default 0. test_exc_chain U12 pins the
-	                             * unconsumed-ness — flipping consumption is a
-	                             * deliberate W2-3 test change, not silent drift. */
+	uint32_t external_entry;    /* EXT (0x500) target (Wave-2 rev 2 F6, appended
+	                             * last; CONSUMED since W2-3 — the deliberate,
+	                             * sanctioned U12 flip). ExcEnter(EXC_EXTERNAL)
+	                             * dispatches HERE when nonzero and falls back to
+	                             * interrupt_entry when 0 (test_exc_chain U12 pins
+	                             * BOTH arms). Q-W2 verdict (EE-CHAIN-RECON.md
+	                             * §W2S-2): the NK discriminates sources by entry
+	                             * point — the published EXT handler
+	                             * [KDP+0x374]=0x50314880 (primary copy) is the
+	                             * live default; its shim is the sc/program 2-SPR
+	                             * shim, NOT the DEC KDP save shim. */
 };
 
 /* Result of ExcEnter: the complete machine-state transition to apply atomically. */

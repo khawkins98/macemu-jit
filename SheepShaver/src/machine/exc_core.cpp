@@ -31,12 +31,19 @@ ExcTransition ExcEnter(uint32_t cur_pc_restart, uint32_t cur_msr,
 	 * ME and IP are preserved. */
 	t.msr = cur_msr & ~EXC_MSR_CLEAR_MASK;
 
-	/* Dispatch target: DEC and EXT share interrupt_entry; SC uses syscall_entry;
-	 * PROGRAM uses program_entry.
-	 * 0 in the table entry -> EXC_PC_UNRESOLVED (caller handles via SS_EXC_SC knob;
-	 * for PROGRAM the caller's loud capture-abort handles it). */
+	/* Dispatch target: SC uses syscall_entry; PROGRAM uses program_entry;
+	 * EXT consumes external_entry WHEN NONZERO and falls back to interrupt_entry
+	 * when 0 (Wave-2 W2-3, the deliberate U12 flip — Q-W2 verdict: the NK
+	 * discriminates interrupt sources by ENTRY POINT; the published EXT handler
+	 * [KDP+0x374]=0x50314880 is a distinct body from the DEC delivery target.
+	 * EE-CHAIN-RECON.md §W2S-2. Zero-field tables keep the pre-W2-3 shared-entry
+	 * behavior — aggregate initializers stay valid); DEC uses interrupt_entry.
+	 * 0 in the resolved entry -> EXC_PC_UNRESOLVED (caller handles via SS_EXC_SC
+	 * knob; for PROGRAM/EXT the caller's loud capture-abort handles it). */
 	uint32_t entry = (cls == EXC_SC)      ? tbl->syscall_entry
 	               : (cls == EXC_PROGRAM) ? tbl->program_entry
+	               : (cls == EXC_EXTERNAL && tbl->external_entry != 0)
+	                                      ? tbl->external_entry
 	                                      : tbl->interrupt_entry;
 	t.pc = entry ? entry : EXC_PC_UNRESOLVED;
 

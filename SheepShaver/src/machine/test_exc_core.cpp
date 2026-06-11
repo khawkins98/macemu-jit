@@ -164,6 +164,38 @@ int main()
 		CHECK((out_msr & 0x00020000u) == 0u);
 	}
 
+	/* --- Test 9: EXC_EXTERNAL entry-point discrimination (Wave-2 W2-3 LAW
+	 * edit; extend-never-edit — all earlier EXT checks use <=3-field tables
+	 * whose external_entry is zero-initialized and so pin the FALLBACK arm
+	 * unchanged). Q-W2 verdict (EE-CHAIN-RECON.md §W2S-2): the NK
+	 * discriminates by entry point; EXT's published handler is distinct. */
+	{
+		/* 9a: external_entry nonzero -> consumed (the live default candidate). */
+		ExcEntryTable tbl4 = { 0x50412b1cu, 0x50314ac0u, 0x50314700u, 0x50314880u };
+		ExcTransition te = ExcEnter(0x00001000u, 0xf072u, EXC_EXTERNAL, &tbl4);
+		CHECK(te.pc == tbl4.external_entry);
+		CHECK(te.pc != tbl4.interrupt_entry);  /* anti-vacuous: targets differ */
+
+		/* 9b: DEC is UNAFFECTED by external_entry (still interrupt_entry). */
+		CHECK(ExcEnter(0x00001000u, 0xf072u, EXC_DECREMENTER, &tbl4).pc
+		      == tbl4.interrupt_entry);
+
+		/* 9c: fallback arm — external_entry=0 keeps the shared-entry shape. */
+		ExcEntryTable tbl0 = { 0x50412b1cu, 0x50314ac0u, 0x50314700u, 0u };
+		CHECK(ExcEnter(0x00001000u, 0xf072u, EXC_EXTERNAL, &tbl0).pc
+		      == tbl0.interrupt_entry);
+
+		/* 9d: both-zero -> EXC_PC_UNRESOLVED (the caller's loud-abort guard). */
+		ExcEntryTable tblz = { 0u, 0u, 0u, 0u };
+		CHECK(ExcEnter(0x00001000u, 0xf072u, EXC_EXTERNAL, &tblz).pc
+		      == EXC_PC_UNRESOLVED);
+
+		/* 9e: SRR1.EE=1 at any deliverable MSR (the NK EXT body's
+		 * punch-through guard panics on SRR1 bit 0x8000 clear; the delivery
+		 * gate admits only EE=1, and SRR1 keeps the low 16 bits). */
+		CHECK((te.srr1 & 0x8000u) != 0u);
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

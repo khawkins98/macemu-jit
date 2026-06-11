@@ -311,6 +311,25 @@ static void do_eoi(OpenPICDevice *p)
 	}
 }
 
+/* CTPR write (oracle: openpic_cpu_write_internal :965, the 0x80 case).
+ *
+ * RECOMPUTE DIVERGENCE NOTE (the b86449c9 review minor, owed to W2-3 — the
+ * equivalence analysis, written down): QEMU's CTPR path consults the CACHED
+ * queue priorities it maintains incrementally (dst->raised.priority /
+ * dst->servicing.priority, kept current by IRQ_check after every queue
+ * mutation):
+ *     if (dst->raised.priority <= dst->ctpr)        -> lower output
+ *     else if (dst->raised.priority > dst->servicing.priority) -> raise
+ * This model keeps no cached priorities; it RECOMPUTES both via queue_next()
+ * (a full scan of raised_bits/servicing_bits). Equivalent by analysis:
+ * queue_next computes exactly the value IRQ_check caches — the highest IVPR
+ * priority over the same membership bits (and -1 when empty, matching the
+ * oracle's reset/empty priority) — and every mutation of raised_bits/
+ * servicing_bits in this file goes through paths that leave the bits
+ * authoritative. So cached-vs-recomputed cannot diverge unless the bit sets
+ * themselves diverge, which would be a bug in BOTH representations. The
+ * comparison chain below is then literal: raised <= ctpr lowers, else
+ * raised > servicing raises, else no change — oracle-exact. */
 static void write_ctpr(OpenPICDevice *p, uint32_t val)
 {
 	int raised_prio, servicing_prio;

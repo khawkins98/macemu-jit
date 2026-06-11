@@ -320,6 +320,97 @@ recordables above (none blocking).
 - Boot budget: **2/8 used** (co-scheduled per P-C3); no question went to residue for
   lack of boots.
 
+### Task B results (2026-06-11) — first-sc round trip PASS; bounded selector map; frontier captured
+
+> Method: 2 fresh diagnostic boots, env-on (`SS_NW_SC_SURFACE=1`), `/tmp/m2accept.prefs`,
+> 65s each — B1 (`/tmp/taskB1.log`, probes: handler 0x50314ac0 + per-selector resumes
+> 0x500d6390/0x500d6514/0x500d64bc/0x500d6414 + cold 0x50429d00 + warm 0x50429d3c +
+> slot-15 0x50429cf0; guest[0]/[4] WATCH + trace ring) and B2 (`/tmp/taskB2.log`,
+> SIGTERM kill for the atexit dumps: R24RING tail + blocks/comp + MMIO/CUDA/VCLK).
+> Per-selector resume PCs located statically (raw==patched verified per window):
+> the full `li r0,SEL / sc` stub table at file 0xd6298..0xd6d3c enumerates selectors
+> 0x0..0x84 (+0xfffd/e/f); resume(SEL) = sc+4. No source changes — evidence-only task.
+> Gate set per plan: build-ss + machine suite (12/12 ALL PASS) + batch test-jit
+> (353/353 score=100); plain test-jit not re-run (no source file changed, stated per
+> the task's smaller-set rule).
+
+**Round-trip sub-contract (all PASS, boot B1):**
+- (a) No `[EXC] FATAL` sc line anywhere in either boot. PASS.
+- (b) Handler-entry probe 0x50314ac0 visit=1 conforms EXACTLY to the Q-S2 table:
+  r0=0x3f, r3=0x00050001, r4=0x10026710, r5=0xf04d6163, r6=0x80000000, r7=0x68ffef20,
+  r8=0x103ffa50, r9=0x5046de08, r10=0x00000001, r1=0x103ffb50 (=caller r1),
+  LR=0x500cf108. PASS (Task A's gate re-asserted on fresh evidence).
+- (c) Resume probe 0x500d6390 visit=1: r1=0x103ffb50 (pinned preserved — gate applies
+  per P-m3), LR=0x500cf108, r4..r10 byte-identical to the at-entry caller values
+  (the Q-S4 preserved rows). PASS.
+- (d) **r3=0x00000000 at the resume** (the Q-S3 success predicate) AND the legacy-spin
+  signature ABSENT: comp=3836 at term dump (not the 3672-class freeze; +164 blocks past
+  the wall) and no 52M/s comp-frozen HB plateau (no [HB] plateau exists — see frontier
+  note on heartbeat silence). PASS.
+
+**Invariant carry-over (all PASS, boots B1+B2, byte-identical between them):**
+- Cold exactly once: trampoline guest[0]/[4] write pair WATCH record #4666
+  (pc=0x50429b40) — same record number as the rung-2 Task X/Y evidence (deterministic);
+  cold probe 0x50429d00 visit=1 with the known cold signature (r24=0x5000002a,
+  CTR=0x5046e8c0); warm 0x50429d3c visit=1 with the completion signature (r3=0xff,
+  r1=0x103ffa2c, r28=scratch 0x68ff6080).
+- guest[0]/[4] stable: the ONLY writes are the known classes — NK cold-init's own
+  guest[4] toggles (pc=0x503109bc/dc, records #213/#215), the trampoline cold pair
+  (#4666), the guest's own 68k vector install (pc=0x50490e00). No reset transitions;
+  the 68k reset vector 0x5000002a appears exactly ONCE in the R24 ring (initial cold
+  dispatch).
+- Slot-15 exhaust stop 0x50429cf0: zero visits (probed, no output).
+- Delivered-DEC stays 0: **field-index verification (P-m1)** — `SheepExcStats` out[0] =
+  delivered_dec = the FIRST field of the `exc=` tuple; delivered_sc is the FIFTH
+  (glue:1177–1183). Observable used: any first DEC delivery prints
+  `[EXC] DEC delivered #1:` to stderr (glue:909) — ZERO such lines in 65s × 2 boots
+  ⇒ delivered_dec=0 throughout. (The conditional form per contracts-m1 — delivery
+  legal if a handler raises EE — never arose: no delivery at all.) PASS.
+
+**Bounded selector map (diagnostic, 2/2 boots — P-M4(3) budget):**
+
+| # | selector r0 | caller LR | caller r1 | args (at handler entry) | r3 at resume |
+|---|---|---|---|---|---|
+| 1 | 0x3f | 0x500cf108 | 0x103ffb50 | r3=0x00050001 (kernel ID) r4=0x10026710 | **0** (probe 0x500d6390) |
+| 2 | 0x19 | 0x500d2fec | 0x103ffb10 | r4=0x000d0001 r5=0x80000000 r6=1 r7=0xaa7f | **0** (probe 0x500d6514) |
+| 3 | 0x14 | 0x500d2d7c | 0x103ffb00 | r5=0x000e0001 r6=0x1001a258 r7=0x80000000 | **0** (probe 0x500d64bc) |
+| 4 | 0x19 | 0x500d2fec | 0x103ffb10 | (repeat of #2's call site) | not sampled (visit 2 — log-sampled probes print 1/10/100) |
+| 5 | 0xf | 0x500d29d4 | 0x103ffac0 | r4=0x00100001 r5/r7=0x80000000 r6=1 | **0** (probe 0x500d6414) |
+
+Total delivered sc count: ≥5 (the 5 stderr-printed deliveries) and ≤9 (handler probe
+never reached its visit=10 sample in 65s). Every sampled resume returned r3=0
+(success). The ID-shaped args (0x5/0xd/0xe/0x10:0001) suggest the same kernel-ID
+directory family as selector 0x3f. Per P-M4(3), selectors beyond this window are the
+next milestone's recon.
+
+**Frontier capture at 60s (the P-M4 artifact — captured, NOT chased):**
+- After sc #5 the excursion RETURNS and execution goes 68k-side. R24RING: 839,284 68k
+  transitions total (ring never wrapped — 68k execution is sparse/slow or ended early).
+  Tail = a 68k ROM loop cycling 0x5000dfa2..0x5000e43c (two full iterations visible in
+  the last 140 entries, with an inner alternation through 0x5000e3f0/f4 vs e3f8 exit
+  legs), ending at `… 5000e43e → 5000f242 → 5000f246 → 5000f248` — byte-identical
+  final signature to Task A's 60s boot (`/tmp/taskA_probe.log`). The dominant tail
+  blocks (≈60 occurrences/8K-entry window each) span 0x50049f86..9f9e, 0x50014db6..dc2,
+  0x5003xxxx and 0x5000exxx — a wide 68k poll/scan loop, not a tight 2-block spin.
+- Heartbeat silence is part of the signature: ZERO `[HB`/`[JIT 5.0s]` lines in 65s
+  (the post-sc execution regime never re-enters the dispatch-loop heartbeat path) —
+  the comp/MMIO/CUDA baseline therefore comes from the SIGTERM term dump (SS_TERM_DUMP;
+  note SIGALRM kills skip ALL dumps — use SIGTERM for capture boots).
+- Term-dump baseline (B2): session 64s, blocks=3836 complete=3836 (100%), hit=18110
+  miss=399; MMIO macio reads=65539, scc reads=65540 writes=2 idle_sleeps=256, via
+  reads=70183 writes=307 (IER=65539, ORB=3848) — same class as the sc-wall baseline;
+  CUDA packets=13 responses=13 i2c=9 all-absent (addrs 41,4F,B5,91,80,C1,28,71,9D)
+  pram_rd=3 — quiet, unchanged class; VCLK mfspr_dec=0 mtspr_dec=4 dec_expiries=1
+  pending=1 (the deferred cold-init expiry, unchanged).
+- Honest naming: the new frontier is **a 68k-side ROM poll loop ending in a parked
+  state at 0x5000f248** (68k transitions stop; wall-clock continues in a non-dispatch
+  execution regime). Whether MPLibrary's full init RETURNED in the CFM sense and what
+  0x5000f248 waits on are Task C's diagnostic / the next milestone's recon.
+
+**Falsifications: NONE.** No pinned contract was falsified; the one-iteration rule was
+not invoked. Boot budget: 2 boots (the P-M4(3) cap), round-trip gates co-scheduled on
+boot B1.
+
 ### Notes for Task A (carried)
 
 - The `SS_EXC_ENTRY=0xINT` no-comma form currently ZEROES syscall_entry (glue parse) —

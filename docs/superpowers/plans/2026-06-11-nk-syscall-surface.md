@@ -232,26 +232,40 @@ allowed (full gates).
 
 ### Task B: the first-sc round trip (conformance per Q-S3/Q-S4)
 
-- [ ] **Round-trip sub-contract (PASS/FAIL), env-on:** (a) no `[EXC] FATAL` sc line;
+- [x] **Round-trip sub-contract (PASS/FAIL), env-on:** (a) no `[EXC] FATAL` sc line;
   (b) handler-entry probe conforms (Task A's gate re-asserted); (c) **post-sc resume
   observed**: `SS_PROBE_PC=0x500d6390` ≥1 visit with r1=0x103ffb50 (the caller's stack —
   continuity) — LR/other registers recorded as diagnostic (the sc ABI may legitimately
   clobber them; gate only on the rows Q-S3/Q-S4 pinned as preserved); (d) **syscall
   result conformance**: the Q-S3-pinned return register(s)/memory hold a value of the
   pinned class at the resume (and the legacy-spin's polled condition is satisfied —
-  the negative datum closed).
-- [ ] **Invariant carry-over (PASS/FAIL):** rung-2 invariants still hold on this config —
+  the negative datum closed). *(ALL PASS — boot B1 `/tmp/taskB1.log`: no FATAL;
+  handler 0x50314ac0 visit=1 exact Q-S2 conformance; resume 0x500d6390 r1=0x103ffb50
+  LR=0x500cf108 r4..r10 preserved; r3=0; comp=3836 ≠ 3672-class, no 52M/s plateau.
+  M3A-ENTRY-TABLE.md "Task B results".)*
+- [x] **Invariant carry-over (PASS/FAIL):** rung-2 invariants still hold on this config —
   table[0] cold exactly once, guest[0]/[4] stable (WATCH), slot-15 stop unvisited,
   no reset transitions in the ring; `exc=` 4th field (deferred_native) recorded —
   any DEC delivered INSIDE the syscall handler is a falsification (EE=0 + fence both
-  say impossible; if seen, stop and re-pin).
-- [ ] **Diagnostic (recorded, not gates):** how many sc's MPLibrary issues, their
+  say impossible; if seen, stop and re-pin). *(ALL PASS — WATCH #4666 cold pair once;
+  only known write classes; slot-15 zero visits; reset vector once in ring;
+  delivered_dec=0 whole boot — verified delivered-DEC is the FIRST exc= field
+  (out[0]), delivered_sc the FIFTH (out[4]); observable = zero `[EXC] DEC delivered`
+  stderr lines.)*
+- [x] **Diagnostic (recorded, not gates):** how many sc's MPLibrary issues, their
   selectors (bounded probe at the handler with r0 dumps), and where the boot stands
   after each — the honest map of "more syscalls or the next parcel's walls".
-- [ ] If a pinned contract is falsified live: the one-iteration mechanics (stop-rule
+  *(5 ≤ count ≤ 9; selectors 0x3f, 0x19, 0x14, 0x19, 0xf — every sampled resume r3=0;
+  frontier at 60s = 68k ROM poll loop 0x5000dfa2..0x5000e43c parking at 0x5000f248,
+  P-M4 artifact captured in the addendum: ring tail + term-dump comp/MMIO/CUDA/VCLK
+  baseline + heartbeat-silence signature. 2/2 mapping boots used.)*
+- [x] If a pinned contract is falsified live: the one-iteration mechanics (stop-rule
   section) — dated addendum falsification entry, ONE bounded re-pin boot, resume;
-  second falsification of the same contract escalates.
-- [ ] Gates: full gates + the sub-contracts. Commit.
+  second falsification of the same contract escalates. *(Not invoked — zero
+  falsifications.)*
+- [x] Gates: full gates + the sub-contracts. Commit. *(Evidence-only task, no source
+  changed — smoke set per the stated-reason rule: build-ss OK; machine suite 12/12
+  ALL PASS; batch test-jit 353/353 score=100.)*
 
 ### Task C: acceptance + default flip (flip LAST, revert-on-red)
 

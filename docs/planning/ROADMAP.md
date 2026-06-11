@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-11 (D3 Machine Layer: M0 + M1 + M2 + M3a + M3b Wave 1 + **M6a rung 2 complete** — the 68k→PPC Mixed Mode switch works in BOTH directions and is the newworld DEFAULT; first complete MixedMode round trip, MPLibrary's TVector executes, jNK 116M→4104; NK syscall surface IN FLIGHT — plan + 2 red-teams + Task 0 done: entry pinned 0x50314ac0, shim = 2 SPR writes, selector 0x3f already ran end-to-end on the override; M3b Wave 2 [OpenPIC + wiring] is parallel backlog)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-11 (D3 Machine Layer: M0 + M1 + M2 + M3a + M3b Wave 1 + M6a rung 2 + **NK syscall surface COMPLETE** — the first guest syscall ever resolved: vector 0xC00 → the NK's own handler 0x50314ac0, 2-SPR shim, 5 selectors delivered (every resume r3=0), MPLibrary's excursion returns, newworld DEFAULT with `SS_NW_SC_SURFACE=0` opt-out; next frontier = the FE1F service surface (F-line trap $FE1F selector 0x31, park at 0x5000f248, captured); M3b Wave 2: OpenPIC model+206-check suite LANDED (`b86449c9`), EE-chain recon (`89fd0642`) recommends verification-first W2-0..W2-4 — wiring/retirements still backlog)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -29,7 +29,7 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 |-------|--------|-------|
 | **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
 | **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ M2 ✅ **M3a ✅** (real PPC exception model: exc_core, sc/rfi real semantics, DEC delivery hook, first real exception delivered, end-to-end demo with SS_SCC_RX_INJECT). **M3b Wave 1 ✅** (dev_cuda + adb_stub live; sync frontier crossed; cuda_init/adb_init retired). **M6a rung 2 ✅** (2026-06-11: the 68k→PPC **Mixed Mode switch complete in both directions, newworld DEFAULT** — first complete MixedMode round trip; MPLibrary's TVector executes; boot transformed jNK 116M→4104). **NK syscall surface IN FLIGHT** (plan `2026-06-11-nk-syscall-surface.md` rev 2; Task 0 recon complete — entry `0x50314ac0` pinned, shim = two SPR writes, the no-shim override boot already ran selector 0x3f end-to-end; Task A+ implementing); M3b Wave 2 (OpenPIC + external-source wiring + SDL_PumpEvents relocation + tm_task/via_int retirements + deliverability harness vector + nested-execute path completion) is parallel backlog. | 🟡 active |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ M2 ✅ **M3a ✅** (real PPC exception model: exc_core, sc/rfi real semantics, DEC delivery hook, first real exception delivered, end-to-end demo with SS_SCC_RX_INJECT). **M3b Wave 1 ✅** (dev_cuda + adb_stub live; sync frontier crossed; cuda_init/adb_init retired). **M6a rung 2 ✅** (2026-06-11: the 68k→PPC **Mixed Mode switch complete in both directions, newworld DEFAULT** — first complete MixedMode round trip; MPLibrary's TVector executes; boot transformed jNK 116M→4104). **NK syscall surface ✅ COMPLETE** (2026-06-11, plan `2026-06-11-nk-syscall-surface.md` rev 2: vector 0xC00 → the NK's own handler `0x50314ac0` [primary copy, NK-published `[KDP+0x390]`], 2-SPR shim [SPRG1:=r1, SPRG2:=LR], **first guest syscall ever resolved** — selector 0x3f → r3=0, 5 selectors per boot, MPLibrary's excursion RETURNS; **newworld DEFAULT**, `SS_NW_SC_SURFACE=0` opt-out; next frontier = the **FE1F service surface**, F-line trap $FE1F selector 0x31, captured). M3b Wave 2: OpenPIC model + 206-check suite landed (`b86449c9`); EE-chain recon (`89fd0642`) recommends verification-first reorder; wiring + SDL_PumpEvents relocation + tm_task/via_int retirements + deliverability harness vector + nested-execute path completion remain parallel backlog. | 🟡 active |
 | **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
@@ -850,12 +850,26 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > world-flip + DEC fence closing the round trip (`43d42b83`), acceptance + default flip
 > (`296c3661`). First complete MixedMode round trip ever: MPLibrary's TVector executes,
 > the 68k resumes at the completion-written PC, jNK 116M→4104, all gates green throughout.
-> **▶ next: the NK syscall surface** — MPLibrary's first kernel call dies at `sc`
-> pc=0x500d638c with unresolved vector 0xC00 (SRR0=0x500d6390 SRR1=0x00007072; baseline
-> comp=3672 jNK=4104 exc=0/1/0/0, CUDA quiet) — captured per the stop-rule, THE named
-> frontier. M3b Wave 2 (OpenPIC + external-source wiring + SDL_PumpEvents relocation +
-> tm_task/via_int retirements + deliverability harness vector + nested-execute path
-> completion + boot-past-console question) remains parallel backlog.
+> **NK syscall surface ✅ 2026-06-11** (plan: `docs/superpowers/plans/2026-06-11-nk-syscall-surface.md`
+> rev 2; evidence: `docs/planning/machine/M3A-ENTRY-TABLE.md`; CHANGELOG same date; arc
+> `dad9a557`…`52928958`): **the first guest syscall ever resolved** — vector 0xC00 →
+> `syscall_entry=0x50314ac0`, the staged NK's OWN handler (primary copy, NK-published
+> `[KDP+0x390]`; deliberate asymmetry vs interrupt_entry's staged copy), bare
+> ExcEnter(EXC_SC) + a 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR). Selector 0x3f →
+> r3=0; 5 selectors per boot (0x3f/0x19/0x14/0x19/0xf); MPLibrary's MixedMode excursion
+> RETURNS. **Newworld profile DEFAULT** (`SS_NW_SC_SURFACE=0` opt-out); the M3a descope
+> formally closed; zero falsifications, all gates green (12-suite era incl.
+> test_dev_openpic 206 checks).
+> **▶ next: the FE1F service surface** — the boot parks at 0x5000f248, the instruction
+> after an F-line NK/DR service trap `$FE1F` selector d0=0x31 (CFM/ExpandMem
+> accelerator-slot fill) — captured per the stop-rule
+> (`M6A-WAVE2-SHIM-RECON.md` "Frontier update, Task C closeout"), THE named frontier.
+> M3b Wave 2: **OpenPIC model + 206-check suite landed** (`b86449c9`; LE register file,
+> CTPR=15 oracle corrections); **EE-chain recon** (`89fd0642`, `EE-CHAIN-RECON.md`)
+> recommends verification-first reorder W2-0..W2-4; external-source wiring +
+> SDL_PumpEvents relocation + tm_task/via_int retirements + deliverability harness
+> vector + nested-execute path completion + boot-past-console question remain
+> parallel backlog.
 > **Deferred (tracked, donor study §7.2 item 4):** full **host-input-over-ADB** — real
 > autopoll packets driving the guest's ADB stack replace `adb_stub` behind the same
 > interface (`SheepShaver/src/include/adb_stub.h` documents the seam; pickup requirements

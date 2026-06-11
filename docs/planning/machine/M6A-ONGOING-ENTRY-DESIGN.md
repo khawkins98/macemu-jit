@@ -945,6 +945,9 @@ trigger 2 / plan Task-Y named wall (i) — the vector-0xC00 syscall_entry fronti
 the NEXT milestone's named problem; no staging beyond the existing abort-capture.
 (Under `SS_EXC_SC=legacy` the boot survives the sc and wedges in a 52M/s comp-frozen
 spin at 3672 — the legacy path is not a viable bridge; diagnostic only.)
+*(Update 2026-06-11: RESOLVED by the NK-syscall-surface milestone —
+`syscall_entry=0x50314ac0` is the newworld default; see `M3A-ENTRY-TABLE.md`
+"Syscall entry resolution". The current frontier is the FE1F service surface.)*
 
 **Switch-OFF boot:** byte-identical baseline preserved (no W/W2 region writes, no
 slot-1 retarget, 0 TVector visits, the FE01↔NK spin signature) — see
@@ -1058,3 +1061,7 @@ appears between the round trip and the sc wall.** MPLibrary's init does not
 return; vector-0xC00 syscall_entry is THE frontier (stop-rule trigger 2:
 captured, stopped — no staging beyond the abort-capture). R-1 note: the
 slot-15 stop never fired through acceptance — 4-record pool sizing stands.
+*(Update 2026-06-11: the syscall_entry frontier is RESOLVED — NK-syscall-surface
+milestone, newworld default `syscall_entry=0x50314ac0`; current frontier = the FE1F
+service surface. See `M3A-ENTRY-TABLE.md` + `M6A-WAVE2-SHIM-RECON.md` Task C
+frontier update.)*

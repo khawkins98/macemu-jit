@@ -252,3 +252,174 @@ diagnosability of FUTURE guest errors, not boot progress.
 - r24=word+2 convention re-calibrated live (FE1F f246 → r24=f248; raise e412 →
   r24=e414 with r27 = next word).
 - The 68k trace-ring "sp=" column IS A7 (r1); the "a7=" column reads 0.
+
+---
+
+## Task 0 — the re-dispatch mechanism pinned (68k-pc-desync plan) — 2026-06-11
+
+> **Status:** BINDING root-cause recon COMPLETE — all blocking answers pinned, no
+> residue on a blocking row. **Boots: 4 of the ≤8 budget** (slot protocol, one
+> big-ring at a time per F13; slot registry checked clean before each):
+> B1 `desync-task0-qds1` (big-ring 0x400000 + window clip + probes + watches,
+> rundir 20260611-214647.7312), B2 `desync-task0-e380-writer` (e380 watch,
+> 20260611-215429.8756), B3 `desync-task0-ea-capture` (extended PROBE68K,
+> 20260611-220030.10815), B4 `desync-task0-r0-at-twi` (r0 probes,
+> 20260611-220653.11423). Provenance: `tools/dump-manifest.sh --check` PASSED
+> (raw 7b1378be…, patched e432df64…). Ring artifact preserved:
+> `/tmp/desync_t0_ring_boot1.txt` (#3390800..#3391999, ephemeral, re-derivable).
+> Capture-only telemetry commit (F5/F7-compliant, ppc-cpu.cpp ONLY): PROBE68K
+> dump extended with the DR pipeline temps r0/r3/r4/r5/r6/r7/r30.
+
+### TL;DR — the verdict in one paragraph
+
+**The desync is an r0-invariant poison, not a resume-PC skew.** The DR (the
+ROM's 68k dynamic recompiler) maintains a standing invariant **r0 ≡ 0** in the
+emulator world — its flag-setting writeback idiom is `addco. rX,rX,r0`
+(0x7c840415 at mirror 0x50460c64 [STATIC]; add-zero sets N/Z, clears V/C). The
+FE1F native callout marshalls the NK service selector **into r0 by design**
+(`mr r0,r8` at raw 0x5046db48 [STATIC, raw==patched]) before `blrl` into the
+entry-vector slot's `twi`. Our M6A PROGRAM delivery turns that twi into an
+exception: the NK prologue 0x313d40 **saves the in-flight r0=0x36 into the 68k
+world's ctx r0-slot (+0x104)**. The callout RETURN is clean (the DR's own
+`li r0,0` at 0x5046db7c re-asserts the invariant — both PROGRAM resumes verified
+clean [PROBE✓ B4]). But the NK's save-and-switch (0x312b0c) deliberately does
+NOT save r0 (the invariant is its contract), so the ctx slot keeps the stale
+0x36 — and the merged restore tail (raw rfi or patched bctr, same reloads)
+**re-poisons r0=0x36 on every subsequent switch-in to the 68k world**, where no
+`li r0,0` exists. The first poisoned `addco.`-class writeback after the second
+post-$36 switch-in is the e388 selector-shim's jump-table load:
+0x5c + 0x36 = 0x92 → `jmp (-0x14,pc,d0.w)` lands at e380+0x92 = **0xe412** →
+line-1111 → SysError 10. On real hardware the slot-8 callout is a
+parcels-patched direct call (no exception, no ctx save) — the placeholder-twi
+delivery is what introduces the poisoned save. **The patched chain constants
+(trap_return / m68k_excp_tbl / sprg3) are all EXONERATED.**
+
+### Q-DS1 [RING✓ B1] — the pinned re-dispatch record
+
+Ring window #3390800..#3391999 walked record-by-record (424 r24 transitions):
+
+- Invocation 1 (id table run): trampoline → **e388 selector shim** →
+  `cmpi.w #1,d0; bcc.s e396; move.w (-0x10,pc,d0.w*2),d0; jmp (-0x14,pc,d0.w)`
+  [RAW==PATCH bytes `0c40 0001 6408 303b 02f0 4efb 00ec`] — table word at e380
+  = 0x005c → e3dc (`link a6`) → e3e0 body → $31 callout (resume r24=f248,
+  clean) → slot fill → $36 callout (resume r24=f270, clean) → success stores
+  e454..e48c (clean — r0 re-zeroed at db7c) → e490/e492 epilogue → rts to
+  trampoline 0x103ffa92 (#3391199) → switch-out (#3391213).
+- Interlude: switch-in #1 (#3391314–19) → short 68k routine 0x49392..0x493e0
+  (d0='bbox' Gestalt-class) → switch-out (#3391349). Ran with r0 already
+  poisoned (0x36) but its writebacks fold flags (no addco. consumer) — survived
+  by luck (residue R-DS2).
+- **Switch-in #2 (#3391655–60: bounce 50312cb4 → patched tail 503244d4 → fast
+  exit bctr 50324524 → slot-exit 5046e1a0) → e388 shim re-entry for the NEXT
+  caller iteration (#3391661, r24=e38a) — IDENTICAL prologue records and
+  prefetches to invocation 1 — and the SAME dispatch block 50467cfc that
+  produced r24=e3de at #3390826 produces r24=e414 at #3391672.** Last good
+  r24 = e396 (#3391669); first bad r24 = e414 (#3391672); what immediately
+  precedes = **the switch-in at #3391655–60** (a world transition — suspects
+  1–3 class), with PURE DR flow in between (no hook bypass: full raw-record
+  walk, F10 honored). Raise at #3391677; ID-10 stub #3391678.
+
+### Q-DS2 [PROBE✓ B1/B3] — invocation census
+
+`SS_PROBE_68K=0x5000e412` legit-class matches by the raise: **1** (invocation 1
+only; the second match is the raise body's own `addi r24,-2`, block 5046d7cc,
+ctr=0 — distinguishable). The desync fires in **invocation 2's PROLOGUE — the
+e388 selector shim's jmp — BEFORE e3e0 is re-entered** (refines the recon's
+"epilogue vs re-entry" framing: neither; the shim never reached e3e0). The
+caller's table run died at iteration 2 of the expected ≥2 (5-entry table).
+**Post-fix expected class (F8): ≥2, presumably 5** legit e412 transitions
+(one per table id) — with the SS_PROBE_68K chaining under-count caveat; a
+row-(d) gate boot may use SS_JIT_NO_CHAIN=1 accepting renumbered anchors.
+
+### Q-DS3 [STATIC+PROBE✓+RING✓] — patched chain-constants audit
+
+Every exit leg the window's deliveries take was walked live in the ring
+(PROGRAM #2's full delivery→resume path #3391096..#3391154; both switch-ins;
+the sc family by census):
+
+| Constant | Verdict | Evidence |
+|---|---|---|
+| `trap_return` (3244d4 tail + 324524 fast-exit bctr) | **EXONERATED** | The patched bctr tail reloads r0/r6–r13 from ctx exactly as the raw merged-rfi tail would (F2's one-rfi frame held); resume PCs correct on every walked leg (callout returns → db6c; switch-ins → 5046e1a0). The r0 poison rides the CTX SLOT, which raw rfi would reload identically. No MSR/EE delta involved (EE never rose; delivered_dec=0). |
+| `m68k_excp_tbl` ([0x2810]:=0 fence write) | **EXONERATED** | On the walked paths only as the dispatcher's fence write; no vector-regime consumption in the window. |
+| `sprg3`/`sprg3_mq` | **EXONERATED** | Vector-table stubs unconsumed in the window. |
+| **(IMPLICATED) the M6A FE1F twi-callout PROGRAM delivery** (our construction) | **THE mechanism** | Prologue 0x313d40 saves live r0 (=selector, the DR's own ABI at db48) → ctx+0x104 [PROBE✓ B4: r0=0x31/0x36 at twi visits 1/2, at 0x50314700 entry, and at the db6c resumes]; save-and-switch 0x312b0c omits r0 from its save set [STATIC W2S-1]; later switch-in tail reloads re-poison r0; the DR's `li r0,0` (db7c) exists only on the callout-return leg [STATIC raw==patched]. |
+
+**The differential mechanism (the M3A constraint satisfied):** the 8 pre-window
+sc resumes and the $31/$36 callout returns all survived because (a) sc callers
+own r0=selector by ABI, and (b) the callout-return leg re-asserts r0=0 at db7c.
+The poison only bites on a **switch-in** that follows a twi delivery with no
+intervening rewrite of ctx+0x104 — a path combination that first exists in the
+FE1F window. The F4 mid-tail-delivery CTR/LR question: **no mid-tail delivery
+occurred** [RING✓ — every tail traversal walked]; CTR/LR fidelity confirmed on
+all legs; the corrupted state is r0, not CTR/LR/SRR.
+
+### Q-DS4 [STATIC+RING✓+PROBE✓] — the across-delivery register contract
+
+- **r24/r27/r29/cr2 + CTR/LR**: ride the 0x313d40 ctx save (r0,r7–r13 →
+  ctx+0x104/0x13c..0x16c; r10:=SRR0, r11:=SRR1, r12:=SPRG2, r13:=CR) plus the
+  save-and-switch set (r17–r31, r2–r5, XER/CTR) — verified live-correct across
+  both PROGRAM round trips and both world-switch round trips (the probes and
+  ring show r24=f248/f270 resumes, correct prefetch r27, correct dispatch r29,
+  correct CR). **The ONE register outside every restore contract is r0** —
+  protected by invariant, not by slot — and the twi delivery is what breaks
+  the invariant's precondition.
+- **Trigger transition: the second post-$36 world switch-in (#3391655–60
+  class)** — NOT a delivery resume. "No delivery implicated" in the resume
+  sense; the $36 PROGRAM delivery is implicated as the SAVE that armed the
+  poison.
+
+### Q-DS5 [RING✓] — stack neighborhood: CLEAN
+
+The e3e0 caller's return path executed correctly: the e49e `rts` (#3391198–99)
+returned to the MixedMode trampoline 0x103ffa92, sp-relative flow consistent
+throughout the window; the excursions' 0x500eexxx-region stack writes touched
+no live return address or frame link (the desync needed no stack value — the
+corrupt jmp operand came from the poisoned register add). Suspect 3 retired.
+
+### Q-DS6 [WATCH✓+mechanism] — residue R1 closed
+
+`[$C70]:=0x5000e448` vs frame PC e412: **e448 = e412 + 0x36 — the same r0
+poison.** The SysError stub's frame-PC pop goes through a poisoned
+addco.-class writeback before the $C70 store (writer r24=0x5000499a,
+#3391708). The 0x36 delta family (jmp target e412=e3dc+0x36, table word
+0x92=0x5c+0x36, $C70 e448=e412+0x36) is one mechanism appearing three times.
+$C74 ← 0x2700 SR pop conforms. R1 is mechanism-closed (the individual pop
+instruction not separately disassembled — residue R-DS3, diagnostic only).
+
+### The blocking-answer table (Task 0 gate)
+
+| Blocking answer | Status |
+|---|---|
+| Q-DS1 pinned record | **PINNED** — #3391672 (block 50467cfc, r24 e396→e414), preceded by switch-in #3391655–60; pure DR flow between |
+| Implicated mechanism | **PINNED** — DR r0≡0 invariant poisoned via ctx+0x104 (twi-delivery save + no-r0 switch save + tail reload); patched constants exonerated |
+| Fix-shape decision (Task A) | **DECIDED — bctr-preserving (F1 default; NO coordinator sign-off needed: no EE/MSR/rfi semantics change).** Re-assert the DR's r0≡0 invariant on the switch-in path, NW-gated: preferred site = the DR slot-exit re-entry stub(s) (5046e1a0-family; exact stub survey + verify-EXPECTED-first at Task A start) inserting `li r0,0` (Apple's own db7c idiom), OR the equivalent ctx+0x104 pre-reload zeroing on the NW switch-in leg. Gate `SS_NW_DESYNC_FIX=1` default OFF (mechanism name candidate: `SS_NW_DR_R0_INVARIANT`). Paravirtual reach: NONE (all inside MachineProfileIsNewWorld()/PatchROM_NW gating; legacy patch bodies untouched) ⇒ inertness argument + gated-off byte-identical A/B boot substitutes for paravirtual e2e, stated per commit. |
+| Falsifiable fix predicate (Task B, F11) | **PINNED, register/record form:** gate ON — (a) PROBE68K@0x5000e394 match-2 shows dr-tmp r0=0x00000000, r4=0x0000005c, d0=0x5c (baseline: 0x36/0x92/0x92); (b) the #3391672-class record shows r24=0x5000e3de (not e414); 0x5046d760 visits=0 all boot; no [$C70] write; no [$AF0]:=0x000A (canonical form per F12); (c) SS_PROBE_68K=0x5000e412 legit count ≥2 (expected class 5; F8 chaining caveat); (d) gate OFF — byte-identical DSAT baseline (anchors #3391679/#3391708/#3391719–20 class, crash sig ea=0x40000fffff42 @ 0x504661a0, counter classes delivered_sc=13/delivered_program=2). Rows (a)–(c) scoped through the formerly-failing window per F9. |
+| Regression scope (Task C) | **ENUMERATED:** (1) sc resume conformance (per-delivery: handler 0x50314ac0, selector census class) — fix is DR-entry-only, sc paths untouched; (2) FE1F $31/$36 round trip (slot fill 0x00120001 class, db7c leg, return predicate); (3) W2's EE facts — trap_return untouched, the EE-parker fact and the XLM_IRQ_NEST −1/delivery drift stand unchanged; (4) warm switch-back nest ±1 balance signature; (5) paravirtual byte-identity (gated-off A/B); (6) cold-once trampoline WATCH pair (#4666 class); (7) post-switch-in guest code (interlude class) now runs r0=0 — strictly less poisoned; (8) if the ctx+0x104-zeroing variant is chosen: verify no NK consumer reads the emulator-world saved r0 slot (debugger/inspection paths) before landing. |
+
+### New residues (named, none blocking)
+
+- **R-DS1**: which ctx the window's excursion sc's (0x42/0x50/0x4d) save into —
+  the slot held 0x36 (not 0x4d) at switch-in #2, so the excursions save
+  elsewhere ([KDP-0x14] differs during excursions); bookkeeping only.
+- **R-DS2**: the 'bbox' interlude ran r0-poisoned and survived (its writebacks
+  fold flags / no addco. consumer) — recorded as the reason switch-in #1
+  didn't already crash the boot.
+- **R-DS3**: R1's exact pop instruction not individually disassembled
+  (mechanism-level closure above suffices).
+- **R-DS4**: the d1 entry-state difference between invocations (0xffffffff vs
+  0) — not consumed by the shim; unexplained, immaterial.
+
+### Instrument notes (carried forward)
+
+- **PROBE68K now dumps the DR pipeline temps** (r0/r3/r4/r5/r6/r7/r30) — the
+  capture extension that cracked this (r3=EA, r4=operand, r30=resolver base).
+- The DR's EA machinery decoded [STATIC]: brief-extension indexed EA = helper
+  family 0x50465ea0/ed0/f00 (lhau ext → extsb d8 → resolver at
+  r30+((ext>>5)&0x7f8), r30=0x50460000 → scale appliers 0x50465f40+) →
+  operand in r4 → per-opcode writeback (e.g. 0x50460c64 move.w-to-D0:
+  `addco. r4,r4,r0` flag idiom + `rlwimi r8,r4,0,16,31`).
+- `SS_JIT_WATCH_ADDR` polls vm_read_memory_4 at every ring record — a
+  zero-hit watch on a guest word is strong evidence the word never changed
+  (used here to exonerate memory at 0x5000e380).
+- The e388 selector shim (raw==patched): only selector 0 is valid; its single
+  table entry at e380 (0x005c) → e3dc. Any d0≠0 at the shim returns −50.

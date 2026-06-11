@@ -1043,3 +1043,19 @@ forwarding beyond retirements, W2-4 spins off as its own milestone.
 half now has a retirement path (item 2) instead of a probe path; W2L-R1 ([KDP+0x67c]
 resolved target) rides W2-4 step 2's first delivery; the fast-exit MSR-dead follow-up
 recorded in (a).
+
+### D-5. W2-4 step 0 LANDED (2026-06-11, label w2-4-step0) — sign-off item 2 discharged
+
+The D-3 rider is implemented: `SS_NW_DEC_PUBLISHED=1` (default OFF — the flip is W2-4's
+final acceptance) re-points `interrupt_entry` to the NK-published DEC handler
+**0x50313200** ([KDP+0x384] [PROBE✓ re-verified, step-0 boot 1]) with the sc/program/EXT
+2-SPR shim; the KDP shim stays as the gate-off fallback. The gate selects the SHIM SHAPE;
+SS_EXC_ENTRY overrides the entry value only (precedence unchanged). W2S-R1's r9 hazard +
+the cr6/cr7 composition hazards are RETIRED on the published route, not probed. Evidence:
+run-exc.sh H8 (gate-on end-to-end DEC delivery via the harness lane — extended stub pins
+SPRG1=caller r1 / SPRG2=caller LR; SS_EXC_BARE=0 proves the KDP shim untaken; honest
+scope: 0x50313200 itself executes only once step 1's riser lands — delivered_dec=0 on
+today's boot path), 12/12 lane, gate-OFF boot signature md5-identical to baseline,
+gate-ON live-inert (terminal tuple unchanged). Full record: M3A-ENTRY-TABLE.md
+"W2-4 step 0". Step 1 (the mtmsr r11 riser) may now deliver onto a self-contained
+handler from delivery #1.

@@ -11,6 +11,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
+### [SheepShaver] Machine Layer Wave-2 W2-4 step 0 — DEC delivery re-pointed to the NK-published handler 0x50313200 + 2-SPR shim (gated, default OFF)
+
+DEC delivery's target is now gate-selectable from the save-and-switch body 0x50412b1c
+(KDP register-save shim — the M3a shape) to the NK-published DEC handler **0x50313200**
+(`[KDP+0x384]`, [PROBE✓] re-verified live this task; primary copy per the publication
+precedent), harmonizing all four exception classes (DEC/sc/program/EXT) on the
+published-handler + 2-SPR-shim pattern (SPRG1:=caller r1, SPRG2:=caller LR). Retires the
+W2S-R1 r9 hazard and the cr6/cr7 flag-composition hazards on the published route
+(EE-CHAIN-RECON.md D-3/D-4, coordinator sign-off item 2). Gate: `SS_NW_DEC_PUBLISHED=1`
+(default OFF — the flip is W2-4's final acceptance); the gate selects the shim shape,
+`SS_EXC_ENTRY` overrides the entry value only (precedence unchanged); the KDP shim stays
+as the gate-off fallback path. Harness: new run-exc.sh **H8** vector trio (gate-on DEC
+delivery end-to-end with `SS_EXC_BARE=0` — a KDP-shim regression would fault; extended
+capture stub `SS_TEST_EXC_STUB=2` pins the SPRG1/SPRG2 rows in the REGDUMP; "(2-SPR)"
+delivery-tag discrimination vs the H1 control), lane 12/12. Live: gate-OFF boot
+signature md5-identical to the pre-change baseline; gate-ON differs only in the
+`[NW-DEC]`/entry-table lines (live-inert — delivered_dec=0 until the W2-4 step 1 riser).
+Honest scope: the harness cannot execute 0x50313200 itself (no NK there — entry
+overridden to the capture stub); end-to-end execution through the published handler
+lands with step 1. test_exc_chain not extended (decision logic untouched — entry value +
+host-side shim only). Records: M3A-ENTRY-TABLE.md "W2-4 step 0", EE-CHAIN-RECON.md D-5.
+
 ### [SheepShaver] Machine Layer M6 — 68k PC-desync: DR r0≡0 invariant re-assert; DSAT wall PASSES; boot 0.16s→4.8s, sc 13→169; newworld DEFAULT (`c8429b23`, `ac50b2c9`, `959e209e`, `86b1b1f7`, `25be4342`, `2024a835`)
 
 The 68k PC-desync wall (post-FE1F frontier, System Error ID 10 → DSAT underflow) is

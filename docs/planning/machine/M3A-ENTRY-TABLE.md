@@ -9,7 +9,7 @@
 
 | Field | Value | Mode | Evidence |
 |---|---|---|---|
-| `interrupt_entry` | **`0x50412b1c`** | **KDP-SHIM** (see below) | 16 live words at 0x50412b0c–0x50412b48 byte-identical to static 0x312b0c–0x312b48 (`409b001c 92260024 …`) |
+| `interrupt_entry` | **`0x50412b1c`** (legacy default) — **gate-selectable to `0x50313200` since W2-4 step 0 (2026-06-11, `SS_NW_DEC_PUBLISHED=1`, default OFF; flip = W2-4 final acceptance)** | legacy: **KDP-SHIM** (see below) · published route: **2-SPR shim** (SPRG1:=caller r1, SPRG2:=caller LR — the sc/program/EXT shape; KDP shim retired on that route) | legacy: 16 live words at 0x50412b0c–0x50412b48 byte-identical to static 0x312b0c–0x312b48 (`409b001c 92260024 …`) · published: NK-published `[KDP+0x384]` = 0x50313200 [PROBE✓ ×2: Q-S1 boot 1 + W2-4 step-0 boot 1], primary copy; see "W2-4 step 0" below |
 | `syscall_entry` | **`0x50314ac0` — RESOLVED (2026-06-11, NK-syscall-surface Tasks 0/A/B/C; newworld DEFAULT since Task C, opt-out `SS_NW_SC_SURFACE=0`)** | bare ExcEnter + 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR) | Primary copy, NK-published `[KDP+0x390]` [PROBE✓]; see "Syscall entry resolution" + "Task C results" below — the M3a descope is formally CLOSED |
 | `program_entry` | **`0x50314700` — RESOLVED (2026-06-11, FE1F-service-surface Tasks 0/A/B/C; newworld DEFAULT since FE1F Task C `be0e02cb`, opt-out `SS_NW_FE1F_SURFACE=0`)** | bare ExcEnter(EXC_PROGRAM) + the SAME 2-SPR shim (the 0x700 handler opens with the same save helper `bl 0x50313d40` the sc family uses); SRR0 = the trap instruction verbatim, SRR1 trap bit `0x00020000` (PEM, test-pinned) | Primary copy, NK-published `[KDP+0x37c]` [PROBE✓]; evidence: `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C results. Consumers: the raw entry-vector `twi 31,r31,N` trap-placeholders (restored over rung-2's parked stops) — the DR FE1F native-callout route |
 
@@ -534,3 +534,53 @@ gate boots (outside the diagnostic budget per P-C3).
   `[KDP+0x360 + (vector>>6)]` — one probe word each (DEC's published handler
   0x50313200 ≠ the M3a delivery target 0x50412b1c, which works via the KDP shim;
   reconciling those two is explicitly NOT this milestone's scope).
+
+## W2-4 step 0 (2026-06-11) — DEC delivery re-pointed to the NK-published handler (gated)
+
+> The "reconciling those two is NOT this milestone's scope" note above is now
+> discharged: EE-CHAIN-RECON.md D-3/D-4 (coordinator sign-off item 2 GRANTED at
+> `81b79bb9`) re-points DEC delivery from the save-and-switch body 0x50412b1c to the
+> NK-published DEC handler — harmonizing all four exception classes (DEC/sc/program/EXT)
+> on the published-handler + 2-SPR-shim pattern. Label: w2-4-step0.
+
+**Hook-contract change (the M3a delivery hook):**
+
+- `SS_NW_DEC_PUBLISHED=1` (default OFF; the flip is W2-4's FINAL acceptance, not step 0)
+  re-points `interrupt_entry` to **`0x50313200`** = `[KDP+0x384]` — **[PROBE✓ re-verified
+  this task** (boot 1, sc-entry anchor 0x50314ac0: `[0x68ffe384]=0x50313200`, siblings
+  `[KDP+0x390]`=0x50314ac0 / `[KDP+0x374]`=0x50314880, `[KDP+0x64c]`=0x50310000**)]** —
+  PRIMARY copy per the publication precedent (the staged-copy asymmetry recorded in
+  Q-S1 #3 is retired on this route, not silently "fixed" on the legacy one).
+- **Shim shape follows the GATE, not the entry value:** gate ON ⇒ the 2-SPR shim
+  (SPRG1:=caller r1, SPRG2:=caller LR — W2S-2 Q-W2 verdict: 0x50313200 opens with the
+  shared save prologue 0x313d40, self-contained, r9-free; retires the W2S-R1 r9 hazard
+  and the cr6/cr7 composition hazards). Gate OFF ⇒ the KDP register-save shim, unchanged
+  (the proven shape for 0x50412b1c — kept as the fallback/override path). `SS_EXC_ENTRY`
+  precedence is unchanged and overrides the ENTRY VALUE only; an override pointing back
+  at 0x50412b1c needs the gate OFF to get its KDP shim. `SS_EXC_BARE` is moot on the
+  published route (two SPR writes, no guest memory) — deliberately ignored there,
+  matching the EXT-branch precedent.
+
+**Evidence (this task):**
+
+- Harness (the end-to-end channel — delivered_dec=0 on today's boot path, no EE riser
+  yet per W2L-3, so the boot CANNOT observe a DEC delivery): run-exc.sh **H8** — gate ON,
+  `SS_EXC_BARE=0` (a KDP-shim regression would fault on unmapped KDP ⇒ no REGDUMP),
+  extended capture stub `SS_TEST_EXC_STUB=2` (mfspr r23,sprg1; mfspr r24,sprg2) pins the
+  2-SPR rows exactly: GPR23=10ffc000 (=caller r1), GPR24=10008000 (=caller LR), plus
+  delivered_dec=1 and the "(2-SPR)" delivery tag (H1 control stays untagged). Lane
+  12/12, interp=JIT REGDUMP byte-diff green. HONEST SCOPE: the harness entry value is
+  the SS_EXC_ENTRY stub — 0x50313200 itself is not executable without the NK; execution
+  THROUGH 0x50313200 lands with W2-4 step 1's riser.
+- Live A/B (3 slot boots total: probe + gate-on + gate-off): gate-OFF boot signature
+  ([EXC]/[CUDA]/[MACHINE]/SIGSEGV lines) **md5-identical to the pre-change baseline**;
+  gate-ON differs ONLY in the `[NW-DEC]`/entry-table lines, terminal tuple identical
+  (`delivered_dec=0 deferred_ee=5 … delivered_sc=169 delivered_program=4`) — live-inert
+  as designed.
+- test_exc_chain: NOT extended — the decision logic (ExcDeliveryDecision/ExcEnter) is
+  untouched; step 0 changes only the entry VALUE and the host-side shim, both outside
+  exc_core. The harness H-vectors (override channel) are unaffected by the default.
+
+**Residue:** retiring the legacy KDP-shim path entirely (and this table's dual-mode row)
+is the W2-4 final-acceptance flip's cleanup, after the riser proves deliveries through
+0x50313200 live.

@@ -207,6 +207,48 @@ else
     report H7_dual_stats 0 "(EXCSTAT delivered_dec=1/delivered_ext=0 not observed)"
 fi
 
+# ---- H8 (W2-4 step 0): published-DEC gate — the 2-SPR shim end-to-end --------
+# SS_NW_DEC_PUBLISHED=1 switches the DEC shim from the KDP register-save shim
+# to the sc/program/EXT 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR). Three
+# discriminators in one vector:
+#   1. SS_EXC_BARE=0 (overriding BASE_ENV): the KDP shim would FAULT here (the
+#      harness maps no KDP/ECB guest memory) => a regression to the KDP shim
+#      means no clean REGDUMP => FAIL. The delivery itself proves the swap.
+#   2. The extended stub (SS_TEST_EXC_STUB=2) lands SPRG1/SPRG2 in r23/r24:
+#      GPR23 = caller r1 (0x10ffc000, the harness reset r1), GPR24 = caller LR
+#      (0x10008000, the return trampoline) — the 2-SPR rows conform exactly.
+#   3. EXCSTAT delivered_dec=1 + the "(2-SPR)" delivery tag (vs H1's untagged
+#      BARE line) pin which shim path ran.
+# HONEST SCOPE: the entry VALUE here is the SS_EXC_ENTRY override (the capture
+# stub) — the harness has no NK, so 0x50313200 itself cannot be executed in
+# this lane. The published value is live-verified by probe ([KDP+0x384] =
+# 0x50313200, [PROBE✓] W2-4 step 0 boot 1) and the gate's entry re-point is a
+# boot-path log observable ([NW-DEC] line); end-to-end execution through
+# 0x50313200 waits for W2-4 step 1's EE riser (delivered_dec=0 on today's
+# boot path — no riser exists, W2L-3).
+EXC_ENV=(SS_NW_DEC_PUBLISHED=1 SS_EXC_BARE=0
+         SS_TEST_DEC_PENDING=1 SS_TEST_MSR=0x00007072
+         SS_EXC_ENTRY=0x1000C000,0 SS_TEST_EXC_STUB=2 SS_TEST_EXC_STATS=1)
+check_vector H8_dec_published_2spr "3C600000 6063F072 7C600124 48000000" \
+    GPR20=00001040 GPR21=1000400c GPR22=0000f072 GPR23=10ffc000 GPR24=10008000 LR=10008000
+if grep -q "DEC delivered #1: .* (2-SPR)$" \
+        "$RUN_DIR/H8_dec_published_2spr.interp.log" 2>/dev/null &&
+   grep -q "^EXCSTAT: delivered_dec=1 " \
+        "$RUN_DIR/H8_dec_published_2spr.interp.log" 2>/dev/null; then
+    report H8_dec_published_tag 1 "(delivered_dec=1 via the 2-SPR shim path; KDP shim not taken)"
+else
+    report H8_dec_published_tag 0 "((2-SPR) delivery tag / delivered_dec=1 not observed)"
+fi
+# Anti-vacuous control: H1 (gate off, BARE) must NOT carry the 2-SPR tag —
+# proves the tag discriminates the shim path rather than decorating every
+# delivery. (H1 ran above; its log is still in RUN_DIR.)
+if grep -q "DEC delivered #1: " "$RUN_DIR/H1_mtmsr_edge.interp.log" 2>/dev/null &&
+   ! grep -q "DEC delivered #1: .* (2-SPR)$" "$RUN_DIR/H1_mtmsr_edge.interp.log"; then
+    report H8_tag_control 1 "(H1 gate-off delivery untagged — tag discriminates)"
+else
+    report H8_tag_control 0 "(H1 delivery line missing or wrongly tagged 2-SPR)"
+fi
+
 # ---- H5: sc-class regression (rev 2 F12: process-isolated) -------------------
 # H5r resolved-to-stub: sc delivers; SRR0 ownership = sc+4 (r21=0x10004004).
 EXC_ENV=(SS_EXC_ENTRY=0x1000C000,0x1000C000 SS_TEST_EXC_STUB=1)

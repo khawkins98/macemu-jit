@@ -105,6 +105,21 @@ extern "C" {
  * Both copies are byte-identical at their probed anchors; reconciling the two
  * interrupt targets is explicitly out of this milestone's scope. */
 #define NW_INTERRUPT_ENTRY_DEFAULT 0x50412b1cu  /* M3A-ENTRY-TABLE.md probe-verified */
+/* Wave-2 W2-4 step 0 (EE-CHAIN-RECON.md D-3/D-4; coordinator sign-off item 2
+ * GRANTED): the NK-PUBLISHED DEC (0x900) handler, [KDP+0x384] = 0x50313200
+ * [PROBE✓ 2026-06-11 w2-4-step0 boot 1: [0x68ffe384]=0x50313200, siblings
+ * [KDP+0x390]=0x50314ac0 / [KDP+0x374]=0x50314880 and [KDP+0x64c]=0x50310000
+ * re-confirmed in the same probe]. PRIMARY copy per the publication precedent
+ * (the sc/program/EXT rule: the live value follows what the NK publishes; the
+ * old default's staged-copy asymmetry is retired on this path). Gated by
+ * SS_NW_DEC_PUBLISHED=1 (default OFF — flip is W2-4's final acceptance, NOT
+ * step 0): gate ON re-points interrupt_entry here AND switches the DEC shim
+ * to the 2-SPR shape (see the delivery hook) — 0x50313200 opens with the
+ * SHARED save prologue 0x313d40 like sc/program/EXT (W2S-2 verdict: same
+ * prologue, same EE-punch-through guard, same bounce exit; self-contained,
+ * r9-free — retires the W2S-R1 r9 hazard and the cr6/cr7 flag-composition
+ * hazards instead of probing them). SS_EXC_ENTRY precedence unchanged. */
+#define NW_INTERRUPT_PUBLISHED_DEFAULT 0x50313200u  /* primary copy, NK-published [KDP+0x384] [PROBE✓] */
 #define NW_SYSCALL_ENTRY_DEFAULT   0x50314ac0u  /* primary copy, NK-published [KDP+0x390] [PROBE✓] */
 /* FE1F-service-surface Task A (plan rev 3): the program-interrupt (0x700) entry —
  * the NK's published 0x700 handler. PRIMARY copy like the syscall entry (the same
@@ -161,6 +176,24 @@ static bool exc_entry_table_apply_env_override(void)
 	        g_exc_entry_table.syscall_entry,
 	        g_exc_entry_table.external_entry);
 	return true;
+}
+
+/* W2-4 step 0: the SS_NW_DEC_PUBLISHED gate, resolved once (default OFF; any
+ * non-"0" value arms it). Shared between the boot finalization (entry-table
+ * default) and the delivery hook (shim shape) — the hook is also reachable on
+ * the SS_TEST harness path, which never runs init_emul_ppc, so the gate must
+ * not live only in the boot parse. CONTRACT: the gate selects the SHIM SHAPE
+ * as well as the entry default; SS_EXC_ENTRY overrides the ENTRY VALUE only
+ * (precedence unchanged). An override pointing back at the save-and-switch
+ * body 0x50412b1c therefore needs the gate OFF to get its KDP shim. */
+static bool exc_dec_published_enabled(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("SS_NW_DEC_PUBLISHED");
+		cached = (e && e[0] && e[0] != '0') ? 1 : 0;
+	}
+	return cached != 0;
 }
 
 /* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
@@ -1091,7 +1124,31 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		return e && e[0] && e[0] != '0';
 	}();
 
-	if (!exc_bare) {
+	/* W2-4 step 0 (SS_NW_DEC_PUBLISHED=1, default OFF): the published-handler
+	 * route — interrupt_entry defaults to 0x50313200 (the NK-published DEC
+	 * handler) and the shim is the sc/program/EXT 2-SPR shim, NOT the KDP
+	 * register-save shim below. Rationale (EE-CHAIN-RECON.md W2S-2 Q-W2
+	 * verdict #2/#3): 0x50313200 opens with the SHARED save prologue 0x313d40,
+	 * which consumes exactly SPRG1 := caller r1 and SPRG2 := caller LR;
+	 * everything else it reads is NK-maintained ([KDP-0x10] flags, [KDP-0x14]
+	 * save target — NOT the [KDP+0x65c]/[KDP+0x660] emulator-interface pair,
+	 * and NOT r9/cr6/cr7, the W2S-R1 hazards this re-point retires). The
+	 * DEC-shim's ECB/[KDP+0x65c] register-save logic does NOT transfer (same
+	 * verdict as sc Q-S2). Unconditional like the sc/program/EXT shims —
+	 * SS_EXC_BARE is moot here (two SPR writes, no guest memory) and is
+	 * deliberately ignored, matching the EXT-branch precedent above.
+	 * The KDP-shim block below STAYS as the gate-off fallback: it is the
+	 * proven delivery shape for the save-and-switch body 0x50412b1c (the
+	 * pre-step-0 default, still reachable via gate-off and/or SS_EXC_ENTRY
+	 * pointed back at it). */
+	const bool dec_published = exc_dec_published_enabled();
+	if (dec_published) {
+		sprg_reg(1) = gpr(1);
+		sprg_reg(2) = lr();
+		// SRR1.EE=1 mandatory (the same punch-through guard as the EXT body —
+		// shared prologue): structurally guaranteed by the EE delivery gate +
+		// ExcEnter's low-16 keep mask, exactly as on the EXT branch.
+	} else if (!exc_bare) {
 		/* --- KDP register-save shim (KDP-SHIM mode, M3A-ENTRY-TABLE.md) ---
 		 * Transcribed EXACTLY from sheepshaver_cpu::interrupt() above (same
 		 * offsets, same order, same rlwimi/record_cr0/CR-splice), with THREE
@@ -1163,7 +1220,7 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	if (exc_stat_delivered_dec <= 5)
 		fprintf(stderr, "[EXC] DEC delivered #%llu: restart=%08x srr1=%08x msr=%08x -> entry=%08x%s\n",
 		        (unsigned long long)exc_stat_delivered_dec, t.srr0, t.srr1, t.msr, t.pc,
-		        exc_bare ? " (BARE)" : "");
+		        dec_published ? " (2-SPR)" : exc_bare ? " (BARE)" : "");
 	return true;
 }
 
@@ -1810,6 +1867,11 @@ static const size_t       SS_TEST_RAM_SIZE     = 16 * 1024 * 1024;
  *                           mfmsr r20; mfspr r21,srr0; mfspr r22,srr1; blr
  *                         The REGDUMP has no MSR/SRR0/SRR1 — the stub captures
  *                         them into GPRs the REGDUMP does carry.
+ *                  =2     (W2-4 step 0) the EXTENDED stub: two extra rows
+ *                         mfspr r23,sprg1; mfspr r24,sprg2 before the blr —
+ *                         makes the 2-SPR shim writes REGDUMP-pinnable (the
+ *                         H8 published-DEC conformance vector). "1" plants
+ *                         the original stub byte-identically.
  *  SS_TEST_EXC_STATS=1    print one EXCSTAT line (the exc= 6-tuple) after the
  *                         vector — the H4 deferral-telemetry observable.
  *                         Counters are cumulative per process (the exc lane
@@ -1868,7 +1930,10 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 			knob_msr_set = 1;
 		}
 		e = getenv("SS_TEST_EXC_STUB");
-		knob_stub = (e && e[0] && e[0] != '0') ? 1 : 0;
+		/* W2-4 step 0: "2" plants the EXTENDED stub (adds mfspr r23,sprg1 /
+		 * mfspr r24,sprg2) so the 2-SPR shim rows land in REGDUMP-visible
+		 * GPRs — the H8 conformance observable. "1" stays byte-identical. */
+		knob_stub = (e && e[0] && e[0] != '0') ? (e[0] == '2' ? 2 : 1) : 0;
 		/* F1: harness-side entry-table setup via the shared parse. */
 		exc_entry_table_apply_env_override();
 		/* Profile resolution (see block comment). */
@@ -1916,18 +1981,31 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 	if (knob_msr_set)
 		cpu->set_msr_for_test(knob_msr);
 	if (knob_stub) {
+		/* SS_TEST_EXC_STUB=1: the W2-1 capture stub, byte-identical to the
+		 * original. =2 (W2-4 step 0): the extended stub — the two extra mfspr
+		 * rows capture SPRG1/SPRG2 into r23/r24, making the 2-SPR shim writes
+		 * (SPRG1:=caller r1, SPRG2:=caller LR) REGDUMP-pinnable (H8). */
 		static const uint32 stub[] = {
 			0x7E8000A6,	/* mfmsr r20      */
 			0x7EBA02A6,	/* mfspr r21,srr0 */
 			0x7EDB02A6,	/* mfspr r22,srr1 */
+			0x7EF142A6,	/* mfspr r23,sprg1  (stub=2 only) */
+			0x7F1242A6,	/* mfspr r24,sprg2  (stub=2 only) */
 			0x4E800020,	/* blr            */
 		};
 		uint8 *p = test_ram + 0xC000;
-		for (size_t i = 0; i < sizeof(stub) / sizeof(stub[0]); i++) {
-			p[4*i + 0] = (stub[i] >> 24) & 0xFF;
-			p[4*i + 1] = (stub[i] >> 16) & 0xFF;
-			p[4*i + 2] = (stub[i] >> 8)  & 0xFF;
-			p[4*i + 3] =  stub[i]        & 0xFF;
+		size_t n = sizeof(stub) / sizeof(stub[0]);
+		size_t i_blr = n - 1;
+		for (size_t i = 0; i < n; i++) {
+			uint32 w = stub[i];
+			if (knob_stub == 1) {
+				if (i == 3) w = stub[i_blr];	/* short stub: blr right after srr1 */
+				else if (i > 3) w = 0;			/* clear the tail (batch replant) */
+			}
+			p[4*i + 0] = (w >> 24) & 0xFF;
+			p[4*i + 1] = (w >> 16) & 0xFF;
+			p[4*i + 2] = (w >> 8)  & 0xFF;
+			p[4*i + 3] =  w        & 0xFF;
 		}
 	}
 }
@@ -2756,6 +2834,27 @@ void init_emul_ppc(void)
 			} else {
 				fprintf(stderr, "[NW-SC] syscall surface OFF (SS_NW_SC_SURFACE=0 "
 				        "opt-out): syscall_entry=0 — abort-with-capture baseline\n");
+			}
+			/* W2-4 step 0: SS_NW_DEC_PUBLISHED=1 (default OFF — the flip is
+			 * W2-4's final acceptance) re-points the DEC delivery target from
+			 * the save-and-switch body 0x50412b1c (KDP shim) to the
+			 * NK-published handler 0x50313200, [KDP+0x384] [PROBE✓] — primary
+			 * copy, the publication precedent. Applied BEFORE the SS_EXC_ENTRY
+			 * parse so the override precedence is unchanged (override > gate
+			 * default > legacy default). The matching shim-shape switch lives
+			 * in the delivery hook (the gate selects shim shape; the override
+			 * selects entry value only — see exc_dec_published_enabled()).
+			 * Live-inert at today's frontier: delivered_dec=0 on the boot path
+			 * (no EE riser yet — W2L-3); the harness lane (run-exc.sh H8) is
+			 * the end-to-end observable until W2-4 step 1 arms the riser. */
+			if (exc_dec_published_enabled()) {
+				g_exc_entry_table.interrupt_entry = NW_INTERRUPT_PUBLISHED_DEFAULT;
+				fprintf(stderr, "[NW-DEC] published DEC route armed "
+				        "(SS_NW_DEC_PUBLISHED=1): interrupt_entry=0x%08x "
+				        "(primary copy, NK-published [KDP+0x384]); "
+				        "shim=SPRG1:=caller r1, SPRG2:=caller LR (KDP shim "
+				        "retired on this route)\n",
+				        g_exc_entry_table.interrupt_entry);
 			}
 			/* TRAP FIX (plan rev 2 P-M1): the no-comma SS_EXC_ENTRY=0xINT form
 			 * previously ZEROED syscall_entry — a post-flip trap (overriding the

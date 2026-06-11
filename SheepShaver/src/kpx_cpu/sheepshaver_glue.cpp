@@ -785,7 +785,12 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	// (the delivery hook defers while execute_depth > 1; this nested execute()
 	// just returned and host state is restored, so re-raise if the latch is
 	// still set — the next outermost-depth poll can then deliver).
-	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+	// W2-0: routed through the extracted predicate via the synthetic full edge
+	// (MSR may have changed arbitrarily across the nested execute; the delivery
+	// hook re-gates on the real MSR) — behavior-identical to the unconditional
+	// if-pending recheck. See ExcEdgeReRaise's header comment.
+	if (MachineProfileIsNewWorld() &&
+	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -824,36 +829,50 @@ void sheepshaver_cpu::interrupt(uint32 entry)
  */
 bool sheepshaver_cpu::deliver_pending_dec_exception()
 {
-	if (!VirtClockDECPending(&g_virt_clock))
+	// Wave-2 W2-0: the gate COMPOSITION lives in exc_core (ExcDeliveryDecision,
+	// pure, law-tested by test_exc_chain). Gate order pending -> depth -> EE ->
+	// native is CONTRACT (the exc= tuple counts per-gate). This caller keeps the
+	// stateful obligations (header doc-comment): sample guest memory, increment
+	// exactly the counter matching the decision, leave the latch SET on any
+	// deferral, clear it EXACTLY ONCE on DELIVER.
+	//
+	// Two-phase run-mode sampling (the sanctioned lazy idiom): [XLM_RUN_MODE]
+	// (0x2810) is guest lowmem — unmapped on the SS_TEST harness path — and the
+	// pre-extraction code only read it after the pending/depth/EE gates passed.
+	// Pass 0 first; only a provisional DELIVER pays the guest read and re-asks.
+	// Decision-identical to a single sampled call (the first three gates never
+	// consult the word).
+	//
+	// The native fence itself (M6a rung-2 W2, plan rev 3.1 item 3): defer while
+	// a MixedMode NATIVE EXCURSION is in flight — [XLM_RUN_MODE] is maintained
+	// 1-forward/0-backward by the NK on exactly the FE01/FE02 switch pair
+	// (MODE_NATIVE=1 during PPC-native windows, MODE_68K=0 while the 68k world
+	// runs). Under the W2 [KDP+0x65c] world-flip discipline the word holds the
+	// MMCB during a native window; the KDP register-save shim below saves
+	// r7-r13 through r6=[KDP+0x65c] — a DEC delivered mid-excursion would save
+	// into the MMCB whose slots the NK switch-back save is about to rewrite.
+	// Latch stays set; EE-edge re-raises + the block-boundary poll pick it up
+	// once [0x2810] returns to 0. Newworld-gated by construction.
+	const int pending = VirtClockDECPending(&g_virt_clock) ? 1 : 0;
+	ExcDecision decision = ExcDeliveryDecision(pending, current_execute_depth(),
+	                                           msr_reg(), 0);
+	if (decision == EXC_DECIDE_DELIVER)
+		decision = ExcDeliveryDecision(pending, current_execute_depth(),
+		                               msr_reg(), ReadMacInt32(XLM_RUN_MODE));
+	switch (decision) {
+	case EXC_DECIDE_NONE:
 		return false;
-	// Deliverability rule (MACHINE-LAYER-PLAN §2d): never deliver inside nested
-	// executes — depth 1 means we are at the outermost execute().
-	if (current_execute_depth() != 1) {
+	case EXC_DECIDE_DEFER_DEPTH:
 		exc_stat_deferred_depth++;
 		return false;
-	}
-	if (!ExcDeliverable(msr_reg())) {
+	case EXC_DECIDE_DEFER_EE:
 		exc_stat_deferred_ee++;
 		return false;
-	}
-	// M6a rung-2 W2 DEC fence (plan rev 3.1 item 3; red-team blocking risk):
-	// defer while a MixedMode NATIVE EXCURSION is in flight — [XLM_RUN_MODE]
-	// (0x2810) is maintained 1-forward/0-backward by the NK on exactly the
-	// FE01/FE02 switch pair (MODE_NATIVE=1 during PPC-native windows,
-	// MODE_68K=0 while the 68k world runs).  Rationale: under the W2
-	// [KDP+0x65c] world-flip discipline the word holds the MMCB during a
-	// native window; the KDP register-save shim below saves r7-r13 through
-	// r6=[KDP+0x65c] — a DEC delivered mid-excursion would save into the
-	// MMCB whose slots the NK switch-back save is about to rewrite (ECB-
-	// clobber by symmetry: pre-W2 it would have CLOBBERED the parked
-	// emulator ctx in the ECB).  Same deferral semantics as the depth/EE
-	// paths above: latch stays set, EE-edge re-raises + the block-boundary
-	// poll pick it up once [0x2810] returns to 0.  Newworld-gated by
-	// construction (this function only runs on the newworld profile).
-	// Inert while no native excursions run ([0x2810]=0 ⇒ no behavior change).
-	if (ReadMacInt32(XLM_RUN_MODE) != 0) {
+	case EXC_DECIDE_DEFER_NATIVE:
 		exc_stat_deferred_native++;
 		return false;
+	case EXC_DECIDE_DELIVER:
+		break;
 	}
 	VirtClockClearDECPending(&g_virt_clock);
 
@@ -1046,7 +1065,10 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	set_cr(saved_cr);
 
 	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1.
-	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+	// W2-0: synthetic-full-edge form of ExcEdgeReRaise (= if-pending re-raise;
+	// behavior-identical — see the predicate's header comment).
+	if (MachineProfileIsNewWorld() &&
+	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1101,7 +1123,10 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	ctr()= saved_ctr;
 
 	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1.
-	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+	// W2-0: synthetic-full-edge form of ExcEdgeReRaise (= if-pending re-raise;
+	// behavior-identical — see the predicate's header comment).
+	if (MachineProfileIsNewWorld() &&
+	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1127,7 +1152,10 @@ inline void sheepshaver_cpu::execute_ppc(uint32 entry)
 	lr() = saved_lr;
 
 	// M3a Task 4.4: depth-deferred DEC re-raised on return toward depth 1.
-	if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+	// W2-0: synthetic-full-edge form of ExcEdgeReRaise (= if-pending re-raise;
+	// behavior-identical — see the predicate's header comment).
+	if (MachineProfileIsNewWorld() &&
+	    ExcEdgeReRaise(0u, 0x8000u, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
 		trigger_interrupt();
 }
 

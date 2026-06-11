@@ -1426,10 +1426,11 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 #ifdef SHEEPSHAVER
 	/* M3a Task 3 / rev 2 F2: EE 0→1 edge re-raise on newworld.
 	 * mtmsr is interpreter-only (JIT falls back), so it always ends JIT blocks —
-	 * the re-poll happens naturally right after increment_pc returns. */
-	if (MachineProfileIsNewWorld() &&
-	    !(old_msr & 0x8000u) && (val & 0x8000u) &&
-	    ss_vclk_active() && VirtClockDECPending(&g_virt_clock))
+	 * the re-poll happens naturally right after increment_pc returns.
+	 * W2-0: edge predicate extracted to exc_core (ExcEdgeReRaise — fires iff
+	 * old EE=0 ∧ new EE=1 ∧ pending; behavior-identical composition). */
+	if (MachineProfileIsNewWorld() && ss_vclk_active() &&
+	    ExcEdgeReRaise(old_msr, val, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
 		trigger_interrupt();
 #endif
 	increment_pc(4);
@@ -1723,8 +1724,10 @@ void powerpc_cpu::execute_rfi(uint32 opcode)
 		ExcRfi(regs().srr0, regs().srr1, old_msr, &new_pc, &new_msr);
 		regs().msr = new_msr;
 		pc()       = new_pc;
-		if (!(old_msr & 0x8000u) && (new_msr & 0x8000u) &&
-		    ss_vclk_active() && VirtClockDECPending(&g_virt_clock))
+		/* W2-0: edge predicate extracted to exc_core (ExcEdgeReRaise) —
+		 * behavior-identical to the inline old/new EE-bit composition. */
+		if (ss_vclk_active() &&
+		    ExcEdgeReRaise(old_msr, new_msr, VirtClockDECPending(&g_virt_clock) ? 1 : 0))
 			trigger_interrupt();
 		return;
 	}

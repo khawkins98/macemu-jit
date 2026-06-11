@@ -291,30 +291,38 @@ before its residue status is decided.
   review minor: slot-1 flip gated on the W region having landed.)*
 
 ### Task Y: rung-2 acceptance (boots authorized) — honest gating + rollback (rev 2 P6)
-- [ ] **PASS/FAIL gates first, flip LAST.** Run with `SS_NW_MM_SWITCH=1` env-on:
+- [x] **PASS/FAIL gates first, flip LAST.** Run with `SS_NW_MM_SWITCH=1` env-on:
   (a) full gates; (b) pool provisioned by default, no `+0x3c` stop hit; (c) **the slots
   Q-B named consumed (if any) executed** (probe counters nonzero; vacuous-pass not
   allowed — if Q-B found none consumed, gate (c) is N/A and recorded as such — rev 2 C2);
   (d) the FE01→TVector→FE02 round trip holds (V/W sub-contracts) on this config;
   (e) cold-start exactly once + guest[0]/[4] stable (X sub-contracts).
-- [ ] **Fix budget (rev 2 P6):** telemetry/capture commits freely; at most ONE small
+  *(ALL PASS pre-flip: (a) canonical set green; (b) pool ON, 0x50429cf0 zero visits;
+  (c) slot-1 route 0x50429d80 visit=1 r3=MMCB — nonzero, not vacuous; (d) fresh ring
+  round trip incl. literal resume at completion-written [saveblk+0x3c]=0x50033776,
+  e1f4 r6=0xff; (e) PASS. Addendum "Task Y results".)*
+- [x] **Fix budget (rev 2 P6):** telemetry/capture commits freely; at most ONE small
   in-scope fix iteration per falsified contract (consistent with the one-iteration rule),
-  full gates re-run after any fix. Acceptance-time unlocks (the CV-10 pattern) are
-  expected, not violations — but each gets its own gated commit + addendum falsification
-  entry.
-- [ ] **THEN flip** `SS_NW_MM_SWITCH` to the newworld profile default (env opt-out kept)
+  full gates re-run after any fix. *(Budget consumed: ZERO — no contract falsified at
+  acceptance, no unlocks needed.)*
+- [x] **THEN flip** `SS_NW_MM_SWITCH` to the newworld profile default (env opt-out kept)
   and re-run (a)-(e). **Any gate failure after the flip ⇒ the flip is REVERTED in the
   same task (machinery stays env-gated), the failure recorded — the milestone does not
-  ship default-on with red gates.**
-- [ ] **DIAGNOSTIC OUTCOMES (recorded, NOT gates):** the FE01 retry spin gone; MPLibrary's
-  parcel init returns; the chain reaches the CodeFragmentMgr lookup (caller region file
-  0xf46e, observed via the r24 ring); boot advances past the parcel calls. Named expected
-  next walls: (i) MPLibrary's real init work hitting the unresolved `syscall_entry`
-  (vector 0xC00 — the abort is SIGNAL: capture SRR0/SRR1 + the sc site); (ii) EE/DEC
-  delivery during PPC-native execution; (iii) further unprovisioned NK surfaces. On
-  non-advancement: a root-caused frontier in the recon-doc idiom.
-- [ ] Record results in M6A-ONGOING-ENTRY-DESIGN (results section) + M6A-WAVE2-SHIM-RECON
-  (frontier update). Commit.
+  ship default-on with red gates.** *(FLIP LANDED: default-ON for newworld, opt-out
+  SS_NW_MM_SWITCH=0 (pool polarity mirrored); misconfig logic adjusted (pool-off A/B
+  now needs switch-off too, loud message). Post-flip (a)-(e) ALL PASS on the true
+  default config (no env var); opt-out boot reproduces the pre-switch baseline
+  byte-identically (comp 3573, jNK 116M spin, 0 TVector, no W/W2 writes). NO revert.)*
+- [x] **DIAGNOSTIC OUTCOMES (recorded, NOT gates):** the FE01 retry spin gone ✓;
+  MPLibrary's parcel init RUNS but does NOT return — the CFM caller region executes
+  (ring, file 0xf4xx) and the chain advances through TWO MixedMode round trips to
+  named wall (i): **`sc` at pc=0x500d638c, unresolved syscall_entry, SRR0=0x500d6390
+  SRR1=0x00007072 lr=0x500cf108 r1=0x103ffb50** — identical pre- and post-flip;
+  captured with full HB/CUDA baseline (comp=3672 jNK=4104 exc=0/1/0/0; CUDA 13/9
+  quiet). Nothing NEW between the round trip and the sc wall. Stop-rule trigger 2:
+  captured and stopped — vector 0xC00 is the NEXT milestone's frontier.
+- [x] Record results in M6A-ONGOING-ENTRY-DESIGN (results section) + M6A-WAVE2-SHIM-RECON
+  (frontier update). Commit. *(Both updated 2026-06-11.)*
 
 ### Task Z: docs
 - [ ] DIAGNOSTICS.md: knob changes (`SS_NW_MM_POOL` default flip + the `=1` explicit-on

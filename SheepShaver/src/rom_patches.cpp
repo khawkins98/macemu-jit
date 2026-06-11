@@ -824,18 +824,27 @@ bool PatchROM(void)
 		// observed concurrent depth 1; never guess bigger, residue R-1).
 		const char *mm_pool_env = getenv("SS_NW_MM_POOL");
 		bool mm_pool = !(mm_pool_env && strcmp(mm_pool_env, "0") == 0);
-		// Rung 2 Task V (plan rev 2 C11): SS_NW_MM_SWITCH implies the pool —
+		// Rung 2 Task Y (acceptance flip, plan rev 2 P6): SS_NW_MM_SWITCH is
+		// the newworld profile DEFAULT (was env-opt-in through Tasks V..X).
+		// Opt-out with SS_NW_MM_SWITCH=0 (A/B: restores the pre-switch
+		// baseline — FE01 retry spin, 0 TVector visits, always-cold table[0]).
+		// Paravirtual/OldWorld untouched (this whole lambda early-returns on
+		// non-newworld profiles).
+		//
+		// Rung 2 Task V (plan rev 2 C11): the switch implies the pool —
 		// the switch's whole point is that FE01 allocates a save record and the
 		// NK switches contexts; switch-without-pool would park the first FE01
-		// at the slot-15 exhaust stop by construction.  A forced SS_NW_MM_POOL=0
-		// alongside SS_NW_MM_SWITCH=1 is a MISCONFIGURATION: log loudly and
-		// re-enable the pool (the switch wins; opt-out A/B of the pool is only
-		// meaningful with the switch off).
-		const bool mm_switch = MachineEnvFlag("SS_NW_MM_SWITCH");
+		// at the slot-15 exhaust stop by construction.  SS_NW_MM_POOL=0 with
+		// the switch on (now the default) is a MISCONFIGURATION: log loudly and
+		// re-enable the pool (the switch wins; a pool-only A/B needs
+		// SS_NW_MM_SWITCH=0 too).
+		const char *mm_switch_env = getenv("SS_NW_MM_SWITCH");
+		const bool mm_switch = !(mm_switch_env && strcmp(mm_switch_env, "0") == 0);
 		if (mm_switch && !mm_pool) {
-			fprintf(stderr, "[NW-TRAMP] V: MISCONFIG — SS_NW_MM_SWITCH=1 with "
-			        "SS_NW_MM_POOL=0 (switch implies pool, plan rev 2 C11); "
-			        "ignoring the pool opt-out and provisioning the pool\n");
+			fprintf(stderr, "[NW-TRAMP] V: MISCONFIG — SS_NW_MM_POOL=0 with the "
+			        "MixedMode switch on (switch implies pool, plan rev 2 C11); "
+			        "ignoring the pool opt-out and provisioning the pool. "
+			        "For a pool-off A/B set SS_NW_MM_SWITCH=0 as well.\n");
 			mm_pool = true;
 		}
 		if (mm_pool) {
@@ -867,7 +876,7 @@ bool PatchROM(void)
 			tp[idx++] = htonl(0x38000000u);  // li   r0, 0
 			tp[idx++] = htonl(0x901C00ECu);  // stw  r0, 0xEC(r28)    in-use bitmap (COLD ARM ONLY)
 		}
-		// Rung 2 Task V (SS_NW_MM_SWITCH, default OFF until Task Y): the two
+		// Rung 2 Task V (SS_NW_MM_SWITCH, newworld default-ON since Task Y): the two
 		// KDP seeds that break the FE01 retry spin — Q-C PINNED
 		// (M6A-ONGOING-ENTRY-DESIGN.md "Rung 2 contracts" → Q-C).  The spin's
 		// pivot is the NK switch-to-context service 0x503143a0 (reached via
@@ -1313,9 +1322,9 @@ bool PatchROM(void)
 		        user_msr ? "ON (SS_M6A_USER_MSR)" : "off",
 		        mm_pool ? "ON (default; ECB+0xE0/E4=0x68ff5800 E8=0xF0000000)"
 		                : "OFF (SS_NW_MM_POOL=0 opt-out)",
-		        mm_switch ? "ON (SS_NW_MM_SWITCH; [KDP+0x660]|=0x00200000, "
+		        mm_switch ? "ON (default; [KDP+0x660]|=0x00200000, "
 		                    "MRU[0x340/0x344]=0x68fff400)"
-		                  : "off (default until Task Y)");
+		                  : "OFF (SS_NW_MM_SWITCH=0 opt-out)");
 		fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
 		        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
 		        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "

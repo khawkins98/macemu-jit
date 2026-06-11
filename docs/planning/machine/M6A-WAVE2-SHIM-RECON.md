@@ -638,3 +638,44 @@ return path via the FE02 switch-back stub; (d) the EE/DEC delivery chain remains
 downstream and untested until (c) runs guest supervisor code. The syscall entry (vector
 0xC00) is NOT the current gate — the FE01 path never issues `sc` — but stays queued for
 the moment MPLibrary's PPC init actually runs.
+
+---
+
+## Frontier update (2026-06-11, rung-2 Task Y closeout) — the MixedMode wall is DOWN; the sc/syscall_entry wall is THE frontier
+
+Everything in the previous section's "Wave-2 requirement" list landed (rung-2 Tasks
+T/U/V/W/W2/X, plan `docs/superpowers/plans/2026-06-11-m6a-rung2-mixedmode-switch.md`;
+full evidence in M6A-ONGOING-ENTRY-DESIGN.md "Rung 2 contracts" + per-task results
+sections), and **`SS_NW_MM_SWITCH` is now the newworld profile DEFAULT** (opt-out
+`SS_NW_MM_SWITCH=0`; the pool was already default-ON since Task T). Corrections to
+this doc's older predictions: only entry-vector slot 1 is consumed (the +0x10..+0x3c
+"fail/service slots" prediction was wrong — dead slots got loud parked stops instead);
+the return path needed no FE02 stub (the native completion re-enters through
+table[0] with r3=command-byte-0xff as the NK selector); the pool was relocated
+0x68ff5000 → 0x68ff5800 (Hnfo-scratch collision, occupancy map in the design doc).
+
+**State on the default config (boots /tmp/tasky_flip_boot1.log, tasky_flip_hb.log,
+tasky_ring.log):** the FE01 retry spin is gone; full FE01 → TVector(0x500cef8c) →
+native completion → table[0] warm re-entry → 68k-resume round trips run (ring:
+`5000fcf2 → 10024dea/de8 → continued`, second excursion resumes at the
+completion-written `[saveblk+0x3c]`=0x50033776); cold start exactly once;
+guest[0]/[4] stable; slot-15 exhaust stop never hit.
+
+**THE frontier (stop-rule trigger 2, named wall (i) — captured, not staged):**
+MPLibrary's PPC init advances to its first kernel service call and dies on the
+unresolved syscall entry:
+
+    [EXC] FATAL: sc at pc=500d638c with unresolved syscall entry
+          (SRR0=500d6390 SRR1=00007072 msr=00007072 lr=500cf108 r1=103ffb50)
+
+Re-confirmed byte-identical on the default-flipped config. The [EXC] entry table
+still shows `syscall=0x00000000` (M3a's descoped syscall_entry — vector 0xC00).
+Surrounding signature (the NEXT milestone's baseline): HB `comp=3672 jNK=4104
+jRAM=0 exc=0/1/0/0 mmio=S:65540/V:70183(IER=65539,ORB=3848)`; CUDA quiet
+(13 packets / 9 i2c to absent addrs 41,4F,B5,91,80,C1,28,71,9D, pram_rd=3) — the
+V-era MMIO/CUDA storm reading is dead (it was the reset cycle). Nothing NEW
+appears between the round trip and the sc wall: the chain runs TVector →
+MPLibrary init → CFM parcel-by-name caller region (file 0xf4xx, straight-line in
+the ring) → second round trip → `sc`. Under `SS_EXC_SC=legacy` the boot survives
+the sc but wedges in a 52M/s comp-frozen spin at 3672 — not a viable bridge,
+diagnostic only. Next milestone: the vector-0xC00 syscall_entry surface.

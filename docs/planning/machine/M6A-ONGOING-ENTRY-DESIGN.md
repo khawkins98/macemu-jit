@@ -995,3 +995,66 @@ r24 ring) and `/tmp/taskx_boot2_legacy.log` (SS_EXC_SC=legacy, heartbeat capture
    sufficient — the census shows binary cold/warm discrimination is the only
    consumed semantics; no refinement needed. (The word stays reserved at
    0x68ff6080 in the occupancy map; R-15's reset-re-init tripwire unchanged.)
+
+### Task Y results (2026-06-11) — rung-2 acceptance PASS (pre- and post-flip); SS_NW_MM_SWITCH is the newworld DEFAULT
+
+**Fix budget consumed: ZERO** — no contract falsified at acceptance; no
+acceptance-time unlocks needed.
+
+**Pre-flip battery (env `SS_NW_MM_SWITCH=1`; boots /tmp/taskx_boot1.log,
+taskx_boot2_legacy.log, tasky_ring.log):**
+- (a) Canonical gates: build-ss OK; batch + plain test-jit 353/353 score=100;
+  machine tests 11/11 ALL PASS (4794 checks); e2e-test 122 passed; paravirtual
+  `make e2e` PASS (clean lifecycle — booted to Finder, clean shutdown, exit 0;
+  the trampoline lambda early-returns on non-newworld, so paravirtual is
+  structurally byte-identical).
+- (b) Pool provisioned (mm-pool=ON default), slot-15 exhaust stop 0x50429cf0:
+  zero visits. PASS.
+- (c) Consumed-slot gate (Q-B: slot 1): the slot-1 route executes —
+  0x50429d80 visit=1 with the forward-switch signature (r3=0x68fff400 MMCB).
+  Nonzero counter; NOT vacuous. PASS.
+- (d) Round trip: TVector visit=1 (r25=0x5000fcf2); fresh ring reproduces the W2
+  pattern — `… 5000f45a..f466 (CFM caller) → 5000fce2..fcf0 (jsr (a4)) →
+  5000fcf2 → 10024dea/10024de8 → 5000dfa2 … (continued, no reset)`, and the
+  second excursion's resume is literal: `… 5000dfc8 → 100266f2 → 0 → 1 →
+  50033776 …` with **[saveblk+0x3c] probed at e1f4 = 0x50033776** and
+  **e1f4 r6=0x000000ff** (command byte live). PASS.
+- (e) Cold-once + guest[0]/[4] stable: PASS (Task X evidence, same tree).
+
+**FLIP:** `SS_NW_MM_SWITCH` promoted to newworld profile default-ON
+(rom_patches.cpp; opt-out `SS_NW_MM_SWITCH=0`, mirroring the pool's polarity).
+Misconfig logic adjusted: `SS_NW_MM_POOL=0` under the (now-default) switch is a
+loud misconfig + pool forced on; a pool-off A/B now requires `SS_NW_MM_SWITCH=0`
+as well. Paravirtual/OldWorld untouched.
+
+**Post-flip battery (NO switch env var — true default; boots
+/tmp/tasky_flip_boot1.log, tasky_flip_hb.log, tasky_optout_boot.log):**
+- (a) Full canonical gates re-run: build-ss OK; batch + plain test-jit 353/353;
+  machine 11/11 ALL PASS; e2e-test 122 passed; paravirtual `make e2e` PASS. ✓
+- (b) mm-pool=ON + mm-switch=ON (default) in the fixup line; slot-15 stop zero
+  visits. ✓
+- (c) Slot-1 route visit=1 (r3=0x68fff400). ✓
+- (d) Round trip holds: TVector r25=0x5000fcf2; warm entry r3=0xff native stack;
+  e1f4 r6=0xff, [saveblk+0x3c]=0x50033776. ✓
+- (e) Cold-once (scratch 0→1 once, WATCH #4666 pair) + guest[0]/[4] stable (only
+  the guest's own vector install at pc=50490e00). ✓
+- Opt-out A/B (`SS_NW_MM_SWITCH=0`): byte-identical pre-switch baseline — comp
+  frozen 3573, jNK 116M FE01↔NK bounce spin, 0 TVector visits, no W/W2 region
+  writes, no slot-1 retarget. ✓
+
+**FLIP STATUS: LANDED** (no gate failure; no revert).
+
+**Diagnostic outcomes (recorded, NOT gates) — the next-milestone baseline,
+re-confirmed on the default config:** the FE01 retry spin is gone; MPLibrary
+init runs; the CFM parcel-by-name caller region executes (ring, file 0xf4xx);
+the boot advances through TWO MixedMode round trips and dies at **the sc wall**:
+`[EXC] FATAL: sc at pc=500d638c with unresolved syscall entry (SRR0=500d6390
+SRR1=00007072 msr=00007072 lr=500cf108 r1=103ffb50)` — identical pre- and
+post-flip. Heartbeat baseline: comp=3672, jNK=4104, jRAM=0, exc=0/1/0/0
+(DEC fence inert), mmio=S:65540/V:70183(IER=65539,ORB=3848). CUDA baseline:
+13 packets / 9 i2c all to absent devices (addrs 41,4F,B5,91,80,C1,28,71,9D),
+pram_rd=3, adb=0 — quiet (the V-era storm reading is dead). **Nothing new
+appears between the round trip and the sc wall.** MPLibrary's init does not
+return; vector-0xC00 syscall_entry is THE frontier (stop-rule trigger 2:
+captured, stopped — no staging beyond the abort-capture). R-1 note: the
+slot-15 stop never fired through acceptance — 4-record pool sizing stands.

@@ -256,7 +256,7 @@ commits allowed (full gates).
 
 ### Task A: provision the continuation + the seed-class fixes (env-gated `SS_NW_FE1F_SURFACE`, default OFF)
 
-- [ ] Land the `[ECB+0x9dc]` provisioning per Q-F2's verdict — **active only under
+- [x] Land the `[ECB+0x9dc]` provisioning per Q-F2's verdict — **active only under
   `SS_NW_FE1F_SURFACE=1`** during bring-up (gated off ⇒ the park baseline
   byte-identical): host-side at glue's ECB pre-population site (next to the
   ECB+0xfc/+0x7fc siblings, with the transcription discipline: exact value the real
@@ -264,22 +264,22 @@ commits allowed (full gates).
   post-NK-init assert (then: occupancy map first, verified-zero region at/above
   0x429d9c). If Q-F2's verdict is V1 (already correct — the fix is elsewhere per
   Q-F5's list), record that explicitly and land only the Q-F5 seed-class fixes.
-- [ ] Land the Q-F5 seed-class fix list (same gate, same discipline; every seed site
+- [x] Land the Q-F5 seed-class fix list (same gate, same discipline; every seed site
   logs one loud `[NW-FE1F]` line under the gate). Misuse hardening: gated-off path
   untouched; no new abort classes (the park IS the captured baseline).
-- [ ] Env-flag matrix as BEHAVIOR (P-M1 carried): pin the gate's interaction with
+- [x] Env-flag matrix as BEHAVIOR (P-M1 carried): pin the gate's interaction with
   SS_NW_MM_SWITCH/SS_NW_SC_SURFACE (this surface is meaningless with either OFF —
   document the dependency, decide+comment the combined-opt-out behavior), polarity
   mirroring SS_NW_SC_SURFACE (explicit-"0"-only opt-out at flip time).
-- [ ] **Probe sub-contract (PASS/FAIL):** with `SS_NW_FE1F_SURFACE=1`, the
+- [x] **Probe sub-contract (PASS/FAIL):** with `SS_NW_FE1F_SURFACE=1`, the
   callout-entry probe shows ≥1 visit with the register dump conforming to **Q-F3's
   expected-register table** (exact/class per row — no "sane registers"; r0=0x31 and
   the &slot-pointer row mandatory). What the callout does AFTERWARD is diagnostic,
   recorded.
-- [ ] **Gated-off A/B:** one boot without the env var reproduces the 0x5000f248 park
+- [x] **Gated-off A/B:** one boot without the env var reproduces the 0x5000f248 park
   baseline byte-identically (ring tail exact, term-dump class exact, selector list
   exact).
-- [ ] Gates: full gates + both sub-contracts. Commit.
+- [x] Gates: full gates + both sub-contracts. Commit.
 
 ### Task B: the selector-0x31 round trip (conformance per Q-F3/Q-F4)
 

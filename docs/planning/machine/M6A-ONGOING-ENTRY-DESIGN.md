@@ -1302,3 +1302,88 @@ w=2 idle=256 / via 70183 w=307; CUDA 13 pkts, 9 i2c absent, pram_rd=3; VCLK
 mtspr_dec=4 dec_expiries=1 pending=1; 5 SC deliveries 0x3f/0x19/0x14/0x19/0xf
 → entry 0x50314ac0; heartbeat silent. Byte-identical class to the Task-C
 capture.
+
+### Task A results — the trap-placeholder restore + the 0x700 delivery surface (2026-06-11, plan rev 3 RATIFIED shape)
+
+**Policy retirement (dated note, plan rev 3 item 1):** rung 2's "dead slots get
+loud stops" policy (Tasks T/U) is RETIRED as of 2026-06-11 — the slots were
+never dead. The raw ROM's `twi 31,r31,N` placeholders (0x0fff000N at file
+0x36e8c0+4N, raw md5 7b1378be…) are load-bearing: executing a slot raises a
+program interrupt (0x700) which the NK's published handler decodes into the
+exit-pointer dispatch. The Task-T/U stops remain the GATED-OFF state (the
+byte-identical park baseline); under `SS_NW_FE1F_SURFACE=1` rom_patches restores
+the raw words over them (verify-EXPECTED == the exact stop branch words,
+PatchROM-time). The rom_patches site carries the same dated note.
+
+**Slot-15 verdict:** slot 15 IS a raw trap-placeholder (`0x0fff000f` at file
+0x36e8fc, re-verified against the raw image this session) → restored with the
+rest (slots 4, 6–15; slot 14 = raw `0x0fff000d`, the duplicate-0x0d quirk,
+restored verbatim). Task T's allocator-exhaustion diagnostics moved to
+telemetry: `SheepExcProgramShim` decodes the slot id from the trap word and
+emits a loud `[EXC] PROGRAM slot-15 (DR allocator EXHAUSTION)` line on every
+slot-15 delivery (+ the delivered-program counter). Exhaustion now reaches the
+NK's own slot-15 exit (cold-init publishes it; see Q-F2).
+
+**Where twi/tw land in the core (pinned by reading the decode):** NEITHER is in
+`ppc-decode.cpp`'s table (no primary-3 / 31-xo-4 entries) — both fall to the
+INVALID entry (`execute_illegal`) which is CFLOW_TRAP, so interpreter-decoded
+blocks already END at the trap site. The aarch64 JIT explicitly falls back
+(ppc-jit.cpp `case 3` twi / op31 `case 4` tw / `case 2` tdi → `return false`),
+so the interpreter arm runs in JIT boots too. The newworld arm lives at the top
+of `execute_illegal`'s SHEEPSHAVER section (after the SS_TEST_HEX clean-exit,
+preserving the harness contract): trap-TAKEN + program_entry resolved →
+`ExcEnter(pc(), msr, EXC_PROGRAM)` + shim + atomic apply (no increment_pc;
+SRR0 = the trap instruction verbatim per PEM). Trap-taken + UNRESOLVED → loud
+`[EXC] FATAL` capture-abort with the trap word + slot-id decode. UNTAKEN
+twi/tw falls through to the legacy illegal path (recorded limitation — no
+untaken sites exist; the placeholders are all TO=31 unconditional).
+exc_core: `EXC_PROGRAM` class + `program_entry` appended LAST;
+SRR1 = (msr & 0xFFFF) | 0x00020000 (PEM program-interrupt bit 14 = trap,
+bit 15 = 0 ⇒ SRR0 points AT the offending instruction; literal TEST-PINNED in
+test_exc_core Test 8 — existing checks untouched, 25 → 37 checks).
+
+**SPRG/shim verdict (the Q-F2-chain question): YES — the sc shim's two SPR
+writes are also expected on the 0x700 path.** The 0x700 handler 0x50314700
+opens with `bl 0x50313d40` — the SAME save helper the sc family uses
+([STATIC], raw==patched): it consumes SPRG1 at 0x313d4c (`[KDP+4] := SPRG1`,
+the caller-r1 save) and SPRG2 at 0x313d84 (`r12 := SPRG2`, the caller LR);
+the handler's fast rfi exit restores LR from SPRG2 / r1 from SPRG1
+(0x314ad8..ae8). `SheepExcProgramShim` (the sc-shim's sibling in glue)
+transcribes exactly those two writes — nothing else (the handler's other
+inputs are NK-maintained staged state).
+
+**Probe sub-contract (PASS), env-on boot (slot protocol, 60 s):**
+- slot-8 word probe field `[0x5046e8e0]=0x0fff0008` ✓ (the restore landed);
+- `[EXC] PROGRAM delivered #1: srr0=5046e8e0 word=0fff0008 slot=8 r1=103ffa38
+  lr=5046db6c -> entry=50314700` ✓ (SRR0 = the slot-8 twi address; entry =
+  the published handler; LR = the FE1F body's post-blrl return — the callout
+  protocol exactly);
+- callout-entry conformance RE-ASSERTED (baseline-true, annotated):
+  `[PROBE 0x5046db44 visit=1] r5=0x5046e8e0 r8=0x00000031 r9=0x00000002
+  r16=0x100037c0 r17=0x103ffc74 r24=0x5000f248` — exact match to Q-F3's table.
+
+**Gated-off A/B (PASS):** boot without the env var reproduces the 0x5000f248
+park baseline byte-identically — ring tail exact (`… 5000e43e 5000f242
+5000f246 5000f248`, 839,284 transitions), blocks=3836 complete=3836, selector
+list 0x3f/0x19/0x14/0x19/0xf → 0x50314ac0, CUDA 13 pkts / VCLK pending=1,
+zero [NW-FE1F] lines, delivered_program=0.
+
+**Diagnostic (recorded, NOT chased — Task B/C territory):** the boot runs FAR
+past the park. The H1 park is GONE: post-return unmarshal 0x5046db6c visited
+(`r3=0x00000000` = noErr-class at block entry; r4=0x00120001 — NOT obviously
+the EVNT-pointer class, Task B's return-predicate check must read this
+carefully). TWO FE1F deliveries (both slot 8; #2 at r1=103ffa34 — consistent
+with the f260/$36 sibling stub). delivered_sc rose 5 → 13. The Task-B watch
+address 0x100037d8 (ExpandMem slot, index 7) FILLS: `[WATCH] pc=5046aa64
+value=50049574 (was 0)` at record #1072456, then churns
+(500497ae → 0 → 5004960a → 0 over ~30k records — the slot is rewritten by
+subsequent guest code; 5 WATCH events total). NEW FRONTIER SIGNATURE: guest
+SIGSEGV, ea=0x40000fffff42 (guest 0x0fffff42, just BELOW RAMBase 0x10000000),
+PPC pc=0x504661a0 (DR emulator mirror, `stwu r3,-4(r1)` family), 68k
+r24=0x50004ad0, DR r1=0x0fffff46 — a 68k-side stack push below RAM bottom,
+~4.48 M ring records past the old park (vs 839 k). Captured per stop-rule
+trigger 2; not staged beyond capture.
+
+**Gates:** build-ss clean; batch + plain test-jit 353/353 score=100; machine
+suite ALL PASS (test_exc_core grew 25 → 37 checks); e2e-test 122 passed;
+paravirtual e2e — see commit record.

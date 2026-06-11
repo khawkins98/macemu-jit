@@ -34,6 +34,11 @@
   ~4.48M crash, 108 B/record) and `SS_RING_DUMP_FROM=0xSTART[:0xEND]` clips the dump to
   absolute record numbers (dump file now has a `# records #A..#B …` header line).
   Full retention math: DIAGNOSTICS.md "Instrument batch".
+- **Ring dumps are read with `tools/ring-walk.py`, not by eye** — point it at a boot
+  log, a ring dump, or a slot rundir: `--window START:END` (absolute record numbers),
+  `--r24-flow` (68k-PC transitions; odd-PC/odd-delta flagged DESYNC-CANDIDATE),
+  `--find-pc 0xPC`, `--regs-at REC`. It follows the log's "dumped to" pointer and
+  warns when /tmp/ss_jit_ring.txt is stale (shared across runs); `--ring` overrides.
 - `SS_JIT_WATCH_ADDR=<HEX,no-0x>` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
 - `SS_SEED_MEM`, `SS_EXC_ENTRY=0xINT[,0xSC]` (no-comma form preserves the syscall
   default), `SS_CUDA_TRACE=1`, `SS_INTERP_RING` — see DIAGNOSTICS.md.
@@ -67,7 +72,9 @@ r1=A7, r24=68k PC.
 
 ## Standing rules (the short list)
 
-Explicit-path staging only (never `git add -A`) · struct fields appended LAST ·
+Explicit-path staging only (never `git add -A`; the claims guard now WARNS when you
+stage a file claimed by nobody — the diff may include another agent's uncommitted
+work, verify it is all yours) · struct fields appended LAST ·
 clean-rebuild awareness for rom_patches/glue headers · oracle SHAs cited at the site,
 divergences documented where they occur · evidence tags [RAW-ROM]/[PATCH]/[STATIC]/
 [PROBE✓] · budgets are caps, partial-findings-beat-stalling · one-iteration rule:

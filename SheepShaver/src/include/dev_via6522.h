@@ -71,20 +71,28 @@ extern void VIABindScheduler(VIA6522 *v, EventScheduler *sched,
 //   - R_ORB writes forward to CudaORBWritten (written byte + current ACR);
 //   - R_SR read/write forward to CudaSRRead/CudaSRWritten — the Cuda's SR byte
 //     replaces the VIA's stored sr on those paths;
-//   - R_ORB reads run CudaSettle then CudaDeriveORB (bit 3 = TREQ recomputed
-//     from Cuda state on EVERY read — C1, the ROM does RMW on ORB; bits 4/5
-//     pass through from the stored byte);
-//   - R_IFR reads run CudaSettle first (C2 lazy backstop, the second poll
-//     surface).
+//   - R_ORB reads run CudaDeriveORB alone — NO settle (CV-10): bit 3 = TREQ
+//     recomputed from Cuda state on EVERY read (C1, the ROM does RMW on ORB;
+//     bits 4/5 pass through from the stored byte). TREQ is mutated
+//     synchronously, so ORB polling never depends on pending delivery;
+//   - R_IFR reads run CudaSettle — the SINGLE deferred SR-int delivery
+//     surface (the deterministic lazy analogue of QEMU's 20µs
+//     cuda_delay_set_sr_int: the int must land AFTER the host's SR read of
+//     the same edge, or the ROM's post-sync 15000-budget IFR wait starves —
+//     CV-10, commit d3e60d88).
 // Returned CUDA_SEAM_* flags are applied to ifr_latched bit 2 DIRECTLY (M6:
 // the bus region lock is non-recursive — every seam call already runs under
 // it, so locked_call would deadlock; the Cuda module itself is lock-free).
 // Timing decision (plan rev 2 M4, documented at the seam): lazy-only. dev_cuda
 // arms NO scheduler one-shots — the VIA header's "config-time, not hot fault
 // paths" deferral rationale does not hold for per-SR-byte timing (first-touch
-// reachable from the Mach handler thread), so the settle-on-read backstop is
-// the PRIMARY mechanism and no allocation can occur on fault paths. The
-// poll-driven boot protocol (S3 §1.5) works lazy-only by design.
+// reachable from the Mach handler thread), so settle-on-IFR-read is the ONLY
+// delivery mechanism and no allocation can occur on fault paths. The
+// poll-driven boot protocol (S3 §1.5) works lazy-only by design. Wave-2
+// caveat: this assumes a POLLING guest — if/when IER-driven CPU interrupt
+// delivery lands, an IFR-read-only delivery point can never fire for a
+// sleeping guest; the surface must then gain a non-read trigger (timer or
+// IER-gated push).
 // Unbound (NULL/never called): M1 behavior exactly — cuda_touch loud stub,
 // stored sr/orb echo. The ORB write-value trace (orb_wtrace) runs in BOTH modes.
 extern void VIABindCuda(VIA6522 *v, CudaDevice *c);

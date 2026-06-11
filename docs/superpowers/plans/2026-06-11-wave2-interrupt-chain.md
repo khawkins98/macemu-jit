@@ -212,7 +212,33 @@ The recon §C.2 spec, adopted verbatim. **Honesty carried: depth-deferral
 (`execute_depth>1`) is NOT harness-reachable** (needs a nested EMUL_OP execute) — covered
 at unit level (U2) and live telemetry (W2-2 P4); recorded, not hidden.
 
-- [ ] Three knobs, all inside the harness path only (`ss_run_one_vector` setup /
+> **W2-1 DONE (2026-06-11, commits 8355c943 + 4b995906).** As-landed notes:
+> (a) the F1 fix shape: the boot parse extracted to the shared helper
+> `exc_entry_table_apply_env_override()` (glue), called from both init_emul_ppc and the
+> harness knob block; (b) the F2 fix shape: **MAP** (not zero-substitute) — guest
+> [0x0,0x4000) mmap'd zero at NATMEM_OFFSET+0 so the hook's two-phase [0x2810] read runs
+> the boot-identical code path (zero = MODE_68K = deliverable); REAL_ADDRESSING refuses
+> loudly; (c) two knobs beyond the named three: `SS_TEST_EXC_STATS=1` (the EXCSTAT
+> 6-tuple line — the H4 observable) and harness-side `MachineProfileInit()` when
+> SS_MACHINE is set (the profile resolver is boot-path-only; without it every
+> delivery-chain gate reads paravirtual); per F11 knob 1 shrank to dec_pending=1 +
+> per-vector re-arm (VirtClockInitHost already runs at the SS_TEST gate); (d) H1's
+> pinned restart 0x1000400C verified EXACTLY — realized by ending the vector in `b .`
+> (the interpreter delivers two block-boundary polls after the edge; the b-self parks
+> the PC deterministically); H3's restart = the rfi target (0x1000401C in the landed
+> layout — the body's 0x10004010 was layout-dependent; the semantic — delivery AT the
+> rfi target — is what held); (e) H4 green non-gating (deferred_ee=1 observed; the
+> legacy HandleInterrupt fall-through proved read-safe on the F2 page); H5-unresolved
+> per F12 (process-isolated, FATAL capture + exit 134, both modes, no REGDUMP);
+> (f) lane `make test-exc-vectors` = METRIC pass=5 fail=0 total=5 score=100,
+> interp-vs-JIT REGDUMPs byte-identical for all gating vectors (JIT-mode honesty:
+> mtmsr/rfi/sc are non-compilable — the diff proves the JIT dispatch path delivers
+> identically, not mtmsr codegen). Gates: 353/353 both modes (legacy table
+> byte-unaffected knobs-off), machine 13/13, e2e-test 122; paravirtual e2e substituted
+> by structural inertness (only boot-reachable change = the behavior-identical parse
+> refactor inside init_emul_ppc's MachineProfileIsNewWorld() branch).
+
+- [x] Three knobs, all inside the harness path only (`ss_run_one_vector` setup /
   SS_TEST block):
   1. `SS_TEST_DEC_PENDING=1` — `VirtClockInit(&g_virt_clock, 25000000, stub_now_ns, 0)` +
      set `dec_pending=1`, reset per vector in batch mode (the harness never reaches
@@ -221,7 +247,7 @@ at unit level (U2) and live telemetry (W2-2 P4); recorded, not hidden.
      all 353 legacy vectors; the EE-edge vectors start at 0x7072).
   3. `SS_TEST_EXC_STUB=1` — plant `mfmsr r20; mfspr r21,srr0; mfspr r22,srr1; blr` at
      guest 0x1000C000 host-side (the REGDUMP has no MSR/SRR0/SRR1 — captured via GPRs).
-- [ ] The five vectors, env
+- [x] The five vectors, env
   `SS_MACHINE=newworld SS_EXC_BARE=1 SS_TEST_DEC_PENDING=1 SS_TEST_MSR=0x00007072
   SS_EXC_ENTRY=0x1000C000,0 SS_TEST_EXC_STUB=1`, each run interp vs JIT with REGDUMP
   diff:
@@ -234,10 +260,10 @@ at unit level (U2) and live telemetry (W2-2 P4); recorded, not hidden.
     asserting deferred_ee incremented.
   - **H5 sc-class regression**: `sc` with entry unresolved vs resolved-to-stub —
     guards EXC_PC_UNRESOLVED + SRR0=sc+4 ownership end-to-end.
-- [ ] New make lane `test-exc-vectors` (dedicated run.sh stanza or sibling script,
+- [x] New make lane `test-exc-vectors` (dedicated run.sh stanza or sibling script,
   METRIC-formatted) — these vectors are env-dependent and MUST NOT enter the 353-table
   (env-free determinism contract).
-- [ ] Gates: full gates + the new lane green in both modes (H1/H2/H3/H5 PASS/FAIL;
+- [x] Gates: full gates + the new lane green in both modes (H1/H2/H3/H5 PASS/FAIL;
   interp-vs-JIT REGDUMP identical). Files: glue harness block, Makefile, the script.
   Commit.
 

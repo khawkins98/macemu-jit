@@ -11,6 +11,66 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
+### [SheepShaver] Machine Layer M3b Wave 1: Cuda protocol model + minimal ADB stub live on newworld (`143f66e7`…`21b6410a`)
+
+M3b Wave 1 (the live consumer half of MACHINE-LAYER-PLAN M3b) landed on the newworld profile:
+
+- **`dev_cuda` pure module** (`143f66e7`, review follow-ups `b7a3445b`): Cuda (Apple MCU)
+  SR-handshake state machine + command dispatcher — ADB dispatch, GET/SET_TIME RTC,
+  READ/WRITE_PRAM + MCU_MEM (in-memory 256-byte PRAM), autopoll control, FILE_SERVER_FLAG/
+  POWER_MESSAGES acks, RESET/POWERDOWN loud-latched, I2C (below). Behavioral extraction
+  (NOT a code port) from two oracles, both SHAs cited in `dev_cuda.h`: QEMU
+  `hw/misc/macio/cuda.c` @ `de5d8bfd6105d3dd3ae668df9762df244a6d1506` and DingusPPC
+  `devices/common/viacuda.cpp` @ `92bb6d10549529f9f4031a85c2bc136149535bdc`.
+  `test_dev_cuda` 2483 → 3924 checks (conformance vectors CV-0…CV-10).
+- **`adb_stub` minimal ADB bus** (`e7120368`, `bb09269f`, 90 checks): keyboard@2 + mouse@3,
+  Talk R3 identification, Listen-R3 address-move (the boot scan MOVES devices), Talk R0 =
+  empty — **full host-input-over-ADB deferred** per the donor study §7.2 decision; the full
+  implementation replaces this module behind the same interface (tracked in ROADMAP D3).
+- **Task 3 integration** (`b7a3445b`, `912f27cb`, `94c4a0f0`, `8c7f6796`): `VIABindCuda`
+  SR/ORB seam on the M1 VIA (region-lock covered, loud stub replaced), main_unix bring-up,
+  `cuda_init_dat` + `adb_init_dat` ROM-patch retirements (profile-gated; **no-op on the
+  9.0.1 parcels ROM by construction** — both patterns miss their search windows there, the
+  inits always ran unpatched; live behavior change on 1.1/OldWorld-window ROMs only).
+- **CV-10 deferred SR-int delivery** (`d3e60d88`) — THE acceptance-unlocking fix. QEMU
+  delays every Cuda-raised SR interrupt 20 µs so it lands *after* the host's sync-byte SR
+  read; our synchronous raise was consumed by that read before the ROM's 15000-budget IFR
+  wait even began, so the wait expired and the boot parked. Fix: pending raise stays
+  latched and is delivered only via `CudaSettle` on the VIA's R_IFR read path (full
+  root-cause story in the dedicated entry below).
+- **I2C 0x22/0x25** (`4e544aff`): READ_WRITE_I2C + COMB_FMT_I2C per DingusPPC, absent-device
+  error replies (`CUDA_ERR_I2C`) — no I2C devices modeled (stop-rule; the boot sweeps 9
+  addresses and moves on). Retired `unknown` 9108 → 0.
+- **Diagnostics** (`132b020d` + Task 3/4): `[CUDA]` stats line, `[VIA] orb:` write-value
+  trace (the C3 polarity forensics that pinned the live Cuda-polarity engine, DDRB=0x30),
+  `SS_TERM_DUMP=1` (SIGTERM → exit(1) so timeout-killed boots reach atexit dumps), `[M3b]`
+  retirement banners with pattern found/absent reporting (`f4c53f80`). Reference:
+  `SheepShaver/docs/DIAGNOSTICS.md` "Machine Layer M3b".
+
+**Acceptance** (records `6ffb467e`, `d80155ae`, `21b6410a` in
+`docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "M3b Wave 1 acceptance"): the M6a-named
+18338-read ORB sync frontier is CROSSED (syncs=1, then 734+/60 s as the boot cycles).
+Latest boot: `packets=9529 responses=9529 pram_rd=2199 pram_wr=733 i2c=6597` (all absent)
+`unknown=0`; comp 849→4786+ climbing, no park. ADB/GET_TIME/autopoll not yet issued — the
+boot cycles its Cuda probe sequence (~80 ms/cycle); the loop-ender is under recon
+(Ticks-starvation hypothesis live; per the plan's stop-rule it gates Wave 2's shape).
+
+**Dual-PRAM inconsistency window (deliberate):** Cuda READ/WRITE_PRAM serves in-memory
+zeros while the `nvram*` EMUL_OP HLE stays applied until M4 — two divergent PRAM sources
+until the M4 NVRAM model unifies them.
+
+**Build gotcha (do NOT pattern-match mid-struct inserts as safe):** the I2C work grew
+`CudaDevice` mid-struct and the Unix build's `main_unix.o`/`dev_via6522.o`/
+`sheepshaver_glue.o` did not rebuild on the header change (no header dependency
+tracking) — first boot showed garbage counters (`powerdowns=6114308096`). Treat any absurd
+`[CUDA]` counter as a stale-object symptom first; force-remove the consuming `.o` files
+after any machine-header struct change.
+
+**Gates throughout:** machine suite 11/11 (now incl. `test_dev_cuda` 3924,
+`test_adb_stub` 90, `test_dev_via6522` 70); batch + legacy `make test-jit` 353/353
+score=100; e2e-test 122; paravirtual `make e2e` PASS; paravirtual byte-identical/inert
+(no `[CUDA]` lines).
+
 ### [SheepShaver] Machine Layer M3b: CV-10 deferred SR-int delivery — sync park root-caused + fixed (`d3e60d88`)
 
 M3b Wave-1 acceptance root cause: the 9.0.1 ROM's 68k Cuda startup sync (file 0x9584, guest

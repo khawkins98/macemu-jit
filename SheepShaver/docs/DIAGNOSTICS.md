@@ -200,6 +200,7 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_ROM_PATCH_TRACE=1` | Log every `find_rom_data` pattern search as `[ROMPATCH] ... -> HIT/RELOCATED/MISS` (`rom_patches.cpp`). Independent of lenient mode. See the "ROM patching diagnostics" section above. |
 | `SS_ROM_NO_904=1` | Opt out of checksum-based auto-lenient for the 9.0.4 G4 ROM. Does not affect `SS_ROM_LENIENT=1`. |
 | `SS_NW_TRAMPOLINE=1` | Enable NewWorld nanokernel trampoline path (`rom_patches.cpp`). Gates the `[NW-MIRROR]` cold-start patch at ROM+0x46e8c0 and other NW-specific trampoline code. Required for New World ROM diagnostic boots. |
+| `SS_TERM_DUMP=1` | SIGTERM → `exit(1)` so `timeout(1)`-killed diagnostic boots reach the atexit telemetry dumps (`[MMIO]`/`[VIA]`/`[VCLK]`/`[CUDA]`). See the M3b section below. |
 
 ## Machine Layer M2 — virtual clock and event scheduler diagnostics
 
@@ -342,3 +343,102 @@ The `comp` jump (781→791, 10 new blocks) is the machine-layer composition sign
 scheduler → M1 bus/backpatch → SCC Rx → `check_work` → console. The `exc=0/1/0` pattern
 (deferred_ee=1) is the cold-MSR-EE fix working correctly — DEC deferred during NK cold-init,
 delivered once EE is enabled by the guest.
+
+## Machine Layer M3b — Cuda + ADB stub diagnostics
+
+### `[CUDA]` stats line
+
+On clean shutdown (atexit, newworld-bus configs only — paravirtual never registers it) and
+on the crash-path dump, the Cuda protocol model emits one stats line to stderr (suppressed
+entirely if the guest never touched the SR/ORB seam):
+
+```
+[CUDA] packets=N responses=N syncs=N bytes_in=N bytes_out=N adb=N adb_absent=N
+       get_time=N set_time=N autopoll=N pram_rd=N pram_wr=N i2c=N
+       i2c_absent=N(addrs=AA,BB,...) acked=N bad_param=N unknown=N(last=T:CC)
+       resets=N powerdowns=N overflows=N
+```
+
+| Field | Meaning |
+|---|---|
+| `packets` / `responses` | Complete command packets committed by the host / response packets queued by the model |
+| `syncs` | Sync/attention sequences completed (TACK asserted with TIP negated — the startup handshake; a probe-cycling boot re-syncs each cycle) |
+| `bytes_in` / `bytes_out` | SR bytes shifted host→Cuda / Cuda→host |
+| `adb` / `adb_absent` | ADB packets dispatched to the adb_stub / Talks to absent addresses (framed as timeout status 0x02) |
+| `get_time` / `set_time` / `autopoll` | RTC reads/writes and autopoll-control commands |
+| `pram_rd` / `pram_wr` | READ_PRAM / WRITE_PRAM (+MCU_MEM) commands served from the in-memory 256-byte PRAM |
+| `i2c` / `i2c_absent=N(addrs=…)` | READ_WRITE_I2C (0x22) + COMB_FMT_I2C (0x25) transactions; `addrs` is the capture-only probe map of raw I2C address bytes the boot swept (all answered absent — `CUDA_ERR_I2C` — until a device is modeled) |
+| `acked` / `bad_param` | Simple-ack commands (FILE_SERVER_FLAG etc.) / malformed-parameter rejections |
+| `unknown=N(last=T:CC)` | Unknown commands, with the most recent one named: `T` = packet type, `CC` = command byte, both hex. A nonzero counter is the "boot demands a command we don't model" signal (this is how 0x22/0x25 were found) |
+| `resets` / `powerdowns` | RESET_SYSTEM / POWER_DOWN commands (latched loud — the model acks but does not act) |
+| `overflows` | Input-packet buffer overflows (should be 0) |
+
+**Stale-object tripwire:** an absurd counter value (e.g. `powerdowns=6114308096`) means a
+stale `.o` compiled against an older `CudaDevice` struct layout, not a logic bug — the Unix
+build does not track header dependencies. Force-remove the consuming objects
+(`main_unix.o`, `dev_via6522.o`, `sheepshaver_glue.o`) and rebuild.
+
+A one-shot `[CUDA] warning: …` line may precede the stats: warnings are latched (not
+printed) on seam paths where stdio is forbidden (§2g, fault-thread reachable) and drained
+at exit.
+
+`[CUDA] model bound to via6522 SR/ORB seam (lazy-only; ADB stub kbd@2 mouse@3)` at startup
+confirms the bring-up (newworld profile only).
+
+### `[VIA] orb:` write-value trace (C3 polarity forensics)
+
+Next to the per-register `[VIA] reads:` histogram, the VIA dumps the ORB **write-value
+transition trace** at exit:
+
+```
+[VIA] orb: ddrb=30 writes=4 trace=38,28,30
+```
+
+| Field | Meaning |
+|---|---|
+| `ddrb` | Data-direction register B (0x30 = bits 4/5 outputs, bit 3 input — the Cuda-polarity engine: TREQ=3 input, TACK=4, TIP=5, all active-LOW) |
+| `writes` | Total ORB writes |
+| `trace` | The sequence of *distinct* written byte values (consecutive duplicates collapsed, bounded buffer) |
+
+This exists because the 68k handshake engines run under the DR emulator and are invisible
+to `SS_PROBE_PC` (zero PPC block-entry hits) — the written bit pattern is the only direct
+evidence of which handshake engine (Cuda vs Egret polarity) is live. `38,28,30` is the
+canonical sync choreography (idle → TACK assert → TACK negate).
+
+### `SS_TERM_DUMP=1` — atexit dumps on timeout-killed boots
+
+`timeout(1)`-killed diagnostic boots die by SIGTERM, which skips the atexit telemetry
+(`[MMIO]`/`[VIA]`/`[VCLK]`/`[CUDA]` dumps). `SS_TERM_DUMP=1` installs a SIGTERM handler
+that calls `exit(1)`, so the dumps run. `exit()` from a signal handler is async-unsafe in
+general; acceptable for one-shot teardown on this env-gated diagnostics path (default
+behavior unchanged). Standard recipe:
+
+```bash
+SS_TERM_DUMP=1 timeout 60 ./SheepShaver --config /tmp/m2accept.prefs 2>/tmp/diag.log
+```
+
+### `[M3b]` retirement banners (cuda_init / adb_init)
+
+On the newworld profile, `rom_patches.cpp` no longer applies the `cuda_init_dat` and
+`adb_init_dat` patches; each emits one banner reporting whether the retirement changed
+anything **on this ROM**:
+
+```
+[M3b] cuda_init ROM patch retired (newworld profile, pattern found - patch suppressed): guest Cuda init runs against the dev_cuda model
+[M3b] adb_init ROM patch retired (newworld profile, pattern absent - no-op on this ROM): ADBInit wait runs against the dev_cuda model + adb_stub
+```
+
+`pattern found - patch suppressed` = the retirement is live behavior change (1.1/OldWorld-
+window ROMs). `pattern absent - no-op on this ROM` = the pattern misses its search window
+(the 9.0.1 parcels ROM: cuda_init @0x9be2, adb_init @0x2b780 — both outside) so the inits
+always ran unpatched there; the banner just records that fact. Paravirtual keeps both
+patches forever (same gate idiom as scc_init/via_init).
+
+### PRAM note — two divergent PRAM sources until M4 (deliberate)
+
+Wave 1's Cuda serves READ_PRAM/WRITE_PRAM from an **in-memory, zero-initialized** 256-byte
+array (well-formed full-length responses; no persistence), while the `nvram1`–`nvram7`
+XPRAM/NVRAM EMUL_OP HLE patches **stay applied** and serve the host-file-backed XPRAM.
+These are two divergent PRAM stores — a guest writing through one path will not see it
+through the other. This inconsistency window is deliberate and closes at M4 (full
+partitioned NVRAM behind the bus, EMUL_OP HLE retired).

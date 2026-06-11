@@ -153,6 +153,16 @@ static uint32_t cuda_now(CudaDevice *c)
 	return c->now_mac ? c->now_mac(c->now_opaque) : 0;
 }
 
+// Capture-only I2C probe map (§2g): latch distinct raw addr bytes so the
+// stats dump names what the boot asked for over I2C.
+static void i2c_latch_addr(CudaDevice *c, uint8_t addr)
+{
+	for (int i = 0; i < c->i2c_addr_count; i++)
+		if (c->i2c_addrs[i] == addr) return;
+	if (c->i2c_addr_count < (int)sizeof(c->i2c_addrs))
+		c->i2c_addrs[c->i2c_addr_count++] = addr;
+}
+
 static void pseudo_command(CudaDevice *c, uint8_t cmd, const uint8_t *a, int n)
 {
 	switch (cmd) {
@@ -282,6 +292,41 @@ static void pseudo_command(CudaDevice *c, uint8_t cmd, const uint8_t *a, int n)
 		c->cmd_pram_write++;
 		resp_begin(c, CUDA_PKT_PSEUDO, 0, cmd);
 		break; }
+	case CUDA_CMD_READ_WRITE_I2C:
+		// DingusPPC viacuda.cpp @ 92bb6d1 i2c_simple_transaction: a[0] =
+		// (7-bit dev addr << 1) | RW (1 = read), a[1..] = write data.  No I2C
+		// devices are modeled (M3b stop-rule: attach a device only if the boot
+		// demonstrably needs its data) — every transaction takes the oracle's
+		// start_transaction-failed path: error_response(CUDA_ERR_I2C).
+		// (QEMU @ de5d8bfd does not implement 0x22/0x25 at all — unknown cmd,
+		// error 2 — which is what the boot retried 9108x against; the
+		// DingusPPC framing names the real condition.)
+		if (n < 1) goto bad_args;
+		c->cmd_i2c++;
+		i2c_latch_addr(c, a[0]);
+		c->i2c_absent++;
+		warn_latch(c, "Cuda: I2C transaction to absent device (see i2c counters)");
+		resp_error(c, CUDA_ERR_I2C, CUDA_PKT_PSEUDO, cmd);
+		break;
+	case CUDA_CMD_COMB_FMT_I2C:
+		// DingusPPC i2c_comb_transaction: a[0] = dev_addr, a[1] = sub_addr,
+		// a[2] = dev_addr1 (bits 7:1 must match a[0], bit 0 = RW of the
+		// repeated-start phase), a[3..] = write data.  Mismatch errors BEFORE
+		// the bus lookup; otherwise the absent-device path as above.  The
+		// live 9.0.1 boot issues this once per I2C probe cycle (686x in the
+		// first post-0x22 acceptance boot) — boot-demanded, plan rev-2 m2.
+		if (n < 3) goto bad_args;
+		c->cmd_i2c++;
+		i2c_latch_addr(c, a[0]);
+		if ((a[0] & 0xFE) != (a[2] & 0xFE)) {
+			c->cmd_bad_param++;
+			resp_error(c, CUDA_ERR_I2C, CUDA_PKT_PSEUDO, cmd);
+			break;
+		}
+		c->i2c_absent++;
+		warn_latch(c, "Cuda: I2C transaction to absent device (see i2c counters)");
+		resp_error(c, CUDA_ERR_I2C, CUDA_PKT_PSEUDO, cmd);
+		break;
 	default:
 		// Unknown command (ONE_SECOND_MODE 0x1B lands here deliberately, plan
 		// m2): well-formed error per both oracles + counter + latched warning.
@@ -441,10 +486,22 @@ size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen)
 		         c->last_unknown_type, c->last_unknown_cmd);
 	else
 		snprintf(unk, sizeof(unk), "0");
+	// i2c_absent=N(addrs=AA,BB,...) — the capture-only probe map (what the
+	// boot asked for over I2C; all answered absent until a device is modeled)
+	char i2c[64];
+	{
+		int p = snprintf(i2c, sizeof(i2c), "%llu",
+		                 (unsigned long long)c->i2c_absent);
+		for (int i = 0; i < c->i2c_addr_count && p < (int)sizeof(i2c) - 5; i++)
+			p += snprintf(i2c + p, sizeof(i2c) - (size_t)p, "%s%02X%s",
+			              i ? "," : "(addrs=", c->i2c_addrs[i],
+			              i == c->i2c_addr_count - 1 ? ")" : "");
+	}
 	int n = snprintf(buf, buflen,
 	    "packets=%llu responses=%llu syncs=%llu bytes_in=%llu bytes_out=%llu "
 	    "adb=%llu adb_absent=%llu get_time=%llu set_time=%llu autopoll=%llu "
-	    "pram_rd=%llu pram_wr=%llu acked=%llu bad_param=%llu unknown=%s "
+	    "pram_rd=%llu pram_wr=%llu i2c=%llu i2c_absent=%s "
+	    "acked=%llu bad_param=%llu unknown=%s "
 	    "resets=%llu powerdowns=%llu overflows=%llu",
 	    (unsigned long long)c->packets, (unsigned long long)c->responses,
 	    (unsigned long long)c->syncs, (unsigned long long)c->bytes_in,
@@ -452,6 +509,7 @@ size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen)
 	    (unsigned long long)c->adb_absent, (unsigned long long)c->cmd_get_time,
 	    (unsigned long long)c->cmd_set_time, (unsigned long long)c->cmd_autopoll,
 	    (unsigned long long)c->cmd_pram_read, (unsigned long long)c->cmd_pram_write,
+	    (unsigned long long)c->cmd_i2c, i2c,
 	    (unsigned long long)c->cmd_acked, (unsigned long long)c->cmd_bad_param,
 	    unk, (unsigned long long)c->resets_latched,
 	    (unsigned long long)c->powerdowns_latched, (unsigned long long)c->in_overflows);

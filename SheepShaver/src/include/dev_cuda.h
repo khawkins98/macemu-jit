@@ -98,6 +98,9 @@
 #define CUDA_ERR_BAD_SIZE  3
 #define CUDA_ERR_BAD_PAR   4
 #define CUDA_ERR_BAD_ARGS  5
+// DingusPPC viacuda.h names the same value CUDA_ERR_I2C ("invalid I2C data or
+// no acknowledge") — identical on the wire, kept distinct for readability.
+#define CUDA_ERR_I2C       5
 
 // Pseudo commands (2nd byte of a PSEUDO packet; QEMU cuda.h constants)
 #define CUDA_CMD_AUTOPOLL          0x01
@@ -115,6 +118,17 @@
 #define CUDA_CMD_SET_DEVICE_LIST   0x19
 #define CUDA_CMD_GET_DEVICE_LIST   0x1A
 #define CUDA_CMD_SET_POWER_MESSAGES 0x21
+// I2C pseudo commands (DingusPPC viacuda.h; QEMU does NOT implement them):
+//   READ_WRITE_I2C: [01 22 addr data...], addr = (7-bit dev addr << 1) | RW
+//     (1 = read).
+//   COMB_FMT_I2C:   [01 25 dev_addr sub_addr dev_addr1 data...]; dev_addr and
+//     dev_addr1 must match in bits 7:1 (the live 9.0.1 boot issues this once
+//     per I2C probe cycle).
+// No I2C devices are modeled (M3b stop-rule) — every transaction answers
+// "Unsupported I2C device" (error 5, DingusPPC's start_transaction-failed
+// path); the probe map (i2c_addrs) records what the boot asked for.
+#define CUDA_CMD_READ_WRITE_I2C    0x22
+#define CUDA_CMD_COMB_FMT_I2C      0x25
 
 #define CUDA_PRAM_SIZE 256
 // MCU memory map (DingusPPC): PRAM window 0x100..0x1FF, Cuda FW ROM at 0xF00+.
@@ -175,6 +189,11 @@ struct CudaDevice {
 	uint64_t cmd_adb, adb_absent;
 	uint64_t cmd_get_time, cmd_set_time, cmd_autopoll;
 	uint64_t cmd_pram_read, cmd_pram_write;
+	uint64_t cmd_i2c;            // READ_WRITE_I2C transactions (addr byte present)
+	uint64_t i2c_absent;         // ... answered "no such device" (currently all)
+	// capture-only probe map (§2g telemetry): distinct raw I2C addr bytes seen
+	uint8_t  i2c_addrs[8];
+	int      i2c_addr_count;
 	uint64_t cmd_acked;          // other known commands acked (file server etc.)
 	uint64_t cmd_bad_param;      // known command, wrong arg count/value
 	uint64_t cmd_unknown;        // unknown pseudo command / packet type

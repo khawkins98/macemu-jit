@@ -409,6 +409,79 @@ int main()
 		CHECK(r.size() == 3 && r[0] == CUDA_PKT_ADB && r[1] == 0x02 && r[2] == 0x2F);
 		CudaBindADB(&cuda, mock_adb, 0);
 	}
+	// READ_WRITE_I2C (0x22) — M3b Wave-1 acceptance frontier (boot retried it
+	// 9108x as unknown).  Oracle: DingusPPC viacuda.cpp @ 92bb6d1
+	// i2c_simple_transaction — packet [01 22 addr data...], addr = (7-bit dev
+	// addr << 1) | RW (1 = read).  No I2C devices are modeled (stop-rule), so
+	// every transaction is "Unsupported I2C device" => error_response(
+	// CUDA_ERR_I2C = 5): reply [02 05 01 22].  (QEMU @ de5d8bfd does NOT
+	// implement 0x22 — it would frame error 2 "unknown command"; the DingusPPC
+	// framing is the one that names the real failure.)
+	{
+		(void)CudaTakePendingWarning(&cuda);
+		uint64_t unk_before = cuda.cmd_unknown;
+		// read probe at 7-bit addr 0x50 (SPD DIMM slot 0 on DingusPPC
+		// Yosemite): addr byte = 0x50<<1 | 1 = 0xA1
+		std::vector<uint8_t> r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_WRITE_I2C, 0xA1 });
+		CHECK(r.size() == 4);
+		CHECK(r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_I2C);
+		CHECK(r[2] == CUDA_PKT_PSEUDO && r[3] == CUDA_CMD_READ_WRITE_I2C);
+		CHECK(cuda.cmd_i2c == 1 && cuda.i2c_absent == 1);
+		CHECK(cuda.cmd_unknown == unk_before);    // implemented: NOT unknown
+		CHECK(CudaTakePendingWarning(&cuda) != 0);    // first-touch latch
+		// write form (RW bit 0) to another address: same absent framing
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_WRITE_I2C, 0x50, 0x12, 0x34 });
+		CHECK(r.size() == 4 && r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_I2C);
+		CHECK(cuda.cmd_i2c == 2 && cuda.i2c_absent == 2);
+		// runt (no addr byte): bad args (DingusPPC reads in_buf[2] blind; we
+		// validate — same wire code 5, distinguished by the counter)
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_WRITE_I2C });
+		CHECK(r.size() == 4 && r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_BAD_ARGS);
+		CHECK(cuda.cmd_i2c == 2);                 // not counted as an i2c txn
+		// capture-only telemetry: distinct raw addr bytes latched (probe map)
+		CHECK(cuda.i2c_addr_count == 2);
+		CHECK(cuda.i2c_addrs[0] == 0xA1 && cuda.i2c_addrs[1] == 0x50);
+		// repeat probe: no duplicate latch
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_READ_WRITE_I2C, 0xA1 });
+		CHECK(cuda.i2c_addr_count == 2 && cuda.cmd_i2c == 3);
+		// stats surface the i2c counters + the probe map
+		char ibuf[512];
+		CHECK(CudaFormatStats(&cuda, ibuf, sizeof(ibuf)) > 0);
+		CHECK(strstr(ibuf, "i2c=3 i2c_absent=3(addrs=A1,50)") != 0);
+	}
+
+	// COMB_FMT_I2C (0x25) — issued by the live boot once per I2C probe cycle
+	// (686x in the first post-0x22 acceptance boot).  Oracle: DingusPPC
+	// i2c_comb_transaction @ 92bb6d1 — packet [01 25 dev_addr sub_addr
+	// dev_addr1 data...]; dev_addr/dev_addr1 must match in bits 7:1 (else
+	// CUDA_ERR_I2C), then start_transaction fails for absent devices =>
+	// error_response(CUDA_ERR_I2C).  Reply [02 05 01 25].
+	{
+		uint64_t i2c_before = cuda.cmd_i2c, abs_before = cuda.i2c_absent;
+		uint64_t unk_before = cuda.cmd_unknown, bad_before = cuda.cmd_bad_param;
+		// combined read: write-addr 0x90, sub-addr 0x00, read-addr 0x91
+		std::vector<uint8_t> r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_COMB_FMT_I2C,
+		                                     0x90, 0x00, 0x91 });
+		CHECK(r.size() == 4);
+		CHECK(r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_I2C);
+		CHECK(r[2] == CUDA_PKT_PSEUDO && r[3] == CUDA_CMD_COMB_FMT_I2C);
+		CHECK(cuda.cmd_i2c == i2c_before + 1 && cuda.i2c_absent == abs_before + 1);
+		CHECK(cuda.cmd_unknown == unk_before);    // implemented: NOT unknown
+		// dev_addr mismatch (bits 7:1 differ): oracle errors BEFORE the bus
+		// lookup — same wire code, NOT an absent-device count
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_COMB_FMT_I2C, 0x90, 0x00, 0xA1 });
+		CHECK(r.size() == 4 && r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_I2C);
+		CHECK(cuda.i2c_absent == abs_before + 1);
+		CHECK(cuda.cmd_bad_param == bad_before + 1);
+		// runt (needs dev_addr, sub_addr, dev_addr1): bad args
+		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_COMB_FMT_I2C, 0x90 });
+		CHECK(r.size() == 4 && r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_BAD_ARGS);
+		// probe map latches the combined address too (raw dev_addr byte)
+		char ibuf[512];
+		CHECK(CudaFormatStats(&cuda, ibuf, sizeof(ibuf)) > 0);
+		CHECK(strstr(ibuf, "90") != 0);
+	}
+
 	// Stats formatter (telemetry house style)
 	{
 		char buf[512];

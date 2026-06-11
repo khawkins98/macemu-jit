@@ -823,7 +823,21 @@ bool PatchROM(void)
 		// Pool sizing: 4 records + the slot-15 loud stop (Task-0 Q-A pinned —
 		// observed concurrent depth 1; never guess bigger, residue R-1).
 		const char *mm_pool_env = getenv("SS_NW_MM_POOL");
-		const bool mm_pool = !(mm_pool_env && strcmp(mm_pool_env, "0") == 0);
+		bool mm_pool = !(mm_pool_env && strcmp(mm_pool_env, "0") == 0);
+		// Rung 2 Task V (plan rev 2 C11): SS_NW_MM_SWITCH implies the pool —
+		// the switch's whole point is that FE01 allocates a save record and the
+		// NK switches contexts; switch-without-pool would park the first FE01
+		// at the slot-15 exhaust stop by construction.  A forced SS_NW_MM_POOL=0
+		// alongside SS_NW_MM_SWITCH=1 is a MISCONFIGURATION: log loudly and
+		// re-enable the pool (the switch wins; opt-out A/B of the pool is only
+		// meaningful with the switch off).
+		const bool mm_switch = MachineEnvFlag("SS_NW_MM_SWITCH");
+		if (mm_switch && !mm_pool) {
+			fprintf(stderr, "[NW-TRAMP] V: MISCONFIG — SS_NW_MM_SWITCH=1 with "
+			        "SS_NW_MM_POOL=0 (switch implies pool, plan rev 2 C11); "
+			        "ignoring the pool opt-out and provisioning the pool\n");
+			mm_pool = true;
+		}
 		if (mm_pool) {
 			// (a) Idempotent constant re-asserts — SAFE on every entry
 			//     (cold or warm): base pointers + existence bitmap never
@@ -849,6 +863,59 @@ bool PatchROM(void)
 			tp[idx++] = htonl(0x38000000u);  // li   r0, 0
 			tp[idx++] = htonl(0x901C00ECu);  // stw  r0, 0xEC(r28)    in-use bitmap (COLD ARM ONLY)
 		}
+		// Rung 2 Task V (SS_NW_MM_SWITCH, default OFF until Task Y): the two
+		// KDP seeds that break the FE01 retry spin — Q-C PINNED
+		// (M6A-ONGOING-ENTRY-DESIGN.md "Rung 2 contracts" → Q-C).  The spin's
+		// pivot is the NK switch-to-context service 0x503143a0 (reached via
+		// [KDP+0x5f4] from the slot-1 stub):
+		//   (1) `mtcrf 0x3f,r7; bnel cr2,…` classifies the call from the
+		//       stub-composed [KDP+0x660] flags word; seeded 0, cr2eq==0 ⇒
+		//       every slot-1 call bounces "not from emulator" having done
+		//       nothing ⇒ command byte stays 0 ⇒ FE07 EQ ⇒ rte ⇒ retry.
+		//       Seed: set bit 0x00200000 (= cr2eq under mtcrf 0x3f; the
+		//       stub's rlwimi chain only composes bits 0x80000000/0x20, so
+		//       the bit passes straight through into cr2).  OR, not store —
+		//       preserve whatever else the NK/stub family derives.
+		//   (2) the MRU context-cache lookup ([KDP+0x340/348/350/358] keys,
+		//       paired ctx ptrs at +0x344/34c/354/35c) must accept the
+		//       requested context ID r3=0x68fff400 (the MMCB; the service
+		//       compares r8 = r3 & ~0x3F, and 0x68fff400 is already
+		//       64-aligned).  Live the cache is NK-init poison (-1/0 ×4
+		//       pairs), and the slow path's page-table validation
+		//       (bl 0x503154b8) is unverified on the flat model (residue
+		//       R-6) — so pre-seed MRU pair 0: key [KDP+0x340]=0x68fff400,
+		//       ctx [KDP+0x344]=0x68fff400 (the natural pair value is the
+		//       MMCB itself; the hit path consumes it as
+		//       [pair+0x5c]:=[KDP+0x648], [KDP-0x14]:=pair → NK SAVE
+		//       0x50312b0c → scheduler resumes the MixedMode ctx at
+		//       [MMCB+0xfc]=0x500ebc20, the ROM's own native glue that
+		//       calls the TVector 0x500cef8c).
+		// PLACEMENT (survival rationale): both seeds are KDP-PAGE state.  NK
+		// cold-init wipes/poisons the KDP page AFTER init_emul_ppc (the
+		// [KDP+0xfd0] re-assert precedent above; the MRU poison was probed
+		// live DURING the spin, i.e. post-trampoline of an unseeded run) —
+		// glue-time seeds would not survive.  The trampoline runs at table[0]
+		// dispatch, after NK cold-init, so stores here stick; nothing on the
+		// FE01 path re-initializes either word (the slow path only ADDS MRU
+		// entries).  Falsifiable live; one-iteration rule applies.
+		// FE07 needs NO implementation (plan rev 2 P8 satisfied by Q-C):
+		// its `bne` falls through when the completion path writes a nonzero
+		// command byte — the DR side is complete.
+		// MSR: NO new MSR writes (Q-E verdict — the MixedMode excursion's MSR
+		// is per-context, carried by the NK switch's ctx SRR1 slot).
+		// Budget: +9 words; pool+switch maximal layout = 46 insns ending
+		// ROM+0x429bf8, still below the 0x429c00 stop stubs.
+		if (mm_switch) {
+			tp[idx++] = htonl(0x3F8068FFu);  // lis  r28, 0x68ff
+			tp[idx++] = htonl(0x639CE000u);  // ori  r28, r28, 0xe000 → r28=KDP (0x68ffe000)
+			tp[idx++] = htonl(0x801C0660u);  // lwz  r0, 0x660(r28)
+			tp[idx++] = htonl(0x64000020u);  // oris r0, r0, 0x0020   set "from emulator" bit 0x00200000
+			tp[idx++] = htonl(0x901C0660u);  // stw  r0, 0x660(r28)   [KDP+0x660] flags word
+			tp[idx++] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
+			tp[idx++] = htonl(0x6000F400u);  // ori  r0, r0, 0xf400   → r0=0x68fff400 (MMCB)
+			tp[idx++] = htonl(0x901C0340u);  // stw  r0, 0x340(r28)   MRU pair-0 key = MMCB id
+			tp[idx++] = htonl(0x901C0344u);  // stw  r0, 0x344(r28)   MRU pair-0 ctx ptr = MMCB
+		}
 		tp[idx] = htonl(0x3B800000u);  // li   r28, 0            (restore trampoline invariant)
 
 		// M6a Wave 1, UserModeMSR transition (memo §5.2; plan rev 2 findings 1+5).
@@ -871,8 +938,21 @@ bool PatchROM(void)
 		// save/restore plumbing; Boot A (off) = clean stall capture, Boot B (on) =
 		// rung-2 recon.  When OFF the trampoline is byte-identical to the
 		// no-MSR-write layout (37 insns with the default pool, 27 with
-		// SS_NW_MM_POOL=0; branch slot tracks b_idx).
-		const bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
+		// SS_NW_MM_POOL=0, 46 with pool+switch; branch slot tracks b_idx).
+		//
+		// Rung 2 Task V resolution (Q-E verdict — QUARANTINE): the MixedMode
+		// switch needs no trampoline-side MSR write (per-context MSR via the
+		// NK switch), SS_M6A_USER_MSR remains a known-broken diagnostic
+		// (zero-page slide, residue R-2), and combining it with the switch
+		// would also overrun the 0x429c00 word budget (49 > 48).  With
+		// SS_NW_MM_SWITCH=1 the user-msr block is therefore DISABLED, loudly.
+		bool user_msr = MachineEnvFlag("SS_M6A_USER_MSR");
+		if (mm_switch && user_msr) {
+			fprintf(stderr, "[NW-TRAMP] V: SS_M6A_USER_MSR=1 ignored under "
+			        "SS_NW_MM_SWITCH=1 (Q-E verdict: per-context MSR via the NK "
+			        "switch; user-msr stays quarantined known-broken diagnostic)\n");
+			user_msr = false;
+		}
 		uint32 b_idx = idx + 1;
 		if (user_msr) {
 			tp[b_idx++] = htonl(0x3C000000u);  // lis  r0, 0             r1-independent immediate load
@@ -888,8 +968,9 @@ bool PatchROM(void)
 		// M6a Wave 2 item #2 (M6A-WAVE2-SHIM-RECON.md §2 quick-win): the 68k
 		// "diagnosable stop" stubs the vectors above point at — one `bra.s *`
 		// (0x60FE) self-loop per vector, 0x10 apart in the same mirror zero run,
-		// safely past the trampoline code (ends ≤ ROM+0x429be0 (pool+msr
-		// maximal layout)):
+		// safely past the trampoline code (ends ≤ ROM+0x429bf8 (pool+switch
+		// maximal layout; pool+msr was 0x429be0 — msr and switch are mutually
+		// exclusive, see the Task-V quarantine above)):
 		//   0x50429c00  illegal-instruction stop (vector offset 0x10)
 		//   0x50429c10  A-line stop              (vector offset 0x28)
 		//   0x50429c20  F-line stop              (vector offset 0x2C)
@@ -1001,9 +1082,13 @@ bool PatchROM(void)
 		        tramp_offset, (unsigned)(b_idx + 1));
 		fprintf(stderr, "[NW-TRAMP] fixup: r31=0x68fff000 r30=0x50460000 "
 		        "r29=0x50480000 guest[4]=0x5000002a guest[0]=0x00100000 "
-		        "user-msr=%s mm-pool=%s\n", user_msr ? "ON (SS_M6A_USER_MSR)" : "off",
+		        "user-msr=%s mm-pool=%s mm-switch=%s\n",
+		        user_msr ? "ON (SS_M6A_USER_MSR)" : "off",
 		        mm_pool ? "ON (default; ECB+0xE0/E4=0x68ff5800 E8=0xF0000000)"
-		                : "OFF (SS_NW_MM_POOL=0 opt-out)");
+		                : "OFF (SS_NW_MM_POOL=0 opt-out)",
+		        mm_switch ? "ON (SS_NW_MM_SWITCH; [KDP+0x660]|=0x00200000, "
+		                    "MRU[0x340/0x344]=0x68fff400)"
+		                  : "off (default until Task Y)");
 		fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
 		        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
 		        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "

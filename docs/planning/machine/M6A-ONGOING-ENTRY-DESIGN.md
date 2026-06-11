@@ -686,3 +686,46 @@ Notes:
   before write) → `b 0x50429cf0`; parked stub `b *` at mirror 0x50429cf0 (site
   verified zero before write). PatchROM-time only (rev 2 C4); both writes
   verify-zero-first (rev 2 C6).
+
+### Task V results (2026-06-11) — Q-C/Q-D CONFIRMED LIVE, zero falsifications
+
+- **Implementation = the two pinned Q-C seeds, nothing else.** Env-gated
+  `SS_NW_MM_SWITCH=1` (default OFF until Task Y), a 9-word trampoline extension
+  (rom_patches.cpp, between the pool block and the `li r28,0` restore):
+  `[KDP+0x660] |= 0x00200000` (OR, not store — the "from emulator" cr2eq bit) and
+  MRU pair-0 seed `[KDP+0x340]=0x68fff400, [KDP+0x344]=0x68fff400` (key + ctx ptr
+  = the MMCB; the slow-path page-table validation, residue R-6, stays bypassed).
+  **Placement rationale:** both are KDP-page state — NK cold-init wipes/poisons the
+  KDP page after glue-time (the [KDP+0xfd0] precedent; the MRU poison was probed live
+  post-trampoline on an unseeded run), so the seeds are trampoline-resident guest
+  stores (run at table[0] dispatch, after NK init). Layout: pool+switch maximal =
+  46 insns ending ROM+0x429bf8, under the 0x429c00 stop stubs (msr+switch mutually
+  exclusive by the quarantine below).
+- **No FE07 code, no MSR write, no save-record writes** — confirming the Q-C/Q-E
+  scoping: the DR's FE01 service + the staged NK switch/save/scheduler + the ROM's
+  native glue at 0x500ebc20 did everything once classified "from emulator" and the
+  MRU lookup hit. The NK hit path (`[pair+0x5c]:=[KDP+0x648]; [KDP-0x14]:=pair;
+  b 0x50312b0c`) behaved exactly as pinned.
+- **Switch⇒pool (rev 2 C11):** SS_NW_MM_POOL=0 forced alongside SS_NW_MM_SWITCH=1 is
+  treated as misconfiguration — loud `[NW-TRAMP] V: MISCONFIG` line, pool re-enabled
+  (switch wins). SS_M6A_USER_MSR=1 under switch-on is DISABLED loudly (Q-E quarantine
+  + word budget 49>48); R-2 unchanged.
+- **Probe gate (PASS):** `SS_PROBE_PC=0x500cef8c` visits 1/10/100+ —
+  CTR=0x500cef8c (exact ✓), r2=0x10024754 (exact ✓), r1=0x103ffe00 (64-byte aligned,
+  < 0x103ffe5c, `[r1]`=0x103ffe5d = back-chain tagged `|1` ✓), LR=0x500ecac0
+  (0x500exxxx glue class ✓), r30=0x10024de8 (RD ✓); also r29=0x10024df4
+  (routineRecord), r31=0x68fff740 (save block), r26=0x000000E1 (procInfo) — the whole
+  Q-B/Q-D register story live-confirmed.
+- **Diagnostic (recorded, not gates):** the FE01 retry spin is **GONE** — comp
+  unfroze 3573→3600, jNK collapsed from ~116M/20s (bounce spin) to ~16K/50s, jDR
+  carries the load. **New frontier:** TVector excursions run repeatedly (≥100 visits);
+  the 68k advances deep into ROM hardware-init code and parks in a poll loop
+  (r24 ring tail cycling 0x500004e4..0x5000057c region) with an MMIO storm —
+  SCC reads ~7.6M/10s (IER-dominated), VIA ORB ~450K/10s — and CUDA traffic
+  (packets=8905, i2c=6165 ALL to absent devices: addrs 41,4F,B5,91,80,C1,28,71,9D;
+  pram_rd=2055). exc=0/1/0; [ALARM]/[STALL] watchdog fires at 15s (pre-WindowManager,
+  30M blocks/s spin). Reading: the MixedMode wall is down; the next wall is
+  device-model surface (I2C/PMU-adjacent probing — unmodeled targets), Task W/Y
+  territory plus the named M-class frontier ladder.
+- **Switch-off default boot:** baseline unchanged (0 TVector visits, comp frozen
+  3573, the FE01↔NK spin signature) — seeds fully inert when gated off.

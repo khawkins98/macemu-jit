@@ -194,20 +194,39 @@ before its residue status is decided.
   (none of the new stops nor slot-15 in the r24 ring). Commit.
 
 ### Task V: FE01 switch completion — enter the TVector (+ FE07 ownership)
-- [ ] Implement the 68k→PPC switch per Q-A/Q-B/Q-D/Q-E: complete the save-record contents
+- [x] Implement the 68k→PPC switch per Q-A/Q-B/Q-D/Q-E: complete the save-record contents
   the DR doesn't write itself, establish the MixedMode register state, perform the MSR
   transition at the pinned site (riding execute_mtmsr's EE-edge re-raise — verified
   contract, ppc-execute.cpp:1321–1347), branch to the TVector. Env-gated
-  `SS_NW_MM_SWITCH=1`, default OFF until Task Y.
-- [ ] **(rev 2 P8) FE07 is THIS task's scope**: whatever the FE07 service must return for
+  `SS_NW_MM_SWITCH=1`, default OFF until Task Y. *(Per the pinned Q-C the entire
+  implementation reduced to TWO trampoline-resident KDP seeds — `[KDP+0x660]|=0x00200000`
+  and MRU pair-0 `[KDP+0x340/0x344]=0x68fff400` — the record contents/register state/
+  TVector call are all performed by the DR's FE01 service + the staged NK's own
+  switch/save/scheduler + the ROM's native glue 0x500ebc20. No MSR write (Q-E).
+  Switch⇒pool misconfig handled: SS_NW_MM_POOL=0 + switch ⇒ loud log + pool forced on.)*
+- [x] **(rev 2 P8) FE07 is THIS task's scope**: whatever the FE07 service must return for
   the retry stub's `bne` to fall through, per Q-C — if Q-C named an out-of-scope NK
-  surface, the stop-rule already fired in Task 0.
-- [ ] Resolve the SS_M6A_USER_MSR interaction per Q-E's verdict-or-fallback (subsume / fix
-  / quarantine — documented either way).
-- [ ] Probe sub-contract (PASS/FAIL): `SS_PROBE_PC=0x500cef8c` shows ≥1 visit with the
+  surface, the stop-rule already fired in Task 0. *(Q-C pinned: FE07 needs NO
+  implementation — the NK switch path writes the nonzero command byte; verified live:
+  the retry spin is GONE under switch-on. P8 satisfied with zero new FE07 code.)*
+- [x] Resolve the SS_M6A_USER_MSR interaction per Q-E's verdict-or-fallback (subsume / fix
+  / quarantine — documented either way). *(QUARANTINED: switch-on disables user_msr with a
+  loud [NW-TRAMP] V: line — Q-E verdict (per-context MSR via NK switch) + the 0x429c00
+  word-budget overrun (49>48) both forbid combining. Stays default-off known-broken
+  diagnostic; residue R-2 unchanged.)*
+- [x] Probe sub-contract (PASS/FAIL): `SS_PROBE_PC=0x500cef8c` shows ≥1 visit with the
   register dump conforming to **Q-D's expected-register table** (rev 2 P7 — "sane"
-  deleted). What the TVector code DOES afterward is diagnostic.
-- [ ] Gates: full gates + the probe sub-contract. Commit.
+  deleted). What the TVector code DOES afterward is diagnostic. *(PASS, zero
+  falsifications: visits 1/10/100+; CTR=0x500cef8c exact, r2=0x10024754 exact,
+  r1=0x103ffe00 (64-aligned, <0x103ffe5c, [r1]=0x103ffe5d back-chain tagged |1),
+  LR=0x500ecac0 (glue region), r30=0x10024de8 (RD). Diagnostic: FE01 retry spin GONE
+  (comp unfroze 3573→3600, jNK collapses 116M→~16K); new frontier = 68k hardware-init
+  poll loop (r24 ring in 0x500004e4..0x5000057c), SCC IER/VIA ORB MMIO storm
+  (~7.6M reads/10s), CUDA i2c probes to absent devices (addrs 41,4F,B5,91,80,C1,28,71,9D).
+  Switch-off baseline boot byte-identical to pre-V behavior (0 TVector visits, comp 3573).)*
+- [x] Gates: full gates + the probe sub-contract. Commit. *(build-ss OK; batch + plain
+  test-jit 353/353 score=100; machine tests 11/11 ALL PASS; e2e-test 122 passed;
+  paravirtual make e2e PASS clean lifecycle.)*
 
 ### Task W: FE02 switch-back
 - [ ] Per Q-F: restore the 68k context from the record, clear the in-use bit, resume the

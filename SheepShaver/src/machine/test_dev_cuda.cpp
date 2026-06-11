@@ -476,6 +476,13 @@ int main()
 		// runt (needs dev_addr, sub_addr, dev_addr1): bad args
 		r = roundtrip({ CUDA_PKT_PSEUDO, CUDA_CMD_COMB_FMT_I2C, 0x90 });
 		CHECK(r.size() == 4 && r[0] == CUDA_PKT_ERROR && r[1] == CUDA_ERR_BAD_ARGS);
+		// counter pin (4e544aff review minor 1): BAD_ARGS == ERR_I2C == 5 on
+		// the wire, so deleting the runt guard would route through the
+		// stale-in_buf mismatch branch with IDENTICAL bytes — only cmd_i2c
+		// can tell (guard rejects BEFORE counting: +2; deleted guard: +3).
+		// bad_param: +1 mismatch above, +1 the runt's bad_args path.
+		CHECK(cuda.cmd_i2c == i2c_before + 2);
+		CHECK(cuda.cmd_bad_param == bad_before + 2);
 		// probe map latches the combined address too (raw dev_addr byte)
 		char ibuf[512];
 		CHECK(CudaFormatStats(&cuda, ibuf, sizeof(ibuf)) > 0);

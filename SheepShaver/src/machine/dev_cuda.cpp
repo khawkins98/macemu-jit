@@ -315,6 +315,9 @@ static void pseudo_command(CudaDevice *c, uint8_t cmd, const uint8_t *a, int n)
 		// the bus lookup; otherwise the absent-device path as above.  The
 		// live 9.0.1 boot issues this once per I2C probe cycle (686x in the
 		// first post-0x22 acceptance boot) — boot-demanded, plan rev-2 m2.
+		// Deliberate divergence (4e544aff review): the oracle lets a runt 0x25
+		// fall through its n>=5 guard to a plain ACK header; we reject as
+		// BAD_ARGS (same wire error byte 5, saner semantics).
 		if (n < 3) goto bad_args;
 		c->cmd_i2c++;
 		i2c_latch_addr(c, a[0]);

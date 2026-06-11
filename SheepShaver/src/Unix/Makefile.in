@@ -300,3 +300,13 @@ g_resource.cpp: $(GRESOURCE_SRCS) $(GRESOURCE_XML)
 
 #-------------------------------------------------------------------------
 # DO NOT DELETE THIS LINE -- make depend depends on it.
+
+# Machine-layer header dependencies (M3b: nothing runs makedepend by default,
+# and these headers carry struct layouts whose offsets are baked into every
+# includer - a stale .o after a header change reads shifted garbage; see the
+# 4e544aff review / the powerdowns=6114308096 incident).
+$(OBJ_DIR)/main_unix.o $(OBJ_DIR)/sheepshaver_glue.o $(OBJ_DIR)/dev_via6522.o \
+$(OBJ_DIR)/dev_cuda.o $(OBJ_DIR)/adb_stub.o: \
+	../include/dev_cuda.h ../include/dev_via6522.h ../include/adb_stub.h \
+	../include/dev_scc8530.h ../include/mmio_bus.h ../include/event_sched.h \
+	../include/virt_clock.h ../include/exc_core.h

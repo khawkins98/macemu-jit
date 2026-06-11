@@ -189,11 +189,6 @@ struct CudaDevice {
 	uint64_t cmd_adb, adb_absent;
 	uint64_t cmd_get_time, cmd_set_time, cmd_autopoll;
 	uint64_t cmd_pram_read, cmd_pram_write;
-	uint64_t cmd_i2c;            // READ_WRITE_I2C transactions (addr byte present)
-	uint64_t i2c_absent;         // ... answered "no such device" (currently all)
-	// capture-only probe map (§2g telemetry): distinct raw I2C addr bytes seen
-	uint8_t  i2c_addrs[8];
-	int      i2c_addr_count;
 	uint64_t cmd_acked;          // other known commands acked (file server etc.)
 	uint64_t cmd_bad_param;      // known command, wrong arg count/value
 	uint64_t cmd_unknown;        // unknown pseudo command / packet type
@@ -204,6 +199,17 @@ struct CudaDevice {
 	// one pending at a time, taking it re-arms — VIATakePendingWarning pattern)
 	uint8_t  warned;             // any warning ever latched (telemetry)
 	const char *warn_what;       // static string, pending until taken
+	// --- I2C telemetry (APPENDED LAST per the struct-layout rule: dev_cuda.h
+	// is included by main_unix/sheepshaver_glue/dev_via6522 and the Unix build
+	// has no header dep tracking — mid-struct inserts shift offsets in stale
+	// .o files; see the 4e544aff review + the powerdowns=6114308096 incident) ---
+	uint64_t cmd_i2c;            // READ_WRITE_I2C/COMB_FMT_I2C transactions
+	uint64_t i2c_absent;         // ... answered "no such device" (currently all)
+	// capture-only probe map (§2g telemetry): distinct raw I2C addr bytes seen.
+	// Saturates at 16 — a sweep wider than that drops the tail (the stats line
+	// shows what fit, not necessarily every probed address).
+	uint8_t  i2c_addrs[16];
+	int      i2c_addr_count;
 };
 
 extern void CudaReset(CudaDevice *c,

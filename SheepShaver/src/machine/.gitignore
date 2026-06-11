@@ -16,3 +16,7 @@ test_event_sched
 test_event_sched.dSYM/
 test_exc_core
 test_exc_core.dSYM/
+test_dev_cuda
+test_dev_cuda.dSYM/
+test_adb_stub
+test_adb_stub.dSYM/

@@ -1387,3 +1387,163 @@ trigger 2; not staged beyond capture.
 **Gates:** build-ss clean; batch + plain test-jit 353/353 score=100; machine
 suite ALL PASS (test_exc_core grew 25 → 37 checks); e2e-test 122 passed;
 paravirtual e2e — see commit record.
+
+### Task B results — selector-0x31 round trip conformance + the CORRECTED return predicate (2026-06-11)
+
+> Evidence task for `docs/superpowers/plans/2026-06-11-fe1f-service-surface.md`
+> Task B (Rev 2 P-M2/P-M5 + Rev 3 item 4). Doc-only (no source edits — a Task-A
+> review ran in parallel). Boots: **3 slot-protocol env-on boots** (within the
+> ≤3 + ≤1-diagnostic budget; the frontier capture rode the evidence boots):
+> `fe1f-taskB-roundtrip` (/tmp/ss-slots/slot0/runs/20260611-191401.62442),
+> `fe1f-taskB-dserr-diag` (…/20260611-192238.63154),
+> `fe1f-taskB-flineloc` (…/20260611-192323.63265) — all 60 s, all ending in the
+> known frontier SIGSEGV (the capture; see instrument notes). Static RE against
+> the re-verified dumps (raw md5 7b1378be…, patched e432df64… — both re-checked
+> this session).
+
+**THE RETURN-PREDICATE CORRECTION (dated refinement entry — one-iteration
+discipline applied; judged a PREDICATE REFINEMENT, not a falsification — see
+judgment below). Two distinct mis-pins found and corrected:**
+
+1. **The slot-address recipe was off by 4.** The e3e0 routine's slot
+   computation (file 0xe428..0xe430, raw==patched, capstone-M68K):
+   `move.l $4(a2),d0 / subq.l #1,d0 / lsl.l #2,d0 / lea.l $4(a0,d0.l),a3` —
+   the `lea` carries a **+4 displacement** Q-F3's recipe missed. Corrected:
+   **slot = array_base + 4·index** (not base + 4·(index−1)). For the live
+   id=2 → index 7 site: slot = 0x100037c0 + 0x1c = **0x100037dc**, NOT
+   0x100037d8. **Task A's watch (and its "fill → churn" lifecycle reading)
+   was on the wrong word**: the 0x100037d8 traffic (50049574/500497ae/
+   5004960a/0 churn) is unrelated neighbor-slot traffic from much later 68k
+   code (r24≈0x5003366c/0x5004a1ce/0x50038172). R-F2 is also re-read: under
+   the corrected recipe index-1's slot is base+4, so `[0x100037c0]=2` is the
+   array's word 0 (header/count-class), not a pre-filled slot.
+2. **r4 (→A0) is the kernel-object ID HANDLE, not the EVNT pointer.** Q-F2's
+   static decode misread the service tail: at 0x5031d270 `mr r4,r8` copies
+   r8 = **the RETURN of the registration call `bl 0x503251b0`** (NK internal
+   ABI returns in r8), not the object pointer (which lives in r31 and stays
+   kernel-internal: stored into the directory entry +4 at 0x503252a0, and the
+   handle is written back at object+0 via `stw r8,0(r31)` at 0x5031d264).
+   The registration tail (0x503252d4/0x503252f0) encodes the handle as
+   `rlwimi r8,r19,16,0,15` → **handle = (directory-index << 16) | generation**.
+   Live r4 = **0x00120001 = directory slot 0x12, generation 1** — exactly the
+   sc surface's 0x00050001-class ID-directory precedent.
+
+**Corrected return predicate (pinned):** at the post-blrl return (body
+0x5046db6c): r3(→D0) = 0 (noErr status, stored at 0xc(a6)); r4(→A0) =
+**nonzero NK kernel-object ID handle, (index<<16)|generation class**; the f240
+tail stores A0 through the 8(a6) slot pointer → **[base+4·index] := handle**.
+The T-C2 deletion of the "d0==0 skip-arm" gate stands (null-ARG guard only).
+
+**Refinement-vs-falsification judgment:** REFINEMENT. The pinned MECHANISM —
+callout returns, r3=0 noErr, nonzero r4 success token stored through the slot
+pointer, e3e0 proceeds to the $36 follow-up — held exactly as pinned. What was
+wrong were two static misreads (a missed lea displacement; `mr r4,r8` traced to
+the wrong r8 definition), both corrected statically and confirmed live in the
+SAME evidence boot — no re-pin boot consumed, no second falsification, no
+escalation.
+
+**Round-trip sub-contract scoreboard (env-on `SS_NW_FE1F_SURFACE=1`, fresh
+evidence, boot 20260611-191401):**
+
+- **(a) The callout RETURNS — PASS.** `[PROBE 0x5046db6c visit=1] r3=0x00000000
+  r4=0x00120001 r5=0x103ffc74 r6=0x00000050 r24=0x5000f248 [0x100037dc]=0x00000000`
+  — ≥1 unmarshal visit; slot still empty at the return (the store is the 68k
+  tail's, post-resume — sequencing as decoded). Meaningful under H1 (P-M5):
+  the Task-0 park (zero db6c visits) is GONE. (Post-unmarshal D1/A1 receive
+  clobber-class r5/r6 — recorded, harmless: the 68k tail does not consume them.)
+- **(b) Callout-entry conformance re-asserted (baseline-true, annotated) —
+  PASS.** `[PROBE 0x5046db44 visit=1] r5=0x5046e8e0 r8=0x00000031 r9=0x00000002
+  r16=0x100037c0 r17=0x103ffc74 r24=0x5000f248 [0x5046e8e0]=0x0fff0008` — exact
+  Q-F3 table match + the restored slot-8 placeholder word (Task A's change
+  observable re-confirmed).
+- **(c) Result conformance per the CORRECTED predicate — PASS.** r3=0/
+  r4=0x00120001 at the return (above), and the ground-truth store:
+  `[WATCH] pc=50491440 addr=100037dc value=00120001 (was 00000000 record
+  #3391079 … r24=5000f258)` — the corrected slot receives EXACTLY r4's handle,
+  written at 68k r24=0x5000f258 = the f240 stub tail (`movea.l d0,a1;
+  move.l a0,(a1)` at 0xf252..f254). Store-through executed; skip-arm vacuous
+  per T-C2.
+- **(d) The 68k advances — PASS.** The trace ring (full 68k register file per
+  record; 262,144-record window of 4,480,459 total) shows r24 monotone past the
+  f24x family — f258 → e44x → … → the new frontier tail
+  `50004ac0 → 50004ac6 → 50004aca → 50004ace → 50004ad0` (crash) — vs the park
+  baseline tail `… 5000f242 5000f246 5000f248` at 839,284. Frontier signature
+  re-confirmed byte-identical class to Task A's capture (same crash registers,
+  ea=0x40000fffff42, PPC pc=0x504661a0; ring total 4,480,459 vs 4,480,458 —
+  1-record jitter class). *Instrument note:* the r24-ring atexit does NOT fire
+  on the SIGSEGV path (crash handler traps out before atexit) — the JIT trace
+  ring (which carries r24 + D/A registers per record) is the crashing-boot
+  substitute and is strictly richer.
+- **(e) The ExpandMem slot fills, corrected class — PASS.** [0x100037dc] :=
+  0x00120001 (the handle class) at record #3391079 and **REMAINS until the
+  crash** (no later WATCH events on the corrected word). Lifecycle
+  characterized: pre-init neighbor churn (small non-handle values, writes from
+  r24≈0x5003366c region) → **whole-array zeroing** at r24=0x5003817x
+  (pc=50491600, records #1101915-16 — both watched words zeroed by the same
+  loop = the ExpandMem array init) → 0 → the FE1F fill → stable. Task A's
+  "fill → consume → refill" churn reading is RETIRED (wrong word + pre-init
+  traffic mis-sequenced).
+
+**Invariant carry-over — ALL PASS (same boot):** cold-once (trampoline
+guest[0]/[4] write pair exactly once, WATCH record #4667, pc=50429b40; the only
+other guest[0]/[4] writers are the pre-trampoline NK low-mem init writes
+(records #213/215, pc=0x503109xx — known WAVE0 class) and the guest's own legit
+vector install (pc=50490e00, r24=0x500389fe/0x50038a02 — the W-boot-3 class));
+delivered-DEC=0 (`delivered_dec=0 deferred_ee=1 deferred_depth=0
+deferred_native=0` — identical class to baseline); slot-15 unvisited
+(delivered_program=2, both slot 8; no slot-15 line); rung-2 round trip intact
+(`[PROBE 0x500cef8c visit=1] r25=0x5000fcf2` — the TVector excursion runs);
+sc surface: **delivered_sc=13** (was 5) — selectors #1-5 unchanged
+(0x3f/0x19/0x14/0x19/0xf, same r1/lr rows), **#10 = 0x50** [PROBE✓ visit=10 at
+0x50314ac0]. *Instrument cap (recorded honestly):* the SC print caps at 5 and
+no per-selector counter exists, so selectors #6-9/#11-13 are unenumerated this
+task — a print-cap/counter bump is a source change deferred (Task C/Z
+candidate). Selector 0x50's NK table entry → 0x50321040 [STATIC].
+
+**Diagnostic map (recorded, not gates):** TWO FE1F callouts fire (selector
+$31 then $36, both via slot 8; #2 at r1=103ffa34 = the f260 sibling as
+predicted). Selector $36's service is STAGED: 0x5031d6b4 [STATIC] — handle
+lookup via 0x50325380 (r3=the $31-returned handle), type-id==9 ('EVNT')
+validation, an index-argument (r4=D1, bounds-checked vs 8) object operation —
+i.e., an EVNT-object op family, not an unimplemented selector. The third
+sibling stub at file 0xf280 (selector **$34**, args a1=8(a6)/a0=$10(a6),
+store-through + status like f240) is the family's next member [STATIC].
+
+**NEW FRONTIER (P-M4 artifact, named — stop-rule trigger 2: captured,
+stopped):** the boot completes the slot fill, then ~600 trace records later a
+**68k System Error ID 10 (line-1111 / F-line class)** is raised:
+`[WATCH] addr=af0 value=000a0000` (DSErrCode := 0x000A, written at
+r24=0x50004a14 = the SysError handler's `move.w d0,$af0`, record #3391719) with
+**saved faulting PC [$C70] := 0x5000e448** (record #3391708) — INSIDE the e3e0
+routine, at the $36-stub argument-push sequence (0xe444..0xe44c) right after
+the successful fill. The saved PC is convention-skewed (0xe448 holds
+`move.l $4(a2),-(a7)`, not an F-line word) — consistent with a synthetic/
+DR-raised 68k exception (the T-M3 FE10..FE1E raise-body class) rather than a
+literal F-line fetch; **pinning the raise site is the next milestone's recon
+question** (suspect: the selector-$36 callout's return/continuation, NOT the
+$31 round trip, which is clean end-to-end). The crash mechanics, fully
+decoded [STATIC file 0x49a0..0x4b00, raw==patched + trace-ring tail]: SysError
+entry 0x500049e0 (regs → $0C30, SR → $C74, popped PC → $C70, vector-stub
+`bsr.b` ladder at 0x49b0..0x49c8 encodes the error ID), wait-spin on
+`bset #7,$C2C / beq` (the ~1.09 M-record gap between raise and crash), then the
+**Deep-Shit-Alert draw setup** at 0x50004a9e: sr:=$2500, $A58/$A5A swap, fake
+A5 world := SP−4, `suba.w #$15a,a7` (QuickDraw frame), `pea -4(a5)` +
+`_InitGraf` ($A86E at 0x4ad6). Entered with A7=0x100000a0 (a RAM-bottom
+fallback stack), the suba takes A7 to 0x0fffff46 and the pea writes 0x0fffff42
+< RAMBase → host SIGSEGV at the DR push site 0x504661a0. Live registers at
+raise/crash: d0=0x0a (the ID), d6=0x40 ($AF0's prior content — an earlier
+DSErrCode-word residue, unpinned), d7=0x36 ([$2BA] nonzero, selector-$36-hued
+residue). **Name: the DSAT stack-underflow wall — a post-CFM-prep system error
+(ID 10) whose alert machinery itself underflows RAMBase.** Not staged beyond
+capture.
+
+**Instrument notes (carried):** SS_JIT_WATCH_ADDR aligns watch addresses down
+to 4 (e.g. `2ba` watches the word at 0x2b8); the watch detects word-size guest
+writes via the 32-bit word change (DSErrCode at $AF0 appears as
+`value=000a0000`); r24-ring atexit skipped on SIGSEGV (trace ring substitutes);
+boots are record-for-record deterministic across runs (watch record numbers
+#3391079/#3391690/#3391719 line up across the three boots).
+
+**Gates:** doc-only task (no source edits — stated reason: Task-A review ran
+in parallel on the same tree; the smoke-set exemption per the plan's
+evidence-only clause). All sub-contract evidence above is fresh this session.

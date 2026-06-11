@@ -283,31 +283,53 @@ commits allowed (full gates).
 
 ### Task B: the selector-0x31 round trip (conformance per Q-F3/Q-F4)
 
-- [ ] **Round-trip sub-contract (PASS/FAIL), env-on:** (a) the callout RETURNS —
+> **DONE 2026-06-11 — all sub-contracts PASS; the return predicate REFINED
+> (judged refinement, not falsification).** Results:
+> `M6A-ONGOING-ENTRY-DESIGN.md` "Task B results". Two Q-F3 mis-pins corrected
+> from evidence: (1) the slot recipe is **base + 4·index** (the e3e0 lea carries
+> a +4 displacement) → the live id=2/index-7 slot is **0x100037dc**, not
+> 0x100037d8 (rev-3 item 4's watch address is superseded); (2) r4(→A0) is the
+> **NK kernel-object ID handle** ((dir-index<<16)|generation; live 0x00120001),
+> NOT the EVNT pointer (which stays kernel-internal) — the sc ID-directory
+> precedent. 3 slot-protocol boots used. New frontier captured + named: the
+> DSAT stack-underflow wall (SysError ID 10 post-$36-callout, saved PC
+> 0x5000e448; alert machinery underflows RAMBase from a 0x100000a0 stack).
+
+- [x] **Round-trip sub-contract (PASS/FAIL), env-on:** (a) the callout RETURNS —
   post-return body PC 0x5046db6c (unmarshal) ≥1 visit; (b) callout-entry probe
   conforms (Task A's gate re-asserted); (c) **result conformance**: the Q-F3-pinned
   return rows hold at the return (r3→D0 of the pinned pointer-class; the d0==0
-  skip-arm NOT taken — observable: the 68k tail's store-through executes); (d)
+  skip-arm NOT taken — observable: the 68k tail's store-through executes)
+  *(executed against the CORRECTED predicate above; the skip-arm row was already
+  deleted by Rev-2 T-C2)*; (d)
   **the 68k advances**: SS_DR_R24_RING shows 68k PCs BEYOND the f24x family after
   the trap (the e3e0 routine's slot-filled arm; ring tail ≠ the captured baseline
-  tail); (e) **the ExpandMem slot fills**: one guest-memory read of the
+  tail) *(r24-ring atexit doesn't fire on the crash path — the trace ring's r24
+  column substituted, recorded)*; (e) **the ExpandMem slot fills**: one guest-memory read of the
   `([$2b6],$310)` array slot (index per the id-table entry) shows the stored value
-  of the pinned class.
-- [ ] **Invariant carry-over (PASS/FAIL):** rung-2 + syscall-surface invariants hold —
+  of the pinned class *(WATCH on 0x100037dc: := 0x00120001 by the f240 tail,
+  stable until the crash; Task A's churn reading retired — wrong word)*.
+- [x] **Invariant carry-over (PASS/FAIL):** rung-2 + syscall-surface invariants hold —
   cold-once (WATCH pair), guest[0]/[4] stable, slot-15 unvisited, the 5 sc
   deliveries with the same selector list and resume r3=0, delivered-DEC=0 (exc=
   first field; a DEC delivered inside the callout while EE=0 + fence closed is a
   falsification — conditioned per the EE-legality rule: only while the callout
-  keeps EE=0).
-- [ ] **Diagnostic (recorded, not gates; ≤2 mapping boots):** how many FE1F callouts
+  keeps EE=0). *(delivered_sc now 13: #1-5 unchanged, #10=0x50 probe-sampled;
+  #6-9/#11-13 unenumerated — SC print caps at 5, counter bump deferred.)*
+- [x] **Diagnostic (recorded, not gates; ≤2 mapping boots):** how many FE1F callouts
   fire and with which selectors (bounded callout-entry probe with r0 dumps); which
   other FE opcodes appear; where the boot stands afterward — the honest map of
-  "more selectors or the next surface's walls".
-- [ ] If a pinned contract is falsified live: the one-iteration mechanics (stop-rule
+  "more selectors or the next surface's walls". *(2 callouts: $31 then $36, both
+  slot 8; $36 service staged at 0x5031d6b4 [STATIC]; $34 sibling stub at 0xf280;
+  the wall is the DSAT stack-underflow — addendum.)*
+- [x] If a pinned contract is falsified live: the one-iteration mechanics (stop-rule
   section) — dated addendum falsification entry, ONE bounded re-pin boot, resume;
-  second falsification of the same contract escalates.
-- [ ] Gates: full gates + the sub-contracts (evidence-only steps may name the smoke
-  set with stated reason). Commit.
+  second falsification of the same contract escalates. *(Dated refinement entry
+  recorded; corrections pinned statically + confirmed in the same evidence boot —
+  no re-pin boot consumed, no escalation.)*
+- [x] Gates: full gates + the sub-contracts (evidence-only steps may name the smoke
+  set with stated reason). Commit. *(Doc-only commit — no source edits this task;
+  stated reason: parallel Task-A review on the same tree.)*
 
 ### Task C: acceptance + default flip (flip LAST, revert-on-red)
 

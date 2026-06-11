@@ -11,6 +11,37 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-11
 
+### [SheepShaver] Machine Layer M3b Wave 2 W2-3 — OpenPIC bus wiring + EXC_EXTERNAL delivery: the interrupt chain's first construction, shipped gated-off (`SS_NW_PIC`, flip HELD) (`b2e0d718`, `7cafd6ae`, `95d3fc53`)
+
+The EE-chain ladder's first construction (links 1 + 11 of EE-CHAIN-RECON.md §A): the
+already-landed OpenPIC model (206 checks) registered on the M1 bus at 0xF3040000+0x40000
+(contained overlap in the macio stub), with **new device interrupt-condition state** —
+the SCC Rx-int predicate (Rx-available ∧ WR1 Rx-int-enable ∧ WR9 MIE, chip-wide WR9 copy;
+rev 2 F4) and the VIA IFR&IER summary edge — feeding PIC inputs 0x25/0x24/0x19
+(transition-only seams, device→pic lock order BINDING). PIC output → a single-copy-atomic
+EXT pending flag + CPU kick (F5). The delivery hook gains the level-held EXT source
+beside the DEC latch (DEC-before-EXT, one-shot-vs-level-held justification; runaway +
+U13-starvation tripwires); **`ExcEnter(EXC_EXTERNAL)` now consumes `external_entry`
+(0x50314880, the NK-published [KDP+0x374]) — the sanctioned U12 flip, both arms pinned**
+— with the sc/program 2-SPR shim per the Q-W2 verdict. Byte-lane = LE value-swap
+[STATIC-oracle] (F16; FRR-read falsifier armed at the seam, untested live — the guest
+never reads the PIC). exc= tuple gains `delivered_ext` as a 7th field printed only when
+configured; `[PIC]` stats/first-IACK record on atexit/term-dump/crash/heartbeat.
+
+**Acceptance = the pre-declared downgrade (stop-rule 3, flip HELD):** live acceptance is
+unreachable — "PIC initialized: NO" ([PIC] reads=0 writes=0, CTPR still 15) AND "EE
+riser: NONE" (every EXT kick lands as deferred_ee). One sanctioned `[DIAG-FORCED]` boot
+pair proved the chain mechanically live for BOTH source classes (SCC inject → 0x25 leg;
+**197 VIA summary edges per boot** traverse device→PIC, mask-gated correctly when
+unforced); the EXT delivery itself is proven at harness level both modes — the
+test-exc-vectors lane gains **H6** (EXT delivery + entry discrimination + SRR1.EE=1 pin)
+and **H7** (dual-pending: DEC delivers, EXT survives), 9/9 score=100. New knobs:
+`SS_NW_PIC`, `SS_NW_PIC_FORCE` ([DIAG-FORCED], never acceptance), `SS_TEST_EXT_PENDING`,
+`SS_EXC_ENTRY` third field. Gates: machine 13/13 (test_exc_core 43, test_exc_chain 64,
+scc 63, via 83), test-jit batch+plain 353/353, e2e-test 122, **paravirtual e2e PASS**,
+gated-off A/B byte-identical (4 of ≤5 boots). Full record: EE-CHAIN-RECON.md "W2-3
+results"; knob reference: SheepShaver/docs/DIAGNOSTICS.md "Wave-2 W2-3".
+
 ### [SheepShaver] Machine Layer M6 — FE1F service surface: the "placeholders" were trap trampolines; the THIRD exception class (0x700) delivered; the first DR native callout round trip — newworld DEFAULT (`46649a23`…`03222907`)
 
 **Headline — unknown ≠ dead:** the 16 entry-vector "placeholder" slots that rung-2 Task U

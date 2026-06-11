@@ -305,7 +305,11 @@ accumulated since boot. The first four are the DEC exception class (the 4th fiel
 with M6a rung-2 Task W2, `43d42b83` — logs older than that show the 3-wide `exc=N/N/N`
 form); the 5th is the syscall class (landed with NK-syscall-surface Task A, `bcce26c2` —
 older logs show the 4-wide form); the 6th is the program-interrupt (0x700) class (landed
-with FE1F-service-surface Task A, `89a28c15`/`669ccf7a` — older logs show the 5-wide form):
+with FE1F-service-surface Task A, `89a28c15`/`669ccf7a` — older logs show the 5-wide form).
+**A 7th field (`delivered_ext`, the EXC_EXTERNAL class) appends ONLY when the Wave-2 W2-3
+PIC source is configured** (`SS_NW_PIC=1` boots / the `SS_TEST_EXT_PENDING` harness knob) —
+gated-off boots keep the 6-wide form byte-identical. PIC-on heartbeats also gain a
+` pic=out:O/r:RAISES/i:IACKS` brief (output level / total input raises / IACKs delivered):
 
 | Subfield | Meaning |
 |---|---|
@@ -315,6 +319,7 @@ with FE1F-service-surface Task A, `89a28c15`/`669ccf7a` — older logs show the 
 | `deferred_native` | Deliveries deferred while a MixedMode **native excursion** is in flight — the M6a W2 DEC fence: `deliver_pending_dec_exception` defers while `[XLM_RUN_MODE]` (guest `0x2810`) `!= 0`. The NK maintains that word 1-forward/0-backward across exactly the MM switch pair, so a DEC cannot save into the MMCB mid-excursion. Known window (residue R-14): the word is 0 during the *backward* save — benign by same-values, recorded not fixed. |
 | `delivered_sc` | **Delivered `sc` syscalls** (NK-syscall-surface Task A, plan rev 2 P-M4: counters for counts, probes for ABI). Incremented in `SheepExcSyscallShim` on every resolved-entry sc delivery; the first 5 also print `[EXC] SC delivered #N: …` to stderr (see below). With the surface opted out (`SS_NW_SC_SURFACE=0`) this stays 0 — the sc dies at the FATAL capture instead. **Beware the print cap when reading totals:** the long-quoted "5 sc deliveries" park baseline was the cap-5 PRINT artifact — the true parked total is 8 (7 distinct selectors); the FE1F-era default boot delivers 13 (9 distinct). Use this counter (or the `[EXC] sc selectors` per-selector line, below) for counts, never the printed lines. |
 | `delivered_program` | **Delivered program interrupts (0x700)** — trap-taken `twi`/`tw` routed to `ExcEnter(EXC_PROGRAM)` (FE1F-service-surface Task A). Incremented in `SheepExcProgramShim`; the first 5 also print `[EXC] PROGRAM delivered #N: …` (see below). With the surface opted out (`SS_NW_FE1F_SURFACE=0`) this stays 0. A healthy FE1F-era default boot shows 2 (selector $31 then $36, both entry-vector slot 8). |
+| `delivered_ext` | **Delivered external interrupts (0x500)** — the level-held OpenPIC output routed to `ExcEnter(EXC_EXTERNAL)` → `external_entry` (default `0x50314880`, the NK-published `[KDP+0x374]`) with the 2-SPR shim (Wave-2 W2-3). Appears only when the PIC source is configured. At the current frontier this stays 0 on live boots — **no EE riser exists on the boot path** (EE-CHAIN-RECON W2L-3); EXT kicks land as `deferred_ee` instead. The harness lane (`make test-exc-vectors` H6/H7) is where nonzero values are proven. |
 
 The same six counters are emitted as one `[EXC] delivered_dec=… deferred_ee=…
 deferred_depth=… deferred_native=… delivered_sc=… delivered_program=…` line on the
@@ -396,13 +401,43 @@ exactly 5 (`0x0f` +2, `0x42` +1, +`0x50`, +`0x4d`) → 13 deliveries, 9 distinct
 
 | Env var | Effect |
 |---|---|
-| `SS_EXC_ENTRY=0xINT[,0xSC]` | Override the interrupt entry address (and optionally the syscall entry) without rebuilding. Hex; comma-separated. Takes precedence over the `SS_NW_SC_SURFACE` gate (the designed no-rebuild probe channel). **Fixed trap (NK-syscall-surface Task A):** the no-comma `SS_EXC_ENTRY=0xINT` form now PRESERVES the default syscall entry — it used to zero it, which post-flip would have silently re-broken the resolved syscall surface. Only an explicit `,0xSC` field overrides the syscall entry. |
+| `SS_EXC_ENTRY=0xINT[,0xSC[,0xEXT]]` | Override the interrupt entry address (and optionally the syscall and external entries) without rebuilding. Hex; comma-separated. Takes precedence over the `SS_NW_SC_SURFACE` gate (the designed no-rebuild probe channel). **Fixed trap (NK-syscall-surface Task A):** the no-comma `SS_EXC_ENTRY=0xINT` form now PRESERVES the default syscall entry — it used to zero it, which post-flip would have silently re-broken the resolved syscall surface. Only an explicit `,0xSC` field overrides the syscall entry. **W2-3:** the optional third field overrides `external_entry` the same way; an explicit `,…,0` clears it, restoring the pre-W2-3 shared-entry fallback (EXT → interrupt_entry) — the harness EXT vectors use this to discriminate entry consumption. |
 | `SS_EXC_SC=abort\|legacy` | Controls what `execute_syscall` does on newworld when `syscall_entry` is **unresolved**. `abort` (default): SRR-capture + context print then abort. `legacy`: fall back to the old `execute_illegal` + ad-hoc PC-bump behavior (the pre-M3a no-op path). **Inert on the default config since the syscall surface resolved** — a loud `[EXC] WARNING: SS_EXC_SC=legacy is INERT …` line is printed when set with a resolved entry; see the M6 syscall-surface section for the reproduction recipe. |
 | `SS_EXC_BARE=1` | Skip the KDP register-save shim before `ExcEnter` — the bounded direct-entry experiment. Without the shim the handler prologue reads uninitialized context-block fields; use only with a handler known not to dereference r6. |
 
 **Note:** `SS_EXC_FORCE` (deliver once ignoring MSR[EE]) was planned as a debug knob but
 was **not implemented** — the heartbeat `exc=0/1/0` deferral telemetry provided equivalent
 evidence without it, so the knob was dropped as moot.
+
+### Wave-2 W2-3 — OpenPIC wiring + EXC_EXTERNAL delivery (`SS_NW_PIC`, default OFF)
+
+The OpenPIC model (`dev_openpic`, 206-check suite) is wired to the M1 bus and the
+delivery hook behind an env gate — **the flip to default-on is HELD** per the Wave-2
+stop-rule 3 (the guest never initializes the PIC at the current frontier, and no EE
+riser exists on the boot path, so live acceptance is unreachable; the chain is proven
+at harness level instead — `make test-exc-vectors` H6/H7).
+
+| Env var | Effect |
+|---|---|
+| `SS_NW_PIC=1` | Wire the OpenPIC: bus region `0xF3040000+0x40000` (contained overlap in the macio stub), SCC ch A/B Rx-interrupt conditions → PIC inputs `0x25`/`0x24`, VIA IFR&IER summary → `0x19`, PIC output → the level-held EXT pending flag + CPU kick. The `exc=` tuple gains the 7th field; `[PIC]` stats ride atexit/term-dump/crash-path/heartbeat. Gated-off boots are byte-identical to the pre-W2-3 baseline (verified A/B 2026-06-11). |
+| `SS_NW_PIC_FORCE=1` | **`[DIAG-FORCED]` — diagnostic, NEVER acceptance** (Wave-2 rev 2 tension 1): host-forces CTPR=0 + IVPR unmask (level, prio 8) for the three wired inputs at bring-up, and re-applies the SCC WR1/WR9 interrupt enables at `SS_SCC_RX_INJECT` time (the guest's own WR9 hw-reset clears bring-up forcing). Distinguishes wiring-broken from guest-hasn't-initialized. |
+| `SS_TEST_EXT_PENDING=1` | Harness knob (SS_TEST path only): assert the level-held EXT source directly at the flag seam — the EXT-branch analogue of `SS_TEST_DEC_PENDING`. Maps the F2 lowmem page; configures the EXCSTAT 7th field. |
+
+`[PIC]` lines: `[PIC] openpic wired: …` (bring-up), `[PIC] FIRST guest FRR read -> 0x…`
+(the **F16 byte-lane falsifier**: LE value-swap predicts `0x02003F00`; `0x003F0002`
+falsifies the swap — still UNTESTED live, the guest has never read the PIC),
+`[PIC] FIRST guest CTPR write: …` (the reset-15 gate observable), `[PIC] reads=… writes=…
+raises=… out=… …` (full counters), `[PIC] first-iacks: src=0x.. vec=0x..` (the Q8
+tripwire record). `[EXC] EXT pending ASSERTED/deasserted (edge #N)` — the first 6 output
+edges. `[EXC] EXT delivered #N: …` — first 5 EXT deliveries. Tripwires (loud, greppable):
+`[EXC] TRIPWIRE: EXT re-delivery runaway` (16 deliveries with no PIC retirement) and
+`[EXC] TRIPWIRE: EXT starvation` (64 consecutive DEC deliveries with EXT pending — the
+U13 guard on the DEC-before-EXT priority).
+
+Priority: **DEC before EXT** (one-shot-clear latch vs level-held line; justification at
+the hook site, M3b rev 2 m11/C1). The hook never clears PIC pending — the guest's
+handler retires it via IACK/EOI/mask (at the current frontier that would be the
+`[KDP+0x5b0]` fallback `0x50325f00`; the registered-handler table is not installed).
 
 ### SCC Rx injection (`SS_SCC_RX_INJECT`)
 

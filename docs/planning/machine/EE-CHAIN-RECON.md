@@ -753,3 +753,116 @@ only coverage.
   pair with `SS_PROBE_LINEAR=1` (cap permitting) or accept first-visit-only.
 - **W2L-R3 (carried):** W2S-R1/R4/R5/R6/R7/R8 unchanged; R3 retired (pinned
   above).
+
+---
+
+## W2-3 results — OpenPIC bus wiring + EXC_EXTERNAL delivery (links 1 + 11 CONSTRUCTED; flip HELD per stop-rule 3) — 2026-06-11
+
+> **Status:** the ladder's first construction, landed env-gated (`SS_NW_PIC=1`, default
+> OFF — **the flip is HELD**, see the verdict). Commits: `b2e0d718` (the LAW edit —
+> ExcEnter(EXC_EXTERNAL) consumes `external_entry`, the sanctioned U12 flip, both arms
+> pinned; + the `write_ctpr` recompute-equivalence comment debt), `7cafd6ae` (F4 SCC
+> interrupt-condition state — NEW model code — + the VIA summary edge, both seams
+> transition-only with unit checks), `95d3fc53` (the wiring: bus registration, byte-lane,
+> source edges, output flag + kick, the delivery-side EXT branch, tripwires, telemetry,
+> harness knob + H6/H7 lane vectors). **Boots used: 4 of ≤5**, slot protocol, all
+> ≤45 s (B1 bring-up, B2/B3 [DIAG-FORCED], B4 gated-off A/B).
+
+### W3-1. What landed (per the Rev-2-amended W2-3 body)
+
+- **Byte-lane (F16):** LE VALUE-SWAP in the `openpic_bus_read/write` trampolines,
+  [STATIC-oracle] (QEMU maps KeyLargo MPIC little-endian; bus values are architectural).
+  Falsifier documented at the seam + `dev_openpic.h`: first live guest FRR read must show
+  `0x02003F00`. **Falsifier still UNTESTED live** — `[PIC] reads=0` on every boot (the
+  guest has never read the PIC); the first-FRR-read loud line is armed for whenever it
+  does. Bus registration: contained overlap in the macio stub (scc/via idiom);
+  Reset-then-BindOutput order honored.
+- **F4 SCC interrupt-condition state (new model code):** per-channel level predicate
+  Rx-available ∧ WR1-Rx-int-enable(0x18) ∧ WR9-MIE(0x08), recomputed at enqueue/drain/
+  enable-writes; WR9 chip-wide via a new shared copy (per-channel storage kept for
+  read-back compat, divergence documented). VIA summary edge: `(ifr & ier & 0x7F) != 0`,
+  recomputed at every read/write + the eager scheduler expiry. Both seams fire on
+  TRANSITIONS only under the owning region lock; cross-region lock order documented
+  BINDING: device → pic, never pic → device. Unit checks: SCC 63 (+23), VIA 83 (+20).
+- **Delivery side:** combined-pending gating through `ExcDeliveryDecision` (one decision
+  per poll — tuple semantics preserved; ext constant-0 when gated off ⇒ byte-identical),
+  source selected after DELIVER with **DEC-before-EXT** (m11/C1 justification at the
+  site); EXT branch = `ExcEnter(EXC_EXTERNAL)` → **`external_entry` = 0x50314880**
+  (NK-published [KDP+0x374], primary copy — the F6 default, now CONSUMED; U12 flipped
+  honestly with both arms pinned: consumption when nonzero, interrupt_entry fallback
+  when 0) + the **2-SPR shim** (SPRG1:=r1, SPRG2:=LR — the sc/program precedent per
+  Q-W2; the DEC KDP shim deliberately does NOT transfer). PIC pending NOT cleared
+  (level-held, rev 2 C1). SRR1.EE=1 punch-through guard satisfied by construction
+  (gate-admitted MSRs only; pinned in test_exc_chain + test_exc_core test 9).
+  F5: single-copy-atomic output flag (acquire/release) + TriggerInterrupt kick on the
+  assert edge; all SIX EE-edge re-raise sites include the EXT source. Tripwires:
+  re-delivery runaway (16, no retirement) + U13 starvation (64 DEC-with-EXT-pending).
+  Telemetry: `delivered_ext` as the exc= 7th field, printed ONLY when configured;
+  `[PIC]` stats + Q8 first-IACK record on atexit/term-dump/crash-path/heartbeat.
+
+### W3-2. The acceptance-or-downgrade verdict: **PRE-DECLARED DOWNGRADE — flip HELD (stop-rule 3)**
+
+Live acceptance ("controlled trigger → EXT delivered → entry 0x50314880 → guest handler
+runs") is **unreachable at the current frontier for two independent, pre-known reasons**,
+both now evidence-backed:
+
+1. **PIC initialized: NO** [PROBE✓ B1]: `[PIC] reads=0 writes=0` — the guest never
+   touches the PIC region; CTPR stays at the reset 15, every source masked. (Consistent
+   with W2L-1's `[[KDP-0x338]+0x20]=1` — no registered-handler table either.)
+2. **EE riser: NONE** (the W2L-3 lever-dead verdict, re-confirmed): every EXT kick lands
+   as `deferred_ee`; `delivered_ext=0` on all live boots. Host-forced unmask cannot
+   manufacture an EE rise and was never going to count as acceptance (tension 1).
+
+Per the plan's tension-1 allowance, ONE `[DIAG-FORCED]` configuration was run (B2/B3,
+`SS_NW_PIC_FORCE=1`: host CTPR=0 + IVPR unmask, SCC WR1/WR9 enables re-applied at
+inject time because the guest's own WR9 hw-reset clears bring-up forcing — a mechanism
+found during implementation, recorded in DIAGNOSTICS.md). **DIAGNOSTIC ONLY, NOT
+acceptance.** What it proved mechanically, live:
+
+- **B3 [PROBE✓]: the full SCC leg** — `SS_SCC_RX_INJECT=0:0D` → Rx enqueue → F4
+  condition asserts → input **0x25** raised → PIC output asserts → `[EXC] EXT pending
+  ASSERTED (edge #1)` → CPU kick → hook poll → `DEFER_EE` (correct: EE=0). The line then
+  deasserts when the guest's SCC init resets the chip (condition drops → 0x25 lowers →
+  output recomputes) — level discipline correct end-to-end.
+- **B2/B3 [PROBE✓]: the VIA leg, at boot scale** — **197 VIA summary edges** traverse
+  device→PIC per boot (`raises=197 lowers=197`; B1 shows the same 197 with the sources
+  MASKED ⇒ `out=0`, the mask gate verified live). Under [DIAG-FORCED] unmask each edge
+  propagates: `out_raises=197/198 out_lowers=197/198`, every assert kick correctly
+  deferred at the EE gate (`deferred_ee=198`, was 1 baseline). **The chain
+  device→PIC→output→flag→kick→gate is live-proven for BOTH wired source classes**;
+  only the EE gate (no riser) and the guest-side retirement stand between the
+  current state and a real delivery.
+- **Frontier untouched in all four boots:** SIGSEGV ea(guest)=0x0fffff42, guest pc
+  0x504661a0, `delivered_sc=13 delivered_program=2` — the F8 staleness anchor
+  byte-matches (env-on adds only the expected `delivered_ext=0` field + [PIC] lines).
+- **B4 gated-off A/B [PROBE✓]:** zero [PIC]/EXT lines, 6-field `[EXC]` tuple
+  byte-identical to the W2-2 baseline class, bus-active line pre-W2-3 shape.
+
+**The EXT delivery itself (the part live boots cannot reach) is PROVEN at harness
+level, both modes:** `make test-exc-vectors` gains **H6** (EXT delivery via the mtmsr
+EE edge; GATING entry-discrimination — `SS_EXC_ENTRY=0,0,0x1000C000` makes a
+wrongly-shared-entry delivery FATAL-unresolved; REGDUMP pins msr=0x1040,
+srr0=restart, srr1=0xf072 ⊃ EE=1) and **H7** (dual-pending: exactly one delivery and
+it is the DEC — the EXCSTAT tuple `delivered_dec=1 … delivered_ext=0` discriminates;
+U13's live analogue). Lane 9/9 score=100, interp-vs-JIT REGDUMPs byte-identical.
+
+### W3-3. Chain-map updates (§A)
+
+| Link | Was | Now |
+|---|---|---|
+| 1 (device IRQ → PIC) | MISSING | **EXISTS-TESTED** (unit: SCC 63/VIA 83 checks; live: 197-edge VIA traffic + the SCC inject leg, [DIAG-FORCED] B2/B3) — env-gated `SS_NW_PIC`, default OFF |
+| 11 (EXC_EXTERNAL delivery) | MISSING | **EXISTS-TESTED-harness / live-blocked-by-EE** (H6/H7 both modes; live blocked by link 9 — no EE riser — and by guest PIC non-init) |
+
+Residues fed to W2-4 / next sessions: the F16 FRR falsifier (armed, untested);
+the first live EXT delivery's guest-side retirement behavior (the [KDP+0x5b0]
+fallback observation — unreachable until an EE riser exists); W2L-R1 (r9/cr6 at a
+DEC delivery instant) unchanged; the nest −1-per-delivery drift now ALSO applies to
+future EXT deliveries (same patched trap-return exit family) — W2-4's XLM_IRQ_NEST
+ownership item gains the EXT class.
+
+### W3-4. Gates (all green, 2026-06-11)
+
+machine suite 13/13 ALL PASS (test_exc_core 43, test_exc_chain 64, scc 63, via 83,
+openpic 206); `make test-jit` plain AND batch 353/353; `make test-exc-vectors` 9/9
+score=100; `make e2e-test` 122 passed; **paravirtual `make e2e` PASS** (booted to
+Finder, clean shutdown, exit 0); gated-off A/B boot byte-identical (B4).

@@ -339,23 +339,41 @@ telemetry commits allowed (full gates).
 Blocked on W2-2's table. All new machinery inert when gated off (paravirtual + gated-off
 newworld byte-identical).
 
-- [ ] **The LE byte-lane decision FIRST (in writing, at the seam):** QEMU maps KeyLargo
+> **W2-3 DONE (2026-06-11, commits b2e0d718 + 7cafd6ae + 95d3fc53) — SHIPPED GATED-OFF,
+> FLIP HELD per stop-rule 3.** Coordinator decision honored: EXT delivers to
+> `external_entry` = the published [KDP+0x374]=0x50314880 (the sanctioned U12 flip, both
+> arms pinned), NOT the shared interrupt_entry; the P3 EE-lever session stayed superseded.
+> Acceptance verdict = the PRE-DECLARED DOWNGRADE: live acceptance unreachable on TWO
+> independent evidence-backed grounds — "PIC initialized: NO" ([PIC] reads=0 writes=0,
+> CTPR still 15) AND "EE riser: NONE" (every EXT kick lands as deferred_ee; W2L-3
+> re-confirmed). One [DIAG-FORCED] config ran inside the budget (tension 1): the full
+> chain device→PIC→output→flag→kick→EE-gate is LIVE-PROVEN for both source classes
+> (SCC inject → 0x25 leg; 197 VIA summary edges per boot — a live finding: the VIA
+> 0x19 input carries real boot traffic, mask-gated correctly when unforced). The EXT
+> delivery itself is proven at HARNESS level both modes (new lane vectors H6 entry-
+> discrimination + H7 dual-pending priority; 9/9 score=100). 4 of ≤5 boots used; F16
+> byte-lane = LE value-swap [STATIC-oracle], FRR falsifier armed but untested live
+> (guest never reads the PIC). Gated-off A/B byte-identical (B4). Full record:
+> EE-CHAIN-RECON.md "W2-3 results". W2-4's entry evidence: the chain is mechanically
+> ready; what's missing is an EE riser + guest PIC init + tick consumption (link 7).
+
+- [x] **The LE byte-lane decision FIRST (in writing, at the seam):** QEMU maps KeyLargo
   little-endian; our bus speaks architectural values; the model speaks natural values.
   Decide value-swap inside the OpenPIC bus trampolines vs natural pass-through, from the
   guest's first observed accesses (FRR read value is the falsifiable probe: a natural
   pass-through shows 0x003F0002, the LE mapping shows 0x02003F00-class lanes) + the
   oracle. Record the decision + evidence in the header's endianness note (replacing
   "W2.0-gated wiring work").
-- [ ] Bus registration in main_unix bring-up (the scc/via idiom):
+- [x] Bus registration in main_unix bring-up (the scc/via idiom):
   `MMIOBusRegister(0xF3040000, 0x40000, MMIO_TRAPPED, &openpic_dev)` — contained overlap
   inside the macio stub, most-specific wins; `OpenPICReset` then `OpenPICBindOutput`
   (reset clears the binding — order matters, header contract); region lock covers the
   lock-free model (§2g rule 1). The `[MMIO] bus active` line gains the pic region.
-- [ ] **Source edges**: VIA IFR-summary → `OpenPICRaise/LowerInput(0x19)`; SCC ch B/A →
+- [x] **Source edges**: VIA IFR-summary → `OpenPICRaise/LowerInput(0x19)`; SCC ch B/A →
   0x24/0x25 — assertion edges from the device models' existing interrupt-condition
   state, called under the owning region's lock (cross-region: device → pic ordering
   documented; never pic → device).
-- [ ] **The delivery-hook extension** (glue): a level-held EXT pending check BESIDE the
+- [x] **The delivery-hook extension** (glue): a level-held EXT pending check BESIDE the
   DEC latch — `OpenPICOutputAsserted` (sampled via the bound-output flag, not a
   cross-thread struct walk), same depth/EE/native gating via `ExcDeliveryDecision`
   (U12 already tests the parity), `ExcEnter(..., EXC_EXTERNAL, ...)` → the same
@@ -370,13 +388,13 @@ newworld byte-identical).
   **Priority: DEC before EXT, justified locally per m11/C1** — OEA ranks External ABOVE
   Decrementer, but our DEC latch is one-shot-clear-on-delivery while PIC pending is
   level-held and safely waits one poll; the comment carries this justification verbatim.
-- [ ] **Observability**: CTPR first-write logged loud (the reset-15 gate — distinguishes
+- [x] **Observability**: CTPR first-write logged loud (the reset-15 gate — distinguishes
   "guest hasn't initialized the PIC" from "wiring broken"); `OpenPICFormatFirstIACKs` +
   `OpenPICFormatStats` wired into the heartbeat/term-dump; the first EXT delivery logged
   like `[EXC] DEC delivered #1`. **Fold the review minor: the `write_ctpr` recompute
   divergence comment** (dev_openpic.cpp:314–325 — equivalent-by-analysis to QEMU's CTPR
   path; write the analysis down at the function).
-- [ ] **Acceptance (PASS/FAIL, env-on `SS_NW_PIC=1`): a device-sourced external interrupt
+- [x] **Acceptance (PASS/FAIL, env-on `SS_NW_PIC=1`): a device-sourced external interrupt
   delivered through PIC→ExcEnter→NK on a CONTROLLED trigger — `SS_SCC_RX_INJECT` is the
   existing controlled source** (SCC Rx → input 0x25 → output → EXT delivery →
   handler-entry probe conforms to the Q-W1/Q-W3 pinned shim table → guest resumes; first
@@ -385,9 +403,9 @@ newworld byte-identical).
   the frontier, the acceptance downgrade is pre-declared: deliver-on-asserted with a
   HOST-forced unmask is NOT acceptance; instead record "PIC initialized: NO" as a W2-4
   evidence input and hold the flip (the stop-rule decides).
-- [ ] **Gated-off A/B**: one boot without the env var byte-identical to the current
+- [x] **Gated-off A/B**: one boot without the env var byte-identical to the current
   baseline class.
-- [ ] **THEN flip** `SS_NW_PIC` to the newworld profile default (opt-out `=0`, the
+- [ ] *(HELD — stop-rule 3, see the DONE note)* **THEN flip** `SS_NW_PIC` to the newworld profile default (opt-out `=0`, the
   SS_NW_MM_SWITCH polarity), re-run full gates + acceptance with no env vars;
   **any red ⇒ revert the flip in the same task** (machinery stays env-gated, failure
   recorded). Gates: full gates throughout. Commit per sub-step.

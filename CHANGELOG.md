@@ -9,6 +9,24 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-11
+
+### [SheepShaver] Machine Layer M3b: CV-10 deferred SR-int delivery — sync park root-caused + fixed (`d3e60d88`)
+
+M3b Wave-1 acceptance root cause: the 9.0.1 ROM's 68k Cuda startup sync (file 0x9584, guest
+0x50009584 — counter-reconciled exactly: ORB=3340, IFR=15002, SR=2, syncs=1; parked 68k PC
+live-verified via `SS_PROBE_PC` r24) reads the SR sync byte AFTER the TACK-negate edge and then
+waits for one more SR int with a 15000-poll IFR budget. Eager seam delivery let that SR read
+consume the int before the wait began → budget expired → park at 0x9754 `bra.b *`. Oracle: QEMU
+cuda.c @ `de5d8bfd` delays every Cuda SR int 20 µs (`cuda_delay_set_sr_int`) past the host's SR
+read. Fix (deterministic lazy equivalent): raises latch in `sr_int_pending` and deliver ONLY via
+`CudaSettle` on the VIA R_IFR read surface; ORB reads no longer settle; SR access clears latched
+IFR.2 only. New CV-10 conformance vector (TDD red→green). Gates: machine suite 11/11, test-jit
+353/353 (batch + plain). Acceptance boot: park GONE — 13156 Cuda packets, 48k/55k bytes in/out,
+1013 syncs, PRAM traffic, SCC active, comp 849→4912+ climbing. New frontier: Cuda I2C pseudo
+command 0x22 (DingusPPC `READ_WRITE_I2C`) unknown ×9108. Full chain:
+`docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "M3b Wave 1 acceptance".
+
 ## 2026-06-10
 
 ### [SheepShaver] Machine Layer M3a: exception core + DEC delivery (`3a3d5380`–`a2dd1ff8`)

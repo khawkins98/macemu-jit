@@ -282,3 +282,73 @@ session.
    /tmp dumps; offsets above are reproducible from the cited files but no tool was
    committed (deliberate — rom-inspect via `rom_decode.hpp` is the right home if one is
    wanted, and `elliotnunn/tbxi` already exists for the container, HANDOFF:866).
+
+---
+
+## §6. EMUL_OP-on-parcels verdict (2026-06-11) — **ALIVE**
+
+> Tripwire **T2 fired and is now retired**, and with it residue 2 above and the
+> HANDOFF-NEWWORLD-SUPERVISOR-MMU:587 table-layout risk. One slot-protocol boot
+> (`ss-slot-boot.sh --label emulop-verdict --timeout 50`, run
+> `slot0/20260611-192832.64083`, env `SS_EMULOP_COUNTS=1 SS_ROM_PATCH_TRACE=1` on the
+> standard newworld 9.0.1 diagnostic config).
+
+**Verdict: ALIVE.** The full 68k→host EMUL_OP dispatch chain executed end-to-end on the
+9.0.1 parcels ROM. Exactly **one** EMUL_OP fired in the 50 s boot: **op 1 = `OP_XPRAM1`**,
+once, at ~0.01 s (`EMULOP-COUNTS: 1=1`, the only counts line of the session — i.e. no
+further EMUL_OP traffic for the remaining ~49 s).
+
+### Evidence chain (each link observed, not inferred)
+
+1. **[PATCH] Table writes are layout-compatible on 9.0.1.** In `/tmp/rom901.bin`
+   (md5 `e432df64…`), slots at `0x380000 + (op<<3)` for op `0xfe40…0xfe4b` read
+   `1800000N 4bf66exx` — `POWERPC_EMUL_OP|N` + `b 0x366084` (emul_ret glue), exactly what
+   `patch_68k_emul()` (rom_patches.cpp:2040–2050) writes. The RAW ROM (`7b1378be…`) has
+   real, fully-populated table content at the same slots (`80bf0808 4bf6e55c` at 0xfe40's
+   slot; 131072/131072 nonzero words in `0x380000–0x400000`) — i.e. the 9.0.1 image
+   natively keeps the opcode table at the same base with the same `op<<3` geometry; the
+   unconditional overwrite lands where it must.
+2. **[STATIC] An emitter site exists.** `SS_ROM_PATCH_TRACE` shows the `nvram1` patch HIT
+   at ROM offset `0x75d0` (`pat=48e7010e -> HIT @0075d0`, rom_patches.cpp:2714–2722) —
+   `M68K_EMUL_OP_XPRAM1` (`0xfe44`) + RTS planted at guest 68k `0x500075d0`. (nvram2–6
+   SKIP; most other 68k EMUL_OP emitters are never planted because `patch_68k` still
+   aborts at the sony block, §1.4 — unchanged.)
+3. **[PROBE✓] The mirror table slot was executed.** The boot log shows
+   `first compile in 64KB region 504f0000 (pc=504ff220)` immediately before the counts
+   line — `0x50480000 + (0xfe44<<3) = 0x504ff220`, the **mirror** dispatch-table slot for
+   `0xfe44`. So the DR emulator fetched the 68k opcode, indexed the live (mirror) table,
+   and the JIT compiled+ran the patched slot — confirming the `patch_68k_emul` writes at
+   image `0x380000` survive the NK's `+0x100000` mirror copy (matching
+   M6A-DR-HANDOFF-ANALYSIS's static finding).
+4. **[PROBE✓] The host service ran.** `execute_emul_op` (sheepshaver_glue.cpp:381, the
+   `SS_EMULOP_COUNTS` counter at :399–421) counted op 1 → `EmulOp()`/`OP_XPRAM1`
+   (emul_op.cpp:573). Neither `execute_sheep`/`execute_emul_op` nor `EmulOp()` carries any
+   `MachineProfileIsNewWorld` fence — the service is profile-agnostic (verified by grep).
+
+### What each consumer takes from this
+
+- **Disk milestone (option a / §4):** the "confirmation the EMUL_OP table works on
+  parcels" line item in option (a)'s *What's missing* column is **done**. The remaining
+  blockers for EMUL_OP DRVRs are purely the §1.4 install chain (`find_rom_resource`
+  next-link fix + a new anchor + reaching the Start-Manager install stage) — the dispatch
+  seam underneath is proven. Option (c)'s NativeOp concern (residue 2's "same glue") is
+  likewise eased: the glue demonstrably executes sheep opcodes from mirror-table slots.
+- **Framebuffer milestone (T-F3):** dispatch is alive, and the `name_reg` patch DID hit
+  this boot (`pat=70ffabeb -> RELOCATED @0002fa`, exactly as T-F3 predicted) — but
+  `OP_NAME_REGISTRY` (op 38) has **not yet fired** (only op 1 ever ran). So the
+  stub-injection chain's dispatch half is retired; whether the boot *reaches* the
+  name-registry call is a frontier question (NOT-YET-REACHED for op 38 specifically),
+  not a machinery question.
+- **General:** any future 68k HLE shim on newworld can assume EMUL_OP delivery works;
+  zero-EMUL_OP boots mean *no emitter installed/reached*, never a broken table.
+
+### Caveats
+
+- The counts dump is 5 s-throttled and printed inside `execute_emul_op` only; ops landing
+  in a trailing <5 s window with no successor wouldn't print. Irrelevant to the verdict
+  (one line ⇒ ALIVE) but don't read "1=1" as a hard upper bound without a term-dump
+  counter.
+- One op, one execution, at the very start of 68k execution — coverage of the other 52
+  ops is untested empirically; their slots carry the same verified write pattern.
+
+Boots used: 1 of 3 budgeted (50 s).

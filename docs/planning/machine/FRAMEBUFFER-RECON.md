@@ -300,6 +300,10 @@ parcels' cofb ndrv. Either way the node above is the one contract both consumers
 
 ### Honest residues
 
+0. **T-F3's dispatch half is RETIRED (2026-06-11):** EMUL_OP dispatch is **ALIVE** on the
+   9.0.1 parcels boot (OP_XPRAM1 executed via the mirror table slot; `name_reg` patch hit
+   relocated @0x2fa as predicted, though `OP_NAME_REGISTRY` itself has not yet fired —
+   frontier, not machinery) — see DISK-PATH-RECON.md §6 for the evidence chain.
 1. **R1 (biggest unknown):** where the Trampoline stores the harvested screen quintuple
    (NKSystemInfo field? KDP? the grafted tree?) and which ROM-side code reads it for the
    early draw — both unlocated. §2.1's evidence proves the harvest exists; the storage

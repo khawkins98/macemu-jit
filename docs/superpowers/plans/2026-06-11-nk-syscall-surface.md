@@ -321,3 +321,98 @@ ppc-execute/glue/rom_patches sites). Wave-2 backlog stays parallel.
 ## Red-team record
 
 *(empty — a red-team round follows this draft; findings to be folded as rev 2 markers)*
+
+## Rev 2 (2026-06-11) — both red-team rounds folded (BINDING amendments; where in conflict, rev 2 overrides the body)
+
+**Free static wins from the contracts review (recorded as pre-pinned Task-0 inputs, [STATIC] from all three dumps, raw+patched agreeing):**
+the sc at file 0xd638c is CONFIRMED (`li r0,0x3f / sc / blr`) and is part of a
+**syscall-stub TABLE** (12-byte stride; sibling selectors 8, 9, 0xa, 0xe — a selector
+family is coming, M4's warning is live); the caller is `0x500cf104 bl 0x500d6388`
+(LR=0x500cf108 matches the capture); the consumption site is **0x500cf10c
+`cmpwi r3,0 / bne 0x500cf3e4`** — selector r0=0x3f, **result register r3, error
+convention r3≠0**. Q-S3's static half is pre-answered; the live probe confirms args.
+
+**Process findings folded:**
+- **(P-C1) Blocking map corrected:** Task A blocks on Q-S1 + Q-S2 + **Q-S5's verdict**
+  (go/no-go + the seed-class fix list — A consumes it); Task C blocks on Q-S5's full
+  structure enumeration. **Task 0's gate = ALL blocking answers pinned before ANY
+  implementation task starts**; the per-task table is a residue-disposition map, not a
+  start-order license.
+- **(P-C2) Static-RE budgets:** each Q gets a time-box with a written residue fallback
+  (the rung-2 P5 idiom). Q-S5 specifically: follow the selector dispatch **≤2 call
+  levels / ≤12 functions** from the handler entry; structures not classifiable within
+  that bound → the verdict is a residue → trigger 3. Unbounded disassembly killed two
+  predecessor agents; bounded windows only.
+- **(P-C3) Boot arithmetic:** the TOTAL cap (≤8 newworld diagnostic boots) binds over
+  the per-question allowance; probe mapping PROBE-S1→Q-S1, PROBE-S2→Q-S3,
+  PROBE-S3→Q-S2/Q-S4 (shared charge); co-scheduling mandated (one boot may serve
+  multiple questions — 8 probe PCs/run allows it); a question with no boots left gets
+  its residue status from static evidence only. Canonical-gate boots (paravirtual e2e)
+  are OUTSIDE this budget.
+- **(P-M1 + contracts m3) The env-flag matrix is Task A BEHAVIOR, not Task Z docs:**
+  precedence `SS_EXC_ENTRY` > `SS_NW_SC_SURFACE` default > 0. **The no-comma
+  `SS_EXC_ENTRY=0xINT` form must PRESERVE the syscall default** (today it zeroes it —
+  a post-flip trap; change the parse with a comment). `SS_EXC_SC=legacy` becomes inert
+  once the entry resolves: log one loud line when set-but-inert; the legacy datum's
+  post-flip reproduction recipe (`SS_NW_SC_SURFACE=0 SS_EXC_SC=legacy`) lands in Task
+  Z's DIAGNOSTICS entry. Task A pins the override×gate 2×2 (override active regardless
+  of gate = the designed PROBE-S3 channel; document).
+- **(P-M2 + contracts C1) THE PROBE-PC FIX:** the sc at 0x500d638c is the SECOND
+  instruction of the block starting **0x500d6388** — probe THAT (r3..r10 at block entry
+  = the at-bl args; r0 pre-li is irrelevant, the selector is static 0x3f). PRIMARY
+  instrument: extend the `[EXC] FATAL` capture to print r0/r3..r10 (capture-only
+  telemetry commit, Task-0-authorized) — it samples the exact dying sc. The consumption
+  disassembly target is LR=0x500cf108ff (0x500d6390 is a lone blr).
+- **(P-M3) 0xC00 classification:** probe 0x40 BYTES at [0xC00] (not one word); Q-S1's
+  deliverable classifies the page: empty / pointer / code-stub. Trigger 1 reworded: a
+  bounded, TRANSCRIBABLE 0xC00 stub is IN-SCOPE (the DEC-shim precedent — Q-S2 pins
+  its postconditions, Task A transcribes); STOP only if the 0xC00 code is unstaged or
+  non-transcribable (dispatches through state only kernel-init builds).
+- **(P-M4 + contracts m4) Post-resolution capture:** resolving the entry deletes the
+  FATAL safety net for ALL selectors. (1) THE capture artifact for a bad-selector wall
+  = handler-entry probe with r0 dump + SS_DR_R24_RING tail + the HB/CUDA baseline —
+  named, executable, cited by trigger 2. (2) Add a **delivered-sc counter as the 5th
+  `exc=` field** (the existing exc_stat idiom) — counters for counts, probes for ABI.
+  (3) Task B's selector-mapping diagnostic is bounded: ≤2 boots; selectors beyond that
+  are the next milestone's recon.
+- **(P-M5) Gate (d) concretized (now mostly pre-answered):** Task B gate (d) = **r3 == 0
+  at the resume probe** (the pinned success predicate; Q-S3's live probe may refine)
+  AND the legacy-spin signature ABSENT (comp not frozen at 3672-class, no 52M/s
+  block-rate plateau). Q-S3's deliverable must state the predicate in register→value
+  form (template satisfied by the static pre-answer).
+- **(P-M6) Q-S4 partitioned:** BLOCKING = exit mechanism (rfi vs scheduler) + SRR0
+  non-re-increment + the preserved-register rows Task B's gates cite. RECORDABLE
+  RESIDUES = R-7, [0x2810]-on-syscall-path, the MSR-translation question (IR/DR-off
+  delivery is affirmatively evidenced by M3A Task 7's live DEC delivery at msr=0x1040;
+  IR/DR are behaviorally inert in the V=P flat model).
+- **(P-m1) The Task-B DEC falsification check, observable form:** the `exc=` delivered
+  count stays 0 for the whole boot. **(contracts m1)** conditioned: a delivery is a
+  falsification only while handler MSR keeps EE=0 and [0x2810]≠0 — an NK handler
+  mtmsr'ing EE=1 makes delivery LEGAL (the EE-edge re-raise exists for this).
+- **(P-m2) "Byte-identical" baselines defined:** FATAL line exact; comp exact-class
+  (3672); jNK/exc signature class; raw mmio counters EXCLUDED (jitter).
+- **(P-m3) r1 gate symmetry:** Task B gate (c)'s r1=0x103ffb50 is conditional on Q-S3/
+  Q-S4 pinning r1 as sc-preserved (same rule as LR).
+- **(P-m4) Citations:** "the completion-written [saveblk+0x3c]" + "the rung-2 Task Y
+  recipe" → see M6A-ONGOING-ENTRY-DESIGN.md "Task W2 results" + "Task Y results".
+- **(P-m5) Cross-copy table asymmetry:** if Q-S1 resolves the syscall entry into the
+  0x503xxxxx primary copy while interrupt_entry stays 0x50412b1c, the addendum AND the
+  glue comment record the deliberate asymmetry explicitly.
+- **(P-m6)** folded into P-M1.
+
+**Contracts findings folded:**
+- **(T-M1) "Byte-identical copies" scoped:** identity is established for exactly two
+  16-word anchor windows (M3A); per-target re-confirmation REQUIRED for the 0xC00
+  handler region and the publication targets; the 4MB dump cannot adjudicate the
+  0x504xxxxx copy above 0x400000 (mirror facts [PROBE✓] only).
+- **(T-M2) The mid-excursion state bundle re-tagged [STATIC-inferred +
+  outcome-confirmed]:** only EE=0 is live-evidenced; one probe word each for [0x2810]
+  and [KDP+0x65c] at the sc wall (riding PROBE-S1's boot) upgrades the bundle to
+  [PROBE✓].
+- **(T-M3) Evidence attribution corrected:** the 10M-visit probes were the PRE-V bounce
+  leg (0x50312cb0); post-V execution of the save/hit legs is outcome-inferred. The
+  conclusion (the NK reaches the primary-range copy) stands on the [PROBE✓]
+  [KDP+0x5f0/4] values.
+- **(T-m2) Region notation pinned end-exclusive:** W2 slot-1 = 0x429d80..0x429d9c
+  (end-exclusive, 7 words); **next free = 0x429d9c** (not 0x429da0).
+- **(T-m5)** glue table cite is :87-93.

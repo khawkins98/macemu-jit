@@ -106,6 +106,12 @@ slot protocol's leases apply.
 - **The slot protocol** (`SheepShaver/tools/ss-slot-boot.sh` + `ss-reap.sh`): leased
   per-slot prefs/logs/diag paths; NEVER global `pkill` — reap only stale leases.
 
+**Review pipelining**: reviews are read-only over committed SHAs — they run in
+PARALLEL with the next task's implementation when the reviewed work is low
+fix-probability (mechanical, template-following); any CHANGES-NEEDED fixes queue to
+the live implementer rather than re-spawning. Serialize reviews only for high-risk
+commits (new mechanisms, LAW-module edits).
+
 **Convergence is designed, not accidental**: streams are chosen so their outputs feed
 each other (tooling multiplies recon throughput; ahead-of-need recon de-risks the
 critical path's future milestones; verification streams de-fuse named surprises
@@ -147,13 +153,21 @@ before construction streams hit them).
   quality (with mutation spot-checks: "would the suite catch this?"); fix loops
   re-review the diff.
 
-## 6. The canonical gate set (this repo)
+## 6. The gate tiers (this repo; rev 2026-06-11 — latency-tuned)
 
-`make -C SheepShaver build-ss` · `SS_HARNESS_BATCH=1 make test-jit` AND plain
-`make test-jit` (353/353; legacy authoritative) · `make -C SheepShaver/src/machine
-test` (ALL suites) · `make e2e-test` · paravirtual `make e2e` PASS + byte-identical.
-A task may run a smaller set only with a stated reason. Boot recipes, probe limits,
-and instrument caveats live in `SheepShaver/docs/DIAGNOSTICS.md`.
+- **Per-commit (inner tier, ~1 min warm)**: `make build-ss` ·
+  `SS_HARNESS_BATCH=1 make test-jit` (353/353) · `make -C SheepShaver/src/machine test`.
+- **Per-task (the final commit)**: + plain `make test-jit` (the authoritative legacy
+  run) · `make e2e-test`.
+- **Risk-based**: paravirtual `make e2e` is REQUIRED when the change touches code
+  reachable on paravirtual; when every new line is structurally inside
+  newworld/env gates, the inertness argument + the gated-off byte-identical A/B boot
+  substitute (state which in the commit message). Doc-only commits: no gates.
+
+The flat "full set on every commit" of the first sessions was correct for trust-building
+and is still available on demand; the tiers preserve the authoritative gates at task
+granularity while halving typical task wall-time. Standing facts, recipes, constants and
+instrument caveats live in `docs/AGENT-CONTEXT.md` (agents read ONE pack, not four docs).
 
 ## 7. Why this works (the evidence)
 

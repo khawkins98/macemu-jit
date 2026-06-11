@@ -17,7 +17,45 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-11 (latest) — FE1F service surface: a capped triage print is not a counter; refinement vs falsification is a judged call; "unknown ≠ dead" is codified
+## 2026-06-11 (latest) — 68k PC-desync: some registers are CONTRACTS, not state — the r0-invariant class
+
+One durable lesson from the 68k PC-desync milestone (plan
+`docs/superpowers/plans/2026-06-11-68k-pc-desync.md`; root cause recon `c8429b23`;
+implementation `ac50b2c9`; zero falsifications throughout):
+
+### Some registers are CONTRACTS, not stored state — save/restore must honor the platform's invariants, not just the architecture's
+
+The DR (68k dynamic recompiler) maintains **r0 ≡ 0** as a standing invariant: its
+flag-setting writeback idiom is `addco. rX,rX,r0` (add zero, set N/Z/V/C). The PPC
+architecture has no such requirement; r0 is a general register. But the DR's ABI depends on
+it and the NK's save-and-switch deliberately omits r0 from the ctx save set (using the
+invariant as a contract, not a preserved slot).
+
+When the FE1F `twi`-delivery ctx save wrote the in-flight r0 (the NK service selector, 0x31
+or 0x36) into the 68k ctx slot +0x104, and the save-and-switch omitted the reload, every
+subsequent switch-in to the 68k world re-poisoned r0 from the stale slot. The first `addco.`
+consumer after the second switch-in mis-dispatched by exactly 0x36.
+
+**The generalizable rule:** before adding a new exception or context-switch path, enumerate
+every register that the target execution environment treats as an *invariant* (not just the
+registers the architecture says callee-save). On real hardware the exception entry path
+either preserves the invariant or the hardware enforces it; in emulation we are the hardware.
+Any path that doesn't explicitly restore platform invariants after context manipulation is
+latently broken, harmless only until the first consumer triggers in the poisoned window.
+
+**Corollary for context save/restore design:** when a platform ABI omits a register from
+the save set (because it is invariant by contract), that is a signal, not a shortcut to copy.
+The omission is correct and intentional — the restore tail must honor it by re-asserting the
+invariant on entry, not by copying what the save slot holds.
+
+The same class applies to other emulated platforms: if an emulated CPU's ISA or ABI
+establishes any "always zero" / "always points to X" / "always within range Y" invariant on
+a register (not just calling-convention callee-save), and our delivery/context-switch
+machinery can observe or write that register, we must either avoid touching it or re-assert
+the invariant at the correct point. Cross-check the workflow rules table in
+`docs/MILESTONE-WORKFLOW.md` before adding invariant-register handling.
+
+## 2026-06-11 — FE1F service surface: a capped triage print is not a counter; refinement vs falsification is a judged call; "unknown ≠ dead" is codified
 
 Three durable lessons from the FE1F-service-surface milestone (plan
 `docs/superpowers/plans/2026-06-11-fe1f-service-surface.md` revs 2/3; evidence in

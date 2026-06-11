@@ -39,7 +39,7 @@ I appreciate that plenty of people won't think much of that, and will consider t
 This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit), adding an AArch64 JIT backend that translates PowerPC instructions to native ARM64 at runtime. **SheepShaver** boots Mac OS 8.x–9.x to the Finder desktop with the full native JIT on M-series Macs.
 
 > **Scope:** SheepShaver (PowerPC) is the working macOS emulator. **BasiliskII** (68K) does *not* currently build on macOS arm64 — see `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`. A native macOS launcher, **Silicon Sheep** (Tauri), is in development — see [`SiliconSheep/`](SiliconSheep/).
-> **Related projects:** [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc) (full PPC Mac emulator), [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac) (browser-based Mac emulation), and [twvd/snow](https://github.com/twvd/snow) (Rust classic-Mac emulator) are tracked as comparative references. Initial evaluations are in `docs/planning/` (dormant — useful reference, not driving active work).
+> **Related projects:** [dingusdev/dingusppc](https://github.com/dingusdev/dingusppc) (full PPC Mac emulator), [mihaip/infinite-mac](https://github.com/mihaip/infinite-mac) (browser-based Mac emulation), [twvd/snow](https://github.com/twvd/snow) (Rust classic-Mac emulator), [utmapp/UTM](https://github.com/utmapp/UTM) (macOS/iOS VM manager — scripting, VM gallery), and [insidegui/VirtualBuddy](https://github.com/insidegui/VirtualBuddy) (SwiftUI VM manager — UI/UX inspiration for Silicon Sheep). Emulator evaluations in `docs/planning/` (dormant — useful reference, not driving active work).
 
 ### Project direction
 
@@ -63,8 +63,12 @@ the previous: **get it running → make it drivable/testable → make it measura
    pref a real app (AltiVec Fractal Carbon) now detects and runs its vector kernel through the JIT (see
    below). **Active: the Machine Layer** — a proper hardware emulation layer (MMIO bus, SCC 8530 serial,
    VIA 6522 timer, AArch64 fault-based MMIO dispatch) enabling the 9.0.1 NewWorld ROM to boot natively.
-   M0 (machine profiles) and M1 (device models) are complete; the nanokernel boots into its MMU init
-   phase. See [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md).
+   M0–M3 are complete (machine profiles, device models incl. a Cuda/ADB protocol stack, a virtual
+   clock, and a real PPC exception model delivering live interrupts and syscalls into the NewWorld
+   nanokernel's own handlers), along with the 68k↔PPC Mixed Mode switch — the boot now runs deep
+   into the 9.0.1 ROM's parcel/CFM init on the fidelity profile, with each remaining boot wall
+   mapped and worked milestone-by-milestone. See
+   [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md).
 5. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, a vector register
    allocator, HLE), with the stage-3 benchmarks gating every change against regressions.
 

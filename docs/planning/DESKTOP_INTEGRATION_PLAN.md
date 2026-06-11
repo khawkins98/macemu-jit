@@ -652,6 +652,7 @@ enabled. No Rosetta 2 fallback is needed.
 | **VMware Fusion** | VM library (filter/tag/search/clone badges), linked clones, Unity mode UX | Unity mode (requires guest tools), balloon driver |
 | **UTM** | Prebuilt VM gallery, Apple Virtualization integration, how they handle "no guest tools" case for older OSes — closest to our situation | SPICE agent features (clipboard, display resize) |
 | **Infinite Mac** | Browser-based classic Mac UX — chronological OS picker, instant boot, drag-and-drop file import. **Best model for the "retro OS in modern frame" problem** | N/A (different architecture entirely) |
+| **VirtualBuddy** | Clean SwiftUI VM library grid, visual disk management, settings panels, dark mode — **closest UI/UX reference for Silicon Sheep's SwiftUI frontend**. Guest agent (`VirtualBuddyGuest`) for clipboard + shared-folder auto-mount | Targets Apple Virtualization Framework only (macOS 13+); guest agent requires modern macOS guest |
 | **DOSBox-X** | 100-slot save states, CRT/scanline shaders, built-in capture, pixel-perfect scaling | Save states require full CPU/device serialization (very high effort) |
 
 **Key insight:** APFS `clonefile(2)` gives us VMware's linked clones for free — duplicate a 4 GB

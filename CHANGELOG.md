@@ -11,6 +11,26 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] Machine Layer W2-4 — DEC reload storm RESOLVED: NK scheduler timebase-frequency global was never staged (`21704614`, `f31d475e`)
+
+The D-6 EE-riser DEC storm (250K deliveries/s, 68k world starved) is fixed. Root
+cause: `[KDP+0xf2c]` is the NK scheduler's timebase-frequency global (ticks/second
+— units pinned by the ROM's own duration→ticks helper at 0x50323708, which divides
+it by 250000 for µs conversions); NK cold-init zeroes it and the hardware config
+path that loads it never runs in the trampoline boot, so every timeslice deadline
+computed `now + 0` → `mtdec 0` → instant re-expiry. Fix: stage
+`[KDP+0xf2c] = TimebaseSpeed` in the newworld trampoline block (same family as the
+existing `KDP+0xf6c` staging; structurally inert on paravirtual). Also lands a
+default-on capture-only instrument: VirtClockWriteDEC value+PC ring and value-class
+buckets in the `[VCLK]` dump — the channel that pinned the zero writes to the NK
+timeslice delta path in one boot. Riser-on acceptance: mtspr_dec 14.68M → 8 in 60s,
+reload values = the genuine 1.042ms NK timeslice, 68k world un-starved
+(jDR 14 → 4.8B; sc=173/program=4 = exact gated-off baseline). New successor item:
+delivery now defers on the run-mode native fence in the cold 68k world
+(deferred_native=97, `[XLM_RUN_MODE]` never cleared) — see EE-CHAIN-RECON.md D-7.
+Gates: task tier 5/5 PASS (test-jit plain 353/353, machine suite 13/13, e2e-test 122).
+
+
 ### [SheepShaver] Machine Layer W2-4 steps 1+2 — the EE riser lands; FIRST DEC deliveries ever (12.4M, zero crashes), storm-bounded (`10b1b3e8`)
 
 The trap_return replacement stub at ROM 0x318000 gains an env-gated **EE riser**

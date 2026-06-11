@@ -1122,3 +1122,62 @@ the stub decrements per traversal, nothing increments at delivery); (3) the tick
 deliveries run the NK handler but nothing posts toward the 68k Ticks word (link 7
 consumption side); (4) via_int cluster disposition unchanged. Default gate stays OFF;
 the flip remains W2-4 final acceptance.
+
+### D-7. W2-4 remaining-body item 1 RESOLVED (2026-06-12, label dec-cadence) — the DEC reload storm was an unstaged NK scheduler frequency global
+
+**Root cause (H-A/C/D falsified; H-B-adjacent guest-state hole).** `[KDP+0xf2c]` is the
+NK scheduler's **timebase-frequency global (ticks/second)**, and nothing in the
+trampoline boot ever set it. Evidence chain:
+
+- **[PROBE✓ + capture ring]** New default-on capture instrument (`21704614`,
+  VirtClockWriteDEC value+PC ring): the storm's writes alternate
+  `7fffffff@503230dc` (empty-queue sentinel clamp) / `00000000@503230d4` (the
+  timeslice delta path) — 4.9M each, 2 per delivery. The quick-reload word
+  `[KDP-0x9d4]` probed 0x00000000 at every sample.
+- **[STATIC]** Timeslice re-arm `0x503249ac..c0`: `deadline = now + {0,[KDP+0xf2c]}`,
+  stored to the static rtclock record `[SPRG0-0x2e8/-0x2e4]` (flag `-0x309`); the
+  reload routine `0x503230b8` computes `delta = deadline − now` → with quantum 0,
+  delta == 0 (µs-granularity TB) → `mtdec 0` → expiry at 1 tick (40ns) → storm.
+- **[STATIC]** Units pin: duration→ticks helper `0x50323708` computes
+  `([0xf2c]/250)·r8/4` for positive r8 (ms→ticks) and `([0xf2c]/0x3d090)·|r8|/4` for
+  negative (µs→ticks) — **the 250000 literal is in the ROM**, so `[0xf2c]` must be
+  ticks/second. RDYQ init `0x503237c4` feeds `-0x412` (1042µs timeslice) through it
+  into the run-queue quantum `[KDP-0x9d4]` (watchpoint-confirmed writer, boot 4).
+- **[STATIC]** NK cold-init `0x50326fe8` zeroes `[0xf28/0xf2c]`; the hardware/config
+  path that loads the real value (`0x50325ddc/e0`, reading a device/config block)
+  never runs in the trampoline boot. Init `0x50311368` copies `[0xf2c]` into the
+  scheduler-mode table `[KDP+0xf88]`.
+- **[SEED✓]** Boot 3 discriminator: `SS_SEED_MEM=0x68ffef2c=0x0003d090` collapsed the
+  storm 5× and **un-starved the 68k world for the first time under the riser**
+  (jDR 14 → 2.87B, VIA MMIO traffic) — but 100× too fast (quantum became 10.4µs:
+  `(250000/250000)·1042/4 = 0x104`, exactly the observed quick-reload value — the
+  arithmetic confirms the units).
+
+**Fix (`f31d475e`, newworld trampoline block, structurally inert on paravirtual):**
+stage `[KDP+0xf28]=0, [KDP+0xf2c]=TimebaseSpeed` (25,000,000) before guest entry —
+same staging family as main.cpp's `KDP+0xf6c` timebase-frequency word.
+
+**Acceptance boot (boot 5; riser-on, same recipe as D-6, 60s, SIGTERM park):**
+- **Storm GONE**: `mtspr_dec=8` total (was 14.68M); write ring shows the healthy
+  cadence — TMRQ init clamp, one passed-deadline kick, `0x017d7840` (1s fallback
+  quantum = the staged frequency), then `~0x65c2` (26050 ticks = the 1.042ms RDYQ
+  timeslice). dec_expiries=1.
+- **68k world recovered to the gated-off baseline**: `exc=0/0/0/97/173/4` —
+  **sc=173 (16-distinct) and program=4 EXACTLY match the D-6 gated-off baseline**;
+  jDR=4.8B, VIA IER/ORB traffic live.
+- **New frontier blocker (successor item)**: the one latched DEC now defers on the
+  native fence — `deferred_native=97`, `[XLM_RUN_MODE]` is never cleared in the cold
+  68k world (the trampoline enters the 68k world without an FE02 backward switch, so
+  the run-mode word still holds its native-window value). delivered_dec=0 in this
+  boot; the 0x50313200 probe never fired. **Ticks verdict: still unmoved — but now
+  blocked on the run-mode fence, no longer on cadence.** Link-7 consumption-side
+  (nothing posts Ticks even when delivered) remains as recorded in D-6.
+
+**W2-4 remaining body after D-7**: (1) ~~DEC reload cadence~~ **RESOLVED**;
+(1b) NEW: run-mode fence vs the cold 68k world (DEFER_NATIVE starves delivery in
+exactly the regime the riser is for — decide ownership: clear `[0x2810]` at the cold
+68k entry, or teach the fence the cold-world case); (2) XLM_IRQ_NEST ownership
+(unchanged); (3) the Ticks consumption path (unchanged); (4) via_int cluster
+(unchanged). Boots used: 5/5 (probe, PC-attrib [SIGTRAP at 0x5046dc1c — delivery
+onto the DR-emulator init loop, one-off, not reproduced], seed, watchpoint,
+acceptance). Falsifications: NONE.

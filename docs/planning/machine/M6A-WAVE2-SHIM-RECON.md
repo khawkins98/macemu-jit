@@ -305,3 +305,55 @@ donor study's §7.2 predicted precisely this: **Cuda is now the named, live, on-
 consumer — M3b (Cuda protocol + minimal ADB stub + OpenPIC) is the next milestone**, with
 the M6a remaining items (the post-Cuda spin diagnosis, ongoing-entry rung 2 polish, shim
 queue continuation) interleaved as its acceptance reveals them.
+
+---
+
+## M3b Wave 1 acceptance — symptom record (2026-06-11, dev_cuda live, commits 143f66e7..8c7f6796)
+
+**The 18338-read sync frontier is CROSSED; the next wall is a bounded ~15000-iteration IFR
+poll that expires with no transfer ever attempted.**
+
+Acceptance boot (90s, /tmp/m2accept.prefs, log /tmp/m3b_accept.log):
+
+```
+[VIA] reads: ORB=3340 SR=2 IFR=15002
+[VIA] orb: ddrb=30 writes=4 trace=38,28,30
+[CUDA] packets=0 responses=0 syncs=1 bytes_in=0 bytes_out=0 adb=0 ... unknown=0
+[HB] comp frozen at 849, mmio frozen at V:18344 (the boot gave up and parked)
+```
+
+Symptom anatomy (all ROM references = file offsets in the SS_DUMP_ROM 9.0.1 image,
+guest = +0x50000000):
+
+1. **Sync now completes.** The startup sync at 0xd0e0–0xd134 was matched
+   instruction-by-instruction to the telemetry: ACR shift-in setup; SR read #1 (IFR.2
+   clear); `bclr #4,(a1)` TACK assert (trace 38→28); wait-TREQ-assert at 0xd0ae
+   (`btst #3,(a1); dbeq` — THE old 18338-budget loop, now exits after ~3.3k reads);
+   `bset #4,(a1)` TACK negate (RMW of the derived ORB → writes 0x30); wait-TREQ-negate
+   at 0xd0c8 (`dbne`); SR read #2 = the sync byte; success; ACR := 0x1C. All 4 ORB
+   writes + both SR reads accounted. dev_cuda's TREQ-mirrors-TACK sync semantics
+   (QEMU cuda_update lines 150–159) satisfied the real ROM choreography on first contact.
+
+2. **The new wall: IFR=15002 polls, then give-up.** ~15000+2 reads = a bounded timeout
+   loop (same `dbeq`-budget shape as the old 18338 ≈ 18336+2). CRITICAL DATUM: the
+   pre-model boot showed the SAME IFR=15002 — this phase always existed behind the sync
+   wall and its budget expires regardless of the model. The boot never enters any send
+   engine (no TIP assert in the trace, packets=0): it is waiting for an EVENT, not a
+   response — most plausibly an SR-int (IFR.2) or CB1 (IFR.4) the real machine would
+   generate after sync that our model does not, OR a non-Cuda IFR bit entirely
+   (timer — the Ticks-starvation hypothesis from the M3b plan rev 2 M1 stays live).
+
+3. **Polled-dispatch architecture surfaced** (Wave-2-relevant): trampolines at 0x6d58
+   (`btst #2,IFR` → push handler [$19a]) and 0x6e90 (`btst #4,IFR` = CB1 → push [$1a2]),
+   plus an SCC poller at 0x6ea0 (VIA base − 0x16000) — the 68k boot world dispatches
+   device service handlers by POLLING the VIA IFR, not via real interrupt delivery.
+   The send engines: Cuda-polarity at 0x9068 (TIP=bclr#5, per-byte IFR.2 waits at
+   0x90d0/0x911e, commit `ori.b #$30` at 0x9112); Egret-polarity at 0x9c28 (TIP
+   active-HIGH via bset#5). Full IFR.2 poll-site catalog: 0x90d0 0x911e 0x915c 0x9190
+   0x92be 0x964c 0x96f2 0x9730 0x9788 0x97bc 0x97e0 0x980c 0x9832 0x984e 0x9c84
+   0x9c9c 0x9d2e (+ the 0x96xx–0x98xx third engine family).
+
+Disposition: root-cause diagnosis dispatched (which loop, which IFR bit, which oracle
+behavior is missing); per the plan's stop-rule, if the awaited event is NOT
+Cuda-model-side (timer/interrupt delivery), it is Wave-2/M6 territory — no tunneling.
+_Root-cause results to be appended below by the diagnostician._

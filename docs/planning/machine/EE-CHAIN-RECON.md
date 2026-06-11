@@ -1161,6 +1161,23 @@ trampoline boot ever set it. Evidence chain:
 stage `[KDP+0xf28]=0, [KDP+0xf2c]=TimebaseSpeed` (25,000,000) before guest entry —
 same staging family as main.cpp's `KDP+0xf6c` timebase-frequency word.
 
+> **Review fold (2026-06-12): APPROVE** — frequency correct by construction (the same
+> `TimebaseSpeed` variable feeds `VirtClockInit`/mftb and the staging; the NK's 1s
+> fallback reload came back 0x017d7840 = 25,000,000 exactly). P2 clarifications folded:
+> (i) **Why the staging survives the NK cold-init zeroer** (unlike KDP+0x6b4, which the
+> zeroer clobbers and needed a ROM patch): the `0x50326fe8` zeroer runs on the
+> hardware/config init path that the trampoline boot never takes — the trampoline enters
+> past it, so init_emul_ppc staging persists; proven empirically by the acceptance boot
+> (the staged value was live at re-arm time). If a future boot path runs cold-init, this
+> staging would need the ROM-patch treatment — watch for a returning mtdec-0 storm.
+> (ii) **The falsified hypotheses, for the record**: H-A = host clock mis-conversion of
+> the written DEC value (falsified — conversion exact); H-C = pending latch not cleared
+> on reprogram (falsified — cleared exactly once at delivery); H-D = stale-pending
+> re-raise ordering after the riser's EE edge (falsified — ordering correct). H-B
+> (timebase broken relative to DEC) was adjacent: the timebase was fine, the NK's
+> *frequency global* was unstaged. (iii) f31d475e's commit message ends with a dangling
+> "Gates: task tier (see below)" — the gate record lives in the CHANGELOG entry.
+
 **Acceptance boot (boot 5; riser-on, same recipe as D-6, 60s, SIGTERM park):**
 - **Storm GONE**: `mtspr_dec=8` total (was 14.68M); write ring shows the healthy
   cadence — TMRQ init clamp, one passed-deadline kick, `0x017d7840` (1s fallback

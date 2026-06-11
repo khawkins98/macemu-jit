@@ -17,7 +17,63 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-11 (latest) — NK syscall surface: recon-heavy/implementation-light is now 3-for-3; static stub tables pre-answer conformance; SIGTERM-not-SIGALRM for capture boots
+## 2026-06-11 (latest) — FE1F service surface: a capped triage print is not a counter; refinement vs falsification is a judged call; "unknown ≠ dead" is codified
+
+Three durable lessons from the FE1F-service-surface milestone (plan
+`docs/superpowers/plans/2026-06-11-fe1f-service-surface.md` revs 2/3; evidence in
+`docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md` — zero falsifications across
+Tasks 0/A/B/C):
+
+### 1. A capped triage print is NOT a counter — baseline numbers must come from instruments designed to count
+
+The "5 sc deliveries per boot" baseline — quoted across trackers, gates, and two
+milestones' worth of byte-identical comparisons — was always the **cap-5 PRINT
+artifact**: the `[EXC] SC delivered #N` lines stop at 5 by design, no parked boot ever
+emitted the `delivered_sc` total (the term-dump path has no `[EXC]` stats line; only the
+crash path prints it, and parked boots die by SIGTERM), and nobody noticed until the
+FE1F advance pushed the count past the cap. True totals: 8 deliveries / 7 distinct
+parked, 13 / 9 distinct FE1F-armed. The fix (Task C, `2949ec32`) is the rule already in
+the plans — **counters for counts, probes for ABI** — applied to one more instrument
+class: when a number becomes a *baseline* (something gates or trackers quote), check
+whether its source was designed to count or merely to triage. A capped print, a
+logarithmically-sampled probe (`visit=1,10,100…`), and a deduped ring all UNDERCOUNT by
+design. Corollary: when a baseline number is corrected this way it is an
+**instrument-gap correction, not a falsification** — the printed lines were always
+byte-identical and stay so.
+
+### 2. Refinement vs falsification is a judged call — judge it in writing against the MECHANISM, not the row
+
+Task B found two mis-pins in the Task-0 conformance contract: the ExpandMem slot recipe
+was off by 4 (a missed `lea` +4 displacement → the watch had been on the wrong word,
+and its "fill → churn" lifecycle reading was unrelated neighbor traffic), and r4's
+return value was the NK kernel-object **ID handle**, not the object pointer (a
+`mr r4,r8` traced to the wrong r8 definition). Both were corrected statically and
+confirmed in the SAME evidence boot. The judgment, recorded in a dated entry: this is a
+**predicate REFINEMENT, not a falsification** — the pinned *mechanism* (callout returns,
+r3=0 noErr, nonzero r4 success token stored through the slot pointer, the routine
+proceeds) held exactly; only the static transcription of two details was wrong. So the
+one-iteration machinery (re-pin boot, escalation counter) was not consumed. The
+discipline that makes this honest rather than self-serving: (a) the judgment is written
+and dated where the contract lives; (b) the mechanism/detail line is drawn BEFORE
+looking for an excuse — if the mechanism rows had failed (callout never returns, or the
+skip-arm taken), that would have been a falsification regardless of how small the fix;
+(c) wrong readings built on the mis-pin are explicitly RETIRED by name (Task A's churn
+reading), not silently dropped.
+
+### 3. "Unknown ≠ dead" is codified in the workflow rules — cross-check there, don't re-derive
+
+The milestone's headline lesson — rung-2 Task U stopped the entry-vector slots as "dead"
+when the raw `twi` placeholders were actually load-bearing trap-to-NK-dispatch
+trampolines — is already an earned rule in `docs/MILESTONE-WORKFLOW.md` (rules table:
+"Verify a slot is truly dead before stopping it — 'unknown' ≠ 'dead'", added at rev-3
+ratification, `f3727fc2`). Read it there; this entry just adds the closure data: the
+restore-and-route fix shipped default-on (`be0e02cb`), the retired stop policy's
+diagnostics survived as delivery telemetry (the slot-15 exhaustion line), and the same
+recon that falsified the stop policy also closed rung-2's "[ECB+0x9e0] writer never
+identified" residue (the NK cold-init publication cluster) — one more instance of the
+falsification paying for itself.
+
+## 2026-06-11 — NK syscall surface: recon-heavy/implementation-light is now 3-for-3; static stub tables pre-answer conformance; SIGTERM-not-SIGALRM for capture boots
 
 Three durable lessons from the syscall-surface milestone (plan
 `docs/superpowers/plans/2026-06-11-nk-syscall-surface.md` rev 2; evidence in

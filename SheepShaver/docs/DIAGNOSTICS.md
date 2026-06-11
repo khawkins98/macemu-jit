@@ -237,6 +237,7 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_NW_MODEL=…` | Name-registry `compatible`-string injection experiment (default off; groundwork kept — necessary alongside, not sufficient by itself). |
 | `SS_NW_SYNTH_ENTRY=1` | Synthetic-entry research diagnostic (`rom_patches.cpp`); dead-ends at the first Mixed-Mode transition — kept as a research tool only. |
 | `SS_NW_FE1F_SURFACE=0` | **Opt OUT** of the FE1F service surface (newworld **default ON** since FE1F Task C, `be0e02cb` 2026-06-11). One gate covers both the raw-`twi` placeholder restore and the 0x700 program-interrupt delivery. Full reference: "Machine Layer M6 — FE1F service surface" below. |
+| `SS_NW_DR_R0_INVARIANT=0` | **Opt OUT** of the DR r0≡0 invariant re-assert (newworld **default ON** since desync Task C, `25be4342` 2026-06-11). The DR (68k dynamic recompiler) maintains r0=0 as a standing invariant; the FE1F `twi`-delivery saves the in-flight r0 (=selector) into the 68k ctx, but the save-and-switch deliberately omits r0 — the stale slot then re-poisons r0 on every subsequent switch-in to the 68k world (the 68k PC desync root cause). Fix: a 3-word stub (`li r0,0; lwz r1,0x10c(r3); b 0x5046e1a4`) at the slot-exit re-entry site 0x5046e1a0 (Apple's own db7c idiom). Gated off: boot dies at the 68k PC-desync wall (DSAT-WALL-RECON.md + recon `c8429b23`; implementation `ac50b2c9`). Default on: boot advances to the **0x505bb060 off-ROM PC slide** (the current frontier, `sc` 13→169 deliveries). `=1` remains valid explicit-on; a `[NW-DR-R0]` line at patch time announces the state. |
 
 ## Machine Layer M2 — virtual clock and event scheduler diagnostics
 
@@ -810,7 +811,12 @@ Two `[EXC] PROGRAM delivered` lines (#1 selector $31, #2 selector $36 — both s
 `srr0=5046e8e0 word=0fff0008 … -> entry=50314700`); the selector-0x31 round trip
 returns r3=0/r4=handle (e.g. `0x00120001`, NK kernel-object ID `(dir-index<<16)|gen`)
 and the 68k stores it into the ExpandMem slot (`[0x100037dc]`); sc selectors 13/9-distinct;
-ring total ~4.48M records (vs 839k parked). The boot then dies at the **DSAT
-stack-underflow wall** (System Error ID 10; alert machinery underflows RAMBase → host
-SIGSEGV `ea=0x…0fffff42` class) — the named frontier as of 2026-06-11, captured in
-`docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "Frontier update (FE1F Task C closeout)".
+ring total ~4.48M records (vs 839k parked). **With `SS_NW_DR_R0_INVARIANT` (default ON),
+the boot passes the former DSAT wall** — PROGRAM deliveries increase to 4 (both FE1F
+invocations), sc deliveries grow to **169/16-distinct** (new selectors 0xfffffffe ×17,
+0xffffffff ×103 — the negative-selector candidate surface), and the boot runs ~4.8s
+JIT-time before dying at the **0x505bb060 off-ROM PC slide** (the current frontier as of
+2026-06-11: control flow reaches pc=0x505bb060 beyond the staged-copy end 0x50500000 and
+slides through zeros → host SIGSEGV; captured in `docs/planning/machine/DSAT-WALL-RECON.md`
+"Task A" + `M6A-WAVE2-SHIM-RECON.md` "Frontier update (desync Task C closeout)"). With
+`SS_NW_DR_R0_INVARIANT=0`, boot dies at the 68k PC-desync wall (the DSAT-baseline path).

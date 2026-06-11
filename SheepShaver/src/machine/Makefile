@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_dev_cuda test_adb_stub
+TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_dev_cuda test_adb_stub test_dev_openpic
 
 test: $(TESTS)
 	./test_machine_profile
@@ -17,6 +17,7 @@ test: $(TESTS)
 	./test_exc_core
 	./test_dev_cuda
 	./test_adb_stub
+	./test_dev_openpic
 
 test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/machine_profile.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_machine_profile.cpp machine_profile.cpp
@@ -56,6 +57,10 @@ test_dev_cuda: test_dev_cuda.cpp dev_cuda.cpp ../include/dev_cuda.h
 
 test_adb_stub: test_adb_stub.cpp adb_stub.cpp ../include/adb_stub.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_adb_stub.cpp adb_stub.cpp
+
+# M3b Wave 2 (stop-rule disposition: model + unit tests, EXC_EXTERNAL wiring deferred)
+test_dev_openpic: test_dev_openpic.cpp dev_openpic.cpp ../include/dev_openpic.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_openpic.cpp dev_openpic.cpp
 
 clean:
 	rm -f $(TESTS)

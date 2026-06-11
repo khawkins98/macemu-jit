@@ -70,16 +70,21 @@ static void send_packet(const uint8_t *data, int len)
 	uint8_t f = CudaSRWritten(&cuda, data[0]);
 	CHECK(f & CUDA_SEAM_CLEAR_SR_INT);            // M4: SR access clears IFR.2
 	f = orb_write(0x18);                          // assert TIP (TACK negated)
-	CHECK(f & CUDA_SEAM_RAISE_SR_INT);            // byte 0 captured on TIP edge
+	CHECK(f == CUDA_SEAM_NONE);                   // CV-10: raises are DEFERRED
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);  // delivered at IFR poll
 	uint8_t tack = CUDA_TACK;
 	for (int i = 1; i < len; i++) {
 		f = CudaSRWritten(&cuda, data[i]);
 		CHECK(f & CUDA_SEAM_CLEAR_SR_INT);
 		tack ^= CUDA_TACK;                        // toggle TACK = capture edge
 		f = orb_write((uint8_t)(0x08 | tack));    // TIP stays asserted (bit5=0)
-		CHECK(f & CUDA_SEAM_RAISE_SR_INT);
+		CHECK(f == CUDA_SEAM_NONE);
+		CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);
 	}
 	(void)orb_write(0x38);                        // negate TIP+TACK: commit (C2)
+	// "always an IRQ at the end of transfer" (QEMU): drain the deferred raise
+	// like the guest's post-commit IFR poll would.
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);
 }
 
 // Read a full Cuda->host response (assert TIP, read SR, toggle TACK until TREQ
@@ -90,7 +95,8 @@ static std::vector<uint8_t> read_response()
 	if (treq_bit() != 0) return out;              // nothing pending
 	host_acr = 0x00;                              // shift in (Cuda->host)
 	uint8_t f = orb_write(0x18);                  // assert TIP: byte 0 -> SR
-	CHECK(f & CUDA_SEAM_RAISE_SR_INT);
+	CHECK(f == CUDA_SEAM_NONE);                   // CV-10: raises are DEFERRED
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);
 	uint8_t tack = CUDA_TACK;
 	for (;;) {
 		uint8_t b;
@@ -100,10 +106,12 @@ static std::vector<uint8_t> read_response()
 		if (treq_bit() == 1) break;               // TREQ negated at last byte
 		tack ^= CUDA_TACK;
 		f = orb_write((uint8_t)(0x08 | tack));
-		CHECK(f & CUDA_SEAM_RAISE_SR_INT);
+		CHECK(f == CUDA_SEAM_NONE);
+		CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);
 	}
 	(void)orb_write(0x38);                        // end transaction
 	CHECK(treq_bit() == 1);                       // back to idle
+	(void)CudaSettle(&cuda);                      // drain the end-of-transfer raise
 	return out;
 }
 
@@ -129,22 +137,38 @@ int main()
 	f = orb_write(0x28);                          // TACK asserted, TIP negated
 	// QEMU cuda_update sync semantics: TREQ mirrors TACK while TIP negated.
 	CHECK(treq_bit() == 0);                       // the 18338-poll terminates
-	CHECK(f & CUDA_SEAM_RAISE_SR_INT);            // attention ack (SR int)
+	CHECK(f == CUDA_SEAM_NONE);                   // CV-10: raise NOT eager
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);  // attention ack (SR int)
 	CHECK(CudaSettle(&cuda) == CUDA_SEAM_NONE);   // consume-once: no double raise
 	f = orb_write(0x38);                          // host negates TACK: sync done
 	CHECK(treq_bit() == 1);                       // back to idle
-	CHECK(f & CUDA_SEAM_RAISE_SR_INT);
+	CHECK(f == CUDA_SEAM_NONE);
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);
 	CHECK(cuda.syncs == 1);
 
-	// Seam-flag contract: mutators deliver RAISE eagerly (consume-once); the
-	// settle backstop on the poll surfaces is idempotent and never double-raises.
-	f = orb_write(0x28);
-	CHECK(f & CUDA_SEAM_RAISE_SR_INT);
-	CHECK(CudaSettle(&cuda) == CUDA_SEAM_NONE);
-	CHECK(CudaSettle(&cuda) == CUDA_SEAM_NONE);
-	f = orb_write(0x38);
-	CHECK(f & CUDA_SEAM_RAISE_SR_INT);
-	CHECK(treq_bit() == 1);
+	// ---- CV-10: deferred SR-int delivery (M3b Wave-1 acceptance frontier) ----
+	// ROM 9.0.1 startup sync at 0x9584 (68k, guest 0x50009584): after TACK
+	// negate + the sync-byte SR read (0x9602), the ROM waits AGAIN for IFR.2
+	// with a 15000-poll budget (0x960e) before declaring the Cuda dead (parks
+	// at 0x9754 'bra.b *').  On hardware/QEMU the post-edge SR int arrives
+	// ~20us AFTER that SR read (QEMU cuda_delay_set_sr_int, sr_delay_ns).
+	// Lazy-model equivalent: edge raises latch in sr_int_pending and deliver
+	// ONLY at the IFR-read surface (CudaSettle); SR access must NOT consume an
+	// undelivered pending raise.
+	f = orb_write(0x28);                          // TACK assert   (ROM 0x95be)
+	CHECK(treq_bit() == 0);                       // TREQ-assert poll (0x95c4)
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);  // IFR wait #1 (0x95da)
+	f = orb_write(0x38);                          // TACK negate   (0x95ec)
+	CHECK(treq_bit() == 1);                       // TREQ-negate poll (0x95f2)
+	{
+		uint8_t sync_byte;
+		f = CudaSRRead(&cuda, &sync_byte);        // sync-byte read (0x9602)
+		CHECK(f & CUDA_SEAM_CLEAR_SR_INT);        // clears the LATCHED IFR.2 only
+	}
+	// THE FRONTIER: the 0x960e wait must still see the negate-edge raise.
+	CHECK(CudaSettle(&cuda) & CUDA_SEAM_RAISE_SR_INT);
+	CHECK(CudaSettle(&cuda) == CUDA_SEAM_NONE);   // consume-once
+	CHECK(cuda.syncs == 2);
 
 	// ---- CV-2: GET_TIME full choreography ----
 	{

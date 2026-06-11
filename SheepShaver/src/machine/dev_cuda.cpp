@@ -64,7 +64,8 @@ const char *CudaTakePendingWarning(CudaDevice *c)
 	return w;
 }
 
-// Consume-once raise latch (header contract: first consumer delivers).
+// Consume-once raise latch (header contract: delivered ONLY via CudaSettle on
+// the IFR-read surface — CV-10 deferred-delivery model).
 static uint8_t take_pending(CudaDevice *c)
 {
 	if (c->sr_int_pending) {
@@ -76,8 +77,13 @@ static uint8_t take_pending(CudaDevice *c)
 
 uint8_t CudaSettle(CudaDevice *c)
 {
-	// Synchronous design: mutators normally deliver the raise themselves; this
-	// backstop (the C2 ORB-read / IFR-read poll surfaces) returns any leftover.
+	// CV-10 deferred delivery: this is the ONLY raise-delivery point, called
+	// from the VIA's R_IFR read path (the guest's IFR.2 poll loops).  It is
+	// the lazy-model analogue of QEMU's cuda_delay_set_sr_int (sr_delay_ns =
+	// 20us): on hardware the post-edge SR int arrives AFTER the host's
+	// follow-up SR read, so it must not be delivered (and then cleared) before
+	// the guest starts polling IFR.  ROM 9.0.1 startup sync 0x9584 depends on
+	// this ordering (root cause of the M3b Wave-1 acceptance park at 0x9754).
 	return take_pending(c);
 }
 
@@ -85,7 +91,9 @@ uint8_t CudaSRWritten(CudaDevice *c, uint8_t value)
 {
 	c->sr = value;
 	c->sr_writes++;
-	c->sr_int_pending = 0;      // M4: SR access clears IFR.2 (pending included)
+	// M4 (rev: CV-10): SR access clears the LATCHED IFR.2 only.  An undelivered
+	// pending raise survives — QEMU's sr_delay timer is not cancelled by SR
+	// accesses either.
 	return CUDA_SEAM_CLEAR_SR_INT;
 }
 
@@ -93,8 +101,7 @@ uint8_t CudaSRRead(CudaDevice *c, uint8_t *value)
 {
 	*value = c->sr;
 	c->sr_reads++;
-	c->sr_int_pending = 0;
-	return CUDA_SEAM_CLEAR_SR_INT;
+	return CUDA_SEAM_CLEAR_SR_INT;   // latched IFR.2 only; pending survives (CV-10)
 }
 
 uint8_t CudaDeriveORB(const CudaDevice *c, uint8_t stored_orb)
@@ -413,7 +420,12 @@ uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr)
 	}
 
 	c->last_b = b;
-	return take_pending(c);        // eager synchronous delivery (consume-once)
+	// CV-10: raises are NOT delivered at the write edge.  sr_int_pending stays
+	// latched for CudaSettle on the IFR-read surface — delivering here lets the
+	// guest's follow-up SR read consume the int before its IFR poll loop starts
+	// (the ROM 0x9584 sync park).  QEMU delays these ints 20us for the same
+	// reason (cuda_delay_set_sr_int).
+	return CUDA_SEAM_NONE;
 }
 
 // --- telemetry formatter (house style: snprintf into caller buffer) -----------

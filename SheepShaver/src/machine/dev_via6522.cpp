@@ -69,12 +69,13 @@ static void cuda_touch(VIA6522 *v, const char *what)
 // --- M3b Task 3: Cuda attachment seam (full contract in the header) -------------
 // Apply seam flags to the IFR DIRECTLY (M6: every seam call already runs under
 // the non-recursive bus region lock — locked_call would deadlock). Clear before
-// raise: CudaSRRead/Written return CLEAR, the mutators' consume-once latch
+// raise: CudaSRRead/Written return CLEAR, CudaSettle's consume-once latch
 // returns RAISE; the two never arrive together today, but the order is safe
 // if they ever do (a raise must not be lost to a stale clear).
-// Timing (plan rev 2 M4, the seam-side record): lazy-only — dev_cuda arms no
-// scheduler one-shots, CudaSettle on the two poll surfaces (R_ORB/R_IFR reads)
-// is the primary completion mechanism, and no allocation happens on fault paths.
+// Timing (plan rev 2 M4, revised by CV-10): lazy-only — dev_cuda arms no
+// scheduler one-shots.  Raise delivery is DEFERRED to CudaSettle on the R_IFR
+// read surface ONLY (the lazy analogue of QEMU's 20us cuda_delay_set_sr_int);
+// mutators and ORB reads never deliver.  No allocation happens on fault paths.
 static inline void cuda_apply(VIA6522 *v, uint8_t flags)
 {
 	if (flags & CUDA_SEAM_CLEAR_SR_INT) v->ifr_latched &= ~IFR_SR;
@@ -238,10 +239,12 @@ uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
 	v->reg_reads[reg]++;   // M6a Wave 2 #4: read histogram (under the bus lock)
 	switch (reg) {
 	case R_ORB:
-		if (v->cuda) {
-			cuda_apply(v, CudaSettle(v->cuda));        // C2: poll-surface backstop
-			return CudaDeriveORB(v->cuda, v->orb);     // C1: bit 3 recomputed
-		}
+		if (v->cuda)
+			// C1: bit 3 recomputed.  NO CudaSettle here (CV-10): TREQ derivation
+			// is synchronous, but raise delivery is IFR-read-only — settling on
+			// ORB reads can deliver the post-edge raise into IFR.2 before the
+			// guest's SR read, which then clears it (the ROM 0x9584 sync park).
+			return CudaDeriveORB(v->cuda, v->orb);
 		return v->orb;
 	case R_ORA:
 	case R_ORA_NH:    return v->ora;
@@ -268,7 +271,7 @@ uint64_t VIARead(void *opaque, uint32_t addr, unsigned size)
 	case R_PCR:       return v->pcr;
 	case R_IFR:
 		if (v->cuda)
-			cuda_apply(v, CudaSettle(v->cuda));        // C2: the other poll surface
+			cuda_apply(v, CudaSettle(v->cuda));   // CV-10: the ONE delivery surface
 		return ifr_now(v);
 	case R_IER:       return 0x80 | v->ier;   // bit7 always set on reads (6522 spec)
 	}

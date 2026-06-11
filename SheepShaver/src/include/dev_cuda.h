@@ -30,22 +30,28 @@
  *      CudaORBWritten returns.
  *    - All seam calls run under the VIA's bus region lock; this module is
  *      lock-free and NEVER takes locks or calls locked_call (M6). "Raise/clear
- *      IFR.2" is communicated back synchronously via CUDA_SEAM_* return flags —
- *      the VIA owns the IFR.  The raise latch is consume-once: the first seam
- *      call that returns CUDA_SEAM_RAISE_SR_INT consumes it, so applying flags
- *      from mutators AND calling CudaSettle on the poll surfaces (ORB reads,
- *      IFR reads — the C2 lazy-settle rule) can never double-raise.
+ *      IFR.2" is communicated back via CUDA_SEAM_* return flags — the VIA owns
+ *      the IFR.  Raise delivery is DEFERRED (CV-10): mutators latch
+ *      sr_int_pending but return no raise; CudaSettle — called from the VIA's
+ *      R_IFR read path ONLY — is the single delivery point, consume-once (no
+ *      double-raise).  SR accesses clear the latched IFR.2 but never consume
+ *      an undelivered pending raise.
  *    - §2g: no stdio, no malloc on any seam path (fault-thread reachable).
  *      Unknown commands latch a one-shot warning (CudaTakePendingWarning),
  *      same pattern as the VIA's cuda_touch loud stub.
  *
- *  Timing (m10): lazy-only.  No EventScheduler one-shots are armed — the boot
- *  protocol is poll-driven (S3 §1.5: ORB TREQ poll + IFR bit-2 poll) and every
- *  state transition completes synchronously inside the seam call.  The byte
- *  timing constants (71/88/61/13 us, donor study §3.2) are deliberately not
- *  modeled; QEMU's 20 us SR_INT delay exists for an interrupt-delivery race
- *  ("MacOS 9 is racy", cuda.h) that cannot occur on the IFR-poll-only newworld
- *  profile.  Revisit if/when VIA SR interrupts are delivered for real (Wave 2+).
+ *  Timing (m10, revised by CV-10): lazy-only.  No EventScheduler one-shots are
+ *  armed — the boot protocol is poll-driven (S3 §1.5: ORB TREQ poll + IFR
+ *  bit-2 poll) and state transitions complete synchronously inside the seam
+ *  call, EXCEPT SR-int delivery, which is deferred to the next IFR read
+ *  (CudaSettle).  m10's original claim that QEMU's 20 us SR_INT delay
+ *  ("MacOS 9 is racy", cuda.h) cannot matter on a poll-only profile was WRONG:
+ *  ROM 9.0.1's startup sync (68k @ 0x9584) reads SR between the TACK-negate
+ *  edge and its 15000-budget IFR.2 wait — eager delivery lets that SR read
+ *  clear the int before the wait starts, and the boot parks at 0x9754
+ *  (M3b Wave-1 acceptance root cause).  Deferred-to-IFR-read delivery is the
+ *  deterministic lazy equivalent of QEMU's delay.  The byte timing constants
+ *  (71/88/61/13 us, donor study §3.2) remain unmodeled.
  *
  *  RTC (m8): GET_TIME returns Mac-epoch (1904) seconds in the LOCAL-time
  *  convention of macos_util.cpp:TimeToMacTime().  The time source is an
@@ -140,7 +146,8 @@ struct CudaDevice {
 	                         // accesses here; its own stored sr goes unused)
 	uint8_t  last_b;         // last host-written ORB image (TACK/TIP bits)
 	uint8_t  treq_asserted;  // 1 => TREQ low => derived ORB bit 3 reads 0
-	uint8_t  sr_int_pending; // consume-once raise latch (see header contract)
+	uint8_t  sr_int_pending; // consume-once raise latch; delivered ONLY by
+	                         // CudaSettle on the IFR-read surface (CV-10)
 	// --- host->Cuda packet capture ---
 	uint8_t  in_buf[CUDA_IN_BUF_SIZE];
 	int      in_count;
@@ -189,20 +196,23 @@ extern void CudaBindADB(CudaDevice *c, CudaADBHandler fn, void *opaque);
 // Host wrote ORB.  orb = full written byte (bits 4/5 = TACK/TIP), acr = current
 // ACR (bit 4 = shift direction: 1 = host->Cuda).  Edge-triggered: byte capture /
 // load on TACK/TIP transitions; packet commit + synchronous command processing
-// when TIP negates with captured bytes (C2).  Returns CUDA_SEAM_* flags.
+// when TIP negates with captured bytes (C2).  Always returns CUDA_SEAM_NONE —
+// raises are deferred to CudaSettle (CV-10).
 extern uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr);
 
-// Host wrote / read the shift register.  Both clear IFR.2 (M4) — flags say so.
+// Host wrote / read the shift register.  Both clear the LATCHED IFR.2 (M4) —
+// flags say so — but never an undelivered pending raise (CV-10).
 extern uint8_t CudaSRWritten(CudaDevice *c, uint8_t value);
 extern uint8_t CudaSRRead(CudaDevice *c, uint8_t *value);
 
 // Derive the ORB value the host must read: stored_orb with bit 3 recomputed
-// from Cuda state (C1 — idle => 1, response/sync pending => 0).  Pure; call
-// CudaSettle first on the ORB-read path (or use both, order per Task 3).
+// from Cuda state (C1 — idle => 1, response/sync pending => 0).  Pure; the
+// ORB-read path uses this ALONE (no settle — CV-10 delivery is IFR-read-only).
 extern uint8_t CudaDeriveORB(const CudaDevice *c, uint8_t stored_orb);
 
-// Lazy settle for the two poll surfaces (ORB reads, IFR reads — C2).  Returns
-// any unconsumed CUDA_SEAM_RAISE_SR_INT.  Safe to call anywhere, idempotent.
+// Deferred raise delivery — call from the IFR-read surface ONLY (CV-10; the
+// lazy analogue of QEMU cuda_delay_set_sr_int).  Returns any unconsumed
+// CUDA_SEAM_RAISE_SR_INT.  Consume-once, idempotent.
 extern uint8_t CudaSettle(CudaDevice *c);
 
 // Return-and-clear the pending one-shot warning (static string), or NULL.

@@ -260,12 +260,14 @@ the 60 Hz VBL timer and hang early boot (see the lldb/VBL caveat in `CLAUDE.md` 
 M3a adds a compact exception counter to the periodic `[HB]` heartbeat (the `exc=…` suffix):
 
 ```
-[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0/0
+[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0/0/5
 ```
 
-The four numbers are `delivered/deferred_ee/deferred_depth/deferred_native` for the DEC
-exception class, accumulated since boot (the 4th field landed with M6a rung-2 Task W2,
-`43d42b83` — logs older than that show the 3-wide `exc=N/N/N` form):
+The five numbers are `delivered/deferred_ee/deferred_depth/deferred_native/delivered_sc`,
+accumulated since boot. The first four are the DEC exception class (the 4th field landed
+with M6a rung-2 Task W2, `43d42b83` — logs older than that show the 3-wide `exc=N/N/N`
+form); the 5th is the syscall class (landed with NK-syscall-surface Task A, `bcce26c2` —
+older logs show the 4-wide form):
 
 | Subfield | Meaning |
 |---|---|
@@ -273,6 +275,11 @@ exception class, accumulated since boot (the 4th field landed with M6a rung-2 Ta
 | `deferred_ee` | Deliveries skipped because `MSR[EE]=0` at the poll point (latch held; re-raised at EE 0→1 edges) |
 | `deferred_depth` | Deliveries skipped because `execute_depth > 1` (inside a nested execute context; re-raised on return) |
 | `deferred_native` | Deliveries deferred while a MixedMode **native excursion** is in flight — the M6a W2 DEC fence: `deliver_pending_dec_exception` defers while `[XLM_RUN_MODE]` (guest `0x2810`) `!= 0`. The NK maintains that word 1-forward/0-backward across exactly the MM switch pair, so a DEC cannot save into the MMCB mid-excursion. Known window (residue R-14): the word is 0 during the *backward* save — benign by same-values, recorded not fixed. |
+| `delivered_sc` | **Delivered `sc` syscalls** (NK-syscall-surface Task A, plan rev 2 P-M4: counters for counts, probes for ABI). Incremented in `SheepExcSyscallShim` on every resolved-entry sc delivery; the first 5 also print `[EXC] SC delivered #N: …` to stderr (see below). With the surface opted out (`SS_NW_SC_SURFACE=0`) this stays 0 — the sc dies at the FATAL capture instead. |
+
+The same five counters are emitted as one `[EXC] delivered_dec=… deferred_ee=…
+deferred_depth=… deferred_native=… delivered_sc=…` line on the crash-path dump
+(newworld only — paravirtual crash output stays byte-identical).
 
 On the paravirtual profile the suffix is omitted (`exc=NULL`). Telemetry rides the heartbeat
 rather than `atexit` because `SIGALRM` from the `perl alarm` wrapper skips `atexit` dumps.
@@ -294,18 +301,33 @@ after the exception-entry transform; `entry` = guest handler PC.
 unresolved when a delivery is attempted. Use `SS_EXC_ENTRY` to override without a rebuild.
 
 ```
-[EXC] FATAL: sc at pc=PPPPPPPP with unresolved syscall entry (SRR0=SSSSSSSS SRR1=TTTTTTTT msr=MMMMMMMM lr=LLLLLLLL r1=RRRRRRRR) - set SS_EXC_ENTRY or SS_EXC_SC=legacy
+[EXC] SC delivered #N: r0=SSSSSSSS r1=RRRRRRRR lr=LLLLLLLL -> entry=EEEEEEEE
 ```
-(Verbatim grep-able string.) Emitted and aborted when `execute_syscall` fires on the
-newworld profile and `syscall_entry == 0` (default: no sc entry resolved in Task 0).
-`SS_EXC_SC=legacy` falls back to the old no-op behavior without a rebuild.
+Emitted on the **first 5 syscall deliveries only** (NK-syscall-surface Task A; the
+heartbeat's 5th `exc=` field is the ongoing counter). `r0` = the NK syscall selector,
+`r1`/`lr` = the caller values the 2-SPR shim latched into SPRG1/SPRG2, `entry` = the
+resolved NK handler (default `0x50314ac0`).
+
+```
+[EXC] FATAL: sc at pc=PPPPPPPP with unresolved syscall entry (SRR0=SSSSSSSS SRR1=TTTTTTTT msr=MMMMMMMM lr=LLLLLLLL r1=RRRRRRRR) - set SS_EXC_ENTRY or SS_EXC_SC=legacy
+[EXC] FATAL: sc capture: r0=XXXXXXXX r3=XXXXXXXX r4=XXXXXXXX r5=XXXXXXXX r6=XXXXXXXX r7=XXXXXXXX r8=XXXXXXXX r9=XXXXXXXX r10=XXXXXXXX
+```
+(Verbatim grep-able strings.) Emitted and aborted when `execute_syscall` fires on the
+newworld profile and `syscall_entry == 0`. **Since the NK-syscall-surface milestone
+(2026-06-11) the entry is RESOLVED by default — this FATAL pair is now the OPTED-OUT
+baseline (`SS_NW_SC_SURFACE=0`), not the default behavior.** The second line (the
+extended capture, Task 0 commit `780bbc34`) samples the dying sc's selector (`r0`) and
+argument registers (`r3..r10`) — the conformance-vector instrument that pinned the
+first guest syscall (selector 0x3f). `SS_EXC_SC=legacy` falls back to the old no-op
+behavior without a rebuild (only meaningful on the unresolved-entry path — see the
+M6 syscall-surface section below).
 
 ### M3a exception-delivery env vars
 
 | Env var | Effect |
 |---|---|
-| `SS_EXC_ENTRY=0xINT[,0xSC]` | Override the interrupt entry address (and optionally the syscall entry) without rebuilding. Hex; comma-separated. Useful for iterating on entry-table values after Task 0 recon. |
-| `SS_EXC_SC=abort\|legacy` | Controls what `execute_syscall` does on newworld when `syscall_entry` is unresolved. `abort` (default): SRR-capture + context print then abort. `legacy`: fall back to the old `execute_illegal` + ad-hoc PC-bump behavior (the pre-M3a no-op path). |
+| `SS_EXC_ENTRY=0xINT[,0xSC]` | Override the interrupt entry address (and optionally the syscall entry) without rebuilding. Hex; comma-separated. Takes precedence over the `SS_NW_SC_SURFACE` gate (the designed no-rebuild probe channel). **Fixed trap (NK-syscall-surface Task A):** the no-comma `SS_EXC_ENTRY=0xINT` form now PRESERVES the default syscall entry — it used to zero it, which post-flip would have silently re-broken the resolved syscall surface. Only an explicit `,0xSC` field overrides the syscall entry. |
+| `SS_EXC_SC=abort\|legacy` | Controls what `execute_syscall` does on newworld when `syscall_entry` is **unresolved**. `abort` (default): SRR-capture + context print then abort. `legacy`: fall back to the old `execute_illegal` + ad-hoc PC-bump behavior (the pre-M3a no-op path). **Inert on the default config since the syscall surface resolved** — a loud `[EXC] WARNING: SS_EXC_SC=legacy is INERT …` line is printed when set with a resolved entry; see the M6 syscall-surface section for the reproduction recipe. |
 | `SS_EXC_BARE=1` | Skip the KDP register-save shim before `ExcEnter` — the bounded direct-entry experiment. Without the shim the handler prologue reads uninitialized context-block fields; use only with a handler known not to dereference r6. |
 
 **Note:** `SS_EXC_FORCE` (deliver once ignoring MSR[EE]) was planned as a debug knob but
@@ -479,3 +501,63 @@ The `[NW-TRAMP]` fixup banner at patch time reports the resolved state
 |---|---|
 | `SS_DR_R24_RING=1` | 68k-PC transition ring: records guest **r24** (the DR emulator's 68k PC) at every JIT dispatcher block entry into a 2M-entry ring, deduped against the last 4 recorded values (loop ping-pong suppressed — beware: a literal resume PC can be dedup-masked if it recurs within 4 entries). Dumped as a `[R24RING] N transitions recorded …` block to stderr at exit (pair with `SS_TERM_DUMP=1` for timeout-killed boots). **This is the only way to observe 68k control flow** — 68k PCs are PPC-probe-blind (`SS_PROBE_PC` keys on PPC block-entry PCs). |
 | `SS_INTERP_RING=1` (or `=2`, or `=/path.bin`) | Interpreted-insn + JIT-block-entry ring (1M entries, 16 MB binary atexit dump, default `/tmp/ss_interp_ring.bin`; `[IRING]` summary line to stderr). Records `{pc, opcode, ea, val}` for every interpreted PPC instruction (`ea`/`val` = effective address + pre-execution guest word for common loads/stores) plus RAM-range JIT block entries (marker records `op=0xffffffff, ea=r24, val=LR`) — built because the 'pwpc' parcel code runs where `SS_PROBE_PC` can't see. Mode `=2`: record EVERY JIT block entry and **freeze** the ring at the first r24 reset transition (`0x5000002c`) once half-full, so the dump ends exactly at a reboot-loop bail; use with `SS_JIT_NO_CHAIN=1` so chained blocks can't bypass the hook. |
+
+## Machine Layer M6 — NK syscall surface (`SS_NW_SC_SURFACE`)
+
+The NK syscall surface (vector 0xC00) is **complete and is the newworld profile DEFAULT**
+since NK-syscall-surface Task C (`7a079079`, 2026-06-11). `g_exc_entry_table.syscall_entry`
+defaults to **`0x50314ac0`** — the staged NK's own syscall handler in the PRIMARY copy,
+NK-published at `[KDP+0x390]` (deliberate cross-copy asymmetry: `interrupt_entry` stays
+the staged-copy `0x50412b1c`; both copies are byte-identical, the syscall entry follows
+what the NK itself publishes). Delivery = bare `ExcEnter(EXC_SC)` (SRR0=sc+4, PEM masks)
+plus a **2-SPR shim** transcribed from the real 0xC00 vector stub's postconditions:
+`SPRG1 := caller r1`, `SPRG2 := caller LR` — nothing else. Acceptance record:
+`docs/planning/machine/M3A-ENTRY-TABLE.md` "Syscall entry resolution" + Task B/C results.
+All knobs newworld-profile-only; paravirtual and OldWorld untouched.
+
+### The knob
+
+| Env var | Effect |
+|---|---|
+| `SS_NW_SC_SURFACE=0` | **Opt OUT** of the syscall surface (newworld **default ON**; explicit-`"0"`-only opt-out, polarity mirroring `SS_NW_MM_SWITCH`). Restores the abort-with-capture baseline byte-identically: `syscall_entry=0`, the first sc dies on the `[EXC] FATAL: sc …` pair (incl. the r0/r3..r10 capture line), exit 134/SIGABRT. `=1` remains valid explicit-on. A loud `[NW-SC] syscall surface OFF …` line announces the opt-out. |
+
+The `[NW-SC] syscall surface armed (newworld default; opt-out SS_NW_SC_SURFACE=0):
+entry=0x50314ac0 …` line at table-finalization time reports the resolved state — grep it
+(or the `[EXC] entry table:` line) to confirm what a boot ran with.
+
+### Override × gate interaction (`SS_EXC_ENTRY` precedence)
+
+Precedence: `SS_EXC_ENTRY` > `SS_NW_SC_SURFACE` default > 0. The pinned 2×2:
+
+| Config | Resulting table `{interrupt, syscall}` |
+|---|---|
+| gate=0, no override | `{0x50412b1c, 0}` — FATAL sc baseline |
+| default, no override | `{0x50412b1c, 0x50314ac0}` — surface armed |
+| gate=0, `SS_EXC_ENTRY=I,S` | `{I, S}` — the override is active REGARDLESS of the gate (the designed no-rebuild probe channel) |
+| default, `SS_EXC_ENTRY=I` (no comma) | `{I, 0x50314ac0}` — the no-comma form PRESERVES the syscall default (**fixed trap**: it previously zeroed it, which would have silently re-broken the surface post-flip) |
+
+### `SS_EXC_SC=legacy` is inert on the default config
+
+`SS_EXC_SC=legacy` only acts on the UNRESOLVED-entry path inside `execute_syscall`. With
+the entry resolved (the default), setting it prints one loud warning instead of silently
+doing nothing:
+
+```
+[EXC] WARNING: SS_EXC_SC=legacy is INERT — syscall entry resolved (0x50314ac0); legacy no-op applies only to the unresolved path (reproduce the legacy datum with SS_NW_SC_SURFACE=0 SS_EXC_SC=legacy)
+```
+
+**Reproduction recipe for the legacy datum** (the 52M/s comp-frozen spin at comp=3672 —
+the caller polling the r3 syscall result the no-op never produced; historical evidence,
+not a bridge):
+
+```bash
+SS_NW_SC_SURFACE=0 SS_EXC_SC=legacy ./SheepShaver --config /tmp/m2accept.prefs
+```
+
+### What a healthy default boot shows
+
+5 sc deliveries in the first 65s (selectors 0x3f/0x19/0x14/0x19/0xf — `[EXC] SC delivered
+#1..#5` lines), every sampled resume r3=0, no `[EXC] FATAL`, `exc=` 5th field counting.
+The post-sc regime is heartbeat-SILENT (the boot leaves the dispatch-loop heartbeat path) —
+capture term baselines via `SS_TERM_DUMP=1` + SIGTERM kills (`timeout(1)`); SIGALRM
+(`perl alarm`) skips ALL atexit dumps.

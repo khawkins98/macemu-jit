@@ -20,6 +20,14 @@
 #   --binary PATH      Emulator binary (default: <repo>/SheepShaver/src/Unix/SheepShaver,
 #                      or $SS_SLOT_BINARY)
 #   --grace N          Seconds after SIGTERM before SIGKILL escalation (default 10)
+#   --expect 'P1;;P2'  Boot-log assertions: fixed-string patterns (';;'-separated)
+#                      that MUST appear in the boot log. Prints one
+#                      "EXPECT: n/m present, k absent-violations" line plus a final
+#                      "BOOT-VERDICT: PASS|FAIL"; the exit status becomes the
+#                      verdict (0 = all assertions hold). Missing patterns are
+#                      listed as "EXPECT-MISS: <pat>" lines.
+#   --absent 'P1;;P2'  Patterns that must NOT appear in the boot log (requires or
+#                      complements --expect; violations listed as "ABSENT-HIT:").
 #   -q | --quiet       Only print the final result lines
 #
 # Default emulator env (caller --env overrides): SS_TERM_DUMP=1 SS_NW_TRAMPOLINE=1
@@ -27,8 +35,11 @@
 #
 # Output (stdout, machine-parseable):
 #   SLOT=N RUNDIR=... EXIT=... LOG=<rundir>/boot.log DIAG=<rundir>/jit_diag.log
+#   (+ EXPECT / BOOT-VERDICT lines when --expect/--absent are given)
 #
-# Exit status: the emulator's exit status (124 if timed out, like timeout(1)).
+# Exit status: the emulator's exit status (124 if timed out, like timeout(1));
+# with --expect/--absent, the BOOT-VERDICT (0=PASS, 3=FAIL) instead — a timed-out
+# diagnostic boot whose log contains the expected markers is a PASS.
 # See SheepShaver/tools/README-slots.md for the full protocol.
 
 set -euo pipefail
@@ -47,8 +58,10 @@ WANT_SLOT=""
 BINARY="$DEFAULT_BINARY"
 QUIET=0
 EXTRA_ARGS=()
+EXPECT_RAW=""
+ABSENT_RAW=""
 
-usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -59,6 +72,8 @@ while [[ $# -gt 0 ]]; do
         --slot)    WANT_SLOT="$2"; shift 2 ;;
         --binary)  BINARY="$2"; shift 2 ;;
         --grace)   GRACE="$2"; shift 2 ;;
+        --expect)  EXPECT_RAW="$2"; shift 2 ;;
+        --absent)  ABSENT_RAW="$2"; shift 2 ;;
         -q|--quiet) QUIET=1; shift ;;
         -h|--help) usage 0 ;;
         --)        shift; EXTRA_ARGS=("$@"); break ;;
@@ -290,4 +305,48 @@ STATUS_NOTE="$EXIT_STATUS"
 release_slot "$STATUS_NOTE"
 
 echo "SLOT=$SLOT RUNDIR=$RUNDIR EXIT=$EXIT_STATUS LOG=$BOOTLOG DIAG=$DIAGLOG"
+
+# ---------------------------------------------------------------------------
+# Boot-log assertions (--expect / --absent). Fixed-string grep over the boot
+# log; ';;'-separated patterns. With assertions present, the VERDICT governs
+# the exit status (a timed-out diagnostic boot with the right markers PASSES).
+# Without them, behavior is unchanged (backward compatible).
+# ---------------------------------------------------------------------------
+if [[ -n "$EXPECT_RAW" || -n "$ABSENT_RAW" ]]; then
+    set +e
+    split_pats() {  # $1 = raw ';;'-separated string → one pattern per line
+        [[ -n "$1" ]] && printf '%s\n' "${1//;;/$'\n'}"
+    }
+    expect_total=0 expect_hit=0 absent_viol=0
+    miss_lines=() viol_lines=()
+    while IFS= read -r pat; do
+        [[ -n "$pat" ]] || continue
+        expect_total=$((expect_total + 1))
+        if grep -qF -- "$pat" "$BOOTLOG" 2>/dev/null; then
+            expect_hit=$((expect_hit + 1))
+        else
+            miss_lines+=("EXPECT-MISS: $pat")
+        fi
+    done < <(split_pats "$EXPECT_RAW")
+    while IFS= read -r pat; do
+        [[ -n "$pat" ]] || continue
+        if grep -qF -- "$pat" "$BOOTLOG" 2>/dev/null; then
+            absent_viol=$((absent_viol + 1))
+            viol_lines+=("ABSENT-HIT: $pat")
+        fi
+    done < <(split_pats "$ABSENT_RAW")
+
+    echo "EXPECT: $expect_hit/$expect_total present, $absent_viol absent-violations"
+    for l in ${miss_lines[@]+"${miss_lines[@]}"} ${viol_lines[@]+"${viol_lines[@]}"}; do
+        echo "$l"
+    done
+    if [[ $expect_hit -eq $expect_total && $absent_viol -eq 0 ]]; then
+        echo "BOOT-VERDICT: PASS"
+        exit 0
+    else
+        echo "BOOT-VERDICT: FAIL"
+        exit 3
+    fi
+fi
+
 exit "$EXIT_STATUS"

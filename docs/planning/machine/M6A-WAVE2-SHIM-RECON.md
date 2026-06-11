@@ -567,3 +567,74 @@ the ROM uses T2 writes only inside bounded delay primitives here.
 Telemetry shipped for this recon (separate commit, gates green): `SS_DR_R24_RING=1` —
 2M-entry ring of 68k-PC (r24) transitions at both JIT dispatch sites, ping-pong-deduped
 (last-4), single-fwrite atexit dump (pairs with SS_TERM_DUMP=1). Zero cost when unset.
+
+### MPLibrary bail NAMED (2026-06-11, diagnostician): the DR Mixed Mode save-record pool ([ECB+0xE0..0xEC]) is unprovisioned — reboot loop killed under SS_NW_MM_POOL=1 (commits 89062484 + 3936db4b)
+
+**One paragraph:** the loop-ender is not a KDP field MPLibrary reads, not the syscall
+vector, and not a SysError at all — MPLibrary's init never executes ONE instruction of its
+own. Its parcel "entry point" at RAM 0x10024de8 is a **MixedMode RoutineDescriptor**
+(`AAFE 07 00 …`, version 7, one RoutineRecord: procInfo=0xE1, ISA=PPC,
+procDescriptor=TVector 0x10024758 → PPC code 0x500cef8c). `jsr (a4)` executes the
+$AAFE goMixedModeTrap → ROM mini-dispatcher 0xdfa2 ($1e00 table, entry [$19F8]; watch-
+verified: per cycle the ROM installs 0x5000e12e at r24=0x5000e0fa, then 0x100266f0 at
+r24=0x5000e0ba after MixedMode's parcel init) → handler stub 0x100266f0 = `dc.w $FE01`,
+the **DR emulator's Mixed Mode Magic opcode**. The DR's FE01 service (full PPC block
+trace: 0x50467dc0 → 0x504ff008 → glue 0x5046dexx → NK 0x503143a0/0x50312cbx/0x503242xx/
+0x503244xx → glue 0x5046e1a0..e2ec) reaches the save-record allocator at staged
+**0x5046e304**: `r6=[ECB+0xE8] & ~[ECB+0xEC]; cntlzw r6; beq cr7,0x5046e8fc` — a
+0x220-byte 68k-context record pool ([0xE0] base-virt, [0xE4] base-phys, [0xE8] existence
+bitmap, [0xEC] in-use bitmap) that the **NK provisions in the ECB on real hardware**.
+Probe-verified live at the bail block: **all four words = 0** → no free bit → branch to
+entry-vector slot +0x3c (0x5046e8fc) — **zero in the static table** (slots +0x10,
++0x18..+0x3c are NK-populated at emulator-context creation; only +0x00/04/08/0c/14 are
+static branches) → execution falls through zeros into the +0x40 fallback stub, which ends
+`b table[0]` (0x5046e960: `4bffff60`) → **our diagnostic always-cold-start trampoline**
+(0x50429b40) → guest[4]=0x5000002a → 68k reset → the ~80 ms cycle. The "SysError-shaped
+A-trap" of the previous recon was the $AAFE trap itself; the reset is self-inflicted by
+the table[0] cold-start redirect. There is no error code — nothing ever computes one.
+
+**Methodology corrections (two falsified premises of this recon's own brief):**
+1. "The parcel runs interpreted PPC (jRAM=0)" — FALSE. SS_INTERP_RING=1 (new instrument,
+   commit 89062484) captured the interpreter loop executing essentially nothing (only the
+   0x5046e8fc zero-word block); no JIT block below the ROM window ever dispatches. The
+   parcel entry is 68k DATA to the DR emulator; the only PPC involved is the DR/NK itself.
+2. "The 68k side knows the error code; capture D0 at the SysError dispatcher" — moot, see
+   above.
+
+**Capture chain that produced the diagnosis** (all bounded, capture-only):
+SS_DR_R24_RING cycle tail (… 0xf452 lookup ok → 0xf464 `jsr 0x5000fce0` thunk →
+0x10024de8/dea → 0xdfa2..dfc8 → 0x100266f2 → 0x5000002c) → guest-RAM dump
+(SS_JIT_MEMDUMP_AT=20) → 68k/PPC capstone disassembly of the descriptor, dispatcher,
+allocator → SS_JIT_WATCH_ADDR=19f8,1768 (needs SS_JIT_TRACE_RING=1 — the watch hook
+lives inside jit_ring_record; addresses parse as HEX) → SS_INTERP_RING=2 +
+SS_JIT_NO_CHAIN=1 full block trace frozen at the reset transition → SS_PROBE_PC
+0x5046e304 absolute reads.
+
+**Staged (env-gated, default OFF): SS_NW_MM_POOL=1** (commit 3936db4b) — 10 guest-side
+trampoline instructions (the Hnfo re-assert idiom; NK cold-init rebuilds the ECB every
+cycle, so glue-time seeds don't survive) seeding a 4-record pool at 0x68ff5000 (free gap
+in the sub-KDP region; V=P → [0xE0]=[0xE4]). Flag-off trampoline is byte-identical
+(default boot still cycles at exactly 837054 r24-transitions).
+
+**A/B result (SS_NW_MM_POOL=1): the reboot loop is GONE.** Zero reset transitions in a
+1M-block ring (vs 1/837054); the allocator takes the success path (0x5046e324 executes;
+[0xEC] cycles free); the boot advances to a NEW frontier: a hot Mixed Mode retry spin —
+FE01 → NK roundtrip → record allocated → return to a 68k stub at 0x10008fb0
+(`dc.w $FE07; bne.b +2; rte` / `jmp 0x500049c4`) → FE01 again, ~55M blocks/s, comp frozen
+at 3573, DEC deferrals accumulating (exc=0/52/0). MPLibrary's PPC TVector 0x500cef8c
+**still never executes** (probe: 0 visits). SS_M6A_USER_MSR=1 on top reproduces its known
+zero-page-slide crash (pc marches to 0x100000) — EE-enable alone is not the unblock.
+
+**Wave-2 requirement (precise, per the stop-rule — not built here):** the NK
+**emulator-context / ongoing-entry surface** that completes a Mixed Mode 68k→PPC switch:
+(a) populate the DR entry-vector table's NK slots (base 0x5046e8c0; at minimum the
+fail/service slots +0x10, +0x18..+0x3c) with real NK entries instead of zeros; (b) replace
+the diagnostic always-cold-start table[0] redirect with a true ongoing entry
+(M6A-ONGOING-ENTRY-DESIGN is exactly this work) so emulator exits resume instead of
+reset; (c) the NK side of FE01 completion: take the saved 68k context record (the
+0x68ff5000 pool, [r3+0xd8] current-record link at [ECB+0x710]+0xd8) and context-switch to
+the RoutineDescriptor's TVector (0x500cef8c for MPLibrary) in user/native mode, with the
+return path via the FE02 switch-back stub; (d) the EE/DEC delivery chain remains
+downstream and untested until (c) runs guest supervisor code. The syscall entry (vector
+0xC00) is NOT the current gate — the FE01 path never issues `sc` — but stays queued for
+the moment MPLibrary's PPC init actually runs.

@@ -1081,7 +1081,11 @@ time. **Word budget (sign-off item 5) [RAW-ROM rom901_inventory.bin]:** 0x318000
 the NK AltiVec element-load thunk table (8-byte `lvebx vN; b` pairs, 0x317e20–0x318628);
 the upstream 4-word stub already clobbers the v28/v29 entries; the +3 words extend into
 v30 + the first word of v31 — same dispatcher, same reachability class as the
-long-accepted clobber. Byte evidence: SS_DUMP_ROM A/B — gate-on vs gate-off diffs are
+long-accepted clobber. (Review P2 fold: the reachability argument is precedent +
+evidence, not proof — upstream has shipped the v28/v29 clobber for decades, and the
+112481f2 probe found zero MSR[VEC] activity in an AltiVec-app boot; if an NK lvebx
+element-load for v30/v31 ever dispatched, v30 would execute the riser words and v31
+would take the relocated branch. Accepted risk, recorded.) Byte evidence: SS_DUMP_ROM A/B — gate-on vs gate-off diffs are
 EXACTLY words 0x31800c/0x318010/0x318014/0x318018; gate-off stub words match the
 manifest rom901.bin verbatim. Fresh gated-off baseline (post-tm_task-guard `2ff7765f`,
 60s slot boot): terminal `exc=0/5/0/0/173/4` (delivered_dec=0, deferred_ee=5,

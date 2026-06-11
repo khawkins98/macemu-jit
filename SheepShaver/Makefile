@@ -20,7 +20,7 @@ JIT_CXXFLAGS := -g -O2 -std=c++11 -DHAVE_CONFIG_H
 JIT_INCLUDES := -I$(JIT_DIR)
 
 .PHONY: all build build-ss build-rom-harness build-rom-inspect inspect-rom \
-        test test-opcodes test-jit test-nw-init test-rom harness-count ui-introspect-test ui-introspect-serialize-test \
+        test test-opcodes test-jit test-exc-vectors test-nw-init test-rom harness-count ui-introspect-test ui-introspect-serialize-test \
         e2e e2e-smoke e2e-bench e2e-workload e2e-test e2e-setup e2e-clean ui-dump \
         run run-jit run-tmux run-jit-tmux \
         tmux-attach tmux-log tmux-stop \
@@ -39,6 +39,7 @@ help:
 	@echo "  Test (run after every ppc-jit.cpp change):"
 	@echo "    make test-jit       JIT codegen gate — interp vs JIT diff (USE THIS)"
 	@echo "    make test-opcodes   Interpreter determinism only (not a JIT test)"
+	@echo "    make test-exc-vectors  Exception-delivery lane (W2-1 H1-H5; env-dependent)"
 	@echo "    make test           Run all tests (opcodes + jit + rom)"
 	@echo ""
 	@echo "  Benchmark:"
@@ -152,6 +153,18 @@ test-jit: build-ss
 	@echo ""
 	@echo "TIP: For deeper verification, boot with:  SS_JIT_VERIFY=1 ./src/Unix/SheepShaver"
 	@echo "     For quick perf A/B:  cd rom-harness && make bench"
+
+# test-exc-vectors: the Wave-2 W2-1 deliverability lane (H1–H5) — real
+# mtmsr/rfi EE edges driving real DEC deliveries + the sc class, harness-only
+# (no boot). SEPARATE from the 353-table by design: these vectors are
+# env-dependent (SS_TEST_DEC_PENDING/SS_TEST_MSR/SS_TEST_EXC_STUB/SS_EXC_ENTRY)
+# and must not enter run.sh's env-free table. Each vector runs interp AND JIT
+# with a REGDUMP diff; METRIC-formatted output.
+# Plan: docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md Task W2-1.
+test-exc-vectors: build-ss
+	@echo ""
+	@echo "=== Exception-Delivery Vector Lane (Wave-2 W2-1; env-dependent, separate from the 353-table) ==="
+	@cd jit-test && bash run-exc.sh
 
 # test-nw-init: NewWorld nanokernel init regression test.
 # Proves the DR Emulator is reached after nanokernel init — checks for the

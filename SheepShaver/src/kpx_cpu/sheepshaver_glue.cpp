@@ -2798,6 +2798,28 @@ void init_emul_ppc(void)
 			        ReadMacInt32(0), ReadMacInt32(4));
 		}
 
+		/* W2-4 DEC reload cadence (the storm root cause): [KDP+0xf2c] is the NK
+		 * scheduler's timebase-frequency global (ticks/second). Evidence chain:
+		 *   - timeslice re-arm 0x503249ac..c0: deadline = now + {0,[KDP+0xf2c]}
+		 *   - duration->ticks helper 0x50323708: positive r8 -> ([0xf2c]/250)*r8/4
+		 *     (ms->ticks), negative -> ([0xf2c]/0x3d090)*|r8|/4 (us->ticks; the
+		 *     250000 literal is IN the ROM, pinning the units to ticks/sec)
+		 *   - RDYQ init 0x503237c4 converts -0x412 (1042us timeslice) through it
+		 *     into the run-queue quantum [KDP-0x9d4]
+		 * NK cold-init ZEROES the word (0x50326fe8) and the config path that loads
+		 * the real value on hardware never runs in the trampoline boot, so every
+		 * timeslice deadline computed to now+0 -> mtdec 0 -> instant re-expiry ->
+		 * the 250K/s DEC storm (EE-CHAIN-RECON.md D-6/D-7). Stage the frequency
+		 * here, before the guest runs: NK init (0x50311368) copies it into the
+		 * scheduler-mode table [KDP+0xf88] and RDYQ init derives the quantum.
+		 * Verified live: seeding restores delivery->reprogram->quiet cadence and
+		 * un-starves the 68k world. Same staging family as main.cpp's KDP+0xf6c
+		 * timebase-frequency word. */
+		WriteMacInt32(kdp + 0xf28, 0);
+		WriteMacInt32(kdp + 0xf2c, (uint32)TimebaseSpeed);
+		fprintf(stderr, "[NW-TRAMP] scheduler timebase-frequency staged: [KDP+0xf2c]=%u "
+		        "(timeslice quantum source; DEC cadence)\n", (uint32)TimebaseSpeed);
+
 		/* SS_SEED_MEM (immediate form): apply the no-PC seeds now — the natural
 		 * "post-init" point, after the nanokernel trampoline has populated the KDP /
 		 * ECB. The PC-triggered form fires later at its target block entry. */

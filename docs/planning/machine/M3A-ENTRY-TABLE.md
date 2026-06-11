@@ -10,7 +10,7 @@
 | Field | Value | Mode | Evidence |
 |---|---|---|---|
 | `interrupt_entry` | **`0x50412b1c`** | **KDP-SHIM** (see below) | 16 live words at 0x50412b0c–0x50412b48 byte-identical to static 0x312b0c–0x312b48 (`409b001c 92260024 …`) |
-| `syscall_entry` | **0 (unresolved — descope active)** | `SS_EXC_SC=abort` default | Not resolved in Task 0; the SRR-capture+abort path carries the double-increment fix; revisit when a live `sc` fires |
+| `syscall_entry` | **`0x50314ac0` — RESOLVED (2026-06-11, NK-syscall-surface Tasks 0/A/B/C; newworld DEFAULT since Task C, opt-out `SS_NW_SC_SURFACE=0`)** | bare ExcEnter + 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR) | Primary copy, NK-published `[KDP+0x390]` [PROBE✓]; see "Syscall entry resolution" + "Task C results" below — the M3a descope is formally CLOSED |
 
 ## Findings
 
@@ -410,6 +410,105 @@ next milestone's recon.
 **Falsifications: NONE.** No pinned contract was falsified; the one-iteration rule was
 not invoked. Boot budget: 2 boots (the P-M4(3) cap), round-trip gates co-scheduled on
 boot B1.
+
+### Task C results (2026-06-11) — acceptance PASS pre/post-flip; `SS_NW_SC_SURFACE` is the newworld DEFAULT; the M3a descope formally CLOSED
+
+**Fix budget consumed: ZERO** — no contract falsified; no fix iterations.
+
+**Pre-flip battery (env `SS_NW_SC_SURFACE=1`; boots `/tmp/taskC1.log` env-on 65s
+SIGTERM, `/tmp/taskC2_off.log` gated-off):**
+- (a) Canonical full gates: build-ss OK; batch + plain test-jit **353/353 score=100
+  (plain re-run — Task B had skipped it)**; machine suite **12/12 RESULT: ALL PASS**
+  (12 binaries incl. the committed `test_dev_openpic`, 206 checks; 4794 checks on
+  test_exc_core line); e2e-test 122 passed; paravirtual `make e2e` PASS (clean
+  lifecycle, exit 0; the whole table-finalization block sits inside the
+  `MachineProfileIsNewWorld()` arm — paravirtual structurally byte-identical).
+- (b) Handler-entry conformance (Task A's gate): 0x50314ac0 visit=1 exact Q-S2 row —
+  r0=0x3f, r3=0x00050001, r4=0x10026710, r5=0xf04d6163, r6=0x80000000, r7=0x68ffef20,
+  r8=0x103ffa50, r9=0x5046de08, r10=0x00000001, r1=0x103ffb50, LR=0x500cf108. PASS.
+- (c) Round trip + result conformance (Task B's gates): no `[EXC] FATAL`; resume
+  0x500d6390 visit=1 with **r3=0**, r1=0x103ffb50, LR=0x500cf108, r4..r10 preserved;
+  no legacy-spin signature (blocks=3836 complete=3836, not 3672-class; no 52M/s
+  plateau). 5 SC deliveries, selectors 0x3f/0x19/0x14/0x19/0xf (= Task B's map). PASS.
+- (d) Rung-2 invariant carry-over: cold-once (WATCH pair #4665, trampoline pc=50429b40,
+  exactly once); guest[0]/[4] stable (only the known write classes: NK cold-init
+  #213/#215, the cold pair, the guest's own 68k vector install pc=50490e00; reset
+  vector 0x5000002a exactly once in the ring); slot-15 stop 0x50429cf0 zero visits;
+  **the MM round trip itself green per the Task Y recipe**: TVector 0x500cef8c visit=1
+  (r25=0x5000fcf2), slot-1 flip region 0x50429d80 visit=1 (r3=0x68fff400 MMCB,
+  r4=0x00200000), warm completion 0x50429d3c visit=1 (r3=0xff, r28=0x68ff6080),
+  completion resume 0x5046e1f4 visit=1 with r6=0x000000ff and
+  **[saveblk+0x3c]=0x50033776** ([r5:0x60] dump, = the Task Y value). delivered-DEC=0
+  (zero `[EXC] DEC delivered` lines). PASS.
+- (e) Gated-off boot (`/tmp/taskC2_off.log`): both `[EXC] FATAL` lines (incl. the
+  780bbc34 r0/r3..r10 capture) **byte-identical** to the Task A baseline
+  (`/tmp/taskA_offAB.log`, diff-verified), exit 134 (SIGABRT), pre-heartbeat death
+  (zero `[HB]` lines) — the P-m2 signature fields (raw mmio counters excluded). PASS.
+
+**FLIP:** `SS_NW_SC_SURFACE` promoted to newworld profile default-ON
+(sheepshaver_glue.cpp table finalization; opt-out `SS_NW_SC_SURFACE=0`, polarity
+mirroring `SS_NW_MM_SWITCH` — explicit-"0"-only opt-out, NOT MachineEnvFlag). The
+`[NW-SC]` armed line now states the default + opt-out; an explicit opt-out logs its
+own loud `[NW-SC] ... OFF` line. Env-matrix comment updated (override × gate 2×2;
+`SS_EXC_ENTRY` precedence unchanged; no-comma form still preserves the default).
+Paravirtual/OldWorld untouched.
+
+**Post-flip battery (NO env vars — true default; boots `/tmp/taskC3_flip.log` 65s
+SIGTERM, `/tmp/taskC4_optout.log` opt-out):**
+- (a) Full gates re-run post-edit: build-ss OK; batch + plain test-jit 353/353
+  score=100; machine 12/12 ALL PASS; e2e-test 122; paravirtual `make e2e` PASS. ✓
+- (b) Handler-entry conformance: byte-identical to the pre-flip dump (visit=1, exact
+  Q-S2 row). ✓
+- (c) Round trip: no FATAL; resume r3=0, r1/LR/r4..r10 preserved; same 5 selectors;
+  blocks=3836 complete=3836. ✓
+- (d) Invariants: WATCH pair #4666 cold-once; only known guest[0]/[4] write classes;
+  slot-15 zero visits; TVector r25=0x5000fcf2; slot-1/warm/e1f4 signatures exact;
+  [saveblk+0x3c]=0x50033776; delivered-DEC=0; heartbeat silence (0 `[HB]`). ✓
+- (e) Opt-out A/B (`SS_NW_SC_SURFACE=0`): FATAL lines byte-identical to the Task A
+  baseline (diff-verified), exit 134, pre-heartbeat death; plus the loud opt-out
+  announcement line. ✓
+
+**FLIP STATUS: LANDED** (no gate failure; no revert). **The M3a syscall_entry
+descope/carry-forward is formally closed** — vector 0xC00 resolves through real NK
+code on the default newworld config; `SS_EXC_SC=abort/legacy` now applies only to
+the opted-out path.
+
+**Frontier capture on the default config (the P-M4 artifact — recorded, NOT chased;
+stop-rule trigger 2):**
+- **Nothing NEW vs Task B's boots**: ring tail byte-identical
+  (`… 5000e43e → 5000f242 → 5000f246 → 5000f248`, 839,284 transitions, ring never
+  wrapped); same 5 sc deliveries (handler-probe r0s: 0x3f/0x19/0x14/0x19/0xf, every
+  sampled resume r3=0); same term-dump baseline class — blocks=3836 complete=3836,
+  MMIO macio reads=65539 / scc reads=65540 writes=2 idle_sleeps=256 / via reads=70183
+  writes=307; CUDA 13 pkts/13 resp, 9 i2c all-absent, pram_rd=3 (quiet); VCLK
+  mtspr_dec=4 dec_expiries=1 pending=1; heartbeat silence throughout (capture via
+  SIGTERM + SS_TERM_DUMP — SIGALRM skips atexit).
+- **The parked loop NAMED (one bounded capstone-M68K look at `/tmp/rom901.bin`,
+  md5-verified [PATCH], file 0xdfa2/0xe3e0/0xf240):**
+  - 0x5000dfa2 is the ROM's **68k A-line trap dispatcher** (reads the trap word,
+    `cmpi.w #$a800` / `subi.w #$ac00`, dispatches through the trap tables at
+    $400/$e00/$1e00) — the wide 0x5000dfa2..0x5000e43c "loop" is repeated A-trap
+    dispatch on behalf of a CFM-prep routine.
+  - The 0x5000e3e0..e43c leg is that routine: trap-availability check via two
+    `_GetToolTrapAddress` ($A746) calls (selector $AA7F — the MixedMode dispatch
+    trap — vs the unimplemented baseline; mismatch ⇒ error 0xffff8d8e), then an
+    id→index lookup (5-entry table at 0x5000e3a0) into an **ExpandMem-anchored
+    pointer array (`([$2b6],$310)`)**; an empty slot (`tst.l (a3)` == 0) calls
+    0x5000f240(&slot).
+  - 0x5000f240: `link / moveq #$31,d0 / dc.w $FE1F / move.l d0,$c(a6) …` — an
+    **F-line nanokernel/DR service trap `$FE1F` with selector d0=0x31**, result
+    expected back in d0 and stored through the slot pointer.
+  - **The park: the ring's final 68k PC 0x5000f248 is the instruction immediately
+    after that `$FE1F` trap** — the 68k issues FE1F selector 0x31 and never records
+    another transition while wall-clock continues in a non-dispatch regime.
+  - **Poll-target class, named (not fixed): the FE-trap service surface — FE1F
+    selector 0x31, an ExpandMem/CFM accelerator-slot fill request.** The next
+    milestone's named frontier is this FE1F service (and whatever NK/DR surface
+    backs it), NOT another sc selector and NOT an MMIO poll.
+
+**Falsifications: NONE** (zero across the pre- and post-flip batteries). Boots used:
+4 (C1 env-on, C2 gated-off, C3 post-flip default, C4 opt-out) + 2 paravirtual e2e
+gate boots (outside the diagnostic budget per P-C3).
 
 ### Notes for Task A (carried)
 

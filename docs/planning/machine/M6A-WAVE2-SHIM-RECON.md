@@ -679,3 +679,45 @@ MPLibrary init → CFM parcel-by-name caller region (file 0xf4xx, straight-line 
 the ring) → second round trip → `sc`. Under `SS_EXC_SC=legacy` the boot survives
 the sc but wedges in a 52M/s comp-frozen spin at 3672 — not a viable bridge,
 diagnostic only. Next milestone: the vector-0xC00 syscall_entry surface.
+
+## Frontier update (2026-06-11, NK-syscall-surface Task C closeout) — the sc wall is DOWN; the FE1F-selector-0x31 park is THE frontier
+
+The syscall surface shipped (plan `docs/superpowers/plans/2026-06-11-nk-syscall-surface.md`
+Tasks 0/A/B/C; full evidence in M3A-ENTRY-TABLE.md "Syscall entry resolution" +
+"Task B results" + "Task C results"): **vector 0xC00 resolves to the NK's own
+handler at 0x50314ac0** (primary copy, NK-published `[KDP+0x390]`) through bare
+`ExcEnter(EXC_SC)` plus a 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR — the real
+0xC00 vector stub's postconditions, transcribed host-side), and **`SS_NW_SC_SURFACE`
+is now the newworld profile DEFAULT** (opt-out `=0`, SS_NW_MM_SWITCH polarity).
+MPLibrary's first kernel calls run end-to-end on real NK code: 5 sc deliveries
+(selectors 0x3f/0x19/0x14/0x19/0xf), every sampled resume r3=0, full register
+continuity at the resume. The previous section's FATAL capture-abort is now the
+OPTED-OUT baseline (`SS_NW_SC_SURFACE=0`; byte-identical, diff-verified).
+
+**State on the default config (boots /tmp/taskC3_flip.log + /tmp/taskC1.log, 65s,
+SIGTERM + SS_TERM_DUMP):** no FATAL; all rung-2 invariants hold (cold-once,
+guest[0]/[4] stable, slot-15 unvisited, TVector/slot-1/warm/e1f4 round-trip
+signatures exact, `[saveblk+0x3c]`=0x50033776); delivered-DEC=0; blocks=3836
+complete=3836 (vs the 3672 sc-wall freeze); heartbeat SILENT for the whole post-sc
+regime (capture boots must die via SIGTERM — SIGALRM skips the atexit dumps).
+
+**THE frontier (stop-rule trigger 2 — captured + named, not chased):** after sc #5
+the MixedMode excursion returns and execution goes 68k-side into a wide ROM loop
+(0x5000dfa2..0x5000e43c), parking at **0x5000f248** — ring tail
+`… 5000e43e → 5000f242 → 5000f246 → 5000f248`, 839,284 transitions, then silence
+while wall-clock continues. One bounded capstone-M68K look (/tmp/rom901.bin,
+file 0xdfa2/0xe3e0/0xf240) names the shape:
+
+- 0x5000dfa2 = the ROM's **68k A-line trap dispatcher** (trap tables $400/$e00/$1e00);
+  the "loop" is repeated A-trap dispatch for a CFM-prep routine.
+- 0x5000e3e0..e43c = that routine: `_GetToolTrapAddress` ($A746) availability check
+  on selector $AA7F (MixedMode dispatch), then an id→index lookup (table 0x5000e3a0)
+  into an **ExpandMem-anchored pointer array `([$2b6],$310)`**; empty slot ⇒ call
+  0x5000f240(&slot).
+- 0x5000f240 = `link / moveq #$31,d0 / dc.w $FE1F / …` — an **F-line NK/DR service
+  trap `$FE1F`, selector d0=0x31**, result stored through the slot pointer.
+- The park PC 0x5000f248 is the instruction immediately after that trap: **the next
+  wall is the FE1F service surface (selector 0x31 — a CFM/accelerator slot-fill
+  request), not another sc selector and not an MMIO poll.** Term-dump baseline
+  unchanged in class (MMIO S:65540/V:70183, CUDA 13 pkts quiet, VCLK pending=1).
+  Nothing NEW vs the Task B boots — ring tail and counters byte-identical in class.

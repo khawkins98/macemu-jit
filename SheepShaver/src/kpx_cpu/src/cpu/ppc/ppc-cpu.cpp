@@ -2408,14 +2408,16 @@ void powerpc_cpu::execute(uint32 entry)
 								/* M3a Task 4: [EXC] DEC-delivery counters ride the heartbeat
 								 * (rev 2 M5: SIGALRM boot-killers skip atexit dumps). Newworld
 								 * only — paravirtual heartbeat lines stay byte-identical.
-								 * M6a Wave 1: + MMIO region read counts (memo §5.5a). */
+								 * M6a Wave 1: + MMIO region read counts (memo §5.5a).
+								 * NK-syscall-surface Task A: 5th field = delivered_sc (P-M4). */
 								char excbuf[160]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
-									uint64_t exc[4];
+									uint64_t exc[5];
 									SheepExcStats(exc);
-									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu",
+									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu",
 									         (unsigned long long)exc[0], (unsigned long long)exc[1],
-									         (unsigned long long)exc[2], (unsigned long long)exc[3]);
+									         (unsigned long long)exc[2], (unsigned long long)exc[3],
+									         (unsigned long long)exc[4]);
 									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, true, now, jit_block_count,
@@ -2607,14 +2609,16 @@ void powerpc_cpu::execute(uint32 entry)
 								static hb_state hb;
 								/* M3a Task 4: [EXC] counters on the heartbeat (see JIT-mode
 								 * call site above). Newworld only.
-								 * M6a Wave 1: + MMIO region read counts (memo §5.5a). */
+								 * M6a Wave 1: + MMIO region read counts (memo §5.5a).
+								 * NK-syscall-surface Task A: 5th field = delivered_sc (P-M4). */
 								char excbuf[160]; excbuf[0] = 0;
 								if (MachineProfileIsNewWorld()) {
-									uint64_t exc[4];
+									uint64_t exc[5];
 									SheepExcStats(exc);
-									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu",
+									snprintf(excbuf, sizeof excbuf, " | exc=%llu/%llu/%llu/%llu/%llu",
 									         (unsigned long long)exc[0], (unsigned long long)exc[1],
-									         (unsigned long long)exc[2], (unsigned long long)exc[3]);
+									         (unsigned long long)exc[2], (unsigned long long)exc[3],
+									         (unsigned long long)exc[4]);
 									hb_append_mmio_suffix(excbuf, sizeof excbuf);
 								}
 								hb_tick(&hb, jit_log_file, false, now, interp_block_count,

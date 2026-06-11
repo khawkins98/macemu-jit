@@ -553,8 +553,16 @@ extern void HandleInterrupt(powerpc_registers *r);
  * execute_depth > 1) — the caller then falls through to the legacy path. */
 extern bool SheepExcDeliverPending(void);
 /* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
- * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions). */
-extern "C" void SheepExcStats(uint64_t out[4]);
+ * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions).
+ * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4). */
+extern "C" void SheepExcStats(uint64_t out[5]);
+/* NK-syscall-surface Task A: the sc-side vector-stub shim (sheepshaver_glue.cpp).
+ * Called from execute_syscall's newworld arm when the syscall entry is RESOLVED,
+ * before the architectural transition is applied (the DEC-shim seam precedent —
+ * MACHINE-LAYER-PLAN §2d keeps powerpc_cpu honest). Architectural effect is
+ * exactly two SPR writes (SPRG1:=caller r1, SPRG2:=caller LR — the real 0xC00
+ * vector stub's postconditions, Q-S2); selector_r0 is telemetry only. */
+extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 selector_r0);
 #endif
 
 #endif /* PPC_CPU_H */

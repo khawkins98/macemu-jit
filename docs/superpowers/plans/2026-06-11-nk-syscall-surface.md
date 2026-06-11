@@ -197,26 +197,38 @@ allowed (full gates).
 
 ### Task A: resolve the entry + the pre-entry surface (env-gated `SS_NW_SC_SURFACE`, default OFF)
 
-- [ ] Land `NW_SYSCALL_ENTRY_DEFAULT` (glue, next to the interrupt default) **active only
+- [x] Land `NW_SYSCALL_ENTRY_DEFAULT` (glue, next to the interrupt default) **active only
   under `SS_NW_SC_SURFACE=1`** during bring-up (gated off ⇒ table stays `{intr, 0}` ⇒
   the abort-with-capture baseline byte-identical). `SS_EXC_ENTRY` override precedence
-  unchanged (documented).
-- [ ] Implement the pre-entry surface per Q-S2's pinned ABI: the sc-side shim (host-side
+  unchanged (documented). *(Done — incl. the P-M1 env matrix as behavior: no-comma
+  `SS_EXC_ENTRY=0xINT` now PRESERVES the syscall default (trap fix), override×gate 2×2
+  pinned in a comment, loud inert-legacy warning; + the P-M4 delivered-sc counter as
+  the 5th `exc=` field.)*
+- [x] Implement the pre-entry surface per Q-S2's pinned ABI: the sc-side shim (host-side
   glue helper called from `execute_syscall`'s newworld arm, transcribed from the pinned
   vector-stub postconditions — the DEC-shim transcription discipline: exact offsets,
   exact order, honest upgrades documented) and/or KDP/ctx seeds (guest-side only if
   Q-S2 demands a post-NK-init assert — then: occupancy map first, verified-zero region
   at/above 0x429da0, PatchROM-time only). If Q-S2's verdict is "no shim needed —
   bare transition correct", record that explicitly and land only the entry default.
-- [ ] Misuse hardening carried: unresolved-entry abort stays for the gated-off path;
-  any new seed site logs one loud `[NW-SC]` line under the gate.
-- [ ] **Probe sub-contract (PASS/FAIL):** with `SS_NW_SC_SURFACE=1`, the handler-entry
+- [x] Misuse hardening carried: unresolved-entry abort stays for the gated-off path;
+  any new seed site logs one loud `[NW-SC]` line under the gate. *(No seed sites needed
+  per Q-S5; the `[NW-SC]` armed line fires at table finalization under the gate.)*
+- [x] **Probe sub-contract (PASS/FAIL):** with `SS_NW_SC_SURFACE=1`, the handler-entry
   probe (`SS_PROBE_PC=<entry>`) shows ≥1 visit with the register dump conforming to
   **Q-S2's expected-register table** (exact/class per row — no "sane registers").
-  What the handler does AFTERWARD is diagnostic, recorded.
-- [ ] **Gated-off A/B:** one boot without the env var reproduces the captured `[EXC]
-  FATAL` baseline byte-identically (same line, same HB signature class).
-- [ ] Gates: full gates + both sub-contracts. Commit.
+  What the handler does AFTERWARD is diagnostic, recorded. *(PASS — visit 1 at
+  0x50314ac0: r0=0x3f, r3=0x00050001, r4=0x10026710, r5..r10 exact caller values,
+  r1=0x103ffb50; resume probe 0x500d6390: r3=0, r1/LR/r4..r10 preserved. ≥5 sc
+  delivered, selectors 0x3f/0x19/0x14/0x19/0xf; boot ran full 60s, comp=3836 — past
+  the 3672 wall; ring tail = 68k execution (excursion returned). `/tmp/taskA_probe.log`.)*
+- [x] **Gated-off A/B:** one boot without the env var reproduces the captured `[EXC]
+  FATAL` baseline byte-identically (same line, same HB signature class). *(PASS — both
+  FATAL lines byte-identical incl. the 780bbc34 r0/r3..r10 capture, exit 134/SIGABRT,
+  pre-heartbeat death same as baseline. `/tmp/taskA_offAB.log`.)*
+- [x] Gates: full gates + both sub-contracts. Commit. *(build-ss OK; batch + plain
+  test-jit 353/353 score=100; machine 11/11; e2e-test 122; paravirtual e2e PASS —
+  all new emission sites newworld-gated.)*
 
 ### Task B: the first-sc round trip (conformance per Q-S3/Q-S4)
 

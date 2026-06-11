@@ -1146,6 +1146,15 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 			        gpr(0), gpr(3), gpr(4), gpr(5), gpr(6), gpr(7), gpr(8), gpr(9), gpr(10));
 			abort();
 		}
+		/* NK-syscall-surface Task A: the resolved-entry pre-entry surface.
+		 * The real vector-0xC00 stub's postconditions (Q-S2, M3A-ENTRY-TABLE.md
+		 * "Syscall entry resolution") are exactly two SPR writes — SPRG1:=caller
+		 * r1, SPRG2:=caller LR — performed by the glue helper (§2d seam, the DEC
+		 * precedent). Must run BEFORE the transition is applied (it samples the
+		 * caller's live r1/LR; ExcEnter never touches them, but ordering here
+		 * mirrors the real stub: SPR saves, then dispatch). Also the delivered-sc
+		 * counter site (P-M4). */
+		SheepExcSyscallShim(gpr(1), lr(), gpr(0));
 		regs().srr0 = t.srr0;
 		regs().srr1 = t.srr1;
 		regs().msr  = t.msr;

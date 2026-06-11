@@ -86,10 +86,24 @@ extern "C" {
 
 /* M3a Task 3: interrupt entry table — newworld profile only.
  * Default interrupt_entry = 0x50412b1c (probe-verified in M3A-ENTRY-TABLE.md).
- * syscall_entry = 0 (unresolved; descope active — see M3A-ENTRY-TABLE.md §5).
+ * syscall_entry default (NK-syscall-surface Task A) = 0x50314ac0, ACTIVE ONLY
+ * under SS_NW_SC_SURFACE=1 (bring-up gate, default OFF — applied at table
+ * finalization in init_emul_ppc; the static initializer below stays {intr, 0}
+ * so the gated-off abort-with-capture baseline is byte-identical).
  * Override via SS_EXC_ENTRY=0xINT[,0xSC] for no-rebuild iteration.
- * Paravirtual never reads this table. */
+ * Paravirtual never reads this table.
+ *
+ * CROSS-COPY ASYMMETRY (deliberate, recorded per plan rev 2 P-m5 +
+ * M3A-ENTRY-TABLE.md "Syscall entry resolution" Q-S1): interrupt_entry points
+ * at the STAGED copy (0x50412b1c = static 0x312b1c + 0x100000; Task-7-proven
+ * delivery target), while syscall_entry points at the PRIMARY copy
+ * (0x50314ac0 = static file 0x314ac0 + ROMBase, NO +0x100000) — because the
+ * live syscall entry follows what the NK itself publishes: [KDP+0x390] =
+ * 0x50314ac0 [PROBE✓], and the NK relocation base [KDP+0x64c] = 0x50310000.
+ * Both copies are byte-identical at their probed anchors; reconciling the two
+ * interrupt targets is explicitly out of this milestone's scope. */
 #define NW_INTERRUPT_ENTRY_DEFAULT 0x50412b1cu  /* M3A-ENTRY-TABLE.md probe-verified */
+#define NW_SYSCALL_ENTRY_DEFAULT   0x50314ac0u  /* primary copy, NK-published [KDP+0x390] [PROBE✓] */
 ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u };
 
 /* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
@@ -100,6 +114,7 @@ static uint64_t exc_stat_delivered_dec  = 0;
 static uint64_t exc_stat_deferred_ee    = 0;
 static uint64_t exc_stat_deferred_depth = 0;
 static uint64_t exc_stat_deferred_native = 0;	// M6a W2: deferred during native excursion ([XLM_RUN_MODE]!=0)
+static uint64_t exc_stat_delivered_sc   = 0;	// NK-syscall-surface Task A (plan rev 2 P-M4): delivered sc count
 
 // Emulation time statistics
 #ifndef EMUL_TIME_STATS
@@ -1115,14 +1130,57 @@ bool SheepExcDeliverPending(void)
 	return ppc_cpu && ppc_cpu->deliver_pending_dec_exception();
 }
 
+/* NK-syscall-surface Task A: the sc-side vector-stub shim (Q-S2 pinned ABI,
+ * M3A-ENTRY-TABLE.md "Syscall entry resolution (vector 0xC00)").
+ *
+ * Transcribed from the real 0xC00 vector-stub TEMPLATE at ROM file 0x300c08
+ * ([STATIC], never installed at [0xC00] — page probed junk/uninstalled):
+ *   mtspr SPRG1,r1 / mflr r1 / mtspr SPRG2,r1 / mfspr r1,SPRG3 /
+ *   lwz r1,0x30(r1) / mtlr r1 / blrl
+ * Its postconditions reduce to EXACTLY TWO SPR writes the handler consumes:
+ *   SPRG1 := caller r1   (consumed at 0x313d48: [KDP+4] := SPRG1 — the
+ *                         caller-r1 save the restore path returns through)
+ *   SPRG2 := caller LR   (consumed at 0x313d84: r12 := SPRG2 → ctx → exit
+ *                         mtlr r12 — the caller's return LR)
+ * Everything else the handler consumes (SPRG0=KDP, SPRG3=KDP+0x360,
+ * [KDP-0x14] ctx, [KDP-0x10]/[KDP-4]) is NK-maintained staged state,
+ * live-verified — no KDP writes, no register mutation, no guest-side seeds.
+ *
+ * DELIBERATE ASYMMETRY vs the DEC-path KDP shim above (plan rev 2 P-m5;
+ * Task-0 finding): the SYSCALL save path saves through the [KDP-0x14] current
+ * ctx (the MMCB mid-excursion), NOT [KDP+0x65c] — the DEC-shim's [KDP+0x65c]
+ * offset logic does NOT transfer and is intentionally absent here. Only what
+ * Q-S2's register table demands is transcribed.
+ *
+ * Host-side glue helper called from execute_syscall's newworld arm (the DEC
+ * precedent; MACHINE-LAYER-PLAN §2d profile-gated slow-path site discipline —
+ * keeps powerpc_cpu honest). Called only when the entry resolved (the
+ * delivered-sc counter rides here, plan rev 2 P-M4: counters for counts,
+ * probes for ABI). selector_r0 is telemetry-only — the shim's architectural
+ * effect is exactly the two SPR writes. */
+extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 selector_r0)
+{
+	ppc_cpu->sprg_reg(1) = caller_r1;	// SHIM WRITE #1: SPRG1 := caller r1
+	ppc_cpu->sprg_reg(2) = caller_lr;	// SHIM WRITE #2: SPRG2 := caller LR
+	exc_stat_delivered_sc++;
+	// First few deliveries to stderr for live triage (the DEC-delivery idiom);
+	// the running total rides the [HB] heartbeat as the 5th exc= field.
+	if (exc_stat_delivered_sc <= 5)
+		fprintf(stderr, "[EXC] SC delivered #%llu: r0=%08x r1=%08x lr=%08x -> entry=%08x\n",
+		        (unsigned long long)exc_stat_delivered_sc, selector_r0,
+		        caller_r1, caller_lr, g_exc_entry_table.syscall_entry);
+}
+
 // M3a Task 4 telemetry export (heartbeat + crash-path dump).
 // M6a W2: + out[3] = deferred_native (the native-excursion DEC fence).
-extern "C" void SheepExcStats(uint64_t out[4])
+// NK-syscall-surface Task A: + out[4] = delivered_sc (plan rev 2 P-M4).
+extern "C" void SheepExcStats(uint64_t out[5])
 {
 	out[0] = exc_stat_delivered_dec;
 	out[1] = exc_stat_deferred_ee;
 	out[2] = exc_stat_deferred_depth;
 	out[3] = exc_stat_deferred_native;
+	out[4] = exc_stat_delivered_sc;
 }
 
 // C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
@@ -1288,12 +1346,13 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// signal death, so emit the counters here too. Newworld-only (the hook never
 	// runs on paravirtual; keeps paravirtual crash output byte-identical).
 	if (MachineProfileIsNewWorld()) {
-		uint64_t exc[4];
+		uint64_t exc[5];
 		SheepExcStats(exc);
 		fprintf(stderr, "[EXC] delivered_dec=%llu deferred_ee=%llu deferred_depth=%llu "
-		        "deferred_native=%llu\n",
+		        "deferred_native=%llu delivered_sc=%llu\n",
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
-		        (unsigned long long)exc[2], (unsigned long long)exc[3]);
+		        (unsigned long long)exc[2], (unsigned long long)exc[3],
+		        (unsigned long long)exc[4]);
 	}
 	dump_registers();
 	dump_log();
@@ -2128,20 +2187,44 @@ void init_emul_ppc(void)
 		 * ECB. The PC-triggered form fires later at its target block entry. */
 		ss_seed_mem_apply_immediate();
 
-		/* M3a Task 3: initialize the exception entry table for newworld.
-		 * Default: interrupt_entry = 0x50412b1c (probe-verified, M3A-ENTRY-TABLE.md).
-		 *          syscall_entry   = 0 (unresolved — descope active).
-		 * Override: SS_EXC_ENTRY=0xINT[,0xSC] for no-rebuild iteration. */
+		/* M3a Task 3 + NK-syscall-surface Task A: finalize the exception entry
+		 * table for newworld.
+		 * Defaults: interrupt_entry = 0x50412b1c (probe-verified, M3A-ENTRY-TABLE.md);
+		 *           syscall_entry   = 0x50314ac0 under SS_NW_SC_SURFACE=1 (bring-up
+		 *           gate, default OFF), else 0 (the abort-with-capture baseline).
+		 * Precedence (plan rev 2 P-M1): SS_EXC_ENTRY > SS_NW_SC_SURFACE default > 0.
+		 *
+		 * The override x gate 2x2 (P-M1, pinned):
+		 *   gate OFF, no override      -> {0x50412b1c, 0}            (FATAL sc baseline)
+		 *   gate ON,  no override      -> {0x50412b1c, 0x50314ac0}   (surface armed)
+		 *   gate OFF, SS_EXC_ENTRY=I,S -> {I, S}   override active REGARDLESS of gate —
+		 *                                 the designed PROBE-S3 no-rebuild channel
+		 *   gate ON,  SS_EXC_ENTRY=I   -> {I, 0x50314ac0}  no-comma form PRESERVES the
+		 *                                 gated syscall default (see trap fix below) */
 		{
+			const bool sc_surface = MachineEnvFlag("SS_NW_SC_SURFACE");
+			if (sc_surface) {
+				g_exc_entry_table.syscall_entry = NW_SYSCALL_ENTRY_DEFAULT;
+				/* Task A: loud bring-up line — entry resolved + shim armed. */
+				fprintf(stderr, "[NW-SC] syscall surface armed (SS_NW_SC_SURFACE=1): "
+				        "entry=0x%08x (primary copy, NK-published [KDP+0x390]); "
+				        "shim=SPRG1:=caller r1, SPRG2:=caller LR\n",
+				        g_exc_entry_table.syscall_entry);
+			}
 			const char *exc_env = getenv("SS_EXC_ENTRY");
 			if (exc_env && exc_env[0]) {
 				char *endp = NULL;
 				uint32_t ie = (uint32_t)strtoul(exc_env, &endp, 0);
-				uint32_t sc = 0;
-				if (endp && *endp == ',')
-					sc = (uint32_t)strtoul(endp + 1, NULL, 0);
+				if (endp && *endp == ',') {
+					g_exc_entry_table.syscall_entry =
+						(uint32_t)strtoul(endp + 1, NULL, 0);
+				}
+				/* TRAP FIX (plan rev 2 P-M1): the no-comma SS_EXC_ENTRY=0xINT form
+				 * previously ZEROED syscall_entry — a post-flip trap (overriding the
+				 * interrupt entry would have silently re-broken the resolved syscall
+				 * surface). It now PRESERVES the syscall entry (gate default or 0);
+				 * only an explicit ",0xSC" field overrides it. */
 				g_exc_entry_table.interrupt_entry = ie;
-				g_exc_entry_table.syscall_entry   = sc;
 				fprintf(stderr, "[EXC] entry table override (SS_EXC_ENTRY): "
 				        "interrupt=0x%08x syscall=0x%08x\n",
 				        g_exc_entry_table.interrupt_entry,
@@ -2151,6 +2234,15 @@ void init_emul_ppc(void)
 				        g_exc_entry_table.interrupt_entry,
 				        g_exc_entry_table.syscall_entry);
 			}
+			/* P-M1: SS_EXC_SC=legacy only acts on the UNRESOLVED-entry path
+			 * (execute_syscall). With the entry resolved it is inert — say so
+			 * loudly once instead of silently ignoring the knob. */
+			const char *sc_legacy = getenv("SS_EXC_SC");
+			if (sc_legacy && sc_legacy[0] == 'l' && g_exc_entry_table.syscall_entry != 0)
+				fprintf(stderr, "[EXC] WARNING: SS_EXC_SC=legacy is INERT — syscall entry "
+				        "resolved (0x%08x); legacy no-op applies only to the unresolved path "
+				        "(reproduce the legacy datum with SS_NW_SC_SURFACE=0 SS_EXC_SC=legacy)\n",
+				        g_exc_entry_table.syscall_entry);
 		}
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);

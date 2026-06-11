@@ -48,6 +48,7 @@ SheepShaver/rom-inspect/*.dSYM
 
 # AI
 CLAUDE.md
+docs/superpowers/.claims/*.claim
 .gstack/
 .claude/
 SheepShaver/src/rpc_socket

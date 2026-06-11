@@ -554,8 +554,9 @@ extern void HandleInterrupt(powerpc_registers *r);
 extern bool SheepExcDeliverPending(void);
 /* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
  * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions).
- * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4). */
-extern "C" void SheepExcStats(uint64_t out[5]);
+ * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4).
+ * FE1F-service-surface Task A: out[5]=delivered_program (the 6th exc= field). */
+extern "C" void SheepExcStats(uint64_t out[6]);
 /* NK-syscall-surface Task A: the sc-side vector-stub shim (sheepshaver_glue.cpp).
  * Called from execute_syscall's newworld arm when the syscall entry is RESOLVED,
  * before the architectural transition is applied (the DEC-shim seam precedent —
@@ -563,6 +564,15 @@ extern "C" void SheepExcStats(uint64_t out[5]);
  * exactly two SPR writes (SPRG1:=caller r1, SPRG2:=caller LR — the real 0xC00
  * vector stub's postconditions, Q-S2); selector_r0 is telemetry only. */
 extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 selector_r0);
+/* FE1F-service-surface Task A: the 0x700-side vector-stub shim (sheepshaver_glue.cpp)
+ * — the sc-shim's sibling. Called from execute_illegal's newworld trap arm when the
+ * program entry is RESOLVED, before the transition is applied. Architectural effect
+ * is exactly the same two SPR writes (SPRG1:=caller r1, SPRG2:=caller LR — the 0x700
+ * handler's save helper 0x50313d40 consumes both, [STATIC] raw==patched);
+ * trap_word/srr0 are telemetry (slot-id decode + the relocated Task-T slot-15
+ * exhaustion diagnostic). */
+extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
+                                    uint32 trap_word, uint32 srr0);
 #endif
 
 #endif /* PPC_CPU_H */

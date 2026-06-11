@@ -1313,6 +1313,58 @@ bool PatchROM(void)
 			        "(written mask=0x%04x, expected 0x7fd0)\n", u_mask);
 		}
 
+		// FE1F-service-surface Task A (plan rev 3, RATIFIED 2026-06-11) — the
+		// rung-2 "dead slots get loud stops" policy is RETIRED: the slots were
+		// never dead.  The raw ROM's `twi 31,r31,N` placeholders (0x0fff000N at
+		// file 0x36e8c0+4N, raw md5 7b1378be…; slot 14 duplicates 0x0d — the
+		// ROM's own quirk, restored verbatim) ARE the design: executing a slot
+		// raises a program interrupt (vector 0x700) and the NK's published
+		// handler ([KDP+0x37c]=0x50314700 [PROBE✓]) decodes the slot id and
+		// dispatches through the exit-pointer array [KDP+0x5f0+4·slot] — the
+		// same NK selector-service gateway regime the sc surface traverses.
+		// Slot 15 (Task T's allocator-exhaustion stop) IS also a raw
+		// placeholder (0x0fff000f at file 0x36e8fc, re-verified this session)
+		// → restored too; the exhaustion diagnostics move to telemetry on the
+		// 0x700 delivery path (SheepExcProgramShim's slot-15 loud line +
+		// delivered-program counter, sheepshaver_glue.cpp).
+		//
+		// Restore is gated on SS_NW_FE1F_SURFACE=1 (bring-up default OFF;
+		// the same gate arms the 0x700 delivery surface in init_emul_ppc) —
+		// gated off, the Task-T/U stops above stay and the 0x5000f248 park
+		// baseline is byte-identical.  Verify-EXPECTED discipline: each slot's
+		// current word must be exactly the stop branch Task T/U wrote above
+		// (same branch arithmetic), else skip loudly.
+		if (MachineEnvFlag("SS_NW_FE1F_SURFACE")) {
+			static const struct { uint8 slot; uint32 stub; uint32 raw; } r_slots[] = {
+				{  4, 0x429c40u, 0x0fff0004u }, {  6, 0x429c50u, 0x0fff0006u },
+				{  7, 0x429c60u, 0x0fff0007u }, {  8, 0x429c70u, 0x0fff0008u },
+				{  9, 0x429c80u, 0x0fff0009u }, { 10, 0x429c90u, 0x0fff000au },
+				{ 11, 0x429ca0u, 0x0fff000bu }, { 12, 0x429cb0u, 0x0fff000cu },
+				{ 13, 0x429cc0u, 0x0fff000du }, { 14, 0x429cd0u, 0x0fff000du },
+				{ 15, 0x429cf0u, 0x0fff000fu },  // Task T's exhaust stop, see note
+			};
+			uint32 r_mask = 0;
+			for (size_t i = 0; i < sizeof(r_slots) / sizeof(r_slots[0]); i++) {
+				const uint32 slot_offset = 0x46e8c0u + r_slots[i].slot * 4u;
+				const uint32 expected = 0x48000000u |
+					((r_slots[i].stub - slot_offset) & 0x03FFFFFCu);
+				uint32 *slot_p = (uint32 *)(ROMBaseHost + slot_offset);
+				if (ntohl(*slot_p) != expected) {
+					fprintf(stderr, "[NW-FE1F] restore: slot %u ROM+0x%x holds "
+					        "%08x, expected the Task-%s stop %08x — skipping\n",
+					        r_slots[i].slot, slot_offset, ntohl(*slot_p),
+					        r_slots[i].slot == 15 ? "T" : "U", expected);
+					continue;
+				}
+				*slot_p = htonl(r_slots[i].raw);
+				r_mask |= 1u << r_slots[i].slot;
+			}
+			fprintf(stderr, "[NW-FE1F] raw twi placeholders RESTORED over the "
+			        "parked stops, slots {4,6-15} (mask=0x%04x, expected 0xffd0; "
+			        "slot 14 = raw 0x0fff000d quirk verbatim) — twi → 0x700 → "
+			        "[KDP+0x37c]=0x50314700\n", r_mask);
+		}
+
 		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "
 		        "(%u insns), table[0] → trampoline → cold-start\n",
 		        tramp_offset, (unsigned)(b_idx + 1));

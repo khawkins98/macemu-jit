@@ -188,6 +188,78 @@ void powerpc_cpu::execute_illegal(uint32 opcode)
 	}
 
 #ifdef SHEEPSHAVER
+	/* FE1F-service-surface Task A (plan rev 3): twi/tw trap-taken on the
+	 * newworld profile = a REAL program exception (vector 0x700, PEM trap type)
+	 * delivered to the NK-published handler — the execute_syscall precedent one
+	 * vector over (§2d slow-path seam, no JIT changes).
+	 *
+	 * Where twi/tw land today (Task-A recon, pinned): NEITHER is in the decode
+	 * table (ppc-decode.cpp has no primary-3 / 31-xo-4 entries) — both fall to
+	 * the INVALID entry (this handler) with CFLOW_TRAP, so decoded blocks
+	 * already END at the trap site; the aarch64 JIT explicitly falls back
+	 * (ppc-jit.cpp case 3 "twi — fall back so trap conditions are evaluated",
+	 * case 31/xo-4 "tw", case 2 "tdi"), so this arm runs in JIT boots too.
+	 *
+	 * Scope honesty: only the trap-TAKEN arm is rerouted. An UNTAKEN twi/tw
+	 * (architecturally a no-op) still falls through to the legacy illegal path
+	 * below — unchanged behavior, recorded limitation (no untaken-trap sites
+	 * exist on the boot path; the entry-vector placeholders are all TO=31
+	 * unconditional). tdi (primary 2) is 64-bit-only and stays illegal.
+	 * Paravirtual: this arm never runs (profile-gated) — byte-identical. */
+	if (MachineProfileIsNewWorld()) {
+		const uint32 primary = opcode >> 26;
+		const bool is_twi = (primary == 3);
+		const bool is_tw  = (primary == 31 && ((opcode >> 1) & 0x3FF) == 4);
+		if (is_twi || is_tw) {
+			const uint32 to = (opcode >> 21) & 0x1F;
+			const int32  a  = (int32)gpr((opcode >> 16) & 0x1F);
+			const int32  b  = is_twi ? (int32)(int16)(opcode & 0xFFFF)
+			                         : (int32)gpr((opcode >> 11) & 0x1F);
+			const bool taken = ((to & 0x10) && (a <  b)) ||
+			                   ((to & 0x08) && (a >  b)) ||
+			                   ((to & 0x04) && (a == b)) ||
+			                   ((to & 0x02) && ((uint32)a <  (uint32)b)) ||
+			                   ((to & 0x01) && ((uint32)a >  (uint32)b));
+			if (taken) {
+				ExcTransition t = ExcEnter(pc(), regs().msr, EXC_PROGRAM,
+				                           &g_exc_entry_table);
+				if (t.pc == EXC_PC_UNRESOLVED) {
+					/* Trap taken with no resolved 0x700 entry (gate off, or a
+					 * stray trap on a gated-off boot): loud capture-abort —
+					 * the execute_syscall FATAL idiom, with the trap word +
+					 * slot-id decode (the entry-vector placeholders encode
+					 * their slot id: twi 31,r31,N = 0x0fff000N). */
+					const bool is_slot = (opcode & 0xFFFF0000u) == 0x0FFF0000u;
+					fprintf(stderr, "[EXC] FATAL: trap (%s) taken at pc=%08x with "
+					        "unresolved program entry (word=%08x slot=%d "
+					        "SRR0=%08x SRR1=%08x msr=%08x lr=%08x r1=%08x) - "
+					        "set SS_NW_FE1F_SURFACE=1\n",
+					        is_twi ? "twi" : "tw", pc(), opcode,
+					        is_slot ? (int)(opcode & 0xFFFFu) : -1,
+					        t.srr0, t.srr1, regs().msr, lr(), gpr(1));
+					fprintf(stderr, "[EXC] FATAL: trap capture: r0=%08x r3=%08x "
+					        "r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x r9=%08x r10=%08x\n",
+					        gpr(0), gpr(3), gpr(4), gpr(5), gpr(6), gpr(7),
+					        gpr(8), gpr(9), gpr(10));
+					abort();
+				}
+				/* Resolved: the 0x700 vector-stub shim (SPRG1:=caller r1,
+				 * SPRG2:=caller LR — the same two SPR writes as the sc stub;
+				 * the 0x700 handler's save helper 0x50313d40 consumes both)
+				 * + the delivered-program counter/telemetry. Then apply the
+				 * transition atomically. NO increment_pc — PC set absolutely
+				 * (SRR0 = the trap instruction itself, per PEM). */
+				SheepExcProgramShim(gpr(1), lr(), opcode, t.srr0);
+				regs().srr0 = t.srr0;
+				regs().srr1 = t.srr1;
+				regs().msr  = t.msr;
+				pc()        = t.pc;
+				return;
+			}
+			/* untaken trap: fall through to the legacy illegal path (see above) */
+		}
+	}
+
 	if (PrefsFindBool("ignoreillegal")) { increment_pc(4); return; }
 #endif
 	fprintf(stderr, "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);

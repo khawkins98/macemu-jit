@@ -105,7 +105,15 @@ extern "C" {
  * interrupt targets is explicitly out of this milestone's scope. */
 #define NW_INTERRUPT_ENTRY_DEFAULT 0x50412b1cu  /* M3A-ENTRY-TABLE.md probe-verified */
 #define NW_SYSCALL_ENTRY_DEFAULT   0x50314ac0u  /* primary copy, NK-published [KDP+0x390] [PROBE✓] */
-ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u };
+/* FE1F-service-surface Task A (plan rev 3): the program-interrupt (0x700) entry —
+ * the NK's published 0x700 handler. PRIMARY copy like the syscall entry (the same
+ * cross-copy note applies: the live value follows what the NK publishes,
+ * [KDP+0x37c] = 0x50314700 [PROBE✓], = static file 0x314700 + ROMBase, NO
+ * +0x100000; the interrupt entry's staged-copy asymmetry is recorded above).
+ * Armed only under SS_NW_FE1F_SURFACE=1 during bring-up (default OFF;
+ * flip-last is Task C's job). */
+#define NW_PROGRAM_ENTRY_DEFAULT   0x50314700u  /* primary copy, NK-published [KDP+0x37c] [PROBE✓] */
+ExcEntryTable g_exc_entry_table = { NW_INTERRUPT_ENTRY_DEFAULT, 0u, 0u };
 
 /* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
  * runs the hook). CPU-thread-only writers (check_spcflags context, plan §2g), so
@@ -116,6 +124,7 @@ static uint64_t exc_stat_deferred_ee    = 0;
 static uint64_t exc_stat_deferred_depth = 0;
 static uint64_t exc_stat_deferred_native = 0;	// M6a W2: deferred during native excursion ([XLM_RUN_MODE]!=0)
 static uint64_t exc_stat_delivered_sc   = 0;	// NK-syscall-surface Task A (plan rev 2 P-M4): delivered sc count
+static uint64_t exc_stat_delivered_program = 0;	// FE1F-service-surface Task A: delivered 0x700 (trap) count
 
 // Emulation time statistics
 #ifndef EMUL_TIME_STATS
@@ -1172,16 +1181,62 @@ extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 s
 		        caller_r1, caller_lr, g_exc_entry_table.syscall_entry);
 }
 
+/* FE1F-service-surface Task A (plan rev 3): the 0x700-side vector-stub shim —
+ * the sc-shim's sibling, one vector over. The NK's 0x700 handler (0x50314700)
+ * opens with the SAME save helper the sc handler family uses (bl 0x50313d40),
+ * which consumes exactly the two SPRs the real lowmem vector stub writes:
+ *   SPRG1 := caller r1   (consumed at 0x313d4c: [KDP+4] := SPRG1)
+ *   SPRG2 := caller LR   (consumed at 0x313d84: r12 := SPRG2; the handler's
+ *                         fast rfi exit restores LR from SPRG2 / r1 from SPRG1
+ *                         at 0x314ad8..0x314ae8)
+ * — verified by static disassembly of the raw==patched dump (md5 7b1378be…)
+ * this session. Transcribe ONLY what the handler consumes (the sc-shim rule);
+ * everything else it reads (SPRG0=KDP, [KDP-0x14] ctx, [KDP+0x648] table base,
+ * exit-pointer array [KDP+0x5f0+4·slot]) is NK-maintained staged state.
+ *
+ * Called from execute_illegal's newworld trap arm (ppc-execute.cpp) when the
+ * program entry is RESOLVED, before the transition is applied. trap_word/srr0
+ * are telemetry: the slot id rides the placeholder encoding (twi 31,r31,N =
+ * 0x0fff000N — the NK decodes it the same way, xoris r8,r8,0x0fff). Slot 15 is
+ * the DR allocator-exhaustion path: rung-2 Task T's parked-stop diagnostics
+ * moved HERE as telemetry (plan rev 3 item 1 — the slot is a real trap
+ * placeholder, restored; exhaustion now reaches the NK's own slot-15 exit). */
+extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
+                                    uint32 trap_word, uint32 srr0)
+{
+	ppc_cpu->sprg_reg(1) = caller_r1;	// SHIM WRITE #1: SPRG1 := caller r1
+	ppc_cpu->sprg_reg(2) = caller_lr;	// SHIM WRITE #2: SPRG2 := caller LR
+	exc_stat_delivered_program++;
+	const bool is_slot = (trap_word & 0xffff0000u) == 0x0fff0000u;
+	const uint32 slot = trap_word & 0xffffu;
+	if (exc_stat_delivered_program <= 5) {
+		char slotbuf[16];
+		if (is_slot) snprintf(slotbuf, sizeof slotbuf, "%u", slot);
+		else         snprintf(slotbuf, sizeof slotbuf, "n/a");
+		fprintf(stderr, "[EXC] PROGRAM delivered #%llu: srr0=%08x word=%08x slot=%s "
+		        "r1=%08x lr=%08x -> entry=%08x\n",
+		        (unsigned long long)exc_stat_delivered_program, srr0, trap_word,
+		        slotbuf, caller_r1, caller_lr, g_exc_entry_table.program_entry);
+	}
+	if (is_slot && slot == 15)
+		fprintf(stderr, "[EXC] PROGRAM slot-15 (DR allocator EXHAUSTION) #%llu: "
+		        "srr0=%08x — pool-sizing tripwire (was Task T's parked stop; "
+		        "now delivered to the NK slot-15 exit)\n",
+		        (unsigned long long)exc_stat_delivered_program, srr0);
+}
+
 // M3a Task 4 telemetry export (heartbeat + crash-path dump).
 // M6a W2: + out[3] = deferred_native (the native-excursion DEC fence).
 // NK-syscall-surface Task A: + out[4] = delivered_sc (plan rev 2 P-M4).
-extern "C" void SheepExcStats(uint64_t out[5])
+// FE1F-service-surface Task A: + out[5] = delivered_program (6th exc= field).
+extern "C" void SheepExcStats(uint64_t out[6])
 {
 	out[0] = exc_stat_delivered_dec;
 	out[1] = exc_stat_deferred_ee;
 	out[2] = exc_stat_deferred_depth;
 	out[3] = exc_stat_deferred_native;
 	out[4] = exc_stat_delivered_sc;
+	out[5] = exc_stat_delivered_program;
 }
 
 // C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
@@ -1347,13 +1402,13 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 	// signal death, so emit the counters here too. Newworld-only (the hook never
 	// runs on paravirtual; keeps paravirtual crash output byte-identical).
 	if (MachineProfileIsNewWorld()) {
-		uint64_t exc[5];
+		uint64_t exc[6];
 		SheepExcStats(exc);
 		fprintf(stderr, "[EXC] delivered_dec=%llu deferred_ee=%llu deferred_depth=%llu "
-		        "deferred_native=%llu delivered_sc=%llu\n",
+		        "deferred_native=%llu delivered_sc=%llu delivered_program=%llu\n",
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
 		        (unsigned long long)exc[2], (unsigned long long)exc[3],
-		        (unsigned long long)exc[4]);
+		        (unsigned long long)exc[4], (unsigned long long)exc[5]);
 	}
 	dump_registers();
 	dump_log();
@@ -2252,6 +2307,42 @@ void init_emul_ppc(void)
 				        "resolved (0x%08x); legacy no-op applies only to the unresolved path "
 				        "(reproduce the legacy datum with SS_NW_SC_SURFACE=0 SS_EXC_SC=legacy)\n",
 				        g_exc_entry_table.syscall_entry);
+
+			/* FE1F-service-surface Task A (plan rev 3): the program-interrupt
+			 * (0x700) delivery surface — bring-up gate SS_NW_FE1F_SURFACE=1,
+			 * DEFAULT OFF (MachineEnvFlag polarity: unset/empty/"0" = off; the
+			 * flip to newworld default + SS_NW_SC_SURFACE-style explicit-"0"
+			 * opt-out polarity is Task C's LAST step, revert-on-red).
+			 *
+			 * Env-flag matrix (rev 2 P-m5, behavior pinned): this surface is
+			 * MEANINGLESS with SS_NW_MM_SWITCH=0 or SS_NW_SC_SURFACE=0 — the
+			 * boot never reaches the FE1F callout without the MixedMode switch
+			 * + the sc surface (the e3e0 routine sits 5 sc deliveries past the
+			 * MixedMode round trip). Combined-opt-out decision: the surface
+			 * still ARMS (harmless — the twi sites are unreachable on such a
+			 * boot) but logs the misconfig loudly; a pre-FE1F A/B wants the
+			 * upstream knob, not this one. The same gate also controls the
+			 * PatchROM-time placeholder restore (rom_patches.cpp) — gated off,
+			 * the Task-T/U parked stops stay and the 0x5000f248 park baseline
+			 * is byte-identical. */
+			if (MachineEnvFlag("SS_NW_FE1F_SURFACE")) {
+				g_exc_entry_table.program_entry = NW_PROGRAM_ENTRY_DEFAULT;
+				fprintf(stderr, "[NW-FE1F] FE1F surface armed (SS_NW_FE1F_SURFACE=1; "
+				        "bring-up default OFF): program_entry=0x%08x (primary copy, "
+				        "NK-published [KDP+0x37c]); twi/tw trap-taken -> 0x700; "
+				        "shim=SPRG1:=caller r1, SPRG2:=caller LR\n",
+				        g_exc_entry_table.program_entry);
+				const char *mm_env = getenv("SS_NW_MM_SWITCH");
+				const bool mm_on = !(mm_env && strcmp(mm_env, "0") == 0);
+				const bool sc_on = (g_exc_entry_table.syscall_entry != 0);
+				if (!mm_on || !sc_on)
+					fprintf(stderr, "[NW-FE1F] MISCONFIG: FE1F surface armed with "
+					        "%s%s%s OFF — the boot cannot reach the FE1F callout; "
+					        "surface stays armed but inert (P-m5)\n",
+					        !mm_on ? "SS_NW_MM_SWITCH" : "",
+					        (!mm_on && !sc_on) ? " and " : "",
+					        !sc_on ? "the sc surface" : "");
+			}
 		}
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);

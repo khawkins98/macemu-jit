@@ -569,8 +569,89 @@ The `[NW-TRAMP]` fixup banner at patch time reports the resolved state
 
 | Env var | Effect |
 |---|---|
-| `SS_DR_R24_RING=1` | 68k-PC transition ring: records guest **r24** (the DR emulator's 68k PC) at every JIT dispatcher block entry into a 2M-entry ring, deduped against the last 4 recorded values (loop ping-pong suppressed — beware: a literal resume PC can be dedup-masked if it recurs within 4 entries). Dumped as a `[R24RING] N transitions recorded …` block to stderr at exit (pair with `SS_TERM_DUMP=1` for timeout-killed boots). **This is the only way to observe 68k control flow** — 68k PCs are PPC-probe-blind (`SS_PROBE_PC` keys on PPC block-entry PCs). |
+| `SS_DR_R24_RING=1` | 68k-PC transition ring: records guest **r24** (the DR emulator's 68k PC) at every JIT dispatcher block entry into a 2M-entry ring, deduped against the last 4 recorded values (loop ping-pong suppressed). Since the instrument batch, suppression no longer masks recurrence: each suppressed repeat increments the matched slot's count, and the dump prints `PC*N` for slots seen more than once (`N` = total observations = 1 + suppressed repeats, covering both consecutive same-r24 dispatches and last-4 loop recurrence — the Q-F4 confound is closed; plain `PC` records are unchanged). Dumped as a `[R24RING] N transitions recorded …` block to stderr at exit, **and now also on SIGSEGV** (the trace-ring crash dump flushes it once — see the instrument-batch section below). Pair with `SS_TERM_DUMP=1` for timeout-killed boots. **This is the only way to observe 68k control flow** — 68k PCs are PPC-probe-blind (`SS_PROBE_PC` keys on PPC block-entry PCs); for a register-file dump at a 68k PC, see `SS_PROBE_68K` below. |
 | `SS_INTERP_RING=1` (or `=2`, or `=/path.bin`) | Interpreted-insn + JIT-block-entry ring (1M entries, 16 MB binary atexit dump, default `/tmp/ss_interp_ring.bin`; `[IRING]` summary line to stderr). Records `{pc, opcode, ea, val}` for every interpreted PPC instruction (`ea`/`val` = effective address + pre-execution guest word for common loads/stores) plus RAM-range JIT block entries (marker records `op=0xffffffff, ea=r24, val=LR`) — built because the 'pwpc' parcel code runs where `SS_PROBE_PC` can't see. Mode `=2`: record EVERY JIT block entry and **freeze** the ring at the first r24 reset transition (`0x5000002c`) once half-full, so the dump ends exactly at a reboot-loop bail; use with `SS_JIT_NO_CHAIN=1` so chained blocks can't bypass the hook. |
+
+## Instrument batch — crash-boot ring reach + 68k probes (`ppc-cpu.cpp`; zero cost unset)
+
+Source-side instruments landed for the DSAT-wall desync milestone (DSAT-WALL-RECON.md
+Task-0: reach trace-ring records ~3.39M in a boot that SIGSEGVs at ~4.48M). All four are
+env-gated capture-only — a default boot is byte-identical with them unset.
+
+### `SS_RING_WINDOW=0xN` — trace-ring capacity override
+
+Overrides the `SS_JIT_TRACE_RING=1` ring **capacity** (records; decimal or 0x-hex,
+rounded up to a power of two, clamped to [0x1000, 0x800000]; default 0x40000 = 256K).
+A `[RING] SS_RING_WINDOW=…: trace ring N records (M MB)` line at init reports the
+resolved size.
+
+**Retention math** (why this knob exists): the crash dump shows the last
+`min(idx, size)` records, so record `#R` is retained at crash record `#C` iff
+`C − R < size`. The DSAT-wall boot crashes at `idx ≈ 4,480,459` with the desync window
+at `#3,391,300..#3,391,700` — a lookback of ~1,089,159 records:
+
+| Ring size | Oldest retained at crash | Reaches #3.39M? | Memory (108 B/record) |
+|---|---|---|---|
+| `0x40000` (256K, default) | #4,218,315 | NO (misses by ~830K) | 27 MB |
+| `0x100000` (1M) | #3,431,883 | NO (misses by ~40K) | 113 MB |
+| `0x200000` (2M) | #2,383,307 | **YES** (~1.0M margin) | 226 MB |
+| `0x400000` (4M) | #286,219 | YES (comfortable) | 453 MB |
+
+So `0x200000` is the smallest power of two that retains the DSAT window; `0x400000` is
+the comfortable choice. (The "2M capacity, barely retained" phrasing in earlier notes
+conflated the r24 ring's 2M-entry capacity with the trace ring — the trace ring's
+default is 256K and does NOT retain the window; 2M *trace-ring* records do, with ~1.0M
+margin, "barely" only in the sense that the next smaller power of two misses.)
+The r24 ring keeps its fixed 2M-entry capacity (its entries are deduped transitions,
+far sparser than trace records; its SIGSEGV problem was the lost atexit dump, fixed by
+the crash bridge below).
+
+### `SS_RING_DUMP_FROM=0xSTART[:0xEND]` — dump clipping by absolute record number
+
+Clips the trace-ring dump (`/tmp/ss_jit_ring.txt`) to **absolute record numbers** — the
+`record #N` anchors printed by `[WATCH]` lines and used throughout the recon notes.
+Decimal or 0x-hex; `END` exclusive, default = newest. Needed alongside big
+`SS_RING_WINDOW` values: an unclipped 2M-record dump is ~700 MB. Clamping is loud: if
+`START` was already evicted the dump is clipped to the oldest retained record (stderr
+says so); if the whole range is gone, the full retained window is dumped instead (also
+announced). The dump file now begins with a `#`-prefixed header line —
+`# records #A..#B (of TOTAL total; ring SIZE records, oldest retained #O)` — so line
+`K` of the body = record `#(A+K−1)`; `jit-analyze.py ring` ignores it. The stderr
+summary line format gained the same `#A..#B` range. The SIGSEGV crash dump also now
+flushes the r24 ring (once per process — a watch-triggered mid-run trace dump consumes
+the one shot; the normal atexit r24 dump still fires separately on clean/SIGTERM exits).
+
+### `SS_PROBE_68K=0x68KPC[:N]` — 68k register-file probe at the DR dispatch hook
+
+The 68k counterpart of `SS_PROBE_PC` (68k PCs are PPC-probe-blind — this was the single
+biggest recurring recon tax). Fires when guest **r24** (the DR emulator's 68k PC)
+*transitions to* the target value at the JIT dispatcher block-entry hook (the same hook
+the r24 ring records from), dumping the 68k register file per the DR map
+(D0–D7 = r8–r15, A0–A6 = r16–r22, A7 = r1) plus the PPC dispatch context
+(block PC, r24/r27/r29, LR, CTR, CR). First `N` matches (default 8), **linear** (every
+match, not logarithmic), edge-triggered: consecutive dispatcher entries with r24 parked
+at the target count as ONE match (the DR executes several PPC blocks per 68k insn).
+Caveats: **r24 word+2 convention** — while the DR executes the 68k word at `X`, r24
+reads `X+2`, so to catch execution of `0x5000f246` probe `0x5000f248`; hook granularity
+is block-entry, so 68k PCs consumed entirely inside one PPC block (no dispatcher
+return) are invisible, same blindness as the r24 ring. Output:
+
+```
+[PROBE68K 0x5000f248 match=1/8]
+  d0=… d1=… … d7=…
+  a0=… a1=… … a7=…
+  ppc: block=0x… r24=… r27=… r29=… lr=… ctr=… cr=…
+[PROBE68K] cap reached (8) — disarmed
+```
+
+### `SS_PROBE_LINEAR=1` (+ `SS_PROBE_CAP=N`) — linear `SS_PROBE_PC` sampling
+
+Makes every `SS_PROBE_PC` probe fire on **every** visit up to a cap (default 32,
+`SS_PROBE_CAP=N`, decimal or 0x-hex) instead of the logarithmic visits 1, 10, 100, …
+— visit counts and sequences become readable (probes still cannot *count* beyond the
+cap; for full counts land an `exc=`-tuple counter). Applies to all probes in the run;
+a `[PROBE] linear sampling: every visit up to N` line announces the mode. After the
+cap, that probe is silent for the rest of the boot.
 
 ## Machine Layer M6 — NK syscall surface (`SS_NW_SC_SURFACE`)
 

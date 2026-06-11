@@ -21,9 +21,19 @@
 
 - `SS_PROBE_PC=0xPC[:fields][;…]` — PPC block-entry only (max 8 PCs/run, logarithmic
   sampling: visits 1,10,100…). Fields: rN, [0xADDR], [rN:SIZE]. **68k PCs are
-  probe-blind** — 68k evidence rides `SS_DR_R24_RING=1` (ring is 2M entries,
-  last-4 dedup — re-verify wrap/dedup before trusting "appears once").
-  **Probes cannot count** — land a counter (the `exc=` tuple idiom) for counts.
+  probe-blind for SS_PROBE_PC** — use `SS_PROBE_68K=0x68KPC[:N]` (68k regfile + PPC
+  context at the DR dispatch hook, first N matches linear, edge-triggered; r24 word+2:
+  to catch word X probe X+2) or `SS_DR_R24_RING=1` (ring is 2M entries, last-4 dedup —
+  dedup now COUNTS: dump prints `PC*N` for suppressed repeats; also flushed on SIGSEGV
+  via the trace-ring crash dump).
+  **Probes cannot count** — land a counter (the `exc=` tuple idiom) for counts; or
+  `SS_PROBE_LINEAR=1` (+`SS_PROBE_CAP=N`, default 32) fires probes on EVERY visit up
+  to the cap so short sequences become readable.
+- Crash-boot ring reach: `SS_RING_WINDOW=0xN` overrides the SS_JIT_TRACE_RING capacity
+  (default 0x40000; 0x200000 is the smallest that retains the DSAT ~3.39M window at the
+  ~4.48M crash, 108 B/record) and `SS_RING_DUMP_FROM=0xSTART[:0xEND]` clips the dump to
+  absolute record numbers (dump file now has a `# records #A..#B …` header line).
+  Full retention math: DIAGNOSTICS.md "Instrument batch".
 - `SS_JIT_WATCH_ADDR=<HEX,no-0x>` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
 - `SS_SEED_MEM`, `SS_EXC_ENTRY=0xINT[,0xSC]` (no-comma form preserves the syscall
   default), `SS_CUDA_TRACE=1`, `SS_INTERP_RING` — see DIAGNOSTICS.md.

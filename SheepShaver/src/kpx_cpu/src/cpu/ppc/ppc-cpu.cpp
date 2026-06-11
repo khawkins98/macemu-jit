@@ -188,6 +188,120 @@ static inline void r24ring_record(uint32_t r24) {
 	s_r24ring_idx++;
 }
 
+// SS_INTERP_RING=1 (or =/path.bin): capture-only telemetry (M6a Wave 2 recon,
+// MPLibrary-bail diagnosis). Records EVERY interpreted-PPC instruction executed
+// through the decode-cache block loop: {pc, opcode, ea, val} where ea is the
+// effective address for D-form / common X-form loads+stores (0 otherwise) and
+// val is the 32-bit guest word at ea&~3 BEFORE execution (0 if MMIO/absent).
+// Ring of 1M entries (16 MB), binary atexit dump (pairs with SS_TERM_DUMP=1).
+// Zero cost when unset (same -1 parse-once pattern as the r24 ring). The
+// rationale: the 'pwpc' parcel PPC code (MPLibrary init) runs interpreted-only
+// (jRAM=0), so SS_PROBE_PC (JIT block entry) cannot see it; this names the
+// exact loads feeding its bail decision.
+struct iring_ent { uint32_t pc, op, ea, val; };
+#define IRING_SIZE (1u<<20)
+static iring_ent *s_iring = NULL;
+static uint64_t s_iring_idx = 0;
+static int s_iring_enabled = -1;
+static int s_iring_mode = 1;
+static const char *s_iring_path = "/tmp/ss_interp_ring.bin";
+
+static void iring_dump_atexit(void) {
+	if (!s_iring) return;
+	uint64_t n = s_iring_idx < IRING_SIZE ? s_iring_idx : IRING_SIZE;
+	uint64_t start = s_iring_idx < IRING_SIZE ? 0 : s_iring_idx % IRING_SIZE;
+	FILE *f = fopen(s_iring_path, "wb");
+	if (!f) return;
+	// Linearize oldest-first so offline analysis is a straight read.
+	if (start)
+		fwrite(s_iring + start, sizeof(iring_ent), IRING_SIZE - start, f);
+	fwrite(s_iring, sizeof(iring_ent), start ? start : n, f);
+	fclose(f);
+	fprintf(stderr, "[IRING] %llu interpreted insns recorded (last %llu dumped to %s, oldest first)\n",
+	        (unsigned long long)s_iring_idx, (unsigned long long)n, s_iring_path);
+	fflush(stderr);
+}
+
+static inline int iring_check_enabled(void) {
+	if (__builtin_expect(s_iring_enabled < 0, false)) {
+		const char *e = getenv("SS_INTERP_RING");
+		s_iring_enabled = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+		if (s_iring_enabled) {
+			if (e[0] == '/') s_iring_path = strdup(e);
+			else s_iring_mode = atoi(e);
+			s_iring = (iring_ent *)calloc(IRING_SIZE, sizeof(iring_ent));
+			if (s_iring) atexit(iring_dump_atexit);
+			else s_iring_enabled = 0;
+			fprintf(stderr, "[IRING] insn/block capture %s -> %s\n",
+			        s_iring_enabled ? "ON" : "alloc FAILED", s_iring_path);
+		}
+	}
+	return s_iring_enabled;
+}
+
+// JIT-block-entry capture: the parcel PPC code in guest RAM is JIT-compiled
+// (RAM is in the compilable domain), so the interpreter ring alone misses it.
+// Record block entries whose PC is below the ROM window (RAM/MixedMode area),
+// plus the FIRST ROM-range block after each RAM run (the return/bail target).
+// Marker records: op=0xffffffff, ea=r24 (68k PC if DR), val=LR.
+// Mode 2 (SS_INTERP_RING=2): record EVERY JIT block entry (pc, r24, lr) and
+// FREEZE the ring at the first r24 transition to the ROM reset entry
+// (0x5000002c) once at least half the ring is filled — so the dump ends
+// exactly at the reboot-loop bail with one full cycle of lead-up. Use with
+// SS_JIT_NO_CHAIN=1 so chained blocks cannot bypass the dispatcher hook.
+static uint32_t s_iring_prev_was_ram = 0;
+static int s_iring_frozen = 0;
+static uint32_t s_iring_last_r24 = 0;
+static inline void iring_jit_block(powerpc_cpu *cpu, uint32_t bpc, uint32_t lrval) {
+	if (!s_iring || s_iring_frozen) return;
+	uint32_t r24 = cpu->gpr(24);
+	if (s_iring_mode >= 2) {
+		if (r24 == 0x5000002c && s_iring_last_r24 != 0x5000002c &&
+		    s_iring_idx >= IRING_SIZE / 2) {
+			s_iring_frozen = 1;
+			fprintf(stderr, "[IRING] frozen at reset transition (idx=%llu)\n",
+			        (unsigned long long)s_iring_idx);
+			return;
+		}
+		s_iring_last_r24 = r24;
+	} else {
+		uint32_t ram = bpc < 0x50000000;
+		if (!ram && !s_iring_prev_was_ram) return;
+		s_iring_prev_was_ram = ram;
+	}
+	iring_ent *e = &s_iring[s_iring_idx % IRING_SIZE];
+	e->pc = bpc; e->op = 0xffffffff;
+	e->ea = r24; e->val = lrval;
+	s_iring_idx++;
+}
+
+static inline void iring_record(powerpc_cpu *cpu, uint32_t ipc, uint32_t op) {
+	uint32_t primary = op >> 26;
+	uint32_t ea = 0;
+	bool has_ea = false;
+	if (primary >= 32 && primary <= 55) {           // D-form load/store family
+		uint32_t ra = (op >> 16) & 31;
+		ea = (ra ? cpu->gpr(ra) : 0) + (int32_t)(int16_t)(op & 0xffff);
+		has_ea = true;
+	} else if (primary == 31) {                     // X-form indexed load/store
+		switch ((op >> 1) & 0x3ff) {
+		case 20: case 23: case 55: case 87: case 119: case 279: case 311:
+		case 343: case 375: case 151: case 183: case 215: case 247:
+		case 407: case 439: case 150: case 534: case 662: case 790: case 918: {
+			uint32_t ra = (op >> 16) & 31, rb = (op >> 11) & 31;
+			ea = (ra ? cpu->gpr(ra) : 0) + cpu->gpr(rb);
+			has_ea = true;
+			break; }
+		}
+	}
+	uint32_t val = 0;
+	if (has_ea && !vm_is_mmio(ea & ~3u))
+		val = vm_read_memory_4(ea & ~3u);   // pre-exec value; == load result for loads
+	iring_ent *e = &s_iring[s_iring_idx % IRING_SIZE];
+	e->pc = ipc; e->op = op; e->ea = has_ea ? ea : 0; e->val = val;
+	s_iring_idx++;
+}
+
 static bool probe_should_log(uint64_t v) {
 	// Log at powers of 10: 1, 10, 100, 1000, ...
 	if (v == 0) return false;
@@ -1865,6 +1979,9 @@ void powerpc_cpu::execute(uint32 entry)
 							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
 						// SS_DR_R24_RING: capture-only 68k-PC transition ring (M6a Wave 2 recon).
 						r24ring_record((uint32_t)gpr(24));
+						// SS_INTERP_RING: RAM-block JIT entry capture (see iring_jit_block).
+						if (__builtin_expect(iring_check_enabled() > 0, false))
+							iring_jit_block(this, (uint32_t)jit_block_start_pc, (uint32_t)lr());
 						// SS_PROBE_PC: dump registers/memory at specified block-entry PCs.
 						// Parsed once; up to PROBE_MAX compares per block when active.
 						{
@@ -2391,6 +2508,9 @@ void powerpc_cpu::execute(uint32 entry)
 							ss_seed_mem_check_pc((uint32_t)jit_block_start_pc);
 						// SS_DR_R24_RING: capture-only 68k-PC transition ring (M6a Wave 2 recon).
 						r24ring_record((uint32_t)gpr(24));
+						// SS_INTERP_RING: RAM-block JIT entry capture (see iring_jit_block).
+						if (__builtin_expect(iring_check_enabled() > 0, false))
+							iring_jit_block(this, (uint32_t)jit_block_start_pc, (uint32_t)lr());
 						if (__builtin_expect(s_probe_count > 0, false)) {
 							uint32_t bpc = (uint32_t)jit_block_start_pc;
 							for (int pi = 0; pi < s_probe_count; pi++) {
@@ -2529,6 +2649,15 @@ void powerpc_cpu::execute(uint32 entry)
 					}
 				}
 #endif
+				// SS_INTERP_RING: parse once, then per-insn capture path (capture-only;
+				// identical execution order to the duff device below, just unrolled 1x).
+				if (__builtin_expect(iring_check_enabled() > 0, false)) {
+					uint32 ipc = bi->pc;
+					for (int k = 0; k < bi->size; k++, ipc += 4) {
+						iring_record(this, ipc, bi->di[k].opcode);
+						bi->di[k].execute(this, bi->di[k].opcode);
+					}
+				} else {
 				const int r = bi->size % 4;
 				di = bi->di + r;
 				int n = (bi->size + 3) / 4;
@@ -2540,6 +2669,7 @@ void powerpc_cpu::execute(uint32 entry)
 				case 2: di[-2].execute(this, di[-2].opcode);
 				case 1: di[-1].execute(this, di[-1].opcode);
 					} while (--n > 0);
+				}
 				}
 
 				if (!spcflags().empty()) {

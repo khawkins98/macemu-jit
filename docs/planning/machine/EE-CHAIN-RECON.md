@@ -1197,7 +1197,13 @@ same staging family as main.cpp's `KDP+0xf6c` timebase-frequency word.
 **W2-4 remaining body after D-7**: (1) ~~DEC reload cadence~~ **RESOLVED**;
 (1b) NEW: run-mode fence vs the cold 68k world (DEFER_NATIVE starves delivery in
 exactly the regime the riser is for — decide ownership: clear `[0x2810]` at the cold
-68k entry, or teach the fence the cold-world case); (2) XLM_IRQ_NEST ownership
+68k entry, or teach the fence the cold-world case)
+**[CORRECTED 2026-06-12 by pm5-recon, INTERRUPT-INJECTION-RECON.md Q4: the "never
+cleared in the cold 68k world" mechanism is FALSIFIED — a riser-on [0x2810] watch shows
+the NK pair set@0x503143d4 / clear@0x50312b0c balanced 151/151, final 0. The 97
+deferrals are polls landing inside transient native windows; the real gap is a missing
+post-DEFER_NATIVE wake-up edge. Fix shape: re-arm the HANDLE spcflag on deferral — NOT
+run-mode clearing, NOT fence changes.]**; (2) XLM_IRQ_NEST ownership
 (unchanged); (3) the Ticks consumption path (unchanged); (4) via_int cluster
 (unchanged). Boots used: 5/5 (probe, PC-attrib [SIGTRAP at 0x5046dc1c — delivery
 onto the DR-emulator init loop, one-off, not reproduced], seed, watchpoint,

@@ -180,6 +180,14 @@ concurrent w2-4 stream undisturbed).
 > OP_NAME_REGISTRY / fall-through from OP_INSTALL_DRIVERS (0xfe68), NOT the TM cluster
 > (0xfe60-0xfe63) — the newly-live tail EMUL_OPs (ADBOp/PowerOff/scrap) are a co-equal
 > P-M5 hypothesis beside the TM-expiry leg.
+>
+> **P-M5 RESOLVED in recon (2026-06-12, INTERRUPT-INJECTION-RECON.md `5accbcf8`)**:
+> the TM-expiry hypothesis is FALSIFIED — the crash is OP_NAME_REGISTRY →
+> FindLibSymbol → Execute68k dispatching through NULL `[KDP+0x1074]/[KDP+0x1078]`
+> (never staged on the trampoline boot); seeding the two words eliminates the SIGSEGV.
+> Also falsified from this record: "via_int2 absent on newworld" — via_int/2/3 ALL
+> apply on 9.0.1 post-tail-lift (byte-proven; via_int2's OP_IRQ sits inside the 60Hz
+> task proc 0x5000bbb8).
 
 The Q5 recommendation shipped: commits `f808a7fb` (implementation, gate default-OFF +
 .Sony-abort lift + tail guards) and the flip commit (newworld-default-ON). Six slot

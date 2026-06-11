@@ -2820,6 +2820,31 @@ void init_emul_ppc(void)
 		fprintf(stderr, "[NW-TRAMP] scheduler timebase-frequency staged: [KDP+0xf2c]=%u "
 		        "(timeslice quantum source; DEC cadence)\n", (uint32)TimebaseSpeed);
 
+		/* M7 item 1 — Execute68k newworld port (INTERRUPT-INJECTION-RECON.md Q1/Q5
+		 * item 1, seed-proven boot 2): execute_68k (this file, gpr(29)/gpr(30) setup)
+		 * reads the kernel-data emulator pair [KDP+0x1074] (pointer to 68k opcode
+		 * dispatch table) / [KDP+0x1078] (emulator code base). On paravirtual the NK/
+		 * emulator init populates them from the boot structure that rom_patches.cpp
+		 * patch_nanokernel_boot stages (lp[0xa8>>2]=LA_DispatchTable=ROMBase+0x480000,
+		 * lp[0xac>>2]=LA_EmulatorCode=ROMBase+0x460000, rom_patches.cpp:1514-1515); on
+		 * the trampoline boot that init never runs and both words are NULL — the first
+		 * synchronous Execute68k (boot sequencer's OP_NAME_REGISTRY -> FindLibSymbol ->
+		 * Execute68k(proc1=0x50510000)) computed execute(0x558f*8) into zeroed low RAM
+		 * and died at the 0x100000 fetch fault (P-M5). Stage the MIRROR-world values
+		 * (the live kernel/emulator run from the 0x504xxxxx mirror, M6a Wave 1 — same
+		 * reasoning as the ctx+0xfc/+0x1ec staging above):
+		 *   [KDP+0x1074] := 0x50480000  (mirror LA_DispatchTable)
+		 *   [KDP+0x1078] := 0x50460000  (mirror LA_EmulatorCode; recon residue R-II4:
+		 *                   value by symmetry with rom_patches.cpp:1515, pair proven
+		 *                   live by the SS_SEED_MEM discriminator boot)
+		 * Same staging family as [KDP+0xf28]/[KDP+0xf2c] above. Structurally inert on
+		 * paravirtual: inside the MachineProfileIsNewWorld() trampoline block. */
+		WriteMacInt32(kdp + 0x1074, (uint32)ROMBase + 0x480000);
+		WriteMacInt32(kdp + 0x1078, (uint32)ROMBase + 0x460000);
+		fprintf(stderr, "[NW-TRAMP] Execute68k emulator pair staged: [KDP+0x1074]=%08x "
+		        "(mirror dispatch table) [KDP+0x1078]=%08x (mirror emulator base)\n",
+		        (uint32)ROMBase + 0x480000, (uint32)ROMBase + 0x460000);
+
 		/* SS_SEED_MEM (immediate form): apply the no-PC seeds now — the natural
 		 * "post-init" point, after the nanokernel trampoline has populated the KDP /
 		 * ECB. The PC-triggered form fires later at its target block entry. */

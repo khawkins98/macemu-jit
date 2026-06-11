@@ -43,6 +43,37 @@ ExcTransition ExcEnter(uint32_t cur_pc_restart, uint32_t cur_msr,
 	return t;
 }
 
+/* Wave-2 W2-0: the delivery-gate composition, extracted verbatim from
+ * sheepshaver_cpu::deliver_pending_dec_exception (sheepshaver_glue.cpp).
+ * THE GATE ORDER IS CONTRACT (pending -> depth -> EE -> native): the exc=
+ * telemetry tuple counts per-gate. See the header for the caller obligations
+ * (latch discipline, counter mapping, lazy run-mode sampling). */
+ExcDecision ExcDeliveryDecision(int pending, int execute_depth,
+                                uint32_t msr, uint32_t run_mode_word)
+{
+	if (!pending)
+		return EXC_DECIDE_NONE;
+	/* Deliverability rule (MACHINE-LAYER-PLAN §2d): never deliver inside
+	 * nested executes — depth 1 means the outermost execute(). */
+	if (execute_depth != 1)
+		return EXC_DECIDE_DEFER_DEPTH;
+	if (!ExcDeliverable(msr))
+		return EXC_DECIDE_DEFER_EE;
+	/* M6a rung-2 W2 DEC fence: defer while a MixedMode native excursion is in
+	 * flight ([XLM_RUN_MODE] != 0) — the KDP register-save shim would save into
+	 * the world-flip block the NK switch-back is about to rewrite. */
+	if (run_mode_word != 0)
+		return EXC_DECIDE_DEFER_NATIVE;
+	return EXC_DECIDE_DELIVER;
+}
+
+/* Wave-2 W2-0: the EE-edge re-raise predicate (mtmsr / rfi / nested-return).
+ * Fires iff a rising EE edge meets an outstanding pending condition. */
+int ExcEdgeReRaise(uint32_t old_msr, uint32_t new_msr, int pending)
+{
+	return !(old_msr & 0x8000u) && (new_msr & 0x8000u) && pending;
+}
+
 void ExcRfi(uint32_t srr0, uint32_t srr1, uint32_t cur_msr,
             uint32_t *out_pc, uint32_t *out_msr)
 {

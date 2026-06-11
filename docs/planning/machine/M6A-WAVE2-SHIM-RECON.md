@@ -419,3 +419,46 @@ probing retries through it but keeps progressing). Also still zero: `get_time`,
 device-probe phase is mapped. The 66M IER/SCC reads are the polled interrupt
 architecture (symptom-record item 3) running hot — Wave-2 idle/interrupt-delivery
 territory as planned.
+
+### I2C commands implemented (2026-06-11): 0x22 + 0x25 retired from unknown — commit 4e544aff
+
+The rev-2 m2 counter spoke, twice. **READ_WRITE_I2C (0x22)** implemented per DingusPPC
+`i2c_simple_transaction` @ 92bb6d1 (packet `[01 22 addr data...]`, addr = 7-bit dev
+addr << 1 | RW); no I2C devices are modeled (stop-rule), so every transaction takes the
+oracle's start_transaction-failed path: `error_response(CUDA_ERR_I2C = 5)` →
+`[02 05 01 22]`. QEMU @ de5d8bfd does NOT implement 0x22/0x25 (frames error 2 "unknown
+command" — what the boot had been retrying against). The first diagnostic boot with 0x22
+live immediately surfaced **COMB_FMT_I2C (0x25)**, issued once per probe cycle (686x) —
+boot-demanded, so implemented the same way (`i2c_comb_transaction`: dev_addr/dev_addr1
+bits-7:1 match check before the bus lookup, then the same absent-device error).
+
+**What the boot probes over I2C** (capture-only probe map, raw addr bytes):
+`41,4F,B5,91,80,C1,71,9D,28` — 7-bit addresses 0x20,0x27,0x5A,0x48,0x40,0x60,0x38,0x4E,
+0x14; all reads except 0x80/0x28 (writes). A broad device-discovery sweep, not a single
+SPD/clock fetch — no probe loops on one address demanding data, so no device model is
+warranted yet (stop-rule holds). DingusPPC's Cuda-machine I2C population for reference:
+SPD DIMMs 0x50–0x53 (Yosemite) / 0x55–0x57 (Gossamer), Athens clock 0x28, Perch EEPROM
+0x53 — none of which match the swept addresses, consistent with "probe and move on".
+
+Conformance vectors: test_dev_cuda 3715 → 3924 checks (red-first on both commands).
+Gates: machine suite 11/11 ALL PASS; build-ss; batch + plain `make test-jit` 353/353.
+Build gotcha (repo memory validated again): the CudaDevice struct grew mid-struct and
+the Unix build's `main_unix.o`/`dev_via6522.o`/`sheepshaver_glue.o` did NOT rebuild on
+the header change — the first boot showed garbage `powerdowns=6114308096`; forced .o
+removal fixed it. Treat any absurd [CUDA] counter as a stale-object symptom first.
+
+**Acceptance boot after (60 s, same prefs, /tmp/i2c_diag2.log):**
+
+```
+[CUDA] packets=9529 responses=9529 syncs=734 bytes_in=35184 bytes_out=40315
+       pram_rd=2199 pram_wr=733 i2c=6597 i2c_absent=6597(addrs=41,4F,B5,91,80,C1,28,71)
+       unknown=0
+[HB]   comp 849 -> 4786+ climbing at 50s; no STALL park; j2i live
+```
+
+**Frontier, honestly:** `unknown=0` — the Cuda pseudo-command set is now sufficient for
+everything this boot phase sends. But `adb`/`get_time`/`autopoll` remain zero: the boot
+is cycling a Cuda probe sequence (sync + PRAM rd/wr + ~9 I2C probes per ~80 ms cycle,
+734 cycles in 60 s) without handing off to ADB/RTC. The next wall is whatever ends that
+probe loop — likely NOT Cuda-command-side (the 48M IER/SCC polls point at Wave-2
+interrupt-delivery/timer territory, per the plan's stop-rule).

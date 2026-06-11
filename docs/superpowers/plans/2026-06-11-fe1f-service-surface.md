@@ -333,20 +333,33 @@ commits allowed (full gates).
 
 ### Task C: acceptance + default flip (flip LAST, revert-on-red)
 
-- [ ] **PASS/FAIL gates first, env-on (`SS_NW_FE1F_SURFACE=1`):** (a) full gates;
+> **DONE 2026-06-11 — FLIP LANDED, battery green pre/post-flip, revert-on-red
+> not invoked.** Results: `M6A-ONGOING-ENTRY-DESIGN.md` "Task C results";
+> frontier: M6A-WAVE2-SHIM-RECON.md "FE1F-service-surface Task C closeout".
+> Commits: 2949ec32 (per-selector sc counter), be0e02cb (the flip).
+
+- [x] **PASS/FAIL gates first, env-on (`SS_NW_FE1F_SURFACE=1`):** (a) full gates;
   (b) Task A callout-entry conformance; (c) Task B round-trip + result + advance
   gates; (d) rung-2 + syscall-surface invariant carry-over (incl. the MixedMode
   round trip itself: TVector visit + completion resume per the rung-2 Task Y
   recipe — see M6A-ONGOING-ENTRY-DESIGN.md "Task W2 results" + "Task Y results");
   (e) gated-off boot reproduces the 0x5000f248 park baseline byte-identically.
-- [ ] **Fix budget:** telemetry/capture commits freely; at most ONE small in-scope
+  *(ALL PASS; paravirtual e2e substituted per the risk-based rule — structural
+  inertness + gated-off A/B, stated in the flip commit.)*
+- [x] **Fix budget:** telemetry/capture commits freely; at most ONE small in-scope
   fix iteration per falsified contract, full gates re-run after any fix.
-- [ ] **THEN flip** `SS_NW_FE1F_SURFACE` to the newworld profile default (opt-out
+  *(Used for the Task-B-recorded counter gap: per-selector sc counter landed
+  (2949ec32, inner gates). Finding: the baseline "5 sc deliveries" was the
+  cap-5 PRINT artifact — true parked total is 8/7-distinct; FE1F adds 5 → 13/9:
+  0x3f,0x19×2,0x14,0x0f×3,0x27,0x40,0x42×2,0x50,0x4d.)*
+- [x] **THEN flip** `SS_NW_FE1F_SURFACE` to the newworld profile default (opt-out
   `=0` kept, explicit-"0"-only, polarity mirroring SS_NW_SC_SURFACE) and re-run
   (a)–(e) with NO env vars. **Any gate failure after the flip ⇒ the flip is
   REVERTED in the same task (machinery stays env-gated), the failure recorded —
   the milestone does not ship default-on with red gates.**
-- [ ] **DIAGNOSTIC OUTCOMES (recorded, NOT gates) — the P-M4 frontier artifact:**
+  *(Flipped (be0e02cb); (a)-(e) re-run with no env vars, ALL PASS — slot fill
+  WATCH at record #3391079 and ring total 4,480,459 Task-B-identical.)*
+- [x] **DIAGNOSTIC OUTCOMES (recorded, NOT gates) — the P-M4 frontier artifact:**
   does the e3e0 routine COMPLETE (all needed id-table slots filled) and the A-line
   dispatcher chain proceed? Where does the boot park/wall next? Capture with the
   full named artifact: callout-entry probe with r0 dump + SS_DR_R24_RING tail +
@@ -354,7 +367,12 @@ commits allowed (full gates).
   honestly as the NEXT milestone's opening evidence (likely: more FE1F selectors,
   another FE opcode, the CFM chain's next surface, or the EE/tick chain). Stop-rule
   trigger 2 applies: capture and stop; no staging beyond capture for new classes.
-- [ ] Record results: M6A-ONGOING-ENTRY-DESIGN.md (the Task-0 addendum's results
+  *(The DSAT stack-underflow wall re-confirmed record-for-record on the default
+  config ([$C70]:=0x5000e448 #3391708 identical; SIGSEGV ea=0x0fffff42 class);
+  NEW: [$AF0] pre-raise content pinned 0xffff — Task B's "d6=0x40 from $AF0"
+  corrected. r24-ring atexit doesn't fire on SIGSEGV; trace-ring substitute
+  carried.)*
+- [x] Record results: M6A-ONGOING-ENTRY-DESIGN.md (the Task-0 addendum's results
   sections), M6A-WAVE2-SHIM-RECON.md (frontier update). Commit.
 
 ### Task Z: docs

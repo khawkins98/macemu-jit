@@ -721,3 +721,49 @@ file 0xdfa2/0xe3e0/0xf240) names the shape:
   request), not another sc selector and not an MMIO poll.** Term-dump baseline
   unchanged in class (MMIO S:65540/V:70183, CUDA 13 pkts quiet, VCLK pending=1).
   Nothing NEW vs the Task B boots — ring tail and counters byte-identical in class.
+
+## Frontier update (2026-06-11, FE1F-service-surface Task C closeout) — the FE1F park is DOWN; the DSAT stack-underflow wall is THE frontier
+
+The FE1F surface shipped (plan `docs/superpowers/plans/2026-06-11-fe1f-service-surface.md`
+Tasks 0/A/B/C; full evidence in M6A-ONGOING-ENTRY-DESIGN.md "FE1F native callout"
++ "Task A/B/C results"): the raw ROM's **`twi 31,r31,N` entry-vector placeholders
+are restored** over rung-2's parked stops (slots 4, 6–15 — the "dead slots get
+loud stops" policy is retired; the placeholders are load-bearing) and the **0x700
+program-interrupt delivery surface** routes trap-taken twi/tw to the NK-published
+handler `[KDP+0x37c]`=0x50314700 (EXC_PROGRAM + the 2-SPR shim, the sc idiom one
+vector over). **`SS_NW_FE1F_SURFACE` is now the newworld profile DEFAULT**
+(explicit-"0"-only opt-out, SS_NW_SC_SURFACE polarity; flip commit `be0e02cb`,
+battery green pre/post-flip). The selector-0x31 EVNT service runs end-to-end on
+real NK code: callout → 0x700 → gateway 0x5031aca0 → 0x5031d204 → return
+r3=0/r4=0x00120001 (kernel-object ID handle) → the 68k tail stores the handle
+into the ExpandMem slot `[0x100037dc]` → the e3e0 routine proceeds to the $36
+sibling callout. The previous section's 0x5000f248 park is now the OPTED-OUT
+baseline (`SS_NW_FE1F_SURFACE=0`; byte-identical pre- and post-flip,
+ring tail + 839,284 + blocks=3836 + CUDA/VCLK class verified both sides).
+
+**Selector-list correction (Task C's fix-budget counter, counters-for-counts):
+the park baseline's "5 sc deliveries" was always the cap-5 PRINT artifact.** The
+new per-selector counter (`[EXC] sc selectors` atexit/crash line) shows the
+parked boot makes **8 deliveries, 7 distinct** (0x3f ×1, 0x19 ×2, 0x14 ×1,
+0x0f ×1, 0x27 ×1, 0x40 ×1, 0x42 ×1); the FE1F advance adds exactly 5 more
+(0x0f +2, 0x42 +1, +0x50, +0x4d) → **13 deliveries, 9 distinct** on the default
+config. The 5 printed lines are unchanged; P-m2's "selector list exact" gate
+reads on the prints and still passes.
+
+**THE frontier (stop-rule trigger 2 — captured + named, not chased): the DSAT
+stack-underflow wall.** On the default config (no env vars) the boot completes
+the slot fill, then dies ~600 trace records later in a **68k System Error ID 10**
+whose Deep-Shit-Alert machinery itself underflows RAMBase: saved faulting PC
+`[$C70]` := 0x5000e448 (record #3391708 — record-for-record identical to the
+Task B capture), DSErrCode `[$AF0]` := 0x000A (#3391720, 1-record jitter class),
+wait-spin, then the alert draw setup enters with A7=0x100000a0, `suba.w #$15a` +
+`pea` push to 0x0fffff42 < RAMBase → host SIGSEGV ea=0x40000fffff42 at DR push
+site 0x504661a0; trace ring 4,480,459 total. Suspect per Task B: the
+selector-$36 callout's return path, NOT the $31 round trip (clean end-to-end).
+NEW vs Task B (one diag boot, watches on $AF0/$C70): the pre-raise `[$AF0]` word
+content is pinned — boot-time 0xffffffff fill (record #22123/#22603,
+r24=0x500005f6), `[$C70]` cleared to 0 at #32194 (r24=0x50004958), `[$AF0]` →
+0xffff0000 at #1840155 (r24=0x500650b6); so Task B's "d6=0x40 = $AF0's prior
+content" reading is CORRECTED — the prior halfword was 0xffff; d6's 0x40 is not
+from $AF0 (residue source still unpinned, next-milestone recon). This wall is
+the next milestone's opening evidence.

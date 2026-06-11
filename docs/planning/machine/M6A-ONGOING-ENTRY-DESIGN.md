@@ -1547,3 +1547,103 @@ boots are record-for-record deterministic across runs (watch record numbers
 **Gates:** doc-only task (no source edits — stated reason: Task-A review ran
 in parallel on the same tree; the smoke-set exemption per the plan's
 evidence-only clause). All sub-contract evidence above is fresh this session.
+
+### Task C results — acceptance battery + the default flip (2026-06-11)
+
+> Acceptance task for `docs/superpowers/plans/2026-06-11-fe1f-service-surface.md`
+> Task C. Boots: **5 slot-protocol boots** (pre-flip env-on + gated-off;
+> post-flip default + explicit opt-out + 1 DSAT diag), all 60 s; run dirs
+> under /tmp/ss-slots/slot{0,1}/runs/20260611-19{37,38,43}*. Commits:
+> `2949ec32` (fix-budget counter), `be0e02cb` (the flip). **FLIP LANDED —
+> no gate failure post-flip, revert-on-red not invoked.**
+
+**Fix-budget item (plan Task C item 2, authorized by the Task B record):**
+per-selector sc delivery counter in glue (`exc_sc_sel_counts`, first 16
+distinct selectors in arrival order; atexit dump + explicit crash-path dump —
+the atexit does not fire on SIGSEGV). Counters-for-counts (rev 2 P-m6); the
+cap-5 triage prints unchanged. Inner gates on its commit: build-ss clean,
+batch test-jit 353/353, machine suite 12/12.
+
+**THE SC SELECTOR LIST, finally enumerable (instrument-gap correction, NOT a
+falsification):** the park baseline's "5 sc deliveries" was always the cap-5
+PRINT artifact — no parked boot ever printed delivered_sc (the term-dump path
+has no [EXC] stats line; only the crash path does, and parked boots die by
+SIGTERM). True counts:
+
+- **Parked/opted-out boot: 8 deliveries, 7 distinct** —
+  0x3f ×1, 0x19 ×2, 0x14 ×1, 0x0f ×1, 0x27 ×1, 0x40 ×1, 0x42 ×1
+  (identical pre-flip-unset and post-flip-=0).
+- **FE1F-armed boot: 13 deliveries, 9 distinct** —
+  0x3f ×1, 0x19 ×2, 0x14 ×1, 0x0f ×3, 0x27 ×1, 0x40 ×1, 0x42 ×2, 0x50 ×1,
+  0x4d ×1 — the FE1F advance adds exactly 5 (0x0f +2, 0x42 +1, +0x50, +0x4d).
+  Consistent with Task B's probe-sampled #10=0x50; the previously
+  unenumerated #6-9/#11-13 are now pinned.
+
+The 5 printed SC lines are byte-identical throughout; P-m2's "selector list
+exact" gate reads on the prints and passes. Tracker sections quoting "5 sc
+deliveries" as a TOTAL (rather than the printed list) should read it as the
+print-cap artifact from here on.
+
+**Battery scoreboard — env-on pre-flip (`SS_NW_FE1F_SURFACE=1`, boot
+20260611-193759):**
+
+- (a) full gates: build-ss clean; batch AND plain test-jit 353/353 score=100;
+  machine suite 12/12 ALL PASS (incl. test_exc_core 37 checks); e2e-test 122.
+- (b) Task A probe sub-contract: `[0x5046e8e0]=0x0fff0008` ✓;
+  `[EXC] PROGRAM delivered #1: srr0=5046e8e0 word=0fff0008 slot=8 lr=5046db6c
+  -> entry=50314700` ✓; callout-entry probe exact Q-F3 match (r5=0x5046e8e0
+  r8=0x31 r9=2 r16=0x100037c0 r17=0x103ffc74 r24=0x5000f248) ✓.
+- (c) Task B round trip: db6c visit=1 r3=0 r4=0x00120001 ✓; WATCH
+  `[0x100037dc] := 0x00120001` at record #3391078 (1-record jitter vs Task B's
+  #3391079), r24=5000f258, HOLDS to the crash ✓; trace ring 4,480,458 total
+  (jitter class vs 4,480,459) ✓.
+- (d) carry-over: cold-once WATCH pair record #4666 class ✓; pre-NK writes
+  #213/215 + the legit vector install (50490e00) as known classes ✓;
+  delivered_dec=0 deferred_ee=1 deferred_native=0 ✓; TVector probe
+  `[PROBE 0x500cef8c visit=1] r25=0x5000fcf2` (MM round trip intact) ✓;
+  delivered_sc=13 / delivered_program=2 (both slot 8, no slot-15) ✓.
+- (e) gated-off boot (unset, SS_DR_R24_RING=1): ring tail
+  `… 5000e43e 5000f242 5000f246 5000f248`, 839,284 transitions ✓;
+  blocks=3836 complete=3836 ✓; CUDA 13 pkts / VCLK pending=1 ✓; SC prints
+  exact ✓; zero [NW-FE1F] lines, zero PROGRAM deliveries ✓.
+
+**THE FLIP (commit `be0e02cb`):** `SS_NW_FE1F_SURFACE` is the newworld profile
+default — explicit-"0"-only opt-out (`getenv`+`strcmp` polarity, the
+SS_NW_SC_SURFACE precedent; NOT MachineEnvFlag), one gate covering both the
+rom_patches placeholder restore and the glue 0x700 delivery surface; loud
+`[NW-FE1F] FE1F surface OFF` opt-out announce; the execute_illegal FATAL
+message re-worded to name the opt-out. All flip lines inside
+MachineProfileIsNewWorld()/PatchROM_NW_trampoline blocks — paravirtual e2e
+SUBSTITUTED by the structural-inertness argument + the gated-off A/B boots
+(stated in the commit per the gate-tier policy).
+
+**Battery scoreboard — post-flip, NO env vars (boots 20260611-194301 default,
+20260611-194304 opt-out, 20260611-194357 DSAT diag):**
+
+- (a) full gates re-run green (same numbers: 353/353 ×2, 12/12, 122).
+- (b)–(d) ALL re-asserted on the default boot with no env vars: armed line
+  with the new polarity text; PROGRAM #1/#2 slot 8 → 0x50314700;
+  callout-entry exact; db6c r3=0/r4=0x00120001; WATCH slot fill at record
+  **#3391079 (Task B-identical)** and holds; cold-once #4667
+  (Task B-identical); delivered_dec=0; TVector r25=0x5000fcf2; sc=13
+  distinct=9 (same list); ring 4,480,459 total (Task B-identical).
+- (e) explicit `SS_NW_FE1F_SURFACE=0` boot: park baseline byte-identical —
+  ring tail exact, 839,284, blocks=3836 complete=3836, CUDA/VCLK class,
+  SC prints exact, no restore line, no PROGRAM deliveries, sc selectors
+  8/7-distinct == the pre-flip gated-off boot. Known instrument-class deltas
+  only: the [NW-FE1F] OFF announce + the [EXC] sc selectors line.
+
+**DIAGNOSTIC — the DSAT stack-underflow wall re-confirmed on the default
+config (P-M4 artifact; stop-rule trigger 2, captured not chased):** SysError
+ID 10 class intact, record-for-record: `[$C70] := 0x5000e448` at record
+#3391708 (Task B-identical; r24=0x5000499a, the SysError entry), `[$AF0] :=
+0x000A` (word 000a0000) at #3391720 (1-record jitter; r24=0x50004a14), then
+the wait-spin and the alert-draw underflow → SIGSEGV ea=0x40000fffff42 at
+0x504661a0, crash regs identical (r24=50004ad0, r1=0fffff46). **NEW vs Task
+B** (watches on $AF0/$C70 from boot): `[$AF0]`/`[$C70]` are 0xffffffff
+boot-fill at records #22123/#22603 (r24=0x500005f6); `[$C70]` cleared to 0 at
+#32194 (r24=0x50004958); `[$AF0]` → 0xffff0000 at #1840155 (r24=0x500650b6).
+So the pre-raise `[$AF0]` halfword was **0xffff**, and Task B's "d6=0x40 =
+$AF0's prior content" reading is CORRECTED — d6's 0x40 is NOT from $AF0
+(residue source unpinned; next-milestone recon item). The DSAT wall is THE
+frontier (M6A-WAVE2-SHIM-RECON.md frontier update carries it).

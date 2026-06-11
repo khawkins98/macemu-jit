@@ -162,21 +162,21 @@ before its residue status is decided.
   allowed (full gates). Commit the addendum.
 
 ### Task T: SS_NW_MM_POOL → profile-provisioned default (+ the collision fix + the safety stop)
-- [ ] **(rev 2 C1) Relocate the pool** off the Hnfo scratch per the occupancy map (e.g.
+- [x] **(rev 2 C1) Relocate the pool** off the Hnfo scratch per the occupancy map (e.g.
   base `0x68ff5800`); write the **sub-KDP occupancy map** into the Task-0 addendum doc
   section (tracked, with the Task-X scratch word reserved); fix the falsified "no other
   users" comment at the seed site.
-- [ ] Promote the pool seed to the newworld profile default (env flips to opt-OUT
+- [x] Promote the pool seed to the newworld profile default (env flips to opt-OUT
   `SS_NW_MM_POOL=0` for A/B; paravirtual/OldWorld untouched). **(rev 2 P11/Task-Z hook:**
   `SS_NW_MM_POOL=1` remains valid explicit-on — document the disposition.)
-- [ ] **(rev 2 C3) The `[ECB+0xEC]` zeroing moves inside the cold-arm-only guard NOW**
+- [x] **(rev 2 C3) The `[ECB+0xEC]` zeroing moves inside the cold-arm-only guard NOW**
   (cold-only == every entry until Task X lands — free today, removes the V/W warm
   re-entry corruption window). Document the invariant at the seed site.
-- [ ] **(rev 2 P2) The `+0x3c` (slot 15) allocator-exhaustion LOUD STOP lands HERE** (one
+- [x] **(rev 2 P2) The `+0x3c` (slot 15) allocator-exhaustion LOUD STOP lands HERE** (one
   verify-zero-first branch write to a unique parked-PC stub above 0x429c30) — T's pool
   sizing fallback is then self-contained: if Q-A's nesting answer is unclear, keep 4
   records + the loud stop, never guess bigger.
-- [ ] Gates: full gates + one newworld diagnostic boot confirming default-on pool = zero
+- [x] Gates: full gates + one newworld diagnostic boot confirming default-on pool = zero
   reset transitions in the r24 ring. Commit.
 
 ### Task U: NK entry-vector slot population (the Q-B consumed set)

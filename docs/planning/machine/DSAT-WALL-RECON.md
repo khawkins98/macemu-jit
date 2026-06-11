@@ -409,6 +409,70 @@ instruction not separately disassembled — residue R-DS3, diagnostic only).
 - **R-DS4**: the d1 entry-state difference between invocations (0xffffffff vs
   0) — not consumed by the shim; unexplained, immaterial.
 
+## Task A — the fix landed (68k-pc-desync plan) — 2026-06-11
+
+> **Status:** the r0-invariant fix is IN, env-gated `SS_NW_DR_R0_INVARIANT`
+> (the Task-0 candidate name is hereby BOUND — one name, used consistently;
+> `MachineEnvFlag` bring-up polarity, default OFF). Boots this task: ON-1
+> (big-ring + e394 probe + d760 probe + af0/c70 watches, rundir
+> 20260611-222707.24448), ON-2/ON-2b (e412 census, plain + SS_JIT_NO_CHAIN=1,
+> 20260611-223220.24906 / 20260611-223337.25113), ON-3 (e3de witness,
+> 20260611-223441.25219), ON-4 (ring-form window via SS_JIT_RING_DUMP_AT_PC=
+> 500f49c8, 20260611-223616.25353), OFF-1 (gated-off A/B, 20260611-223750.25488).
+> Ring artifacts: `/tmp/desync_taskA_ring_on.txt` / `_off.txt` (ephemeral).
+
+**The site as landed** (rom_patches.cpp, inside `PatchROM_NW_trampoline`):
+staged-copy word ROM+0x46e1a0 (mirror 0x5046e1a0, the slot-exit re-entry —
+LR of the `bnel cr2,slot1` at 0x5046e19c, THE switch-in resume PC)
+verify-EXPECTED-first (`lwz r1,0x10c(r3)` = 0x8023010c) → `b 0x50429da0`;
+3-word stub at 0x429da0 (verify-zero-first, above the 0x429d9c free line):
+`li r0,0; lwz r1,0x10c(r3); b 0x5046e1a4`. Family survey [PATCH]: the only
+link-calls into the entry-vector table are e19c→slot1 (resume e1a0, consumed),
+c9e4→slot2 / c4f0→slot4 (resumes c9e8/c4f4 — unconsumed per Q-B, NOT patched);
+no other static branch targets e1a0/e1a4. Bonus confirmation: the stub's own
+post-resume legs consume r0 AS the invariant zero (`oris r6,r0,0x1300` @e2bc,
+`ori r6,r0,0xe05c` @e360, `stw r0,0x210(r5)` @e34c).
+
+**Probe sub-contract (gate ON), all rows PASS** (F9-scoped through the
+formerly-failing window):
+- (a) `0x5046d760` (vector-0x2c raise) **0 visits the whole boot** [PROBE✓ ON-1];
+  PROBE68K@0x5000e394 match-2: **r0=0x00000000 r4=0x0000005c d0=0x5c**
+  (baseline 0x36/0x92/0x92) — the pinned register-form predicate verbatim.
+- (b) no `[$C70]` failure-class write, no `[$AF0]:=0x000A` [WATCH✓ ON-1].
+- (c) ring window [RING✓ ON-4, header `#3390800..#3391999 of 3408977`]:
+  the #3391672-class record (block 50467cfc, invocation-2 d1=0 signature,
+  now ≈#3391877 — gate-ON renumbering: the stub adds one ring record per
+  e1a0 arrival) shows **r24=0x5000e3de**; `r24=5000e414` count in the
+  window = **0**. Good flow present, bad dispatch absent.
+- (d) e412 legit count = **2** (≥2 PASS), confirmed TRUE count by
+  SS_JIT_NO_CHAIN=1 re-run (also 2) — the F8 "presumably 5" presumption is
+  NOT borne out (not a contract falsification: the pinned class was ≥2);
+  consistent with the e388 shim's selector-0-only design — table ids 2..5
+  take the `bcc.s e396` early-exit and never reach the e410 lea.
+
+**Gated-off A/B PASS** [RING✓/WATCH✓ OFF-1]: total records 4,480,458 vs
+baseline 4,480,459 (the pre-authorized ±1 jitter class; window diff = the
+one-record edge shift only); `[$C70]:=0x5000e448` @#3391707 (writer
+r24=0x5000499a), `[$AF0]:=000a0000` @#3391719; crash SIGSEGV
+ea=0x40000fffff42, guest pc=0x504661a0, r24=0x50004ad0, r1=0x0fffff46
+(crash regs show r0=0x36 — the poison on display); delivered_sc=13,
+delivered_program=2. Byte-identical baseline per the plan's field enumeration.
+
+**THE WALL IS PASSED — the next frontier (P-M4 capture, named, NOT chased):
+the 0x505bb060 off-ROM PC slide.** Gate ON, the boot runs ~4.8s JIT-time
+(vs 0.16s to the old wall): PROGRAM #3/#4 delivered (invocation 2's $31/$36,
+slot 8, conformant), sc surface grows 13 → **169 deliveries, 16 distinct
+selectors** (new: 0x1b/0x1c/0x07/0x0c/0x08 ×3 each, 0xfffffffe ×17,
+0xffffffff ×103), deferred_ee=5, CUDA packets=13, VIA/SCC MMIO traffic.
+Death: guest control flow reaches **pc=0x505bb060** (beyond the staged-copy
+end 0x50500000 — unmapped zero territory; lr=r29=0x505bb060, ctr=0,
+r24=0x500050ef) and slides through zeros across every 64KB region up to
+0x55590000 → SIGSEGV ea=0x400055590000. Instrument note: this crash class
+RE-FAULTS the crash handler inside `dump_disassembly` (reads the unmapped
+pc neighborhood) BEFORE `ppc_jit_dump_trace_ring()` — the crash ring flush
+does NOT fire; use `SS_JIT_RING_DUMP_AT_PC` (this task's ON-4 idiom) for
+ring capture in this regime.
+
 ### Instrument notes (carried forward)
 
 - **PROBE68K now dumps the DR pipeline temps** (r0/r3/r4/r5/r6/r7/r30) — the

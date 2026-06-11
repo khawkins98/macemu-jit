@@ -1,5 +1,17 @@
 # M6 next milestone — the FE1F service surface: provision the DR's native-callout service (opcode $FE1F, selector 0x31) so the 68k CFM-prep routine fills its ExpandMem slot and the newworld boot advances past 0x5000f248
 
+> **✅ MILESTONE COMPLETE (2026-06-11)** — all tasks done, `SS_NW_FE1F_SURFACE` is the
+> newworld profile DEFAULT (`=0` opt-out; flip `be0e02cb`), zero falsifications
+> milestone-wide (Task B's two corrections = judged predicate refinements). Arc:
+> plan `46649a23`/`103c7def`/`eba8f0a3` (revs 2/3), Task 0 `74fdc067`, Task A
+> `89a28c15`/`669ccf7a`/`3b27fb9c` (APPROVED review), Task B `9443a568`, Task C
+> `2949ec32`/`be0e02cb`/`03222907`. Evidence: `M6A-ONGOING-ENTRY-DESIGN.md`
+> "FE1F native callout" + Task A/B/C results. The boot advances 839k→4.48M ring
+> records; the new named frontier is the **DSAT stack-underflow wall**
+> (`M6A-WAVE2-SHIM-RECON.md` "Frontier update, FE1F Task C closeout"; recon in flight).
+> Docs closeout (Task Z): DIAGNOSTICS / CHANGELOG / MACHINE-LAYER-PLAN / ROADMAP /
+> LEARNINGS / M3A-ENTRY-TABLE synced 2026-06-11.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — Tasks A/B/C all touch the same two files (`sheepshaver_glue.cpp`, `rom_patches.cpp`); NOTHING in this plan parallelizes.**
 
 **Goal:** On the default newworld profile (MixedMode switch + syscall surface both
@@ -75,7 +87,8 @@ the 0x5000f248 park baseline is byte-identical.
   patch_68k EMUL_OP. (Branch (i) — service-or-retire a paravirtual-fenced EMUL_OP —
   is dead unless Task 0's provenance re-verify falsifies the raw-dump identity.)
 - **The FE1F dispatch slot** (static 0x380000 + (0xFE1F<<3) = **0x3ff0f8**; live
-  mirror handler = 0x50480000 | 0x7F0F8 = **0x504F70F8**): `80bf 09dc 4bf6 ea48` =
+  mirror handler = 0x50480000 | 0x7F0F8 = **0x504F70F8** *(TYPO — correct mirror
+  address is 0x504FF0F8; see the rev-3 correction at the end, R-F1 carried)*): `80bf 09dc 4bf6 ea48` =
   `lwz r5, 0x9dc(r31); b -0x915b8` → static body **0x36db44** (mirror **0x5046db44**).
   Identical raw vs patched. Same family shape as FE01's `lwz r5,0x9e0(r31)`; the
   FE10..FE1F slot run loads sequential ECB offsets 0x9a0..0x9dc — a 16-entry
@@ -157,6 +170,14 @@ the 0x5000f248 park baseline is byte-identical.
 
 ### Task 0: FE1F callout recon (BINDING — gates Tasks A..C; static RE + bounded probe boots)
 
+> **DONE 2026-06-11 (`74fdc067`) — ALL blocking answers PINNED in 3 of ≤8 boots**
+> (donor boot skipped, moot). Addendum: `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native
+> callout (selector 0x31)". THE finding: nobody writes slot 8 — the raw `twi`
+> placeholders ARE the design (trap → 0x700 → NK-published `[KDP+0x37c]`=0x50314700
+> → exit-pointer dispatch); selector-$31 'EVNT' service fully staged, seed-class fix
+> list EMPTY, fix is route-class. H1 park confirmed. Re-scope flagged (not
+> improvised) and RATIFIED as rev 3 (`eba8f0a3`).
+
 Pin each contract in a written addendum (`M6A-ONGOING-ENTRY-DESIGN.md`, new section
 "FE1F native callout (selector 0x31) — fe1f-service-surface plan Task 0"). Budget
 honesty: static RE (capstone PPC-BE + capstone-M68K, raw + patched dumps with
@@ -167,7 +188,7 @@ canonical-gate boots (paravirtual e2e) are OUTSIDE this budget. Each Q gets a
 static time-box (≤90 min) with a written residue fallback. Capture-only telemetry
 commits allowed (full gates).
 
-- [ ] **Provenance first**: confirm `/tmp/rom901_inventory.bin` (raw: 16 `twi`
+- [x] **Provenance first**: confirm `/tmp/rom901_inventory.bin` (raw: 16 `twi`
   placeholders at 0x36e8c0) + `/tmp/rom901.bin` (patched) exist and md5-match the
   recorded values (or re-dump via SS_DUMP_ROM); re-confirm the three free static
   wins above against the re-established dumps (file 0xf240 region, slot 0x3ff0f8,
@@ -175,7 +196,7 @@ commits allowed (full gates).
   falsified (the $FE1F turns out patch-introduced), STOP: the milestone re-shapes
   to branch (i) (identify the patch + its EMUL_OP semantics; service-or-retire on
   newworld) — re-plan, do not improvise.** Tag discipline carried unchanged.
-- [ ] **(Q-F1) The dispatch route, mirror-confirmed**: verify the live route from the
+- [x] **(Q-F1) The dispatch route, mirror-confirmed**: verify the live route from the
   68k F-line word to the service body — [PROBE-F1] probe `0x5046db44` (mirror body)
   for ≥1 visit at the park boot, and read the live mirror slot words at
   `0x504F70F8` (expect the `lwz r5,0x9dc(r31); b …` pair relocated). Deliverable:
@@ -183,7 +204,7 @@ commits allowed (full gates).
   through the opcode table under the Wave-1 geometry (NOT the 68k F-line vector
   0x2C stop-stub — if the 0x2C stub is what actually catches it, that is a
   falsification of the whole shape: record + stop-rule trigger 3).
-- [ ] **(Q-F2) The continuation pointer `[ECB+0x9dc]` — value and writer** (THE
+- [x] **(Q-F2) The continuation pointer `[ECB+0x9dc]` — value and writer** (THE
   blocking question): (a) [PROBE-F2] one probe of live `[ECB+0x9dc]` (ECB from
   `[KDP+0x65c]` discipline — mind the world-flip: read it in the emulator regime,
   i.e., at/near the park, riding PROBE-F1's boot) + the neighboring block
@@ -200,7 +221,7 @@ commits allowed (full gates).
   (glue ECB pre-population vs PatchROM trampoline, recommend glue per the ECB
   precedent; justify if not)); **(V3) points-at-unstaged-code** (the native body
   only exists when the real Trampoline/parcel chain builds it — STOP-RULE).
-- [ ] **(Q-F3) Selector 0x31 semantics + the conformance vector**: (a) [PROBE-F3]
+- [x] **(Q-F3) Selector 0x31 semantics + the conformance vector**: (a) [PROBE-F3]
   in-trap register file at the callout — probe the body 0x5046db44 (or the
   continuation entry if V1) with full register dump: confirm the marshaling map
   (r0=0x31? r3=A0=the &slot pointer into the ExpandMem array?) — the register-map
@@ -215,7 +236,7 @@ commits allowed (full gates).
   slot from the 68k tail's exact operand reading); the d0==0 arm = the failure/
   not-ready negative space.** Task A's probe gate is exact conformance to this
   table.
-- [ ] **(Q-F4) The park mechanism, named**: discriminate H1 (one-shot-never-returns)
+- [x] **(Q-F4) The park mechanism, named**: discriminate H1 (one-shot-never-returns)
   vs H2 (poll-returns-unsatisfied): re-read the full SS_DR_R24_RING (wrap/capacity
   arithmetic re-verified in writing) — do the f24x PCs recur or appear once?; pair
   with PROBE-F1's body visit COUNT (1 visit = H1-shaped; many = H2) and one probe
@@ -226,7 +247,7 @@ commits allowed (full gates).
   callout, and any MSR/world-flip the continuation performs. Deliverable: the
   park named + the exit-path confirmation (the body's unmarshal+dispatch-resume
   is the only return route).
-- [ ] **(Q-F5) Staged-surface audit of the selector-0x31 service** (the stop-rule
+- [x] **(Q-F5) Staged-surface audit of the selector-0x31 service** (the stop-rule
   tripwire): from the (possibly newly-seeded-on-paper) continuation entry,
   enumerate every structure the service reads/writes (KDP fields, ECB fields,
   ExpandMem, kernel pool, parcel data) — bounded ≤2 call levels / ≤12 functions;
@@ -237,16 +258,16 @@ commits allowed (full gates).
   after the addendum. Also record (bounded, diagnostic): what the OTHER 4 id-table
   entries / nearby selectors imply for the next milestone, and whether anything
   EE/tick-shaped appears (→ EE-CHAIN-RECON cross-ref, contingency only).
-- [ ] **Paravirtual donor datum (1 boot max, OUTSIDE the 8-boot newworld budget per
+- [x] **Paravirtual donor datum (1 boot max, OUTSIDE the 8-boot newworld budget per
   the donor-study precedent, or static-only if the boot budget is contended)**:
   what does paravirtual hold in `[ECB+0x9dc]` / does its boot path ever issue
   FE1F? A filled paravirtual slot is a transcription donor for V2; a never-reached
   FE1F on paravirtual is also signal (the init that fills it may be OldWorld-only).
   Residue-class: skippable if Q-F2(b) pins the writer statically.
-- [ ] **Probe pack mapping** (within the budget): PROBE-F1→Q-F1/Q-F4 (shared boot),
+- [x] **Probe pack mapping** (within the budget): PROBE-F1→Q-F1/Q-F4 (shared boot),
   PROBE-F2→Q-F2 (rides the same boot), PROBE-F3→Q-F3; a question with no boots
   left gets its residue status from static evidence only.
-- [ ] **Gate (the blocking-answer table): ALL blocking answers pinned before ANY
+- [x] **Gate (the blocking-answer table): ALL blocking answers pinned before ANY
   implementation task starts.** Task A blocks on **Q-F2 (value+writer+seed-site
   verdict) + Q-F3 (callout-entry register table) + Q-F5's verdict (go/no-go + the
   seed-class fix list)**; Task B blocks on **Q-F3 (return predicate) + Q-F4 (park
@@ -377,7 +398,7 @@ commits allowed (full gates).
 
 ### Task Z: docs
 
-- [ ] DIAGNOSTICS.md: `SS_NW_FE1F_SURFACE` (default + opt-out + the
+- [x] DIAGNOSTICS.md: `SS_NW_FE1F_SURFACE` (default + opt-out + the
   SS_NW_MM_SWITCH/SS_NW_SC_SURFACE dependency matrix); CHANGELOG (the first
   serviced DR native callout — acceptance numbers); MACHINE-LAYER-PLAN header +
   M6 row; ROADMAP cross-check; LEARNINGS (at minimum: the raw-ROM-provenance

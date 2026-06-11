@@ -207,6 +207,14 @@ dispatch math (Q-SL2 by-design), or stack handling (no drain exists).
 
 ## Fix record (2026-06-11, label tmtask-fix) — the guard landed
 
+> **Review (2026-06-12): APPROVED** — all claims verified (guard reads the exact write
+> site via the same `wp`, ntohs symmetric with the file's htons writes, 1.1 behavior
+> structurally unchangeable, FORCE arm byte-exact, banner on the emul thread). Notes
+> carried: (P2) a Gossamer variant assembled as `bsr.w`/`jsr` would GUARDED-SKIP where
+> the old code NOPed — loud banner + FORCE knob mitigate, no Gossamer ROM in evidence;
+> scsi_mgr +0x20 residue stays RECORDED-not-guarded (semantic identity not pinnable by
+> a byte guard; frontier dies long before SCSI use).
+
 The recommendation-step-1 guard is implemented (rom_patches.cpp, tm_task NW/Gossamer
 arm). **T0-B is ANSWERED** — the 1.1 layout at pattern+28 was pinned by an offline
 decode of the 1.1 .rom (header-only `rom_decode.hpp` in a standalone host tool, no

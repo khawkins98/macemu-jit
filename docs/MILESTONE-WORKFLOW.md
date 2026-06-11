@@ -76,6 +76,10 @@ Key properties of each step:
   with oracle SHAs and acceptance numbers, tracker rows, LEARNINGS for durable
   lessons, and a **cross-tracker grep** for stale current-state claims (historical
   sections stay; only current-state claims get corrected).
+  Every ~3 milestones (or at each re-score), the docs task ALSO triggers the
+  **periodic doc-sync sweep** over the meta-docs (CONTRIBUTING/README/AGENT-CONTEXT/
+  this file/tracker headers/DIAGNOSTICS) — checklist in CONTRIBUTING.md
+  "Documentation Lifecycle §0".
 
 ## 3. The parallel layer (streams)
 

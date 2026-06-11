@@ -170,6 +170,30 @@ don't imply a clean win.
 
 ## Documentation Lifecycle
 
+### 0. The periodic doc-sync sweep (every ~3 milestones, or at every re-score)
+
+Beyond the per-milestone cross-tracker grep (which audits frontier claims), run a
+**doc-sync sweep** over the meta-docs themselves — they drift silently because no
+milestone's Task Z owns them. Trigger: every ~3 closed milestones, at every
+MACHINE-LAYER-PLAN re-score, or whenever process/tooling changed (new knobs, new gate
+tiers, new protocols). The sweep checklist:
+
+| Doc | In-sync means |
+|---|---|
+| `CONTRIBUTING.md` (this file) | The process pointers, gate commands, and fast-iteration tools match current reality |
+| `README.md` (top-level + SheepShaver/) | The project description/status doesn't contradict the trackers |
+| `docs/AGENT-CONTEXT.md` | Constants match code; recipes/knobs match DIAGNOSTICS; gate tiers match MILESTONE-WORKFLOW §6 |
+| `docs/MILESTONE-WORKFLOW.md` | The rules table reflects practice; new earned rules added with their incidents |
+| `docs/MAINTENANCE — MACHINE-LAYER-PLAN.md` header + `ROADMAP.md` status | Current-state lines true; "next" points at the real frontier |
+| `SheepShaver/docs/DIAGNOSTICS.md` | Every live env knob documented; no documented knob removed from code |
+| CLAUDE.md (local, each contributor's) | Pointers resolve; the binding process section current |
+
+Method: one read-only sweep agent (or session) checks each row, fixes current-state
+drift in docs only (dated historical sections stay), and commits per-group. Record the
+sweep date in the commit message so the next trigger is checkable via `git log`.
+
+
+
 Docs rot when work lands but the docs don't move. Two rules keep them honest.
 
 ### 1. When you finish (or change) something

@@ -17,7 +17,49 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
-## 2026-06-11 (latest) — M6a rung 2: activity is not progress; live-verify before retargeting; "free gap" claims need an occupancy map
+## 2026-06-11 (latest) — NK syscall surface: recon-heavy/implementation-light is now 3-for-3; static stub tables pre-answer conformance; SIGTERM-not-SIGALRM for capture boots
+
+Three durable lessons from the syscall-surface milestone (plan
+`docs/superpowers/plans/2026-06-11-nk-syscall-surface.md` rev 2; evidence in
+`docs/planning/machine/M3A-ENTRY-TABLE.md` — zero falsifications across Tasks 0/A/B/C):
+
+### 1. The recon-heavy/implementation-light pattern is now 3-for-3 — a binding Task 0 that costs more than Task A is the CHEAP side
+
+M3a's DEC delivery, the rung-2 MixedMode switch, and now the syscall surface all followed
+the same cost shape: the bounded, blocking-answer recon (static RE + ≤2 probe boots per
+question, written addendum, stop-rule tripwire) consumed most of the milestone's budget,
+and the implementation it gated collapsed to almost nothing — here, ONE constant
+(`syscall_entry=0x50314ac0`) plus TWO SPR writes (SPRG1:=caller r1, SPRG2:=caller LR).
+The controlled no-shim boot (PROBE-S3) even ran the NK service end-to-end before any code
+landed, turning Task A into transcription. The corollary that keeps proving out: the
+staged NK is far more complete than any obstacle map assumed — our obligation keeps
+reducing to "provide the vector-stub/Trampoline surface", not "reimplement services".
+Budget Task 0 generously and defend it; resist the urge to "just start implementing" —
+implementation without the pinned ABI table would have been the expensive side (the
+rung-2 predecessors that died in unbounded disassembly are the counterevidence).
+
+### 2. A static stub TABLE pre-answers a whole conformance family — look for the stride before probing selector-by-selector
+
+The first sc's caller stub (`li r0,0x3f / sc / blr` at file 0xd6388) sat in a 12-byte-stride
+table enumerating selectors 0x00..0x84 (+0xfffd/e/f). Recognizing the table converted
+"probe each selector's resume as it appears" into a static map computed in one pass:
+resume(SEL) = stub's sc+4, caller identified from LR, per-selector resume probes
+pre-placed for Task B's bounded mapping (5 selectors observed, every resume r3=0). Same
+move as the rung-2 entry-vector table: when one instance of a guest structure shows up,
+check for the array it lives in — the stride answers questions you haven't asked yet,
+within the same evidence budget.
+
+### 3. Capture-boot kill discipline: SIGTERM (+SS_TERM_DUMP) runs the dumps; SIGALRM skips ALL of them — and post-sc boots are heartbeat-silent
+
+The post-syscall execution regime never re-enters the dispatch-loop heartbeat path: ZERO
+`[HB]` lines in 65s, so the term-dump counters (blocks/comp, MMIO, CUDA, VCLK, exc=) are
+the ONLY baseline evidence — and they exist only if the process dies by SIGTERM with
+`SS_TERM_DUMP=1` (`timeout(1)`), never by the perl-alarm SIGALRM (skips atexit entirely).
+Heartbeat silence itself is part of the frontier signature, not a hang indicator. Pair
+with the standing rule: counters for counts (the `exc=` 5th field), probes for ABI
+(register-table conformance) — each instrument answers only its own question class.
+
+## 2026-06-11 — M6a rung 2: activity is not progress; live-verify before retargeting; "free gap" claims need an occupancy map
 
 Three durable lessons from completing the Mixed Mode switch (plan
 `docs/superpowers/plans/2026-06-11-m6a-rung2-mixedmode-switch.md`; results in

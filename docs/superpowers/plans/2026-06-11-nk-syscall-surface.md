@@ -1,5 +1,17 @@
 # M6 next milestone — the NK syscall surface: resolve vector 0xC00 (`syscall_entry`) so MPLibrary's parcel init can make its NK system calls and return
 
+> ## ✅ MILESTONE COMPLETE (2026-06-11)
+> All tasks done (0/A/B/C/Z), zero falsifications, fix budget consumed: zero.
+> `syscall_entry=0x50314ac0` is the **newworld profile DEFAULT** (`SS_NW_SC_SURFACE=0`
+> opt-out); the first guest syscall ever resolved (selector 0x3f → r3=0), 5 selectors
+> delivered per boot, MPLibrary's MixedMode excursion returns. The M3a descope is
+> formally closed. Evidence: `docs/planning/machine/M3A-ENTRY-TABLE.md` ("Syscall entry
+> resolution" + Task B/C results); frontier capture:
+> `docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` (Task C closeout — the FE1F
+> selector-0x31 service surface is the next named wall). Arc: `dad9a557`/`3e9682c9`
+> (plan + rev 2), `780bbc34`+`3e7b04ca` (Task 0), `bcce26c2` (A), `c41b9ea3` (B),
+> `7a079079`+`52928958` (C), Task Z docs commits 2026-06-11.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — Tasks A/B/C all edit the same three files (`ppc-execute.cpp`, `sheepshaver_glue.cpp`, `rom_patches.cpp`); NOTHING in this plan parallelizes.**
 
 **Goal:** On the newworld profile (MixedMode switch default-on since rung 2), MPLibrary's
@@ -133,11 +145,11 @@ per question before its residue status is decided.** Candidate-entry boots use
 `SS_EXC_ENTRY=0x50412b1c,0xCANDIDATE` (no rebuild). Capture-only telemetry commits
 allowed (full gates).
 
-- [ ] **Provenance first**: confirm `/tmp/rom901_inventory.bin` (raw) +
+- [x] **Provenance first**: confirm `/tmp/rom901_inventory.bin` (raw) +
   `/tmp/rom901.bin`/fresh `SS_DUMP_ROM` dump (patched) still exist and match the
   recorded md5s; re-dump if evaporated. Tag discipline [RAW-ROM]/[PATCH]/[STATIC]/[PROBE✓]
   carried unchanged.
-- [ ] **(Q-S1) The live syscall handler entry + the copy question**: locate the staged
+- [x] **(Q-S1) The live syscall handler entry + the copy question**: locate the staged
   NK's vector-0xC00 handler. Method (in order): (a) static RE of NK cold-init's
   entry-vector publication cluster — the writers of `[KDP+0x5f0]/[0x5f4]` (live values
   0x50313bf8/0x503143a0) and their sibling stores; find the analogous syscall-handler
@@ -150,7 +162,7 @@ allowed (full gates).
   entry address in the copy the NK itself reaches (resolve the 0x503xxxxx-vs-0x504xxxxx
   ambiguity in writing — Codebase fact above), with [PROBE✓] confirmation that the
   candidate words match the static bytes.**
-- [ ] **(Q-S2) The handler entry ABI** (what its real vector stub provides): registers
+- [x] **(Q-S2) The handler entry ABI** (what its real vector stub provides): registers
   at handler-body entry (the interrupt body's analogues: r6=save area? r7/r8=class/flags?
   r1 via SPRG0? r11=SRR1? r13=CR?), which KDP/ctx state it consumes (`[KDP+0x65c]` —
   currently MMCB mid-excursion; `[KDP-0x14]`; `[KDP+0x660]` bit family — R-9's sibling),
@@ -161,14 +173,14 @@ allowed (full gates).
   table for the handler entry; Task A's probe gate is exact conformance to it.** Also
   pin: shim-required verdict (and if required, host-side glue helper vs guest-side
   stub — recommend host-side per the DEC precedent; justify if not).
-- [ ] **(Q-S3) MPLibrary's first-sc conformance vector**: `SS_PROBE_PC=0x500d638c` full
+- [x] **(Q-S3) MPLibrary's first-sc conformance vector**: `SS_PROBE_PC=0x500d638c` full
   register dump — r0 (selector), r3..r10 (args), plus the post-sc consumption: what the
   caller at SRR0=0x500d6390 does with the return (disassemble 0x500d6390ff; name the
   checked register/memory — the SS_EXC_SC=legacy 52M/s spin is the negative datum: the
   caller polls/branches on something the no-op never produced). **Deliverable: selector +
   args + the expected-return protocol (result register(s), error convention) — the
   conformance vector Task B gates on.**
-- [ ] **(Q-S4) The handler exit path + environment interactions**: does the NK syscall
+- [x] **(Q-S4) The handler exit path + environment interactions**: does the NK syscall
   service return via `rfi` (SRR0/SRR1 intact ⇒ ExcRfi resumes at +4 — verify nothing
   clobbers SRR0/1 in between) or via the scheduler restore? Verify the SRR0=+4 ownership
   matches what the NK expects (it must NOT re-increment). Record: handler MSR after
@@ -176,20 +188,20 @@ allowed (full gates).
   state?), `[0x2810]` during the handler (does the NK touch run-mode on the syscall
   path?), EE (stays 0 — SRR1=0x7072), and the **R-7 residue** (ctx SRR1 for the
   MixedMode ctx) wherever the syscall path exposes it.
-- [ ] **(Q-S5) Staged-surface audit of the targeted service** (the stop-rule tripwire):
+- [x] **(Q-S5) Staged-surface audit of the targeted service** (the stop-rule tripwire):
   follow the selector dispatch (static) from the handler entry to MPLibrary's specific
   service(s); enumerate every NK structure it reads/writes (KDP fields, queues,
   per-task blocks, the kernel pool 0x68FF7000+). **Verdict required in writing: the
   service runs on staged state (+ at most seed-class fixes) — or it requires unstaged
   Trampoline/kernel-init surfaces, in which case the STOP-RULE fires here** (the
   rung-5 L-class question), after the addendum.
-- [ ] **Probe pack** (within the boot budget): [PROBE-S1] live `[0xC00]` + candidate
+- [x] **Probe pack** (within the boot budget): [PROBE-S1] live `[0xC00]` + candidate
   publication slots at the sc wall; [PROBE-S2] the 0x500d638c register dump (Q-S3);
   [PROBE-S3] one candidate-entry boot `SS_EXC_ENTRY=0x50412b1c,0xCAND` — classify the
   outcome against the Q-S2 static expectation (handler-entry probe + where it walls);
   this boot is DIAGNOSTIC (no shim yet — a missing-shim divergence is signal, not
   failure).
-- [ ] **Gate (the blocking-answer table):** the addendum exists; every answer tagged;
+- [x] **Gate (the blocking-answer table):** the addendum exists; every answer tagged;
   the BLOCKING answers pinned (not residues): **Task A blocks on Q-S1 + Q-S2 (address +
   ABI/shim verdict); Task B blocks on Q-S3 + Q-S4 (conformance vector + exit path);
   Task C blocks on Q-S5's verdict.** A residue on a blocking answer invokes the
@@ -312,7 +324,7 @@ allowed (full gates).
 
 ### Task Z: docs
 
-- [ ] DIAGNOSTICS.md: `SS_NW_SC_SURFACE` (default + opt-out + interaction with
+- [x] DIAGNOSTICS.md: `SS_NW_SC_SURFACE` (default + opt-out + interaction with
   `SS_EXC_ENTRY`/`SS_EXC_SC=legacy` — legacy's diagnostic disposition re-stated);
   CHANGELOG (the first resolved guest syscall — acceptance numbers); MACHINE-LAYER-PLAN
   header + M6 row (+ M3a carry-forward closure note); ROADMAP cross-check; LEARNINGS

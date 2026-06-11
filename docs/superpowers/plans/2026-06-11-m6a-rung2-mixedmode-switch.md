@@ -228,15 +228,37 @@ before its residue status is decided.
   test-jit 353/353 score=100; machine tests 11/11 ALL PASS; e2e-test 122 passed;
   paravirtual make e2e PASS clean lifecycle.)*
 
-### Task W: FE02 switch-back
-- [ ] Per Q-F: restore the 68k context from the record, clear the in-use bit, resume the
+### Task W: FE02 switch-back — ⛔ STOP-RULE fired (second falsification); partial landing, re-scope required
+- [x] Per Q-F: restore the 68k context from the record, clear the in-use bit, resume the
   68k after the $AAFE site with the convention's result registers. `SS_NW_MM_SWITCH`
-  covers the pair.
+  covers the pair. *(PARTIAL — implementation, not verification: the "completion
+  already works" hypothesis was FALSE (pre-W, every TVector excursion ended in a 68k
+  RESET via the always-cold table[0] — ring `100266f2 → 0 → 1 → 5000002c`). Landed
+  (env-gated, default OFF): the table[0] cold/warm discriminator at 0x50429d00 (NEW
+  verified-zero region — the trampoline stays 46/48), R2 scratch 0x68ff6080 cold-once,
+  cold-arm seed [KDP+0x658]=ECB (the NK switch-back restore target, live-probed
+  garbage =1), warm-arm pool re-assert (the NK ctx save OVERLAYS [ECB+0xE0..0xEC] —
+  new finding) + b 0x5046f900 (original slot-0 route). The LAST leg self-switches:
+  [KDP+0x65c] (save-target) and [KDP+0x658] (restore-source) are both ECB — the warm
+  save destroys the parked emulator ctx. The fix is the [KDP+0x65c] current-world
+  flip discipline (warm arm := MMCB; slot-1 stub prepend := ECB) — touches the
+  working forward stub, beyond the one-iteration budget. Stop-rule trigger 1
+  (re-scope, not improvisation). Full chain + corrected contract: addendum
+  "Task W results".)*
 - [ ] Round-trip sub-contract (PASS/FAIL): one full FE01→TVector→FE02 round trip — TVector
   probe visit + **the post-$AAFE 68k PC observed in the SS_DR_R24_RING tail** (rev 2 C5 —
   68k PCs are not probe-able); `[ECB+0xEC]` returns to its pre-call value; guest[0]/[4]
   unmodified (`SS_JIT_WATCH_ADDR` — hex values, with SS_JIT_TRACE_RING=1).
-- [ ] Gates: as Task V. Commit.
+  *(SCOREBOARD: (a) FAIL — e1f4/e408/e1a0 zero visits, the 68k never resumes at the
+  derived post-$AAFE PC 0x5000fcf2 (= r25 at TVector entry; `stw r25,0x3c(r31)` at
+  0x500ed400 is the completion's resume-PC write). (b) premise FALSIFIED — [ECB+0xEC]
+  is clobbered to saved-r12 by the NK ctx save every switch-out (the overlay finding);
+  replaced by warm re-assert + residue R-10. (c) PASS — table[0] cold exactly once,
+  guest[0]/[4] never rewritten after first entry (probe + watch, boots 3/5). R-4
+  RESOLVED: command byte = 0xff, rides in r3 as the table[0]/NK selector.)*
+- [x] Gates: as Task V. Commit. *(Full canonical set re-run on the partial landing —
+  see commit; switch-off boots byte-identical (branch encoder reproduces 0x4BFBB280;
+  W region unwritten when gated off).)*
 
 ### Task X: real ongoing entry at table[0] (design doc R2+R3+R4)
 - [ ] **(rev 2 P1) PRECONDITION: post-Task-W re-census** — re-run the PROBE-O1 pack with

@@ -729,3 +729,118 @@ Notes:
   territory plus the named M-class frontier ladder.
 - **Switch-off default boot:** baseline unchanged (0 TVector visits, comp frozen
   3573, the FE01↔NK spin signature) — seeds fully inert when gated off.
+- *(Task-V review fold-in, cold/warm classification for Task X)*: (a)-class — the
+  `[KDP+0x660]` OR may stay on both Task-X arms (idempotent). The MRU pair-0
+  re-assert is provisionally both-arms but Task X must re-evaluate: a warm
+  re-assert can evict an NK-installed MRU entry → unverified slow path (R-6).
+  (Task-W status: the W discriminator routes warm entries around the trampoline
+  entirely, so both seeds are structurally cold-only today.)
+
+### Task W results (2026-06-11) — round trip FALSIFIED through existing machinery; warm arm built; STOP-RULE fired on the second falsification
+
+**Verdict: implementation, partial.** The "completion already works" hypothesis from
+Task V's live evidence is FALSE; Task W landed the table[0] cold/warm discriminator +
+two seeds (env-gated under `SS_NW_MM_SWITCH`, default OFF), which kills the
+reset-per-excursion failure and pins the full switch-back contract — but the round
+trip's last leg (the NK restore handing back the *emulator* ctx) hit the
+**dual-ctx surface** and the one-iteration rule's second-falsification trigger
+escalated to the stop-rule. Boots: `/tmp/taskw_boot{1..5}.log` (probe recipes inside).
+
+**Falsification chain (each leg live-probed):**
+
+1. **Boot 1-2 (pre-W verification, the plan's round-trip sub-contract):** legs (a)/(b)
+   FAIL through existing machinery. The completion path never reaches the DR services
+   (0x5046e1f4 / 0x5046e408 / 0x5046e1a0: ZERO visits) and never calls the NK switch
+   service backward (0x503143a0 sampled visits all forward r3=0x68fff400; slow/error/
+   save legs zero) — instead the native completion re-enters the 68k world **by
+   branching through the entry-vector table** (the forward hit path plants
+   `[ctx+0x5c]:=[KDP+0x648]` for exactly this), arriving at table[0] with the native
+   glue's register file (warm signature r1=0x103ffa2c native stack, r24=junk;
+   ≥100 re-entries/boot). The always-cold trampoline then rewrote guest[0]/[4]
+   (1050 WATCH hits) and cold-started the 68k — **a 68k reset per excursion**
+   (ring: `100266f2 → 0 → 1 → 5000002c`; design doc §2.4 failure mode (ii), live).
+   Task V's "boot advances deep into hardware-init" was the reboot cycle, not progress.
+2. **Pool-word/ctx-save overlay (boot 1, [STATIC] confirmed):** the NK ctx save
+   (0x50312b0c) writes through r6=[KDP+0x65c]=ECB with stride-8 slots at
+   +0xd4..+0x1fc — `[ECB+0xEC]`=saved r12 (live: 0x5046e1a0), `[ECB+0xE4]`=saved r11
+   (=0x0002f072, the stub MSR fiction), and the FP-restore helper 0x50313e18 does
+   `lwz r8,0xe4(r6); lfd f31,0xe0(r6)` — **the DR pool words [ECB+0xE0..0xEC] overlay
+   the NK ctx FP/GPR slots**. Sub-contract leg (b) as written ("[ECB+0xEC] returns to
+   pre-call value") is unfalsifiable — the in-use bitmap is clobbered to saved-r12 at
+   every switch-out; allocation survives by accident (bit 0 of 0x5xxxxxxx is clear).
+   The warm arm re-asserts [0xE0/E4/E8] (without it the next allocation computes the
+   record PHYS base from 0x0002f072 → NK would save 0x220 bytes into low 68k RAM).
+3. **Boot 3 (warm arm v1):** table[0] cold exactly once ✓, guest[0]/[4] stable ✓
+   (leg (c) PASS: 6 WATCH hits = one trampoline pass + the guest's own legit vector
+   install at 0x504662a4), TVector ran, completion entered the warm arm →
+   slot-0 stub → NK selector service — SIGSEGV: scheduler restore resumed at
+   0x68fff740 (data). Re-pin boot 4: **the completion calls table[0] with
+   r3=0x000000ff — THE COMMAND BYTE rides in r3 as the NK selector** (R-4 verified:
+   0xff confirmed) — and LR=0x500ef258 (its own next-resume continuation); the NK leg
+   0x50313cc8 `beq cr2` → 0x50312af8 `lwz r9,0x658(r1)`: **the switch-back restore
+   target is [KDP+0x658]** — live GARBAGE (=1; no NK writer exists — it is a
+   Trampoline-init surface). Semantics confirmed by the paravirtual CR-injection
+   (`[[KDP+0x658]]+0xdc` = parked emulator saved CR; glue :2276, main_unix :2678).
+4. **Boot 5 (warm arm v2, + cold-arm seed [KDP+0x658]=ECB): SECOND falsification —
+   the self-switch.** The seed is consumed and the NK switch completes, but
+   **[KDP+0x65c] (save-target consumed by the slot stubs) and [KDP+0x658]
+   (restore-source) are the same block (ECB)**: the warm save overwrites the parked
+   emulator ctx (forward-saved resume [ECB+0xfc]=0x5046e1a0 → replaced by native
+   LR=0x500ef258), and the restore hands back the just-saved native state — the
+   native world resumes at its own continuation having switched to nobody. The
+   continuation 0x500ef258 then faulted reading `[saveblk+0x3c]` (rewritten by the
+   glue's $AAFE tail-call block 0x500ef220-254 to 0x486eff9e — sub-finding: the
+   completion primitive's [r31+0x3c] handling includes a tail-call rewrite when the
+   68k resume instruction is itself $AAFE-class; raw datum, not yet decoded).
+
+**The corrected contract (pinned for the re-scope):** the architectural switch-back
+is: native completion writes results + `[saveblk+0x3c]`=resume 68k PC (0x500ed400:
+`stw r25,0x3c(r31)`; live r25=0x5000fcf2 = the post-$AAFE PC, derived from the Q-D
+probe and the ring's `5000fcf2 → 10024dea/10024de8` $AAFE call-site chain), then
+calls table[0] with r3=0xff and LR=its continuation; the NK saves the outgoing
+(native) ctx into [KDP+0x65c] and restores [KDP+0x658] → resume the parked FE01
+service at [ECB+0xfc]=0x5046e1a0 → frame protocol → FE07 reads command 0xff → NE →
+e1f4 reloads r24/D/A from the save block → 68k resumes. **The missing surface is the
+[KDP+0x65c] current-world flip discipline**: it must hold ECB while the 68k world
+runs (forward switch parks the emulator there) and the MMCB during native excursions
+(warm switch-back parks the native ctx there — self-consistent with Q-F's
+"re-switches to the native ctx which resumes at 0x500ef258"). No NK code maintains
+either word — both are Trampoline-init surfaces; on real hardware the REAL slot-stub
+bodies (Trampoline-written; the raw ROM has `twi` placeholders AND nop'd stub pages)
+plausibly encode the flip. Implementing it touches the slot-1 stub body (the WORKING
+forward direction) — beyond this task's one-iteration budget ⇒ **stop-rule trigger 1
+(re-scope), not improvisation**. The candidate fix for the next iteration: warm arm
+sets [KDP+0x65c]:=MMCB before `b 0x5046f900`; slot-1 stub body (ours, patch_68k_emul)
+prepends [KDP+0x65c]:=ECB (idempotent on the first call); both env-gated with the
+switch. Risk to re-check: the M3a DEC shim also consumes [KDP+0x65c] — the flip is
+architecturally right for it (interrupted-world ctx) but unverified.
+
+**What landed (kept, env-gated `SS_NW_MM_SWITCH=1`, default OFF):**
+- table[0] → cold/warm discriminator at mirror 0x50429d00 (24 words, NEW
+  verified-zero region above the 0x429c40..0x429cf0 stops; trampoline untouched at
+  46/48). Cold arm: scratch 0x68ff6080 test-and-set (the Task-X R2 reserved word,
+  used minimally — Task X refines), + seed [KDP+0x658]=ECB, → trampoline. Warm arm:
+  pool-constant re-assert [ECB+0xE0/E4/E8] (overlay repair; [0xEC] untouched —
+  in-use record live at warm entry), restore r28 (CTR stash), → 0x5046f900 (the
+  displaced original slot-0 stub). Clobbers r0/cr0/CTR only (ABI-volatile; the
+  slot stubs clobber CTR by design).
+- The [ECB+0xEC] wipe + V seeds are now STRUCTURALLY cold-only under switch-on
+  (rev 2 C3 upgraded from documented-invariant to structural there).
+- Switch-off: region not written, table[0] → trampoline direct, byte-identical
+  behavior (verified: the generic branch encoder reproduces 0x4BFBB280).
+
+**Sub-contract scoreboard:** (a) FE01→TVector→switch-back round trip: **FAIL** (the
+self-switch; the 68k never resumes at 0x5000fcf2 — e1f4/e408/e1a0 all zero visits in
+every boot). (b) [ECB+0xEC] pre-call restoration: **premise falsified** (ctx-save
+overlay; replaced by the warm re-assert + residue R-10). (c) table[0] cold exactly
+once + guest[0]/[4] stable after first entry: **PASS** (boots 3/5, probe + watch).
+
+**Residue updates:** R-4 **resolved** (command byte = 0xff, rides in r3 as the NK
+selector). R-5 **corrected** (resume route = table[0]/slot-0/selector-0xff; e1a0 is
+the post-restore resume, blocked on the flip discipline). NEW **R-10**: [ECB+0xEC]
+in-use word accumulates ctx-save junk (bits 1/3 phantom-used; depth ceiling ~2 of 4
+records until the overlay is resolved). NEW **R-11**: the NK FP-restore reads
+[ECB+0xE0/E4] as FPSCR/flags and `lfd f31` from the pool words — junk FP state during
+switches (inert so far; the 68k world barely uses FP). NEW **R-12 (THE frontier)**:
+the [KDP+0x65c] current-world flip discipline — the named re-scope item, candidate
+fix above.

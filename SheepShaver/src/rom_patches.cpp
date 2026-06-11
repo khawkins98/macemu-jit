@@ -859,7 +859,11 @@ bool PatchROM(void)
 			//     discriminator MUST wrap exactly these two words inside its
 			//     cold arm (the scratch word reserved at 0x68ff6080 is the
 			//     discriminator's home); the (a) re-asserts above may stay
-			//     on both arms.
+			//     on both arms.  Task-W update: under SS_NW_MM_SWITCH the W
+			//     discriminator (below) routes warm table[0] entries around
+			//     this trampoline entirely, so the wipe IS structurally
+			//     cold-only there; switch-off keeps the documented-invariant
+			//     status (always-cold regime, every-entry == cold-only).
 			tp[idx++] = htonl(0x38000000u);  // li   r0, 0
 			tp[idx++] = htonl(0x901C00ECu);  // stw  r0, 0xEC(r28)    in-use bitmap (COLD ARM ONLY)
 		}
@@ -898,6 +902,14 @@ bool PatchROM(void)
 		// dispatch, after NK cold-init, so stores here stick; nothing on the
 		// FE01 path re-initializes either word (the slow path only ADDS MRU
 		// entries).  Falsifiable live; one-iteration rule applies.
+		// Cold/warm classification (Task-V review): (a)-class — the
+		// [KDP+0x660] OR may stay on both Task-X arms (idempotent).  The MRU
+		// pair-0 re-assert is provisionally both-arms but Task X must
+		// re-evaluate: a warm re-assert can evict an NK-installed MRU entry
+		// -> unverified slow path (R-6).  (Task-W status: the W discriminator
+		// below routes warm entries AROUND this trampoline entirely, so both
+		// seeds are structurally cold-only today; the classification governs
+		// Task X's arm design.)
 		// FE07 needs NO implementation (plan rev 2 P8 satisfied by Q-C):
 		// its `bne` falls through when the completion path writes a nonzero
 		// command byte — the DR side is complete.
@@ -963,7 +975,118 @@ bool PatchROM(void)
 		tp[b_idx] = htonl(0x48000000u |
 		                  ((0x46e964u - (tramp_offset + b_idx * 4)) & 0x03FFFFFCu));
 
-		*tbl0 = htonl(0x4BFBB280u);  // table[0] → trampoline
+		// Rung 2 Task W (SS_NW_MM_SWITCH pair; plan "Task W: FE02 switch-back"):
+		// the WARM/ONGOING arm at table[0].  Live falsification (Task-W boots
+		// 1-2, addendum "Task W results"): the native MixedMode completion
+		// does NOT call the NK switch service 0x503143a0 (zero backward-
+		// direction visits; slow/error/save legs zero) — it re-enters the
+		// 68k-emulator world by branching THROUGH THE ENTRY-VECTOR TABLE
+		// (the forward hit path planted [ctx+0x5c]:=[KDP+0x648] for exactly
+		// this), arriving at table[0] with the native glue's register file
+		// (r1=native stack 0x103ffa2c, r24=scratch junk).  The always-cold
+		// trampoline then rewrote guest[0]/[4] and cold-started the 68k — a
+		// reset per excursion (design doc §2.4 failure mode (ii), live: ring
+		// `100266f2 → 0 → 1 → 5000002c`, 68k reset PC).  Fix: a cold/warm
+		// discriminator in a NEW verified-zero region (the trampoline's
+		// 46/48-word budget is full — plan Task-W note), table[0] → 0x50429d00:
+		//   COLD (scratch 0x68ff6080 == 0): set scratch := 1, b trampoline —
+		//        cold-start exactly once per boot; the [ECB+0xEC] wipe and the
+		//        V seeds become STRUCTURALLY cold-only (rev 2 C3).
+		//   WARM (scratch != 0): re-assert pool constants [ECB+0xE0/E4/E8] —
+		//        the NK ctx save writes through r6=ECB (probed live:
+		//        [ECB+0xEC]=saved r12=0x5046e1a0; ctx slot stride 8 puts
+		//        saved r11 at +0xE4) and OVERLAYS the pool words on every
+		//        switch-out; without the warm re-assert the next FE01
+		//        allocation computes the record's PHYS address from saved-r11
+		//        junk (0x0002f072, the stub's MSR fiction) and the NK would
+		//        save 0x220 bytes into low 68k RAM.  [ECB+0xEC] is NOT touched
+		//        (the in-use record is live at warm entry; the word
+		//        accumulates overlay junk in bits 1/3 — residue R-10 in the
+		//        addendum) — then b 0x5046f900, the DISPLACED original
+		//        table[0] target: the slot-0 stub saves caller r7-r13 and
+		//        exits via [KDP+0x5f0]=NK 0x50313bf8, which restores the
+		//        parked emulator ctx → resume 0x5046e1a0 → the FE01 service
+		//        reads the command byte and completes (e1f4: r24:=saved 68k
+		//        PC — the post-$AAFE resume).
+		// Register contract: warm arm clobbers r0/cr0 (PPC-ABI volatile; the
+		// DR/glue protocol treats them so on the forward leg too) and CTR
+		// (dead at entry — the caller arrived via bctr, and the architectural
+		// slot stubs clobber it immediately with mtctr r1); r28 is stashed in
+		// CTR and restored.  Scratch 0x68ff6080 is the occupancy-map address
+		// RESERVED for Task X's R2 discriminator — Task W uses it minimally
+		// (cold-once test-and-set); Task X refines (re-census, route
+		// decision, R4) on top of this provisional arm.
+		// PatchROM-time only (rev 2 C4); verify-zero-first on the whole
+		// region (rev 2 C6).  Switch-off: table[0] → trampoline direct,
+		// byte-identical to the pre-W layout (region not written).
+		uint32 tbl0_target = tramp_offset;  // default: always-cold trampoline
+		if (mm_switch) {
+			const uint32 w_offset = 0x429d00;
+			uint32 *wp = (uint32 *)(ROMBaseHost + w_offset);
+			// COLD-ARM EXTRA SEED ([KDP+0x658], one-iteration re-pin, Task-W
+			// boot 4): the warm route reaches the NK selector service —
+			// the completion calls table[0] with r3=0xff (THE COMMAND BYTE
+			// rides in r3) and LR=0x500ef258 (its continuation) → 0x50313cc8
+			// `beq cr2` → 0x50312af8 `lwz r9, 0x658(r1)` — the switch-back
+			// TARGET ctx is **[KDP+0x658]**, live-probed GARBAGE (=1): the
+			// NK never writes it (no `stw …,0x658(r1)` in the NK image; on
+			// real hardware the Trampoline/emulator-init seeds it) and the
+			// restore-from-junk resumed at a data address (boot-3 SIGSEGV,
+			// resume PC 0x68fff740).  Semantics = "the 68k-emulator context
+			// block" (the paravirtual CR-injection writes the parked
+			// emulator's saved CR at [[KDP+0x658]]+0xdc — sheepshaver_glue
+			// :2276, main_unix :2678; ECB ctx slot +0xdc = saved r13/CR,
+			// design doc §2.1) → seed [KDP+0x658] = ECB 0x68fff000.
+			// KDP-page state ⇒ trampoline-resident timing like the V seeds;
+			// the trampoline itself is at its 48-word budget, so the seed
+			// lives on THIS cold arm (same once-per-boot, post-NK-init).
+			static const uint32 w_code[] = {
+				0x7F8903A6u,  // 0x429d00: mtctr r28          stash caller r28 (CTR dead: arrived via bctr)
+				0x3F8068FFu,  // 0x429d04: lis   r28, 0x68ff
+				0x639C6080u,  // 0x429d08: ori   r28, r28, 0x6080 → r28 = R2 scratch 0x68ff6080
+				0x801C0000u,  // 0x429d0c: lwz   r0, 0(r28)
+				0x2C000000u,  // 0x429d10: cmpwi r0, 0         (cr0 only — cr2 is the DR mode field)
+				0x40820024u,  // 0x429d14: bne   +0x24 (warm arm 0x429d38)
+				// cold arm — r0/r28/CTR free by the cold-start contract:
+				0x38000001u,  // 0x429d18: li    r0, 1
+				0x901C0000u,  // 0x429d1c: stw   r0, 0(r28)    scratch := 1 (cold exactly once)
+				0x3F8068FFu,  // 0x429d20: lis   r28, 0x68ff
+				0x639CE000u,  // 0x429d24: ori   r28, r28, 0xe000 → r28 = KDP
+				0x3C0068FFu,  // 0x429d28: lis   r0, 0x68ff
+				0x6000F000u,  // 0x429d2c: ori   r0, r0, 0xf000   → r0 = ECB
+				0x901C0658u,  // 0x429d30: stw   r0, 0x658(r28) [KDP+0x658] = emulator ctx (NK switch-back target)
+				0x4BFFFE0Cu,  // 0x429d34: b     0x50429b40    → the cold trampoline
+				// warm arm — preserves everything except r0/cr0/CTR:
+				0x3F8068FFu,  // 0x429d38: lis   r28, 0x68ff
+				0x639CF000u,  // 0x429d3c: ori   r28, r28, 0xf000 → r28 = ECB
+				0x3C0068FFu,  // 0x429d40: lis   r0, 0x68ff
+				0x60005800u,  // 0x429d44: ori   r0, r0, 0x5800   → 0x68ff5800 (pool base)
+				0x901C00E0u,  // 0x429d48: stw   r0, 0xE0(r28)  pool virt base re-assert
+				0x901C00E4u,  // 0x429d4c: stw   r0, 0xE4(r28)  pool phys base re-assert (overlay repair)
+				0x3C00F000u,  // 0x429d50: lis   r0, 0xF000     → existence bitmap
+				0x901C00E8u,  // 0x429d54: stw   r0, 0xE8(r28)  existence bitmap re-assert
+				0x7F8902A6u,  // 0x429d58: mfctr r28            restore caller r28
+				0x48045BA4u,  // 0x429d5c: b     0x5046f900     ongoing entry = original slot-0 stub
+			};
+			const size_t w_n = sizeof(w_code) / sizeof(w_code[0]);
+			bool w_zero = true;
+			for (size_t i = 0; i < w_n; i++)
+				if (ntohl(wp[i]) != 0) { w_zero = false; break; }
+			if (!w_zero) {
+				fprintf(stderr, "[NW-TRAMP] W: discriminator site ROM+0x%x not zero "
+				        "— ongoing arm SKIPPED (table[0] stays always-cold)\n",
+				        w_offset);
+			} else {
+				for (size_t i = 0; i < w_n; i++)
+					wp[i] = htonl(w_code[i]);
+				tbl0_target = w_offset;
+				fprintf(stderr, "[NW-TRAMP] W: table[0] → cold/warm discriminator "
+				        "0x50429d00 (scratch 0x68ff6080; cold → trampoline once; "
+				        "warm → pool re-assert + b 0x5046f900 slot-0 stub)\n");
+			}
+		}
+		*tbl0 = htonl(0x48000000u | ((tbl0_target - 0x46e8c0u) & 0x03FFFFFCu));
+		                             // table[0] → discriminator (switch-on) / trampoline
 
 		// M6a Wave 2 item #2 (M6A-WAVE2-SHIM-RECON.md §2 quick-win): the 68k
 		// "diagnosable stop" stubs the vectors above point at — one `bra.s *`

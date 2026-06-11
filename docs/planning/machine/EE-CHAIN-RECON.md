@@ -866,3 +866,22 @@ machine suite 13/13 ALL PASS (test_exc_core 43, test_exc_chain 64, scc 63, via 8
 openpic 206); `make test-jit` plain AND batch 353/353; `make test-exc-vectors` 9/9
 score=100; `make e2e-test` 122 passed; **paravirtual `make e2e` PASS** (booted to
 Finder, clean shutdown, exit 0); gated-off A/B boot byte-identical (B4).
+
+## Dated note (2026-06-11, 68k-pc-desync closeout) — trap_return verdict: EXONERATED; W2's facts STAND; F8 staleness anchor moved
+
+The desync milestone's Task 0 (DSAT-WALL-RECON.md "Task 0", c8429b23) walked
+every window delivery's exit leg live: **`trap_return` (the patched bctr tail
++ fast exit), `m68k_excp_tbl`, and `sprg3`/`sprg3_mq` are ALL EXONERATED** for
+the DSAT-class desync — the mechanism was a DR r0≡0 invariant poison riding
+the ctx r0 slot (which a raw rfi tail would reload identically). The fix
+(`SS_NW_DR_R0_INVARIANT`, **newworld default since 25be4342**) touches ONLY
+the DR slot-exit re-entry word 0x46e1a0 + a 3-word stub at 0x429da0: the NK
+exit paths, the EE-parker fact (W2S-0), the mixed rfi/bctr exit regime, and
+the XLM_IRQ_NEST −1/delivery drift all stand unchanged — no W2 re-pin needed.
+**F8 staleness caveat:** the standing frontier signature changes on default
+configs — the old ceiling (ea(guest)=0x0fffff42 @0x504661a0, ring 4,480,458,
+sc=13/program=2) now appears only under the `SS_NW_DR_R0_INVARIANT=0` opt-out;
+the new default-config ceiling is the **0x505bb060 garbage-return slide**
+(SIGSEGV ea=0x400055590000; sc=169/16-distinct incl. 0xfffffffe/0xffffffff;
+program=4) — see M6A-WAVE2-SHIM-RECON.md frontier update. W2 pins anchored on
+the OLD signature should re-anchor or boot with the opt-out.

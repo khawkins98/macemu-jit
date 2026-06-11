@@ -767,3 +767,46 @@ r24=0x500005f6), `[$C70]` cleared to 0 at #32194 (r24=0x50004958), `[$AF0]` →
 content" reading is CORRECTED — the prior halfword was 0xffff; d6's 0x40 is not
 from $AF0 (residue source still unpinned, next-milestone recon). This wall is
 the next milestone's opening evidence.
+
+## Frontier update (2026-06-11, 68k-pc-desync Task C closeout) — the DSAT wall is DOWN; the 0x505bb060 garbage-return slide is THE frontier
+
+**The DSAT stack-underflow wall is RESOLVED** (plan `2026-06-11-68k-pc-desync`;
+root cause: the DR r0≡0 invariant poisoned by the FE1F twi-delivery ctx save —
+DSAT-WALL-RECON.md "Task 0", commit c8429b23; fix: `li r0,0` re-assert at the
+slot-exit re-entry 0x5046e1a0, **newworld default since 25be4342**, opt-out
+`SS_NW_DR_R0_INVARIANT=0`). On the default config (no env vars) the boot now
+passes 0xe410 intact (zero vector-0x2c raises, both e3e0 invocations complete,
+ExpandMem slots 0x100037dc:=0x00120001 and 0x100037c4:=0x00150001 fill), runs
+~4.8s JIT-time, PROGRAM deliveries 2→4 (all slot 8 conformant), sc surface
+13→**169 deliveries / 16 distinct** — including the **negative-selector oddity
+0xfffffffe ×17 / 0xffffffff ×103** (not in the NK's positive service range;
+flagged as a candidate NEW surface class — crash reg r26=0xfffffffe is
+suggestive), deferred_ee=5, CUDA 13 packets.
+
+**THE frontier (stop-rule trigger 2 — captured + named, not chased): the
+0x505bb060 garbage-return slide.** P-M4 artifact (ring dump via
+`SS_JIT_RING_DUMP_AT_PC=505bb060` — the crash-path ring flush does NOT fire in
+this regime, the handler re-faults in dump_disassembly; artifact
+`/tmp/desync_taskC_frontier_ring.txt`, trigger at total 3,652,196 records):
+
+- **Origin chain [RING✓, records #3651939-46]:** a 68k `rts` executes with A7
+  at the very TOP of the boot stack (sp 0x103ffff6→0x103ffffe, stack
+  effectively empty) and pops a stale/garbage return address → r24=0x5000027c
+  (low ROM header territory). The bytes there [ROM dump]: 0x5000027a holds
+  `61ff` (bsr.l) whose 32-bit displacement is the FOLLOWING words `0000 4e71`
+  (nop padding) → target 0x5000027a+2+0x4e71 = **0x500050ed — an ODD 68k PC**
+  (observed r24=0x500050ef, word+2). The DR's misaligned opcode fetch at
+  0x500050ed reads **0x760c**, and the dispatch computes slot address
+  **0x505bb060 = 0x50580000 + (0x760c<<3)** — one bit (0x100000) above the
+  true table slot 0x504bb060 = 0x50480000 + (0x760c<<3); the same window shows
+  the healthy form live (block 0x504b0ff8 = slot(0x61ff)). 0x505bb060 is past
+  the staged-copy end 0x50500000 → unmapped zeros → the PC slides through
+  every 64KB region to 0x55590000 → SIGSEGV ea=0x400055590000 (lr=r29=
+  0x505bb060, ctr=0 at crash).
+- **Named shape:** the slide target is a **DR dispatch-table slot address
+  computed from a garbage opcode at an odd 68k PC** (not a vector, not a
+  size). Two next-milestone questions, in honest priority order: (i) the 68k
+  root — what emptied the boot stack / left the garbage return address that
+  the rts consumed (the desync-class question); (ii) the DR mechanics — the
+  +0x100000 slot-base anomaly on the odd-PC dispatch (0x50580000 vs
+  0x50480000), bounded-look residue, not chased per the one-look rule.

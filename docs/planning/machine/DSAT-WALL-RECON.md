@@ -1,5 +1,12 @@
 # DSAT stack-underflow wall — pre-milestone recon (2026-06-11)
 
+> **STATUS: RESOLVED (2026-06-11).** Root cause pinned in "Task 0" below (DR
+> r0≡0 invariant poison via the FE1F twi-delivery ctx save); fix landed Task A
+> (`li r0,0` re-assert at slot-exit re-entry 0x5046e1a0) and is the **newworld
+> default since commit 25be4342** (opt-out `SS_NW_DR_R0_INVARIANT=0`). Tasks
+> B/C results below; the successor frontier is the **0x505bb060 garbage-return
+> slide** (tracked in M6A-WAVE2-SHIM-RECON.md, frontier update 2026-06-11).
+
 > Next-milestone recon for the frontier captured by FE1F Task B
 > (M6A-ONGOING-ENTRY-DESIGN.md "Task B results" / "NEW FRONTIER", commit 9443a568;
 > re-confirmed post-flip in Task C). READ-ONLY task: no source edits.
@@ -573,3 +580,80 @@ grows 13→169 with the negative-selector family above; deferred_ee=5, CUDA 13
 packets, VIA/SCC MMIO traffic. The boot dies at the **0x505bb060 off-ROM PC
 slide** (Task A's named frontier) — the P-M4 artifact + origin-class look is
 Task C's deliverable. No new wall class beyond it.
+
+## Task C — acceptance battery + the default flip (68k-pc-desync plan) — 2026-06-11
+
+> **Status: FLIP LANDED (commit 25be4342) — no gate failure post-flip,
+> revert-on-red NOT invoked. THE WALL IS RESOLVED.** Boots this task: 3
+> slot-protocol boots — OFF pre-flip A/B (`desync-taskC-off-ab`,
+> 20260611-225602.37718), frontier capture (`desync-taskC-frontier`,
+> 20260611-225655.37853), post-flip default (`desync-taskC-postflip-default`,
+> 20260611-230119.44372), post-flip opt-out (`desync-taskC-postflip-optout`,
+> 20260611-230153.44501). Frontier ring artifact:
+> `/tmp/desync_taskC_frontier_ring.txt` (ephemeral, re-derivable).
+
+**(a) Full gates** — green pre- AND post-flip: build-ss clean; batch + plain
+`make test-jit` 353/353 score=100 (both modes, both sides of the flip);
+machine suite **13 suites ALL PASS**; `make e2e-test` **122 passed**.
+
+**(b) Task A probe sub-contract + (c) Task B advancement/invariants** —
+re-asserted on the post-flip default boot with NO env vars: `[NW-DR-R0] ARMED
+(newworld default; opt-out SS_NW_DR_R0_INVARIANT=0)`; 0x5046d760 **0 visits**;
+e412 census = 2; c70/af0 = the 4 boot-fill classes only (zero failure-class
+writes); cold-once #4666; delivered_dec=0 / delivered_sc=169 (16 distinct,
+the 0xfffffffe/0xffffffff oddity reproduced) / delivered_program=4 all slot 8;
+TVector `r25=0x5000fcf2`; boot dies at the named successor frontier
+(ea=0x400055590000) — Task B's full row tables stand on fresh evidence.
+
+**(d) The Task-0 regression-scope enumeration, walked row by row:**
+
+1. *sc resume conformance* — handler 0x50314ac0 entered per delivery (first 8
+   sampled linear [PROBE✓ B1]: 0x3f/0x19/0x14/0x19/0x0f/0x27/0x40/0x42, r3-class
+   args per M3A); the fix is DR-entry-only, sc paths untouched. PASS.
+2. *FE1F $31/$36 round trip* — both invocations: entry r0/r4 = $31/2, $36/7,
+   $31/4, $36/1 [PROBE✓ 0x50314700]; slot fills 0x00120001 + 0x00150001 (handle
+   class, writer r24=0x5000f258 the f240 tail). PASS.
+3. *W2's EE facts* — trap_return bytes UNTOUCHED by the fix (site = 0x46e1a0 +
+   the 0x429da0 stub only); the EE-parker fact and the XLM_IRQ_NEST −1/delivery
+   drift stand unchanged. PASS (Q-DS3 exonerated, nothing to re-pin for W2).
+4. *Warm switch-back nest ±1 balance* — the 0x2818 sawtooth signature present
+   (118 events through B2's window, one return-to-0 at #3388726). PASS.
+5. *Paravirtual byte-identity / gated-off A/B* — pre-flip OFF boot AND post-flip
+   opt-out boot both byte-identical DSAT baseline: `[$C70]:=0x5000e448`
+   #3391708/#3391707, `[$AF0]:=0x000A` #3391720/#3391719 (the ±1 jitter class),
+   delivered_sc=13 (9 distinct, exact list) / delivered_program=2, SIGSEGV
+   ea=0x40000fffff42 @0x504661a0, crash r24=0x50004ad0 r1=0x0fffff46 (r0=0x36 —
+   the poison on display), ring totals 4,480,459 / 4,480,458. PASS.
+6. *Cold-once trampoline pair* — #4666 (pc=50429b40), known writer classes only.
+   PASS.
+7. *Post-switch-in guest code runs r0=0* — stub-entry probe r0=0; e394 dr-tmp
+   r0=0; the interlude class strictly less poisoned than baseline. PASS.
+8. *ctx+0x104-zeroing variant checks* — N/A (the `li r0,0` site variant was
+   chosen; the emulator-world saved-r0 ctx slot is not rewritten by the fix).
+
+**(e)** gated-off baseline — see row 5. PASS.
+
+**THE FLIP** — `SS_NW_DR_R0_INVARIANT` is the newworld profile default
+(explicit-"0"-only opt-out, getenv+strcmp polarity per the
+SS_NW_SC_SURFACE/SS_NW_FE1F_SURFACE precedent, NOT MachineEnvFlag); loud
+`[NW-DR-R0] r0-invariant fix OFF` opt-out announce. All changed lines inside
+the PatchROM_NW_trampoline / MachineProfileIsNewWorld() block — NW-only ⇒ the
+paravirtual e2e gate is SUBSTITUTED by the structural-inertness argument + the
+gated-off byte-identical A/B boots (stated in the commit).
+
+**DIAGNOSTIC (recorded, not a gate) — the successor frontier, named: the
+0x505bb060 garbage-return slide.** Full P-M4 artifact + the bounded origin
+look live in M6A-WAVE2-SHIM-RECON.md (frontier update 2026-06-11, this
+closeout). One-paragraph shape: a 68k `rts` on an effectively-empty boot stack
+(A7=0x103ffff6→fe, top of the 0x10400000 stack) pops garbage → r24=0x5000027c
+(low ROM header) → the `61ff` word there consumes the nop padding `0000 4e71`
+as a bsr.l displacement → **ODD 68k PC 0x500050ed** → misaligned opcode fetch
+0x760c → dispatch slot address **0x505bb060 = 0x50580000 + (0x760c<<3)** (one
+0x100000 bit above the true slot 0x504bb060; healthy form live in the same
+window: block 0x504b0ff8 = slot(0x61ff)) → past the staged-copy end
+0x50500000 → zero slide to SIGSEGV ea=0x400055590000. Origin class named
+honestly: **a dispatch-table slot computed from a garbage opcode at an odd
+68k PC** — neither a vector nor a size. Instrument note re-confirmed: the
+crash-path ring flush does NOT fire in this regime (handler re-faults in
+dump_disassembly); `SS_JIT_RING_DUMP_AT_PC=505bb060` is the capture idiom
+(trigger at total 3,652,196 records).

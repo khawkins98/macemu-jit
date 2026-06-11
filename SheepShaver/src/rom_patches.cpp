@@ -2563,15 +2563,15 @@ static bool patch_68k(void)
 	// retirement is a 1.1/OldWorld-window-ROM behavior change only. Paravirtual
 	// keeps the patch forever. Same idiom as via_init/scc_init: the search still
 	// runs (find/skip telemetry stays consistent), only the patching is gated.
-	if (MachineProfileIsNewWorld()) {
-		fprintf(stderr, "[M3b] cuda_init ROM patch retired (newworld profile): "
-		        "guest Cuda init runs against the dev_cuda model\n");
-	}
 	static const uint8 cuda_init_dat[] = {0x08, 0xa9, 0x00, 0x04, 0x16, 0x00, 0x4e, 0x71, 0x13, 0x7c, 0x00, 0x84, 0x1c, 0x00, 0x4e, 0x71};
 	base = find_rom_data(0xa000, 0x12000, cuda_init_dat, sizeof(cuda_init_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
 	if (MachineProfileIsNewWorld()) {
-	// retired ([M3b] line above)
+		// Retired; banner reports whether the retirement changed anything on
+		// THIS ROM (Task-3 review minor: on 9.0.1 the pattern misses, no-op).
+		fprintf(stderr, "[M3b] cuda_init ROM patch retired (newworld profile, "
+		        "pattern %s): guest Cuda init runs against the dev_cuda model\n",
+		        base ? "found - patch suppressed" : "absent - no-op on this ROM");
 	} else if (base) {
 	D(bug("cuda_init %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base);
@@ -2827,15 +2827,14 @@ static bool patch_68k(void)
 	// parcels ROM this pattern already MISSES its window (adb_init @0x2b780,
 	// outside 0x31000..0x3d000), so the retirement only changes behavior on
 	// 1.1/OldWorld-window ROMs. Paravirtual keeps the patch forever.
-	if (MachineProfileIsNewWorld()) {
-		fprintf(stderr, "[M3b] adb_init ROM patch retired (newworld profile): "
-		        "ADBInit wait runs against the dev_cuda model + adb_stub\n");
-	}
 	static const uint8 adb_init_dat[] = {0x08, 0x2b, 0x00, 0x05, 0x01, 0x5d, 0x66, 0xf8};
 	base = find_rom_data(0x31000, 0x3d000, adb_init_dat, sizeof(adb_init_dat));
 	if (base == 0 && !g_rom_904_lenient) return false;
 	if (MachineProfileIsNewWorld()) {
-	// retired ([M3b] line above)
+		// Retired; banner reports pattern presence (no-op on 9.0.1 — see above).
+		fprintf(stderr, "[M3b] adb_init ROM patch retired (newworld profile, "
+		        "pattern %s): ADBInit wait runs against the dev_cuda model + adb_stub\n",
+		        base ? "found - patch suppressed" : "absent - no-op on this ROM");
 	} else if (base) {
 	D(bug("adb_init %08lx\n", base));
 	wp = (uint16 *)(ROMBaseHost + base + 6);

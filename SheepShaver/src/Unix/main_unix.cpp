@@ -1362,14 +1362,20 @@ static VIA6522 via;
 // touches them; the VIA stays in M1 loud-stub mode there).
 static CudaDevice cuda;
 static ADBStub adb;
-// Injected Cuda services. now_mac wraps the paravirtual local-time convention
+// Injected Cuda services. now_mac uses the paravirtual local-time convention
 // (plan rev 2 m8: macos_util.cpp TimeToMacTime, Mac-epoch LOCAL seconds — do
-// not re-derive UTC). §2g note: this runs at GET_TIME packet commit under the
-// bus region lock, potentially on the Mach handler thread; tzset() ran at
-// startup so localtime_r does not initialize/allocate on this path.
+// not re-derive UTC). §2g hardening (Task-3 review): GET_TIME commit runs under
+// the bus region lock, potentially on the Mach handler thread — so the libc/
+// prefs-touching TimeToMacTime runs ONCE at bring-up (cuda_mac_base, safe
+// thread) and the fault-path callback is pure arithmetic on the monotonic
+// clock. Tradeoff: a DST boundary mid-session drifts the offset — irrelevant
+// for boot-time GET_TIME.
+static uint32_t cuda_mac_base;      // TimeToMacTime(time()) sampled at bring-up
+static uint64_t cuda_mac_base_ns;   // vclk_host_now_ns at the same instant
 static uint32_t cuda_now_mac(void *)
 {
-	return TimeToMacTime(time(NULL));
+	return cuda_mac_base +
+	       (uint32_t)((vclk_host_now_ns(NULL) - cuda_mac_base_ns) / 1000000000ull);
 }
 // Thin adapter onto the Task 2 ADB stub (signatures match by design).
 static int cuda_adb_adapter(void *opaque, uint8_t cmd, const uint8_t *listen_data,
@@ -1868,6 +1874,10 @@ int main(int argc, char **argv)
 		// the primary mechanism, so nothing on this path can allocate on the
 		// Mach fault path. Reset order: ADB stub first (the Cuda binds it).
 		ADBStubReset(&adb);
+		// RTC base sampled here on a safe thread; cuda_now_mac is then pure
+		// monotonic arithmetic (§2g — see the comment at the wrapper).
+		cuda_mac_base = TimeToMacTime(time(NULL));
+		cuda_mac_base_ns = vclk_host_now_ns(NULL);
 		CudaReset(&cuda, cuda_now_mac, NULL);
 		CudaBindADB(&cuda, cuda_adb_adapter, &adb);
 		VIABindCuda(&via, &cuda);

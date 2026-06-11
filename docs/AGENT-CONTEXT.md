@@ -27,10 +27,13 @@
 - `SS_JIT_WATCH_ADDR=<HEX,no-0x>` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
 - `SS_SEED_MEM`, `SS_EXC_ENTRY=0xINT[,0xSC]` (no-comma form preserves the syscall
   default), `SS_CUDA_TRACE=1`, `SS_INTERP_RING` — see DIAGNOSTICS.md.
-- ROM dumps: `/tmp/rom901_inventory.bin` = RAW (md5 7b1378be…, 16 placeholder words at
-  file 0x36e8c0); `/tmp/rom901.bin` = PATCHED (md5 e432df64…). Re-verify md5 before
-  tagging [RAW-ROM]/[PATCH]; mirror-region facts are [PROBE✓]-only (no dump covers the
-  mirror). capstone-M68K mis-decodes `fe1f`-style words (hand-split); PPC is BE.
+- ROM dumps — canonical location: **`/Users/Shared/macemu/dumps/`** with `MANIFEST.txt`
+  (filename + md5 + provenance). `rom901_inventory.bin` = RAW (md5 7b1378be…, 16
+  placeholder words at file 0x36e8c0); `rom901.bin` = PATCHED (md5 e432df64…). The /tmp
+  copies remain valid but ephemeral. Provenance ritual before tagging [RAW-ROM]/[PATCH]:
+  `tools/dump-manifest.sh --check`. Mirror-region facts are [PROBE✓]-only (no dump covers
+  the mirror). capstone-M68K mis-decodes `fe1f`-style words — use `tools/m68k-dis.py`
+  (boundary-splits A/F-line + 0x0fff words); PPC is BE.
 
 ## Constants (probe-ready absolutes)
 

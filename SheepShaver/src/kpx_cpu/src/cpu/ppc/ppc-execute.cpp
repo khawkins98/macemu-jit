@@ -1590,6 +1590,7 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 		break;
 	case 22:	/* DEC — M2: honored on the virtual clock (was: dropped) */
 		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockNoteDECWritePC(&g_virt_clock, pc());  // W2-4 cadence capture
 			VirtClockWriteDEC(&g_virt_clock, s);
 			break;
 		}

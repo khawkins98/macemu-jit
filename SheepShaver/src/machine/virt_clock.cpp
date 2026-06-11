@@ -71,6 +71,14 @@ uint32_t VirtClockReadDEC(VirtClock *c)
 void VirtClockWriteDEC(VirtClock *c, uint32_t v)
 {
 	c->mtspr_dec_writes++;                         // CPU-thread-only counter
+	// W2-4 DEC-cadence capture (CPU-thread-only; no stdio here)
+	c->dec_write_pc_ring[c->dec_write_ring_pos & 7] = c->dec_write_note_pc;
+	c->dec_write_ring[c->dec_write_ring_pos++ & 7] = v;
+	if      (v == 0)            c->dec_w_zero++;
+	else if (v & 0x80000000u)   c->dec_w_msb++;
+	else if (v < 0x1000u)       c->dec_w_tiny++;
+	else if (v < 0x40000u)      c->dec_w_small++;
+	else                        c->dec_w_mid++;
 	c->dec_set_tb = VirtClockTB(c);
 	c->dec_set_value = v;
 	uint32_t gen = (uint32_t)(__atomic_load_n(&c->dec_arm_word, __ATOMIC_RELAXED) >> 1) + 1;
@@ -119,4 +127,14 @@ void VirtClockDumpStats(const VirtClock *c, FILE *f)
 	        (unsigned long long)c->tb_writes,
 	        (unsigned long long)__atomic_load_n((uint64_t *)&c->dec_expiries, __ATOMIC_RELAXED),
 	        (unsigned)__atomic_load_n((uint32_t *)&c->dec_pending, __ATOMIC_RELAXED));
+	if (c->mtspr_dec_writes) {
+		fprintf(f, "[VCLK] dec writes: zero=%llu tiny=%llu small=%llu mid=%llu msb=%llu last8=",
+		        (unsigned long long)c->dec_w_zero, (unsigned long long)c->dec_w_tiny,
+		        (unsigned long long)c->dec_w_small, (unsigned long long)c->dec_w_mid,
+		        (unsigned long long)c->dec_w_msb);
+		for (int i = 0; i < 8; i++)
+			fprintf(f, "%08x@%08x%s", c->dec_write_ring[(c->dec_write_ring_pos + i) & 7],
+			        c->dec_write_pc_ring[(c->dec_write_ring_pos + i) & 7],
+			        i == 7 ? "\n" : ",");
+	}
 }

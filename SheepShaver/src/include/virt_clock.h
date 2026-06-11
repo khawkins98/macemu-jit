@@ -48,6 +48,20 @@ struct VirtClock {
 
 	// Telemetry (DoD observed-traffic asserts; dumped at exit)
 	uint64_t mfspr_dec_reads, mtspr_dec_writes, tb_writes, dec_expiries;
+
+	// W2-4 DEC-cadence capture (CPU-thread-only, appended LAST per struct-offset
+	// rule): last-8 written DEC values + value-class buckets. Capture-only,
+	// no stdio on the hot path; dumped by VirtClockDumpStats.
+	uint32_t dec_write_ring[8];         // last 8 mtspr DEC values (ring)
+	uint32_t dec_write_pc_ring[8];      // guest PC of each (set by the mtspr caller
+	                                    // via VirtClockNoteDECWritePC before WriteDEC)
+	uint32_t dec_write_note_pc;         // staging slot for the next write's PC
+	uint32_t dec_write_ring_pos;
+	uint64_t dec_w_zero;                // v == 0
+	uint64_t dec_w_tiny;                // 0 < v < 0x1000 (<164us @25MHz)
+	uint64_t dec_w_small;               // 0x1000 <= v < 0x40000 (<10.5ms)
+	uint64_t dec_w_mid;                 // 0x40000 <= v < 0x80000000
+	uint64_t dec_w_msb;                 // MSB set (negative write)
 };
 
 extern void     VirtClockInit(VirtClock *c, uint32_t tb_freq_hz,
@@ -60,6 +74,8 @@ extern uint64_t VirtClockNowNS(VirtClock *c);   // any thread: raw injected sour
 extern uint64_t VirtClockTB(VirtClock *c);      // 64-bit TB = ns*freq/1e9 + tb_offset
 extern uint32_t VirtClockReadDEC(VirtClock *c); // also performs the lazy expiry check
 extern void     VirtClockWriteDEC(VirtClock *c, uint32_t v);
+// W2-4 capture aid: note the guest PC of the upcoming WriteDEC (CPU thread only).
+static inline void VirtClockNoteDECWritePC(VirtClock *c, uint32_t pc) { c->dec_write_note_pc = pc; }
 extern void     VirtClockWriteTBL(VirtClock *c, uint32_t v);
 extern void     VirtClockWriteTBU(VirtClock *c, uint32_t v);
 

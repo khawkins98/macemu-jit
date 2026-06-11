@@ -127,3 +127,206 @@ SS_PROBE_PC='0x504268d0:[0x2810],[0x2814],[0x2818],[0x281c],[0x68ffe65c],[0x68ff
 SS_PROBE_PC='0x504268d0:[0x50412b1c],...,[0x50426880],...;0x50426aec:[0x50412b3c],...,[0x504268a0],...'
 # Both: SS_ROM_LENIENT=1 SS_ROM_SKIP_JUMP68K=1, perl-alarm 20-25s, /tmp/m2accept.prefs
 ```
+
+---
+
+## Syscall entry resolution (vector 0xC00) — NK-syscall-surface plan Task 0 (2026-06-11)
+
+> **Status:** ✅ All blocking answers pinned. Method: static capstone RE of the raw dump
+> + 2 bounded diagnostic boots (`/tmp/sc0_1.log`, `/tmp/sc0_2.log`; budget 2/8 used) +
+> the FATAL-capture r0/r3..r10 extension (commit 780bbc34). Stop-rule: **NOT fired.**
+>
+> **Provenance re-established:** `/tmp/rom901_inventory.bin` md5
+> `7b1378be15d99ac1a15ab2fc22bcc56f` ([RAW-ROM], 16 twi placeholders);
+> `/tmp/rom901.bin` == `/tmp/rom901_patched_t0.bin` md5
+> `e432df64122a5a89ec1c08d0bdf01609` ([PATCH]). Every static window below verified
+> raw==patched. Tags carried: [RAW-ROM]/[PATCH]/[STATIC]/[PROBE✓].
+
+### Q-S1 — the live syscall handler entry + the copy resolution [PROBE✓ + STATIC]
+
+**`syscall_entry = 0x50314ac0` — the PRIMARY copy (0x503xxxxx).** Resolution chain:
+
+1. **The NK's vector dispatch is a per-vector handler-pointer table at `KDP+0x360`,
+   indexed by `vector>>6`, reached through SPRG3** ([STATIC]: the vector-page stub
+   template image lives at file `0x300000..0x302fff` — one stub per 0x100 stride; the
+   0xC00 stub at file 0x300c08 is
+   `mtspr SPRG1,r1 / mflr r1 / mtspr SPRG2,r1 / mfspr r1,SPRG3 / lwz r1,0x30(r1) /
+   mtlr r1 / blrl` — handler = `[SPRG3+0x30]`; DEC's stub loads `[SPRG3+0x24]`
+   = 0x900>>6). NK init sets `SPRG3 = KDP+0x360` ([STATIC] 0x3113b4) — so the syscall
+   handler is published at **`[KDP+0x390]`**.
+2. **[PROBE✓] (boot 1, at TVector and warm-table[0] entry): `[KDP+0x390] = 0x50314ac0`**;
+   siblings `[KDP+0x384]`(DEC)=0x50313200, `[KDP+0x374]`(ext-int)=0x50314880,
+   `[KDP+0x37c]`=0x50314700, `[KDP+0x39c]`=0x50314240; **`[KDP+0x64c]` (NK relocation
+   base) = `0x50310000`** — the NK publishes PRIMARY-copy addresses throughout.
+3. **Copy-ambiguity resolution (P-m5 asymmetry, deliberate and recorded):** the live
+   syscall entry follows what the NK publishes → **primary copy 0x50314ac0**
+   (= static file 0x314ac0 + ROMBase, no +0x100000). `interrupt_entry` stays
+   0x50412b1c (staged copy) — both copies are byte-identical at their anchors and
+   delivery there is Task-7-proven; NOT silently "fixed" (out of scope). The glue
+   comment must record this asymmetry when Task A lands the default.
+4. **T-M1 per-target byte re-confirmation [PROBE✓]** (boot 2): 12 live words across
+   0x50314ac0..0x50314b50 match the static bytes exactly (incl. `4bfff209` =
+   `bl 0x50313d40` and `48006150` = `b 0x5031aca0`).
+5. **The 0xC00 page classification [PROBE✓]** (boot 1, 0x40 bytes at [0xC00..0xC3C]):
+   **junk/uninstalled** — `f3018000 ffffffff ffffffff ffffffff 00000000 0000ffff
+   ffffffff ffffffff | ffffffff ffffffff ffffffff 00ffffff 00000000 ...` — not code,
+   not a pointer table (the M3a vector-page-empty finding now covers 0xC00: the staged
+   NK never installs its vector-page image; the stub TEMPLATE in the ROM image is the
+   transcription source). Per rev 2 P-M3 this is the in-scope case: the stub's
+   postconditions (Q-S2) are transcribable host-side; no 0xC00 code execution needed.
+
+### Q-S2 — handler entry ABI + shim verdict [STATIC + PROBE✓]
+
+Register/state → expected value/class at entry to **0x50314ac0** (Task A's probe gate):
+
+| Row | Expected at entry | Class | Evidence |
+|---|---|---|---|
+| r0 | syscall selector (first sc: 0x3f) | exact (per sc) | [PROBE✓] boot 2 |
+| r3..r10 | caller args, UNTOUCHED (first sc: r3=0x00050001, r4=0x10026710) | live caller values | [PROBE✓] |
+| r1 | caller r1 (the handler clobbers it; the STUB has already saved it) | =caller r1 | [PROBE✓] r1=0x103ffb50 at entry |
+| **SPRG1** | **caller r1 — THE SHIM WRITE #1** | exact | stub template [STATIC]; consumed at 0x313d48 (`[KDP+4]:=SPRG1`) and the negative fast paths |
+| **SPRG2** | **caller LR — THE SHIM WRITE #2** | exact | stub template [STATIC]; consumed at 0x313d84 (r12:=SPRG2 → ctx → exit `mtlr r12`); boot 2 showed r12=0 without it |
+| SPRG0 | KDP (0x68ffe000) | NK-maintained, already correct | [PROBE✓] boot 2: r1=KDP at 0x313d40 block entry (post `mfspr r1,SPRG0`) |
+| SPRG3 | KDP+0x360 | NK-maintained (stub-only consumer; handler body doesn't read it) | [STATIC] 0x3113b4 |
+| SRR0/SRR1 | sc+4 / PEM-masked SRR1 | ExcEnter owns (+4 verified live) | mfspr 0x1a/0x1b at 0x313d78/7c |
+| MSR | ExcEnter mask result (0x7072→0x1040 class) | masks are LAW; NK kernel code runs IR/DR-off (M3A Task 7 precedent) | [PROBE✓] handler ran to completion at it |
+| LR | don't-care (the real stub clobbers it via blrl; handler uses SPRG2) | any | [STATIC] |
+| `[KDP-0x14]` | current ctx — the syscall SAVE TARGET (mid-excursion: **MMCB 0x68fff400**) | staged, NK/W2-maintained | [PROBE✓] boots 1+2 (r6=0x68fff400 at dispatcher) |
+| `[KDP-0x10]` / `[KDP-4]` | flags word (0x00a00006) / kernel r1 (=KDP 0x68ffe000) | staged | [PROBE✓] boot 1 |
+
+**Handler flow** ([STATIC], all primary-copy): 0x314ac0 checks fast negative selectors
+(-1/-2/-3: SPRG1/SPRG2-restore + rfi, pre-save); positive falls to 0x314b38:
+`bl 0x50313d40` (save: `[KDP+4]:=SPRG1`, `[KDP+0x18]:=r6`, r6:=`[KDP-0x14]` ctx,
+ctx+0x104:=r0, ctx+0x13c..0x16c:=r7..r13, then r10:=SRR0 r11:=SRR1 r13:=CR r12:=SPRG2
+r7:=`[KDP-0x10]` r8:=KDP r1:=`[KDP-4]`) → `[KDP+0xe60]`++ → `oris r11,r11,2` →
+`b 0x5031aca0` (saves r14..r31 via 0x3238ac, then the selector dispatch at 0x31aed0:
+bounds `cmplwi r15,0x86`, table at NK_base+0xacb8, **target = table[sel] + base +
+sel*4**; out-of-bounds → r3=-4). The save goes into the **`[KDP-0x14]` ctx (the MMCB
+mid-excursion)** — NOT `[KDP+0x65c]` — architecturally correct for a native-world sc;
+the DEC-shim's `[KDP+0x65c]` logic does NOT transfer.
+
+**Shim verdict: REQUIRED — exactly two SPR writes (SPRG1:=gpr(1), SPRG2:=lr) before
+the bare ExcEnter transition.** Host-side glue helper called from execute_syscall's
+newworld arm (the DEC-shim precedent; §2d site discipline). No KDP writes, no register
+mutation, no guest-side seeds needed (everything else the handler consumes is
+NK-maintained staged state, live-verified). Boot 2 (no shim) is the controlled
+falsification: the round trip succeeded END-TO-END except r1 restored as 0 (from
+unset SPRG1) at resume → SIGSEGV — the two SPRs are the entire missing surface.
+
+### Q-S3 — MPLibrary's first-sc conformance vector [STATIC + PROBE✓ + FATAL-capture]
+
+- **Stub** (file 0xd6388, raw==patched): `li r0,0x3f / sc / blr` — part of the 12-byte-
+  stride syscall-stub table (sibling selectors 6, 7, 8, 9, 0xa, 0xc, 0xd, 0xe, 0x63 in
+  the window; a selector family is coming — M4's warning live).
+- **Caller**: 0x500cf100 `lwz r3,4(r25)` → 0x500cf104 `bl 0x500d6388` (LR=0x500cf108,
+  matches the capture). **Consumption** (LR target, 0x500cf108ff): `nop / cmpwi r3,0 /
+  bne 0x500cf3e4` where 0x500cf3e4 = `extsh r3` + epilogue return (error propagates as
+  the function result); success falls through to 0x500cf114.
+- **Live vector** ([PROBE✓] block-entry 0x500d6388 + the FATAL capture at the sc):
+  **r0=0x3f, r3=0x00050001 (kernel ID, type 2 — exists in the staged ID directory),
+  r4=0x10026710 (RAM ptr; the value the service stores at obj+0xec)**; r5=0xf04d6163,
+  r6=0x80000000, r7=0x68ffef20, r8=0x103ffa50, r9=0x5046de08, r10=0x00000001
+  (live-through, not consumed by the 0x3f body).
+- **Return protocol (the Task-B predicate, register→value form): result register r3;
+  SUCCESS ⇔ r3 == 0 at the resume (0x500d6390); error convention r3≠0 → branch to
+  0x500cf3e4.** The legacy-spin datum is closed: the spin polled the r3 status the
+  no-op never produced; boot 2 produced r3=0 live.
+- **Service semantics** (selector 0x3f body at NK_base+0xf288 = 0x5031f288 [STATIC],
+  executed [PROBE✓]): lock `[KDP-0xb50]` → ID lookup 0x325380 (directory at
+  `[KDP-0xa98]`: two-level, 8-byte entries {type:1, gen:2, objptr:4}) → require
+  type==2 → `stw r4,0xec(obj)` → unlock → r3=0. One store into an existing kernel
+  object; boot 2 ran it to completion (0x5031b124 probe: r3=0).
+
+### Q-S4 — exit path + SRR0 ownership [PROBE✓ + STATIC]
+
+**BLOCKING half — pinned:**
+- **Exit mechanism**: common exit 0x5031b124 (`crset cr2eq`) → `b 0x503242dc` — the
+  scheduler/dispatch-restore route, ending in the §2.2 tail (`mtlr r12 / mtctr r10 /
+  bctr`): resume PC = r10 = **SRR0 = sc+4, never re-incremented** ([PROBE✓] boot 2:
+  resume block entry exactly 0x500d6390). No rfi needed on the success path (the rfi
+  exits exist on the fast negative-selector paths); SRR0/SRR1 are NOT re-consumed at
+  exit — nothing in between may clobber them is satisfied trivially (they're read once
+  into r10/r11 at save time).
+- **Preserved-register rows for Task B's gates** ([PROBE✓] boot 2 + [STATIC] restore
+  protocol): **r3 = result (0)** live-through (NOT restored from ctx); **r1 = caller r1**
+  (restored from ctx+0x10c ← `[KDP+4]` ← SPRG1 — the shim row); **LR = caller LR**
+  (restored via ctx ← r12 ← SPRG2 — the shim row); **r4..r10 = caller values** (ctx
+  slots 0x13c..0x16c + 0x114..0x134; boot 2: r4/r10 verified preserved at resume).
+  Task B gate (c)'s r1=0x103ffb50 is therefore GATEABLE (r1 is sc-preserved), and
+  LR=0x500cf108 likewise.
+
+**RECORDABLE RESIDUES (per rev 2 P-M6, not blocking):**
+- R-7 (ctx SRR1/EE for the MixedMode ctx): the syscall path writes the oris-0x20000
+  copy of SRR1 through r11 into the ctx CR/SRR family during the heavy path; the EE
+  state the eventual NK rfi uses remains unresolved — unchanged residue.
+- `[0x2810]` on the syscall path: not touched by the 0x3f service ([STATIC] body has
+  no XLM access); [PROBE✓] =1 at the wall (T-M2 upgrade, below). Whether other
+  selectors touch run-mode: next-milestone recon.
+- MSR-translation question: IR/DR-off delivery affirmatively evidenced (M3A Task 7 +
+  boot 2's full round trip at the ExcEnter mask); IR/DR behaviorally inert in V=P.
+- The exact MSR value at resume (bctr route vs rfi): boot 2 resumed and executed
+  guest code correctly; the restore tail's MSR protocol not instruction-pinned —
+  residue, falsifiable at Task B's resume probe if it ever matters.
+- `[KDP+0x65c]` at the *sc instant*: sampled ECB (0x68fff000) at TVector and
+  warm-entry block entries (pre-flip instants); the W2 flip's MMCB value at the exact
+  sc was not separately sampled — immaterial to this milestone (the syscall save path
+  consumes `[KDP-0x14]`, probed = MMCB), recorded for honesty.
+
+### Q-S5 — staged-surface audit + the stop-rule verdict [STATIC + PROBE✓]
+
+Bounded walk (≤2 levels, 12 functions): stub template 0x300c08 → entry 0x314ac0 →
+save 0x313d40 → dispatcher 0x31aca0/0x31aed0 → nonvol-save 0x3238ac → lock 0x312700 /
+unlock 0x3272e0 → ID-lookup 0x325380 → body 0x31f288 → exits 0x31af38/0x31b124 →
+restore route 0x3242dc. NK structures consumed: the `KDP+0x360` handler table;
+`[KDP+0x64c]` base; `[KDP-0x14]/[KDP-0x10]/[KDP-4]` ctx/flags/kernel-r1;
+`[KDP+4]/[KDP+0x18]` scratch save slots; the ctx save record (MMCB); the kernel lock
+`[KDP-0xb50]`; the ID directory `[KDP-0xa98]`; counters `[KDP+0xe40/0xe60/0xee4]`
+(+optional `[KDP+0xef4]` table); the selector-dispatch table NK_base+0xacb8
+(0x87 entries, in-image); SPRG0..3. **Every one is staged NK-init state — and boot 2
+is the empirical seal: with ONLY the entry resolved (no shim, no seeds), selector
+0x3f executed to completion on staged state and returned r3=0.**
+
+**STOP-RULE VERDICT: does NOT fire.** The syscall surface requires entry resolution
++ the two-SPR shim — nothing unstaged, no vector-page code, no kernel-init-only
+structures. Seed-class fix list for Task A: NONE beyond the shim.
+
+### Blocking-answer table (plan rev 2 P-C1)
+
+| Answer | Status | Consumer |
+|---|---|---|
+| Q-S1 entry address + copy + 0xC00 classification | **PINNED** (0x50314ac0 primary; page junk/in-scope) | Task A |
+| Q-S2 ABI table + shim verdict | **PINNED** (table above; shim = SPRG1/SPRG2, host-side) | Task A |
+| Q-S5 verdict + seed-class list | **PINNED** (go; no seeds beyond shim) | Task A |
+| Q-S3 conformance vector + return predicate | **PINNED** (r0=0x3f r3=ID r4=ptr; r3==0 at 0x500d6390) | Task B |
+| Q-S4 blocking half (exit mechanism + non-re-increment + preserved rows) | **PINNED** | Task B |
+| Q-S5 full structure enumeration | **PINNED** (list above) | Task C |
+
+ALL blocking answers pinned — implementation may start. Residues: the four Q-S4
+recordables above (none blocking).
+
+### Probe pack disposition + T-M2 upgrade
+
+- PROBE-S1 (boot 1, `/tmp/sc0_1.log`): [0xC00..0xC3C] dumped (junk); publication
+  slots `[KDP+0x390]`/siblings/`[KDP+0x64c]` pinned. **T-M2 upgrade: `[0x2810]`=1
+  [PROBE✓] at the wall** (mid-excursion confirmed); `[KDP+0x65c]`=0x68fff000 sampled
+  (instant caveat above); `[KDP-0x14]`=0x68fff400 MMCB [PROBE✓].
+- PROBE-S2: superseded by the better instruments — block-entry 0x500d6388 register
+  dump + the FATAL capture (both in boot 1) sampled the args at-bl AND at-sc
+  (identical values; the at-bl/at-sc distinction is moot for r3..r10).
+- PROBE-S3 (boot 2, `/tmp/sc0_2.log`, `SS_EXC_ENTRY=0x50412b1c,0x50314ac0`):
+  classified — handler-entry conformance EXACT per the Q-S2 table minus the two shim
+  rows; the divergence (resume r1=0 → SIGSEGV) is exactly the missing-shim
+  prediction. Signal, not failure.
+- Boot budget: **2/8 used** (co-scheduled per P-C3); no question went to residue for
+  lack of boots.
+
+### Notes for Task A (carried)
+
+- The `SS_EXC_ENTRY=0xINT` no-comma form currently ZEROES syscall_entry (glue parse) —
+  rev 2 P-M1: change to PRESERVE the default before the flip (post-flip trap).
+- P-m5 asymmetry: glue comment must state interrupt=staged-copy / syscall=primary-copy
+  per NK publication, deliberately.
+- The vector-handler-table fact generalizes M3a: any future vector resolves as
+  `[KDP+0x360 + (vector>>6)]` — one probe word each (DEC's published handler
+  0x50313200 ≠ the M3a delivery target 0x50412b1c, which works via the KDP shim;
+  reconciling those two is explicitly NOT this milestone's scope).

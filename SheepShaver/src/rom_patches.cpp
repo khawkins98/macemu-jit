@@ -1368,6 +1368,86 @@ bool PatchROM(void)
 			        "[KDP+0x37c]=0x50314700\n", r_mask);
 		}
 
+		// 68k PC-desync fix — DR r0≡0 invariant re-assert (plan
+		// 2026-06-11-68k-pc-desync Task A; root cause BINDING-pinned in
+		// DSAT-WALL-RECON.md "Task 0 — the re-dispatch mechanism pinned",
+		// commit c8429b23).  The DR maintains a standing invariant r0 == 0 in
+		// the 68k-emulator world: its flag-writeback idiom is `addco. rX,rX,r0`
+		// (mirror 0x50460c64), and this very stub composes constants from it
+		// (`oris r6,r0,0x1300` @0x5046e2bc, `ori r6,r0,0xe05c` @0x5046e360,
+		// `stw r0,0x210(r5)` @0x5046e34c — all verified [PATCH] this task).
+		// Our M6A FE1F twi-callout PROGRAM delivery saves the in-flight r0
+		// (= the NK service selector, e.g. 0x36 — the DR's own marshalling ABI,
+		// `mr r0,r8` @0x5046db48) into the emulator ctx r0 slot (+0x104); the
+		// NK save-and-switch (0x50312b0c) deliberately does NOT save r0 (the
+		// invariant is its contract), so every later world switch-IN reloads
+		// the stale selector into r0 and the first poisoned addco.-class
+		// writeback mis-dispatches the 68k stream (the e388 selector shim's
+		// jmp landed at 0xe412 = 0xe3dc + 0x36 → line-1111 → SysError 10 →
+		// the DSAT wall).  On real hardware the slot-8 callout is a
+		// parcels-patched direct call — no exception, no poisoned save.
+		//
+		// Fix shape (Task-0 BINDING; rev-2 F1 bctr-PRESERVING — no EE/MSR/rfi
+		// semantics change, NK exit paths untouched): re-assert the invariant
+		// with Apple's own `li r0,0` idiom (the 0x5046db7c callout-return
+		// precedent) at the slot-exit re-entry point 0x5046e1a0 — the resume
+		// PC every slot-1 world switch-out parks for the emulator ctx (LR of
+		// the `bnel cr2,slot1` at 0x5046e19c).  Site survey (this task,
+		// [PATCH]): the only link-calls into the entry-vector table are
+		// e19c→slot1 (resume e1a0, THE consumed path), c9e4→slot2 (resume
+		// c9e8) and c4f0→slot4 (resume c4f4) — the latter two are unconsumed
+		// (Q-B census, zero visits) and are NOT patched; no other static
+		// branch targets e1a0/e1a4.  r0 is provably dead across e19c→e1a0
+		// (the NK switch reloads it from ctx regardless, so the raw code
+		// cannot depend on it), making the zero safe on the bnel-not-taken
+		// fall-through too.
+		//
+		// Mechanism: displace the word at 0x5046e1a0 (`lwz r1,0x10c(r3)`,
+		// verify-EXPECTED-first) to a 3-word stub in the staged zero run
+		// (0x429da0, above the 0x429d9c free line, verify-zero-first):
+		// li r0,0; the displaced lwz; b 0x5046e1a4.  Staged copy ONLY (the
+		// primary 0x5036e1a0 image is not executed by the DR regime).
+		// Env-gated SS_NW_DR_R0_INVARIANT (the Task-0 bound name; default
+		// OFF, bring-up polarity).  Gated off, neither region is written —
+		// byte-identical DSAT baseline.  Paravirtual reach: NONE (inside
+		// this MachineProfileIsNewWorld()-early-returning lambda AND the env
+		// gate; legacy patch bodies untouched).
+		if (MachineEnvFlag("SS_NW_DR_R0_INVARIANT")) {
+			const uint32 site_offset = 0x46e1a0;       // mirror 0x5046e1a0 (slot-exit re-entry)
+			const uint32 site_expected = 0x8023010Cu;  // lwz r1, 0x10c(r3)
+			const uint32 r0_stub_offset = 0x429da0;    // staged zero run (free ≥ 0x429d9c)
+			uint32 *site_p = (uint32 *)(ROMBaseHost + site_offset);
+			uint32 *r0sp = (uint32 *)(ROMBaseHost + r0_stub_offset);
+			if (ntohl(*site_p) != site_expected) {
+				fprintf(stderr, "[NW-DR-R0] site ROM+0x%x reads %08x (expected %08x = "
+				        "lwz r1,0x10c(r3)) — r0-invariant fix SKIPPED\n",
+				        site_offset, ntohl(*site_p), site_expected);
+			} else if (ntohl(r0sp[0]) != 0 || ntohl(r0sp[1]) != 0 || ntohl(r0sp[2]) != 0) {
+				fprintf(stderr, "[NW-DR-R0] stub site ROM+0x%x not zero (%08x %08x %08x) "
+				        "— r0-invariant fix SKIPPED\n",
+				        r0_stub_offset, ntohl(r0sp[0]), ntohl(r0sp[1]), ntohl(r0sp[2]));
+			} else {
+				const uint32 stub_w0 = 0x38000000u;    // li  r0, 0  (the invariant re-assert)
+				const uint32 stub_w1 = site_expected;  // lwz r1, 0x10c(r3)  (displaced word)
+				const uint32 stub_w2 = 0x48000000u |
+					(((site_offset + 4) - (r0_stub_offset + 8)) & 0x03FFFFFCu);
+				                                       // b 0x5046e1a4 (rejoin past the site)
+				const uint32 site_new = 0x48000000u |
+					((r0_stub_offset - site_offset) & 0x03FFFFFCu);  // b 0x50429da0
+				fprintf(stderr, "[NW-DR-R0] ARMED (SS_NW_DR_R0_INVARIANT): DR r0==0 "
+				        "invariant re-assert at switch-in resume 0x5046e1a0\n");
+				fprintf(stderr, "[NW-DR-R0] rewrite stub ROM+0x%x: 00000000x3 -> "
+				        "%08x %08x %08x (li r0,0; lwz r1,0x10c(r3); b 0x5046e1a4)\n",
+				        r0_stub_offset, stub_w0, stub_w1, stub_w2);
+				fprintf(stderr, "[NW-DR-R0] rewrite site ROM+0x%x: %08x -> %08x "
+				        "(b 0x50429da0)\n", site_offset, ntohl(*site_p), site_new);
+				r0sp[0] = htonl(stub_w0);
+				r0sp[1] = htonl(stub_w1);
+				r0sp[2] = htonl(stub_w2);
+				*site_p = htonl(site_new);
+			}
+		}
+
 		fprintf(stderr, "[NW-TRAMP] register-fixup trampoline at ROM+0x%x "
 		        "(%u insns), table[0] → trampoline → cold-start\n",
 		        tramp_offset, (unsigned)(b_idx + 1));

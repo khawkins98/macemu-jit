@@ -142,6 +142,16 @@ emulator* — the dormant cross-world constant Wave 1 rev-2 finding 6 deliberate
 (`sheepshaver_glue.cpp:1927–1936`). Any rung that makes table[0]'s ongoing arm live must
 also retarget `[KDP+0x5f0/0x5f4]` → `0x50466080` (mirror).
 
+> **CORRECTION (2026-06-11, W2 rev 3.1 item 4 — the paragraph above is STALE):** the
+> paravirtual-seed framing does not survive contact with the live newworld boot. The
+> glue's `0x366080`/primary-world values are dead scaffolding (PROBE-O2 already showed
+> the glue ctx pre-population dead); **the LIVE `[KDP+0x5f0]/[0x5f4]` values are
+> NK-REBUILT staged addresses — `0x50313bf8` / `0x503143a0` (Q-C probe authoritative)**,
+> written by NK cold-init after glue time. The warm switch-back path traverses them
+> CORRECTLY (slot-0 stub → `[KDP+0x5f0]`=0x50313bf8 selector → `beq cr2` restore leg);
+> retargeting them to `0x50466080` would destroy BOTH switch directions. The required
+> action is **verify-and-leave** (Task X) — the retarget directive above is STRUCK.
+
 ---
 
 ## 2. Q3 — the NK's save/restore protocol and the M3a shim
@@ -638,6 +648,25 @@ made by the ROM's own native glue (0x500ebc20), so Task V writes seeds, not call
   written at 0x5046e35c — semantics unknown; restored by e408 each cycle, inert so far.
 - **R-9**: the interrupt-handler-side `[KDP+0x660]` flag tests (original O4 probe
   target) — unexercised this boot; same bit family as the pinned consumer.
+- **R-10/R-11/R-12**: defined in "Task W results" below ([ECB+0xEC] ctx-save junk
+  accumulation; junk FP state from the pool-word overlay; the [KDP+0x65c] world-flip
+  discipline — R-12 RESOLVED by Task W2, see "Task W2 results").
+- **R-13** *(W2 rev 3.1 item 7)*: stale-MMCB window — the warm arm sets
+  `[KDP+0x65c]:=MMCB` and only the slot-1 region restores ECB; if slots 2/3/5 (or any
+  other entry) are ever consumed while the word still holds the MMCB, their save
+  protocol would write into the MMCB. Inert today (Q-B: slot 1 is the only consumed
+  slot); re-check whenever a new slot becomes live.
+- **R-14** *(W2 rev 3.1 item 7)*: backward-half mid-switch DEC once EE delivery is
+  live — during the BACKWARD save `[0x2810]`=0 (the NK clears it on switch-back entry)
+  so the W2 DEC fence is open while the native ctx is being saved; benign by
+  same-values (the shim would save the registers the NK save is writing anyway) —
+  recorded, not fixed.
+- **R-15** *(W2 rev 3.1 item 5)*: reset-re-init — the NK's single cold-init writer of
+  `[KDP+0x658]` (`stw r12,0x658(r1)` at static 0x310834) re-runs on any NK
+  reset/re-init and re-garbages the word, while the W discriminator scratch
+  (0x68ff6080) stays warm → the cold-arm re-seed would NOT re-run. No live NK re-init
+  observed; becomes load-bearing if one ever appears (tripwire: a boot-3-class SIGSEGV
+  resume at a data address).
 
 ### Sub-KDP occupancy map (Task T, 2026-06-11 — AUTHORITATIVE; extend before placing anything here)
 
@@ -779,7 +808,14 @@ escalated to the stop-rule. Boots: `/tmp/taskw_boot{1..5}.log` (probe recipes in
    0xff confirmed) — and LR=0x500ef258 (its own next-resume continuation); the NK leg
    0x50313cc8 `beq cr2` → 0x50312af8 `lwz r9,0x658(r1)`: **the switch-back restore
    target is [KDP+0x658]** — live GARBAGE (=1; no NK writer exists — it is a
-   Trampoline-init surface). Semantics confirmed by the paravirtual CR-injection
+   Trampoline-init surface). *(AMENDMENT 2026-06-11, W2 rev 3.1 item 5 — the "no NK
+   writer exists" clause is FALSIFIED: there is exactly ONE cold-init writer in the
+   NK image, `stw r12,0x658(r1)` at static 0x310834, dump-verified — the live-garbage
+   source. It runs during NK cold-init, PRE-table[0], so the W cold-arm seed wins;
+   there is NO post-init/switch-path writer. The Trampoline-init-surface conclusion
+   stands; the writer census is corrected. Consequent residue R-15: an NK
+   reset/re-init re-runs 0x310834 while the discriminator scratch stays warm.)*
+   Semantics confirmed by the paravirtual CR-injection
    (`[[KDP+0x658]]+0xdc` = parked emulator saved CR; glue :2276, main_unix :2678).
 4. **Boot 5 (warm arm v2, + cold-arm seed [KDP+0x658]=ECB): SECOND falsification —
    the self-switch.** The seed is consumed and the NK switch completes, but
@@ -844,3 +880,72 @@ records until the overlay is resolved). NEW **R-11**: the NK FP-restore reads
 switches (inert so far; the 68k world barely uses FP). NEW **R-12 (THE frontier)**:
 the [KDP+0x65c] current-world flip discipline — the named re-scope item, candidate
 fix above.
+
+### Task W2 results (2026-06-11) — the world-flip discipline: ROUND TRIP PASSES; new frontier = the sc/syscall_entry wall
+
+**Verdict: R-12 RESOLVED, zero falsifications of the flip contract.** The rev 3.1
+corrected design landed faithfully (all env-gated `SS_NW_MM_SWITCH=1`, default OFF;
+boots `/tmp/w2_boot{1,2,3}.log` + `/tmp/w2_boot_off.log`):
+
+1. **Slot-1 flip region** (rev 3.1 item 1): retargeted 7-word region at verified-zero
+   mirror 0x50429d80 — `mtctr r1 / lwz r1,0x2804(0) / lis+ori r0=ECB /
+   stw r0,0x65c(r1) / mfctr r1 / b 0x5046fa00` (clobbers r0/CTR only). The MIRROR
+   table word at ROM+0x46e8c4 retargeted with verify-EXPECTED == 0x4800113c
+   (the verify-zero idiom's sibling for nonzero sites); switch-off: neither write.
+   Live: `[PROBE 0x50429d80 visit=1]` with the forward-switch register file
+   (r3=0x68fff400 MMCB, r4=0x00200000 the cr2eq bit, LR=0x5046e1a0).
+2. **Warm-arm flip** (item 2): 5 words ([KDP+0x65c]:=MMCB via explicit r28=KDP
+   re-derive) after the pool re-asserts, before `mfctr r28 / b 0x5046f900`.
+   Region re-derived: **30 words, 0x429d00..0x429d74 (end exclusive 0x429d78)**,
+   verify-zero-first over the whole enlarged region; bne offset +0x24→+0x28.
+3. **DEC fence** (item 3): `deliver_pending_dec_exception` defers while
+   `[XLM_RUN_MODE]` (0x2810) != 0 — new `deferred_native` counter (4th field of the
+   `exc=` heartbeat tuple + `[EXC]` crash line). Live: exc=0/1/0/0 — inert as
+   predicted (delivered=0 regime).
+4. **Hardening** (item 6): cold-arm `[KDP-0x14]:=ECB` one word after the [KDP+0x658]
+   seed (register state verified: r28=KDP, r0=ECB live there).
+5. **Corrections** (items 4/5): the 0x658 writer census amendment above (writer at
+   static 0x310834 dump-verified); the §1.3 wrinkle paragraph corrected
+   (verify-and-leave; retarget STRUCK); residues R-13/R-14/R-15 registered.
+
+**Round-trip sub-contract (carried from W) — PASS:**
+- (a) TVector `0x500cef8c` visit=1 (register file exactly the Q-D table; r25=0x5000fcf2
+  the post-$AAFE PC). Ring (boot 2): the $AAFE call chain
+  `… 5000f4xx (CFM caller region) → 5000fce2..5000fcf0 (jsr (a4)) → 5000fcf2 →
+  10024dea/10024de8 → (excursion) → 5000dfa2 …` — continued 68k execution, NO reset
+  signature (pre-W2: every excursion ended `100266f2 → 0 → 1 → 5000002c`). The
+  literal post-excursion re-record of 0x5000fcf2 is masked by the ring's 4-entry
+  dedup (it sits 2 entries before the RD); the SECOND excursion provides the
+  unmasked direct evidence: ring `… 5000dfc8 → 100266f2 → 0 → 1 → 50033776
+  50033778 …` where **[saveblk+0x3c] probed at e1f4 = 0x50033776** (boot 3,
+  `[r5:0x60]` dump: save record +0x3c = 50033776, +0x30 = 10024de8 the RD) — the
+  completion-written resume PC IS the next 68k PC in the ring. Disassembly closes
+  the first chain: 0x5000fcf0 `jsr (a4)`, 0x5000fcf2 `move.w d0,d7 … rts` (the
+  MixedMode result epilogue).
+- (b) Completion-side DR services EXECUTE: `0x5046e1a0` visit=1 (the parked FE01
+  service resumed — the leg that was structurally impossible pre-W2) and
+  `0x5046e1f4` visit=1 with **r6=0x000000ff — the command byte read live** (probe
+  granularity is block-entry, so counts are events, not executions). e408 (free
+  path): 0 block-entry visits — recorded, likely subsumed into a chained block.
+- (c) Cold-once + guest[0]/[4] stability: trampoline cold write exactly once
+  (WATCH record #4666 pair); the only later guest[0]/[4] writes are the guest's own
+  legit 68k vector install (pc=50490e00, r24=0x500389fe guest code) — same class as
+  W boot 3's 0x504662a4. No reset transitions.
+
+**Diagnostic (recorded, not a gate) — the next frontier, captured honestly:**
+the boot is TRANSFORMED. The V-era "hardware-init poll loop + SCC/CUDA MMIO storm"
+reading is dead (it was the reset cycle): CUDA now 13 packets/9 i2c (vs 8905/6165),
+jNK 4104 (vs 116M), one pass. The chain runs: TVector → MPLibrary init →
+**the CFM parcel-by-name caller region RUNS** (ring: straight-line 0x5000f400..f466
+= file 0xf4xx) → second MixedMode round trip → **`sc` at pc=0x500d638c with
+unresolved syscall entry — SRR0=0x500d6390 SRR1=0x00007072 lr=0x500cf108
+r1=0x103ffb50** (the [EXC] FATAL capture-abort). MPLibrary's init does NOT return
+yet: it advances to its first kernel service call. This is EXACTLY stop-rule
+trigger 2 / plan Task-Y named wall (i) — the vector-0xC00 syscall_entry frontier,
+the NEXT milestone's named problem; no staging beyond the existing abort-capture.
+(Under `SS_EXC_SC=legacy` the boot survives the sc and wedges in a 52M/s comp-frozen
+spin at 3672 — the legacy path is not a viable bridge; diagnostic only.)
+
+**Switch-OFF boot:** byte-identical baseline preserved (no W/W2 region writes, no
+slot-1 retarget, 0 TVector visits, the FE01↔NK spin signature) — see
+`/tmp/w2_boot_off.log`.

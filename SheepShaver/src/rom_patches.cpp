@@ -66,6 +66,7 @@ const uint32 ZERO_SCRAP_PATCH_SPACE = 0x2fcf80;
 const uint32 PUT_SCRAP_PATCH_SPACE = 0x2fcfc0;
 const uint32 GET_SCRAP_PATCH_SPACE = 0x2fd100;
 const uint32 ADDR_MAP_PATCH_SPACE = 0x2fd140;
+const uint32 TIME_MANAGER_PATCH_SPACE = 0x2fd240;	// 4 TM EMUL_OP stub bodies (SS_NW_TM_TRAPS; checked at the site, not in PatchROM's global check, so non-newworld ROMs are unaffected)
 
 // Global variables
 int ROMType;				// ROM type
@@ -3547,13 +3548,25 @@ static bool patch_68k(void)
 		sony_offset = find_rom_resource(FOURCC('D','R','V','R'), 4, true);		// First DRVR 4 is .MFMFloppy
 	if (sony_offset == 0) {
 		sony_offset = find_rom_resource(FOURCC('n','d','r','v'), -20196);		// NewWorld 1.6 has "PCFloppy" ndrv
-		if (sony_offset == 0)
-			return false;
-		lp = (uint32 *)(ROMBaseHost + rsrc_ptr + 8);
-		*lp = htonl(FOURCC('D','R','V','R'));
-		wp = (uint16 *)(ROMBaseHost + rsrc_ptr + 12);
-		*wp = htons(4);
+		if (sony_offset == 0) {
+			// 9.0.1 parcels ROM: no DRVR 4 and no PCFloppy ndrv (verified against the
+			// raw dump's resource map). This used to be a hard `return false` that
+			// silently dropped the ENTIRE remaining EMUL_OP tail (Time Manager, ADBOp,
+			// PowerOff, scrap, ...) — TRAP-TABLE-RECON.md Q2. Lenient mode: skip the
+			// driver replacement only and resume the tail. Every write site in the
+			// resumed tail below is verify-target-first (a find_rom_trap/find_rom_resource
+			// result of 0 SKIPs with a banner, never writes at ROM offset 0).
+			if (!g_rom_904_lenient)
+				return false;
+			fprintf(stderr, "[ROMPATCH] SKIP sony driver replacement (no DRVR 4 / PCFloppy ndrv in parcels) — EMUL_OP tail resumes\n");
+		} else {
+			lp = (uint32 *)(ROMBaseHost + rsrc_ptr + 8);
+			*lp = htonl(FOURCC('D','R','V','R'));
+			wp = (uint16 *)(ROMBaseHost + rsrc_ptr + 12);
+			*wp = htons(4);
+		}
 	}
+	if (sony_offset) {
 	D(bug("sony_offset %08lx\n", sony_offset));
 	memcpy((void *)(ROMBaseHost + sony_offset), sony_driver, sizeof(sony_driver));
 
@@ -3576,6 +3589,7 @@ static bool patch_68k(void)
 	memcpy(ROMBaseHost + sony_offset + 0xc00, DiskIcon, sizeof(DiskIcon));
 	CDROMIconAddr = ROMBase + sony_offset + 0xe00;
 	memcpy(ROMBaseHost + sony_offset + 0xe00, CDROMIcon, sizeof(CDROMIcon));
+	} // sony_offset
 
 	// Patch driver install routine
 	static const uint8 drvr_install_dat[] = {0xa7, 0x1e, 0x21, 0xc8, 0x01, 0x1c, 0x4e, 0x75};
@@ -3590,17 +3604,27 @@ static bool patch_68k(void)
 
 	// Don't install serial drivers from ROM
 	if (ROMType == ROMTYPE_ZANZIBAR || ROMType == ROMTYPE_NEWWORLD || ROMType == ROMTYPE_GOSSAMER) {
-		wp = (uint16 *)(ROMBaseHost + find_rom_resource(FOURCC('S','E','R','D'), 0));
-		*wp = htons(M68K_RTS);
+		uint32 serd_offset = find_rom_resource(FOURCC('S','E','R','D'), 0);
+		if (serd_offset) {
+			wp = (uint16 *)(ROMBaseHost + serd_offset);
+			*wp = htons(M68K_RTS);
+		} else
+			// 9.0.1 parcels has no SERD 0 — the unguarded write would land M68K_RTS
+			// at ROM offset 0 (the banked SERD-0 hazard, TRAP-TABLE-RECON.md).
+			fprintf(stderr, "[ROMPATCH] SERD-0 GUARDED-SKIP (resource absent — would clobber ROM offset 0)\n");
 	} else {
-		wp = (uint16 *)(ROMBaseHost + find_rom_resource(FOURCC('s','l','0','5'), 2) + 0xc4);
-		*wp++ = htons(M68K_NOP);
-		*wp++ = htons(M68K_NOP);
-		*wp++ = htons(M68K_NOP);
-		*wp++ = htons(M68K_NOP);
-		*wp = htons(0x7000);			// moveq	#0,d0
-		wp = (uint16 *)(ROMBaseHost + find_rom_resource(FOURCC('s','l','0','5'), 2) + 0x8ee);
-		*wp = htons(M68K_NOP);
+		uint32 sl05_offset = find_rom_resource(FOURCC('s','l','0','5'), 2);
+		if (sl05_offset) {
+			wp = (uint16 *)(ROMBaseHost + sl05_offset + 0xc4);
+			*wp++ = htons(M68K_NOP);
+			*wp++ = htons(M68K_NOP);
+			*wp++ = htons(M68K_NOP);
+			*wp++ = htons(M68K_NOP);
+			*wp = htons(0x7000);			// moveq	#0,d0
+			wp = (uint16 *)(ROMBaseHost + sl05_offset + 0x8ee);
+			*wp = htons(M68K_NOP);
+		} else
+			fprintf(stderr, "[ROMPATCH] sl05-2 GUARDED-SKIP (resource absent — would clobber ROM offset 0xc4)\n");
 	}
 	uint32 nsrd_offset = find_rom_resource(FOURCC('n','s','r','d'), 1);
 	if (nsrd_offset) {
@@ -3609,29 +3633,118 @@ static bool patch_68k(void)
 	}
 
 	// Replace ADBOp()
-	memcpy(ROMBaseHost + find_rom_trap(0xa07c), adbop_patch, sizeof(adbop_patch));
+	{
+		uint32 adbop_offset = find_rom_trap(0xa07c);
+		if (adbop_offset)
+			memcpy(ROMBaseHost + adbop_offset, adbop_patch, sizeof(adbop_patch));
+		else
+			fprintf(stderr, "[ROMPATCH] ADBOp GUARDED-SKIP (find_rom_trap(0xa07c)=0 — would clobber ROM offset 0)\n");
+	}
 
-	// Replace Time Manager
-	wp = (uint16 *)(ROMBaseHost + find_rom_trap(0xa058));
-	*wp++ = htons(M68K_EMUL_OP_INSTIME);
-	*wp = htons(M68K_RTS);
-	wp = (uint16 *)(ROMBaseHost + find_rom_trap(0xa059));
-	*wp++ = htons(0x40e7);		// move	sr,-(sp)
-	*wp++ = htons(0x007c);		// ori	#$0700,sr
-	*wp++ = htons(0x0700);
-	*wp++ = htons(M68K_EMUL_OP_RMVTIME);
-	*wp++ = htons(0x46df);		// move	(sp)+,sr
-	*wp = htons(M68K_RTS);
-	wp = (uint16 *)(ROMBaseHost + find_rom_trap(0xa05a));
-	*wp++ = htons(0x40e7);		// move	sr,-(sp)
-	*wp++ = htons(0x007c);		// ori	#$0700,sr
-	*wp++ = htons(0x0700);
-	*wp++ = htons(M68K_EMUL_OP_PRIMETIME);
-	*wp++ = htons(0x46df);		// move	(sp)+,sr
-	*wp = htons(M68K_RTS);
-	wp = (uint16 *)(ROMBaseHost + find_rom_trap(0xa093));
-	*wp++ = htons(M68K_EMUL_OP_MICROSECONDS);
-	*wp = htons(M68K_RTS);
+	// Replace Time Manager.
+	// Two cases per trap:
+	//  (a) find_rom_trap() nonzero (1.1/OldWorld/Zanzibar/Gossamer): upstream's in-place
+	//      stub write over the ROM's own TM body (bodies verbatim from kanjitalk755/macemu
+	//      rom_patches.cpp; unchanged behavior).
+	//  (b) find_rom_trap() == 0: the 9.0.1 parcels ROM genuinely ships NULL trap-table-image
+	//      entries for the whole TM cluster {0x58 InsTime/InsXTime, 0x59 RmvTime,
+	//      0x5a PrimeTime, 0x93 Microseconds} — on real HW the TM is native-runtime-installed
+	//      (parcels world, parked). TRAP-TABLE-RECON.md Q2/Q5. The unguarded upstream write
+	//      would clobber ROM offset 0. Instead (SS_NW_TM_TRAPS, newworld): place upstream's
+	//      exact stub bodies in TIME_MANAGER_PATCH_SPACE and populate the ROM-embedded
+	//      trap-table IMAGE entries (at [ROM+0x22] + 0x1000 + 4*trap#) verify-zero-first;
+	//      the guest's OWN installer (ROM 0xe0c8) then installs them into lowmem 0x400 at
+	//      boot — both DR dispatch levels consume that same table (recon Q1).
+	{
+		// SS_NW_TM_TRAPS: env-gated, default OFF (FLIP-LAST: flip to newworld-default-ON
+		// with explicit-"0" opt-out after acceptance proves green).
+		const bool tm_traps_on = MachineProfileIsNewWorld() && MachineEnvFlag("SS_NW_TM_TRAPS");
+		bool tm_space_ready = false;	// stub bodies written to patch space?
+		uint32 stub_ofs[4] = {0, 0, 0, 0};	// ROM offsets of the 4 stub bodies
+		struct { uint16 trap; uint8 kind; const char *name; } tm_traps[4] = {
+			{0xa058, 0, "InsTime"},		// kind 0: EMUL_OP + rts
+			{0xa059, 1, "RmvTime"},		// kind 1: sr-masked EMUL_OP
+			{0xa05a, 2, "PrimeTime"},	// kind 2: sr-masked EMUL_OP
+			{0xa093, 3, "Microseconds"},	// kind 3: EMUL_OP + rts
+		};
+		const uint16 tm_emul_op[4] = {M68K_EMUL_OP_INSTIME, M68K_EMUL_OP_RMVTIME,
+		                              M68K_EMUL_OP_PRIMETIME, M68K_EMUL_OP_MICROSECONDS};
+		for (int i = 0; i < 4; i++) {
+			uint32 ofs = find_rom_trap(tm_traps[i].trap);
+			if (ofs) {
+				// (a) upstream in-place write (body verbatim)
+				wp = (uint16 *)(ROMBaseHost + ofs);
+				if (tm_traps[i].kind == 1 || tm_traps[i].kind == 2) {
+					*wp++ = htons(0x40e7);		// move	sr,-(sp)
+					*wp++ = htons(0x007c);		// ori	#$0700,sr
+					*wp++ = htons(0x0700);
+					*wp++ = htons(tm_emul_op[i]);
+					*wp++ = htons(0x46df);		// move	(sp)+,sr
+					*wp = htons(M68K_RTS);
+				} else {
+					*wp++ = htons(tm_emul_op[i]);
+					*wp = htons(M68K_RTS);
+				}
+				continue;
+			}
+			if (!tm_traps_on) {
+				fprintf(stderr, "[ROMPATCH] %s GUARDED-SKIP (find_rom_trap(0x%04x)=0, SS_NW_TM_TRAPS off — would clobber ROM offset 0)\n",
+				        tm_traps[i].name, tm_traps[i].trap);
+				continue;
+			}
+			// (b) image population path
+			if (!tm_space_ready) {
+				if (!check_rom_patch_space(TIME_MANAGER_PATCH_SPACE, 0x40)) {
+					fprintf(stderr, "[ROMPATCH] tm_traps GUARDED-SKIP (patch space 0x%x not free — layout moved)\n",
+					        TIME_MANAGER_PATCH_SPACE);
+					continue;
+				}
+				// Stub bodies, upstream-verbatim (kanjitalk755/macemu rom_patches.cpp
+				// "Replace Time Manager"), relocated into patch space:
+				wp = (uint16 *)(ROMBaseHost + TIME_MANAGER_PATCH_SPACE);
+				stub_ofs[0] = TIME_MANAGER_PATCH_SPACE + 0x00;	// InsTime/InsXTime (d1 = trap word)
+				*wp++ = htons(M68K_EMUL_OP_INSTIME);
+				*wp++ = htons(M68K_RTS);
+				*wp++ = htons(M68K_NOP);
+				*wp++ = htons(M68K_NOP);
+				stub_ofs[1] = TIME_MANAGER_PATCH_SPACE + 0x08;	// RmvTime
+				*wp++ = htons(0x40e7);		// move	sr,-(sp)
+				*wp++ = htons(0x007c);		// ori	#$0700,sr
+				*wp++ = htons(0x0700);
+				*wp++ = htons(M68K_EMUL_OP_RMVTIME);
+				*wp++ = htons(0x46df);		// move	(sp)+,sr
+				*wp++ = htons(M68K_RTS);
+				*wp++ = htons(M68K_NOP);
+				*wp++ = htons(M68K_NOP);
+				stub_ofs[2] = TIME_MANAGER_PATCH_SPACE + 0x18;	// PrimeTime
+				*wp++ = htons(0x40e7);		// move	sr,-(sp)
+				*wp++ = htons(0x007c);		// ori	#$0700,sr
+				*wp++ = htons(0x0700);
+				*wp++ = htons(M68K_EMUL_OP_PRIMETIME);
+				*wp++ = htons(0x46df);		// move	(sp)+,sr
+				*wp++ = htons(M68K_RTS);
+				*wp++ = htons(M68K_NOP);
+				*wp++ = htons(M68K_NOP);
+				stub_ofs[3] = TIME_MANAGER_PATCH_SPACE + 0x28;	// Microseconds
+				*wp++ = htons(M68K_EMUL_OP_MICROSECONDS);
+				*wp = htons(M68K_RTS);
+				tm_space_ready = true;
+			}
+			// Populate the trap-table image entry, verify-zero-first (entries proven
+			// NULL on the raw 9.0.1 dump; nonzero means the layout moved — never overwrite).
+			uint32 img = ReadMacInt32(ROMBase + 0x22);
+			uint32 ent = img + 0x1000 + 4 * (tm_traps[i].trap & 0xff);	// OS table leg
+			lp = (uint32 *)(ROMBaseHost + ent);
+			if (ntohl(*lp) != 0) {
+				fprintf(stderr, "[ROMPATCH] tm_traps %s GUARDED-SKIP (image entry @ROM+0x%x = %08x, expected 0 — layout moved)\n",
+				        tm_traps[i].name, ent, ntohl(*lp));
+				continue;
+			}
+			*lp = htonl(stub_ofs[tm_traps[i].kind]);
+			fprintf(stderr, "[ROMPATCH] tm_traps: OS trap #0x%02x %s -> ROM+0x%x (EMUL_OP stub; guest installer 0xe0c8 installs at boot)\n",
+			        tm_traps[i].trap & 0xff, tm_traps[i].name, stub_ofs[tm_traps[i].kind]);
+		}
+	}
 
 	// Disable Egret Manager
 	static const uint8 egret_dat[] = {0x2f, 0x30, 0x81, 0xe2, 0x20, 0x10, 0x00, 0x18};
@@ -3660,8 +3773,14 @@ static bool patch_68k(void)
 	} else fprintf(stderr, "[ROMPATCH] SKIP shutdown (absent in parcels)\n");
 
 	// Patch PowerOff() → trigger clean host exit via OP_POWEROFF
-	wp = (uint16 *)(ROMBaseHost + find_rom_trap(0xa05b));	// PowerOff()
-	*wp = htons(M68K_EMUL_OP_POWEROFF);
+	{
+		uint32 poweroff_offset = find_rom_trap(0xa05b);	// PowerOff()
+		if (poweroff_offset) {
+			wp = (uint16 *)(ROMBaseHost + poweroff_offset);
+			*wp = htons(M68K_EMUL_OP_POWEROFF);
+		} else
+			fprintf(stderr, "[ROMPATCH] PowerOff GUARDED-SKIP (find_rom_trap(0xa05b)=0 — would clobber ROM offset 0)\n");
+	}
 
 	// Patch VIA interrupt handler
 	static const uint8 via_int_dat[] = {0x70, 0x7f, 0xc0, 0x29, 0x1a, 0x00, 0xc0, 0x29, 0x1c, 0x00};
@@ -3706,48 +3825,61 @@ static bool patch_68k(void)
 
 	// Patch ZeroScrap() for clipboard exchange with host OS
 	uint32 zero_scrap = find_rom_trap(0xa9fc);	// ZeroScrap()
-	wp = (uint16 *)(ROMBaseHost + ZERO_SCRAP_PATCH_SPACE);
-	*wp++ = htons(M68K_EMUL_OP_ZERO_SCRAP);
-	*wp++ = htons(M68K_JMP);
-	*wp++ = htons((ROMBase + zero_scrap) >> 16);
-	*wp++ = htons((ROMBase + zero_scrap) & 0xffff);
-	base = ROMBase + ReadMacInt32(ROMBase + 0x22);
-	WriteMacInt32(base + 4 * (0xa9fc & 0x3ff), ZERO_SCRAP_PATCH_SPACE);
+	if (zero_scrap) {
+		wp = (uint16 *)(ROMBaseHost + ZERO_SCRAP_PATCH_SPACE);
+		*wp++ = htons(M68K_EMUL_OP_ZERO_SCRAP);
+		*wp++ = htons(M68K_JMP);
+		*wp++ = htons((ROMBase + zero_scrap) >> 16);
+		*wp++ = htons((ROMBase + zero_scrap) & 0xffff);
+		base = ROMBase + ReadMacInt32(ROMBase + 0x22);
+		WriteMacInt32(base + 4 * (0xa9fc & 0x3ff), ZERO_SCRAP_PATCH_SPACE);
+	} else
+		fprintf(stderr, "[ROMPATCH] ZeroScrap GUARDED-SKIP (find_rom_trap(0xa9fc)=0 — stub would jmp ROMBase+0)\n");
 
 	// Patch PutScrap() for clipboard exchange with host OS
 	uint32 put_scrap = find_rom_trap(0xa9fe);	// PutScrap()
-	wp = (uint16 *)(ROMBaseHost + PUT_SCRAP_PATCH_SPACE);
-	*wp++ = htons(M68K_EMUL_OP_PUT_SCRAP);
-	*wp++ = htons(M68K_JMP);
-	*wp++ = htons((ROMBase + put_scrap) >> 16);
-	*wp++ = htons((ROMBase + put_scrap) & 0xffff);
-	base = ROMBase + ReadMacInt32(ROMBase + 0x22);
-	WriteMacInt32(base + 4 * (0xa9fe & 0x3ff), PUT_SCRAP_PATCH_SPACE);
+	if (put_scrap) {
+		wp = (uint16 *)(ROMBaseHost + PUT_SCRAP_PATCH_SPACE);
+		*wp++ = htons(M68K_EMUL_OP_PUT_SCRAP);
+		*wp++ = htons(M68K_JMP);
+		*wp++ = htons((ROMBase + put_scrap) >> 16);
+		*wp++ = htons((ROMBase + put_scrap) & 0xffff);
+		base = ROMBase + ReadMacInt32(ROMBase + 0x22);
+		WriteMacInt32(base + 4 * (0xa9fe & 0x3ff), PUT_SCRAP_PATCH_SPACE);
+	} else
+		fprintf(stderr, "[ROMPATCH] PutScrap GUARDED-SKIP (find_rom_trap(0xa9fe)=0 — stub would jmp ROMBase+0)\n");
 
 	// Patch GetScrap() for clipboard exchange with host OS
 	uint32 get_scrap = find_rom_trap(0xa9fd);	// GetScrap()
-	wp = (uint16 *)(ROMBaseHost + GET_SCRAP_PATCH_SPACE);
-	*wp++ = htons(M68K_EMUL_OP_GET_SCRAP);
-	*wp++ = htons(M68K_JMP);
-	*wp++ = htons((ROMBase + get_scrap) >> 16);
-	*wp++ = htons((ROMBase + get_scrap) & 0xffff);
-	base = ROMBase + ReadMacInt32(ROMBase + 0x22);
-	WriteMacInt32(base + 4 * (0xa9fd & 0x3ff), GET_SCRAP_PATCH_SPACE);
+	if (get_scrap) {
+		wp = (uint16 *)(ROMBaseHost + GET_SCRAP_PATCH_SPACE);
+		*wp++ = htons(M68K_EMUL_OP_GET_SCRAP);
+		*wp++ = htons(M68K_JMP);
+		*wp++ = htons((ROMBase + get_scrap) >> 16);
+		*wp++ = htons((ROMBase + get_scrap) & 0xffff);
+		base = ROMBase + ReadMacInt32(ROMBase + 0x22);
+		WriteMacInt32(base + 4 * (0xa9fd & 0x3ff), GET_SCRAP_PATCH_SPACE);
+	} else
+		fprintf(stderr, "[ROMPATCH] GetScrap GUARDED-SKIP (find_rom_trap(0xa9fd)=0 — stub would jmp ROMBase+0)\n");
 
 	// Patch SynchIdleTime()
 	if (PrefsFindBool("idlewait")) {
-		base = find_rom_trap(0xabf7) + 4;						// SynchIdleTime()
-		wp = (uint16 *)(ROMBaseHost + base);
-		D(bug("SynchIdleTime at %08lx\n", base));
-		if (ntohs(*wp) == 0x2078) {								// movea.l	ExpandMem,a0
-			*wp++ = htons(M68K_EMUL_OP_IDLE_TIME);
-			*wp = htons(M68K_NOP);
-		}
-		else if (ntohs(*wp) == 0x70fe)							// moveq	#-2,d0
-			*wp++ = htons(M68K_EMUL_OP_IDLE_TIME_2);
-		else {
-			D(bug("SynchIdleTime patch not installed\n"));
-		}
+		base = find_rom_trap(0xabf7);							// SynchIdleTime()
+		if (base) {
+			base += 4;
+			wp = (uint16 *)(ROMBaseHost + base);
+			D(bug("SynchIdleTime at %08lx\n", base));
+			if (ntohs(*wp) == 0x2078) {							// movea.l	ExpandMem,a0
+				*wp++ = htons(M68K_EMUL_OP_IDLE_TIME);
+				*wp = htons(M68K_NOP);
+			}
+			else if (ntohs(*wp) == 0x70fe)						// moveq	#-2,d0
+				*wp++ = htons(M68K_EMUL_OP_IDLE_TIME_2);
+			else {
+				D(bug("SynchIdleTime patch not installed\n"));
+			}
+		} else
+			fprintf(stderr, "[ROMPATCH] SynchIdleTime GUARDED-SKIP (find_rom_trap(0xabf7)=0 — would patch ROM offset 4)\n");
 	}
 
 	// Construct list of all sifters used by sound components in ROM

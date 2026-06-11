@@ -86,6 +86,17 @@ size_t VIAFormatReadHistogram(const VIA6522 *v, char *buf, size_t buflen)
 	return n;
 }
 
+size_t VIAFormatOrbTrace(const VIA6522 *v, char *buf, size_t buflen)
+{
+	if (!v->orb_write_count) return 0;
+	size_t n = (size_t)snprintf(buf, buflen, "ddrb=%02X writes=%llu trace=",
+	                            v->ddrb, (unsigned long long)v->orb_write_count);
+	for (uint32_t i = 0; i < v->orb_wtrace_n && n < buflen; i++)
+		n += (size_t)snprintf(buf + n, buflen - n, "%s%02X", i ? "," : "",
+		                      v->orb_wtrace[i]);
+	return n < buflen ? n : buflen - 1;
+}
+
 static VIA6522 *g_diag_via;   // heartbeat telemetry instance (prod bring-up registers it)
 
 void VIARegisterDiagInstance(VIA6522 *v)
@@ -233,8 +244,14 @@ void VIAWrite(void *opaque, uint32_t addr, unsigned size, uint64_t value)
 	uint8_t b = (uint8_t)value;
 	switch (((addr - v->base) >> 9) & 0xF) {
 	case R_ORB:
-		// Bits 3/4 of ORB are the Cuda handshake lines (TREQ/TIP/byteack).
-		if ((v->orb ^ b) & 0x18) cuda_touch(v, "ORB handshake bits 3/4");
+		// Cuda handshake lines live in ORB bits 3/4/5 (M3b C3: TREQ=3 input,
+		// TACK=4, TIP=5, active-LOW — donor study §3.2 prose had 3/4; corrected).
+		if ((v->orb ^ b) & 0x38) cuda_touch(v, "ORB handshake bits 3/4/5");
+		// C3 polarity forensics: trace value TRANSITIONS (capture-only, §2g).
+		v->orb_write_count++;
+		if (v->orb_wtrace_n < sizeof(v->orb_wtrace) &&
+		    (v->orb_wtrace_n == 0 || v->orb_wtrace[v->orb_wtrace_n - 1] != b))
+			v->orb_wtrace[v->orb_wtrace_n++] = b;
 		v->orb = b;
 		break;
 	case R_ORA:

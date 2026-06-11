@@ -825,6 +825,13 @@ static bool init_sdl()
 	signal(SIGINT, SIG_DFL);
 	signal(SIGTERM, SIG_DFL);
 
+	// M3b diagnostics: SS_TERM_DUMP=1 turns SIGTERM into exit(1) so the atexit
+	// telemetry dumps (MMIO/VIA/VCLK) run on timeout(1)-killed diagnostic boots.
+	// exit() from a handler is async-unsafe in general; acceptable for a one-shot
+	// teardown on an env-gated diagnostics path (default behavior unchanged).
+	if (getenv("SS_TERM_DUMP"))
+		signal(SIGTERM, [](int) { exit(1); });
+
 	// E2E harness (ROADMAP A5): SIGUSR1 requests a clean guest shutdown. SA_RESTART so it
 	// doesn't EINTR blocking syscalls. The handler only sets host_shutdown_requested.
 	{
@@ -1362,6 +1369,10 @@ static void mmio_dump_stats_atexit(void)
 	char via_hist[256];
 	if (VIAFormatReadHistogram(&via, via_hist, sizeof(via_hist)))
 		fprintf(stderr, "[VIA] reads: %s\n", via_hist);
+	// M3b C3 polarity forensics: ORB write-value transitions (the 68k handshake
+	// engines are PPC-probe-invisible; the written bit pattern is the evidence).
+	if (VIAFormatOrbTrace(&via, via_hist, sizeof(via_hist)))
+		fprintf(stderr, "[VIA] orb: %s\n", via_hist);
 }
 
 // ---

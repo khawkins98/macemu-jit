@@ -39,6 +39,14 @@ struct VIA6522 {
 	// Bumped in VIARead (runs under the bus region lock; plain increments are
 	// race-free there). Identifies WHICH register a guest poll loop hammers.
 	uint64_t reg_reads[16];
+	// M3b C3 polarity forensics: ORB write-value transition trace (first 32 distinct
+	// consecutive values) + total write count. The 68k handshake engines are invisible
+	// to PPC-PC probes, so the written bit-4/5 idle/handshake pattern is the polarity
+	// evidence (Cuda TREQ=3/TACK=4/TIP=5 active-LOW vs the Egret-polarity engine).
+	// Same §2g rules as reg_reads: capture-only here, emission on safe threads.
+	uint8_t  orb_wtrace[32];
+	uint32_t orb_wtrace_n;
+	uint64_t orb_write_count;
 };
 
 extern void VIAReset(VIA6522 *v, uint32_t base,
@@ -83,5 +91,10 @@ extern void VIARegisterDiagInstance(VIA6522 *v);
 // "(IFR=N,T2CL=M)" (one entry if only one is nonzero). Returns chars written;
 // 0 when no instance is registered or no reads happened.
 extern size_t VIAFormatTopReads(char *buf, size_t buflen);
+
+// Format the ORB write-value trace as "ddrb=XX writes=N trace=AA,BB,..." (hex
+// values). Returns chars written (0 if ORB was never written). Safe-thread rule
+// as above (stats dump / heartbeat emit it, never the capture path).
+extern size_t VIAFormatOrbTrace(const VIA6522 *v, char *buf, size_t buflen);
 
 #endif

@@ -236,7 +236,7 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_NW_NO_SCC=1` | Restore the pre-M1 behavior (SCC base 0 → `check_work` returns -1) — isolates SCC-model regressions. |
 | `SS_NW_MODEL=…` | Name-registry `compatible`-string injection experiment (default off; groundwork kept — necessary alongside, not sufficient by itself). |
 | `SS_NW_SYNTH_ENTRY=1` | Synthetic-entry research diagnostic (`rom_patches.cpp`); dead-ends at the first Mixed-Mode transition — kept as a research tool only. |
-| `SS_NW_FE1F_SURFACE=1` | **In flight (FE1F milestone, plan rev 3)** — bring-up gate, default OFF: restores the raw `twi` trap-placeholders in the mirror entry-vector slots + routes trap-taken `twi` to `ExcEnter(EXC_PROGRAM)` (0x700 delivery). Full reference lands with the milestone's docs task. |
+| `SS_NW_FE1F_SURFACE=0` | **Opt OUT** of the FE1F service surface (newworld **default ON** since FE1F Task C, `be0e02cb` 2026-06-11). One gate covers both the raw-`twi` placeholder restore and the 0x700 program-interrupt delivery. Full reference: "Machine Layer M6 — FE1F service surface" below. |
 
 ## Machine Layer M2 — virtual clock and event scheduler diagnostics
 
@@ -296,14 +296,16 @@ the 60 Hz VBL timer and hang early boot (see the lldb/VBL caveat in `CLAUDE.md` 
 M3a adds a compact exception counter to the periodic `[HB]` heartbeat (the `exc=…` suffix):
 
 ```
-[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0/0/5
+[HB 30s] blocks=812M (28.4M/s) comp=3214 | jNK=... | rss=412MB cpu=98% | exc=2/0/0/0/5/0
 ```
 
-The five numbers are `delivered/deferred_ee/deferred_depth/deferred_native/delivered_sc`,
+The six numbers are
+`delivered/deferred_ee/deferred_depth/deferred_native/delivered_sc/delivered_program`,
 accumulated since boot. The first four are the DEC exception class (the 4th field landed
 with M6a rung-2 Task W2, `43d42b83` — logs older than that show the 3-wide `exc=N/N/N`
 form); the 5th is the syscall class (landed with NK-syscall-surface Task A, `bcce26c2` —
-older logs show the 4-wide form):
+older logs show the 4-wide form); the 6th is the program-interrupt (0x700) class (landed
+with FE1F-service-surface Task A, `89a28c15`/`669ccf7a` — older logs show the 5-wide form):
 
 | Subfield | Meaning |
 |---|---|
@@ -311,11 +313,12 @@ older logs show the 4-wide form):
 | `deferred_ee` | Deliveries skipped because `MSR[EE]=0` at the poll point (latch held; re-raised at EE 0→1 edges) |
 | `deferred_depth` | Deliveries skipped because `execute_depth > 1` (inside a nested execute context; re-raised on return) |
 | `deferred_native` | Deliveries deferred while a MixedMode **native excursion** is in flight — the M6a W2 DEC fence: `deliver_pending_dec_exception` defers while `[XLM_RUN_MODE]` (guest `0x2810`) `!= 0`. The NK maintains that word 1-forward/0-backward across exactly the MM switch pair, so a DEC cannot save into the MMCB mid-excursion. Known window (residue R-14): the word is 0 during the *backward* save — benign by same-values, recorded not fixed. |
-| `delivered_sc` | **Delivered `sc` syscalls** (NK-syscall-surface Task A, plan rev 2 P-M4: counters for counts, probes for ABI). Incremented in `SheepExcSyscallShim` on every resolved-entry sc delivery; the first 5 also print `[EXC] SC delivered #N: …` to stderr (see below). With the surface opted out (`SS_NW_SC_SURFACE=0`) this stays 0 — the sc dies at the FATAL capture instead. |
+| `delivered_sc` | **Delivered `sc` syscalls** (NK-syscall-surface Task A, plan rev 2 P-M4: counters for counts, probes for ABI). Incremented in `SheepExcSyscallShim` on every resolved-entry sc delivery; the first 5 also print `[EXC] SC delivered #N: …` to stderr (see below). With the surface opted out (`SS_NW_SC_SURFACE=0`) this stays 0 — the sc dies at the FATAL capture instead. **Beware the print cap when reading totals:** the long-quoted "5 sc deliveries" park baseline was the cap-5 PRINT artifact — the true parked total is 8 (7 distinct selectors); the FE1F-era default boot delivers 13 (9 distinct). Use this counter (or the `[EXC] sc selectors` per-selector line, below) for counts, never the printed lines. |
+| `delivered_program` | **Delivered program interrupts (0x700)** — trap-taken `twi`/`tw` routed to `ExcEnter(EXC_PROGRAM)` (FE1F-service-surface Task A). Incremented in `SheepExcProgramShim`; the first 5 also print `[EXC] PROGRAM delivered #N: …` (see below). With the surface opted out (`SS_NW_FE1F_SURFACE=0`) this stays 0. A healthy FE1F-era default boot shows 2 (selector $31 then $36, both entry-vector slot 8). |
 
-The same five counters are emitted as one `[EXC] delivered_dec=… deferred_ee=…
-deferred_depth=… deferred_native=… delivered_sc=…` line on the crash-path dump
-(newworld only — paravirtual crash output stays byte-identical).
+The same six counters are emitted as one `[EXC] delivered_dec=… deferred_ee=…
+deferred_depth=… deferred_native=… delivered_sc=… delivered_program=…` line on the
+crash-path dump (newworld only — paravirtual crash output stays byte-identical).
 
 On the paravirtual profile the suffix is omitted (`exc=NULL`). Telemetry rides the heartbeat
 rather than `atexit` because `SIGALRM` from the `perl alarm` wrapper skips `atexit` dumps.
@@ -357,6 +360,37 @@ argument registers (`r3..r10`) — the conformance-vector instrument that pinned
 first guest syscall (selector 0x3f). `SS_EXC_SC=legacy` falls back to the old no-op
 behavior without a rebuild (only meaningful on the unresolved-entry path — see the
 M6 syscall-surface section below).
+
+```
+[EXC] PROGRAM delivered #N: srr0=SSSSSSSS word=WWWWWWWW slot=S r1=RRRRRRRR lr=LLLLLLLL -> entry=EEEEEEEE
+```
+Emitted on the **first 5 program-interrupt (0x700) deliveries only** (FE1F-service-surface
+Task A; the heartbeat's 6th `exc=` field is the ongoing counter). `srr0` = the trap
+instruction address (SRR0 points AT the offending instruction per PEM; for the entry-vector
+placeholders this is the slot address, e.g. `5046e8e0` = slot 8); `word` = the trap
+instruction word (`0x0fff000N` = `twi 31,r31,N`, encoding slot id N — `slot=n/a` for
+non-placeholder trap words); `r1`/`lr` = the caller values the 2-SPR shim latched into
+SPRG1/SPRG2 (`lr` = the FE1F body's post-`blrl` return on the callout path); `entry` = the
+resolved 0x700 handler (default `0x50314700`).
+
+```
+[EXC] PROGRAM slot-15 (DR allocator EXHAUSTION) #N: srr0=SSSSSSSS — pool-sizing tripwire (was Task T's parked stop; now delivered to the NK slot-15 exit)
+```
+Slot-15 exhaustion telemetry: rung-2 Task T's allocator-exhaustion parked stop moved here
+when the placeholders were restored (slot 15 IS a raw trap-placeholder; exhaustion now
+reaches the NK's own slot-15 exit). Emitted on EVERY slot-15 delivery (not capped) —
+grep for it as the MixedMode save-record pool-sizing tripwire.
+
+```
+[EXC] sc selectors (arrival order, distinct=D): 0xSS xN 0xSS xN …
+```
+Per-selector sc delivery counts (FE1F-service-surface Task C fix-budget item, `2949ec32` —
+counters-for-counts): the first 16 DISTINCT selectors in arrival order with delivery
+counts (`(+N deliveries beyond 16 distinct)` if overflowed). Emitted once at exit
+(atexit) AND explicitly on the crash path (atexit does not fire on SIGSEGV). This closed
+the cap-5 print artifact: the parked baseline is `0x3f x1 0x19 x2 0x14 x1 0x0f x1
+0x27 x1 0x40 x1 0x42 x1` (8 deliveries, 7 distinct); the FE1F-era default boot adds
+exactly 5 (`0x0f` +2, `0x42` +1, +`0x50`, +`0x4d`) → 13 deliveries, 9 distinct.
 
 ### M3a exception-delivery env vars
 
@@ -592,8 +626,75 @@ SS_NW_SC_SURFACE=0 SS_EXC_SC=legacy ./SheepShaver --config /tmp/m2accept.prefs
 
 ### What a healthy default boot shows
 
-5 sc deliveries in the first 65s (selectors 0x3f/0x19/0x14/0x19/0xf — `[EXC] SC delivered
-#1..#5` lines), every sampled resume r3=0, no `[EXC] FATAL`, `exc=` 5th field counting.
+5 printed sc deliveries in the first 65s (selectors 0x3f/0x19/0x14/0x19/0xf — `[EXC] SC
+delivered #1..#5` lines; the prints cap at 5), every sampled resume r3=0, no `[EXC] FATAL`,
+`exc=` 5th field counting. **True totals (per-selector counter, FE1F era): 13 deliveries,
+9 distinct on the default config; 8 deliveries, 7 distinct with `SS_NW_FE1F_SURFACE=0`.**
 The post-sc regime is heartbeat-SILENT (the boot leaves the dispatch-loop heartbeat path) —
 capture term baselines via `SS_TERM_DUMP=1` + SIGTERM kills (`timeout(1)`); SIGALRM
 (`perl alarm`) skips ALL atexit dumps.
+
+## Machine Layer M6 — FE1F service surface (`SS_NW_FE1F_SURFACE`)
+
+The FE1F service surface — the DR emulator's generic 68k→native callout opcode `$FE1F`,
+serviced through the NK's own program-interrupt dispatch — is **complete and is the
+newworld profile DEFAULT** since FE1F-service-surface Task C (`be0e02cb`, 2026-06-11).
+One gate covers two pieces:
+
+1. **Placeholder restore** (`rom_patches.cpp`, PatchROM-time): the raw ROM's
+   `twi 31,r31,N` entry-vector placeholders (`0x0fff000N`, file 0x36e8c0+4N; slot 14
+   duplicates 0x0d — the ROM's own quirk, restored verbatim) are restored over rung-2
+   Task T/U's parked stops in mirror slots {4, 6–15}, verify-EXPECTED (current word must
+   be the exact stop branch). The placeholders are load-bearing: executing a slot raises
+   a program interrupt and the NK's published 0x700 handler decodes the slot id and
+   dispatches through the exit-pointer array `[KDP+0x5f0+4·slot]`. The rung-2 "dead
+   slots get loud stops" policy is RETIRED (dated note at the rom_patches site).
+2. **0x700 delivery surface** (`sheepshaver_glue.cpp` + `exc_core`): trap-taken
+   `twi`/`tw` in `execute_illegal` routes to `ExcEnter(EXC_PROGRAM)` →
+   `program_entry = 0x50314700` (primary copy, NK-published `[KDP+0x37c]` [PROBE✓]),
+   with `SheepExcProgramShim` — the sc-shim's sibling, exactly two SPR writes
+   (`SPRG1 := caller r1`, `SPRG2 := caller LR`). SRR0 = the trap instruction verbatim;
+   SRR1 = `(msr & 0xFFFF) | 0x00020000` (PEM program-interrupt trap bit, test-pinned in
+   `test_exc_core`). Trap-taken with the entry UNRESOLVED (opted out) dies on a loud
+   `[EXC] FATAL` capture-abort naming the opt-out.
+
+All knobs newworld-profile-only; paravirtual and OldWorld untouched (all lines inside
+`MachineProfileIsNewWorld()` / `PatchROM_NW_trampoline` blocks).
+
+### The knob
+
+| Env var | Effect |
+|---|---|
+| `SS_NW_FE1F_SURFACE=0` | **Opt OUT** of the FE1F surface (newworld **default ON**; explicit-`"0"`-only opt-out, polarity mirroring `SS_NW_SC_SURFACE` — NOT MachineEnvFlag). Restores the 0x5000f248 park baseline byte-identically: Task-T/U parked stops stay in the slots, `program_entry=0`, ring tail `… 5000f242 5000f246 5000f248` at 839,284 transitions, sc selectors 8/7-distinct, zero PROGRAM deliveries. `=1` remains valid explicit-on. A loud `[NW-FE1F] FE1F surface OFF …` line announces the opt-out. |
+
+Grep `[NW-FE1F]` to confirm what a boot ran with: the armed line
+(`[NW-FE1F] FE1F surface armed (newworld default; opt-out SS_NW_FE1F_SURFACE=0):
+program_entry=0x50314700 …`) plus the restore line (`[NW-FE1F] raw twi placeholders
+RESTORED … slots {4,6-15} (mask=0x…, expected 0xffd0 …)`).
+
+### Dependency matrix (`SS_NW_MM_SWITCH` / `SS_NW_SC_SURFACE`)
+
+The FE1F surface is **MEANINGLESS with `SS_NW_MM_SWITCH=0` or `SS_NW_SC_SURFACE=0`** —
+the boot never reaches the FE1F callout without the MixedMode switch + the sc surface
+(the CFM-prep routine that issues FE1F sits 5 printed sc deliveries past the MixedMode
+round trip). Combined-opt-out behavior (pinned, rev 2 P-m5): the surface still ARMS
+(harmless — the twi sites are unreachable on such a boot) but logs the misconfiguration
+loudly:
+
+```
+[NW-FE1F] MISCONFIG: FE1F surface armed with SS_NW_MM_SWITCH and the sc surface OFF — the boot cannot reach the FE1F callout; surface stays armed but inert (P-m5)
+```
+
+A pre-FE1F A/B wants the upstream knob (`SS_NW_MM_SWITCH=0` or `SS_NW_SC_SURFACE=0`),
+not this one.
+
+### What a healthy FE1F-era default boot shows
+
+Two `[EXC] PROGRAM delivered` lines (#1 selector $31, #2 selector $36 — both slot 8,
+`srr0=5046e8e0 word=0fff0008 … -> entry=50314700`); the selector-0x31 round trip
+returns r3=0/r4=handle (e.g. `0x00120001`, NK kernel-object ID `(dir-index<<16)|gen`)
+and the 68k stores it into the ExpandMem slot (`[0x100037dc]`); sc selectors 13/9-distinct;
+ring total ~4.48M records (vs 839k parked). The boot then dies at the **DSAT
+stack-underflow wall** (System Error ID 10; alert machinery underflows RAMBase → host
+SIGSEGV `ea=0x…0fffff42` class) — the named frontier as of 2026-06-11, captured in
+`docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "Frontier update (FE1F Task C closeout)".

@@ -348,6 +348,49 @@ bad_args:
 	resp_error(c, CUDA_ERR_BAD_ARGS, CUDA_PKT_PSEUDO, cmd);
 }
 
+// --- capture-only packet telemetry (diagnostic; M3b root-cause work) ----------
+// SS_CUDA_TRACE=1 latches the first CUDA_TRACE_MAX packets (in + response bytes,
+// truncated to 24 each) into a static ring.  §2g-safe on the capture side (no
+// stdio/malloc/locks; getenv once, lazily).  CudaDumpPacketTrace prints it from
+// the crash/term-dump path only (same contract as CudaFormatStatsRegistered).
+#include <stdlib.h>   // getenv only (lazy one-shot read on the capture path)
+#define CUDA_TRACE_MAX  64
+#define CUDA_TRACE_BYTES 24
+static struct cuda_trace_ent {
+	uint8_t in[CUDA_TRACE_BYTES];  uint8_t in_len;   // truncated copy; real len below
+	uint8_t out[CUDA_TRACE_BYTES]; uint8_t out_len;
+	uint16_t in_full, out_full;                       // untruncated lengths
+} g_cuda_trace[CUDA_TRACE_MAX];
+static int g_cuda_trace_n = -2;   // -2 = env unread, -1 = off, >=0 = count captured
+
+static void trace_capture(CudaDevice *c)
+{
+	if (g_cuda_trace_n == -2)
+		g_cuda_trace_n = getenv("SS_CUDA_TRACE") ? 0 : -1;
+	if (g_cuda_trace_n < 0 || g_cuda_trace_n >= CUDA_TRACE_MAX)
+		return;
+	struct cuda_trace_ent *t = &g_cuda_trace[g_cuda_trace_n++];
+	int il = c->in_count  < CUDA_TRACE_BYTES ? c->in_count  : CUDA_TRACE_BYTES;
+	int ol = c->out_size  < CUDA_TRACE_BYTES ? c->out_size  : CUDA_TRACE_BYTES;
+	memcpy(t->in,  c->in_buf,  (size_t)(il > 0 ? il : 0));
+	memcpy(t->out, c->out_buf, (size_t)(ol > 0 ? ol : 0));
+	t->in_len = (uint8_t)(il > 0 ? il : 0);  t->out_len = (uint8_t)(ol > 0 ? ol : 0);
+	t->in_full = (uint16_t)c->in_count;      t->out_full = (uint16_t)c->out_size;
+}
+
+void CudaDumpPacketTrace(FILE *f)   // crash/term-dump thread only — never seam
+{
+	if (g_cuda_trace_n <= 0) return;
+	for (int i = 0; i < g_cuda_trace_n; i++) {
+		struct cuda_trace_ent *t = &g_cuda_trace[i];
+		fprintf(f, "[CUDA-TRACE %02d] in(%u):", i, t->in_full);
+		for (int j = 0; j < t->in_len; j++) fprintf(f, " %02x", t->in[j]);
+		fprintf(f, "%s -> out(%u):", t->in_full > t->in_len ? " ..." : "", t->out_full);
+		for (int j = 0; j < t->out_len; j++) fprintf(f, " %02x", t->out[j]);
+		fprintf(f, "%s\n", t->out_full > t->out_len ? " ..." : "");
+	}
+}
+
 // --- packet commit (synchronous, C2) ------------------------------------------
 
 static void process_packet(CudaDevice *c)
@@ -392,6 +435,7 @@ static void process_packet(CudaDevice *c)
 	}
 queued:
 	c->responses++;
+	trace_capture(c);           // capture-only telemetry (no-op unless SS_CUDA_TRACE)
 	c->treq_asserted = 1;       // C2: TREQ asserted before the seam call returns
 }
 

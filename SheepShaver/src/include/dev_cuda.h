@@ -80,6 +80,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>   // FILE* for CudaDumpPacketTrace (diagnostic dump only)
 
 // ORB handshake bits (active-LOW; C3-corrected assignments)
 #define CUDA_TREQ 0x08
@@ -255,5 +256,9 @@ extern size_t CudaFormatStats(const CudaDevice *c, char *buf, size_t buflen);
 // (paravirtual stays silent by construction).
 extern void CudaRegisterDiagInstance(CudaDevice *c);
 extern size_t CudaFormatStatsRegistered(char *buf, size_t buflen);
+
+// Capture-only packet telemetry (SS_CUDA_TRACE=1): dump the first packets'
+// raw in/out bytes.  Crash/term-dump thread only — never a seam path.
+extern void CudaDumpPacketTrace(FILE *f);
 
 #endif

@@ -1254,6 +1254,7 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 		char cuda_stats[512];
 		if (CudaFormatStatsRegistered(cuda_stats, sizeof(cuda_stats)))
 			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
+		CudaDumpPacketTrace(stderr);   // no-op unless SS_CUDA_TRACE=1
 	}
 	// Machine Layer M2 acceptance instrumentation (Task 8): same reasoning for
 	// the virtual-clock telemetry — the [VCLK] atexit dump never runs on the

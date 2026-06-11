@@ -1414,6 +1414,7 @@ static void mmio_dump_stats_atexit(void)
 		if (CudaFormatStats(&cuda, cuda_stats, sizeof(cuda_stats)))
 			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
 	}
+	CudaDumpPacketTrace(stderr);   // no-op unless SS_CUDA_TRACE=1
 }
 
 // ---

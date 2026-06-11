@@ -184,7 +184,8 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_JIT_PROFILE=1` (or `=/path`) | Execution-weighted hot-block profiler (OPTIMIZATION-PLAN §P0): each block counts its executions + an instruction-mix tag; dumps the top-40 hottest blocks (pc/exec/%/mix/insns/region) at exit to stderr (or to `/path`). Also emits a `[JIT-RUN-PROFILE]` line: empirical **guest-MIPS** (wall-clock throughput, "operations per second" for the whole run — boot/app/benchmark), and a **deterministic** execution-weighted `a64/guest-op` codegen-density A/B metric (zero host-noise; emitted whole-block, an inflated upper bound — use for deltas, not as a literal executed count). Capture per workload via the e2e harness (`SS_JIT_PROFILE=/path make e2e` / `e2e-bench`). Zero cost when unset. |
 | `SS_JIT_PROFILE_DISASM=1` | With `SS_JIT_PROFILE`, also dump each top block's first 16 PPC instruction words (big-endian encodings), captured at compile time. Disassemble offline with capstone (`CS_ARCH_PPC`, `CS_MODE_BIG_ENDIAN`, `struct.pack('>I', word)`). Used to identify hot blocks — e.g. the boot atomic-primitive cluster in §P0. (Compile-time capture, not exit-time reads: the NATMEM reservation has PROT_NONE holes that fault on read.) |
 | `SS_JIT_DEBUG_PC=0xNNNNNNNN` | Per-PC debug output. |
-| `SS_JIT_WATCH_ADDR=dec,dec` | Guest-memory watchpoints (decimal, comma-separated). Emits `[WATCH] pc=PPPPPPPP addr=AAAAAAAA value=VVVVVVVV  (was WWWWWWWW ...)` on each detected change. PC is block-entry granularity for JIT, exact instruction for interpreter. Grep for `[WATCH]` to parse programmatically. |
+| `SS_JIT_WATCH_ADDR=hex,hex` | Guest-memory watchpoints (**HEX, no `0x` prefix**, comma-separated, up to 4, 4-byte aligned). **Requires `SS_JIT_TRACE_RING=1`** — the check lives in `jit_ring_record()`, so without the ring nothing fires. Emits `[WATCH] pc=PPPPPPPP addr=AAAAAAAA value=VVVVVVVV  (was WWWWWWWW ...)` on each detected change. PC is block-entry granularity for JIT, exact instruction for interpreter. Grep for `[WATCH]` to parse programmatically. (Doc fix 2026-06-11: the parser is `strtoul(tok, NULL, 16)` — earlier docs said decimal.) |
+| `SS_JIT_WATCH_DUMPS=<n>` | With `SS_JIT_WATCH_ADDR`: how many of the first detected changes ALSO dump the trace ring (default 3). Set `0` for report-only when watching busy locations (stack slots). |
 | `SS_JIT_WATCH_STUB=1` | Software watchpoint on Mixed Mode switch-back stubs (`ppc-cpu.cpp`). |
 | `SS_JIT_TRACE_RING=1` | Block-level execution-history ring; dumped to `/tmp/ss_jit_ring.txt` by the SIGSEGV handler (records J/I blocks, inline calls, EMUL_OP entry/return). |
 | `SS_JIT_RING_DUMP_TRIGGER=1` | Dump the trace ring when the DR emulator executes stack-region code (`ppc-cpu.cpp`). |
@@ -201,6 +202,41 @@ The canonical reference for the JIT/EMUL_OP debug knobs (read by `ppc-cpu.cpp`,
 | `SS_ROM_NO_904=1` | Opt out of checksum-based auto-lenient for the 9.0.4 G4 ROM. Does not affect `SS_ROM_LENIENT=1`. |
 | `SS_NW_TRAMPOLINE=1` | Enable NewWorld nanokernel trampoline path (`rom_patches.cpp`). Gates the `[NW-MIRROR]` cold-start patch at ROM+0x46e8c0 and other NW-specific trampoline code. Required for New World ROM diagnostic boots. |
 | `SS_TERM_DUMP=1` | SIGTERM → `exit(1)` so `timeout(1)`-killed diagnostic boots reach the atexit telemetry dumps (`[MMIO]`/`[VIA]`/`[VCLK]`/`[CUDA]`). See the M3b section below. |
+| `SS_JIT_TRACE=/path` | Per-block execution trace to a file (`ppc-cpu.cpp`). Very verbose; the trace ring (`SS_JIT_TRACE_RING=1`) is usually the better tool. |
+| `SS_JIT_CHAIN_LOG=1` | Log block-chaining/dispatch events (`ppc-cpu.cpp`). |
+| `SS_JIT_CACHE_KB=<n>` | JIT translation-cache size in KB. Set automatically from the `jitcachesize` pref by the glue (pref is in bytes); an explicit env value overrides the pref. |
+| `SS_JIT_MAX_INSNS=<n>` | Diagnostic cap on compiled block length (instructions per block). |
+| `SS_JIT_INTERP_RANGE=lo-hi` | Force a guest-PC range (hex, `lo-hi`) to the interpreter — range-bisection tool for isolating a miscompiled region. |
+| `SS_JIT_SKIP_OPC=n,n` / `SS_JIT_SKIP_XO=n,n` / `SS_JIT_SKIP_XO19=n,n` / `SS_JIT_SKIP_XO63=n,n` | Opcode-bisection: force the listed primary opcodes (or op-31 / op-19 / op-63 extended opcodes) to the interpreter instead of native codegen. |
+| `SS_JIT_NO_OE=1` | Force the OE-form (overflow-recording) arithmetic variants (`addco`/`subfco`/… op-31 XO 522/520/778/552/616) to the interpreter — diagnostic only. |
+| `SS_JIT_VERIFY_BUDGET=<n>` | With `SS_JIT_VERIFY=1`: divergence report budget before suppression (default 20). |
+| `SS_JIT_VERIFY_PC=lo:hi` | With `SS_JIT_VERIFY=1`: restrict verification to a guest-PC range (hex `lo:hi`) — makes whole-boot verify runs tractable. |
+| `SS_JIT_PROFILE_PC=hexpc[,…]` | With the profiler: print execution counts for SPECIFIC block PCs (not just the top-40). Companion of `SS_COPYBITS_TRACE`. |
+| `SS_JIT_MEMDUMP=1` | Dump guest RAM at exit for interp-vs-JIT differential diffing (`ppc-cpu.cpp`). `SS_JIT_MEMDUMP_AT=0xPC` triggers the dump at a PC instead; `SS_JIT_MEMDUMP_PATH=/path` sets the output file. |
+| `SS_JIT_RING_DUMP_AT_PC=0xPC` | One-shot trace-ring dump when execution reaches a PC; `SS_JIT_RING_DUMP_AT_PC_DELAY=<n>` defers it to the n-th visit. |
+| `SS_JIT_RING_68K_MONITOR=1` | Watch guest `$28` (the A-line vector) for corruption; on change, dump the ring and exit (use with `SS_JIT_TRACE_RING=1`). Built for the 9.2.1-on-1.1-ROM post-splash stall hunt. |
+| `SS_LOG_FIRST_BLOCKS=<n>` | Log the first n JIT block entries (`[FB k] pc=…`) — cheap early-boot trajectory capture. |
+| `SS_LOG_ILLEGAL=1` | Log every undecoded opcode reaching the illegal handler (interpreter), incl. the mtmsr/MSR[VEC] AltiVec-detection probe. |
+| `SS_LOG_PPCF=1` | Read-only Gestalt registration/dispatch logging (AltiVec-detection force experiment, task #26). No codegen effect. |
+| `SS_STUB_TRACE=1` | Per-stub pressure counters (SPR/interpreter-fallback stubs) with an atexit dump; flips boot→steady at first guest idle. See `MMU-NANOKERNEL-MP-PLAN.md`. |
+| `SS_COPYBITS_TRACE=1` | Resolve `_CopyBits` (trap 0xA8EC) once the System is up and log its RoutineDescriptor + PPC code entry, so a `SS_JIT_PROFILE`/`SS_JIT_PROFILE_PC` run can read the CopyBits call count from the per-block profiler. No guest patching. |
+| `SS_FORCE_ALTIVEC=1` | Dev override: force the `altivec` pref ON even when absent/false (`=0` forces it off). The pref remains the user-facing opt-in. |
+| `SS_TEST_DUMP=1` | Opcode-harness REGDUMP output (GPRs/CR/XER + all 32 FPR/VR) for `SS_TEST_HEX` runs — the differential-referee channel. |
+| `SS_TEST_INIT=<32 hex words>` | Opcode harness: seed the 32 GPRs before executing the vector. |
+| `SS_TEST_HEX_FILE=/path` | Opcode harness batch mode: run every vector in the file in ONE process (the `SS_HARNESS_BATCH=1` mechanism; see `jit-test/README.md`). |
+
+### Machine-profile / machine-layer selection knobs
+
+| Env var | Effect |
+|---|---|
+| `SS_MACHINE=paravirtual\|newworld` | Machine-profile selection (`machine_profile.cpp`); overrides the `machine` pref. `SS_NW_TRAMPOLINE=1` survives as a deprecated alias for `newworld` (warning printed). |
+| `SS_MMIO_BUS=1` | Enable the MMIO bus on the paravirtual profile (the "named third config"); the newworld profile uses the bus unconditionally. |
+| `SS_MMIO_STRICT=1` | Strict-fence mode for unclaimed MMIO accesses (resolved once at init — getenv is not Mach-handler-thread safe). |
+| `SS_MMIO_THUNK_SELFTEST=1` | Self-test the JIT's MMIO backpatch thunk at JIT init. |
+| `SS_NW_NO_SCC=1` | Restore the pre-M1 behavior (SCC base 0 → `check_work` returns -1) — isolates SCC-model regressions. |
+| `SS_NW_MODEL=…` | Name-registry `compatible`-string injection experiment (default off; groundwork kept — necessary alongside, not sufficient by itself). |
+| `SS_NW_SYNTH_ENTRY=1` | Synthetic-entry research diagnostic (`rom_patches.cpp`); dead-ends at the first Mixed-Mode transition — kept as a research tool only. |
+| `SS_NW_FE1F_SURFACE=1` | **In flight (FE1F milestone, plan rev 3)** — bring-up gate, default OFF: restores the raw `twi` trap-placeholders in the mirror entry-vector slots + routes trap-taken `twi` to `ExcEnter(EXC_PROGRAM)` (0x700 delivery). Full reference lands with the milestone's docs task. |
 
 ## Machine Layer M2 — virtual clock and event scheduler diagnostics
 

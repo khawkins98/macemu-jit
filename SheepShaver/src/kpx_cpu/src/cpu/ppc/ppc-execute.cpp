@@ -1138,6 +1138,12 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 			fprintf(stderr, "[EXC] FATAL: sc at pc=%08x with unresolved syscall entry "
 			        "(SRR0=%08x SRR1=%08x msr=%08x lr=%08x r1=%08x) - set SS_EXC_ENTRY or SS_EXC_SC=legacy\n",
 			        pc(), t.srr0, t.srr1, regs().msr, lr(), gpr(1));
+			/* NK-syscall-surface Task 0 (plan rev 2 P-M2): the dying sc IS the
+			 * conformance-vector sample point — print the selector (r0) and the
+			 * argument registers (r3..r10) before aborting. Capture-only telemetry. */
+			fprintf(stderr, "[EXC] FATAL: sc capture: r0=%08x r3=%08x r4=%08x r5=%08x "
+			        "r6=%08x r7=%08x r8=%08x r9=%08x r10=%08x\n",
+			        gpr(0), gpr(3), gpr(4), gpr(5), gpr(6), gpr(7), gpr(8), gpr(9), gpr(10));
 			abort();
 		}
 		regs().srr0 = t.srr0;

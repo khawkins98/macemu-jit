@@ -1849,8 +1849,25 @@ bool powerpc_cpu::check_spcflags()
 		 * (EE off / execute_depth > 1, latch left SET): the hook returns false
 		 * and we fall through to the legacy path exactly as before. The HANDLE
 		 * flag is cleared exactly once above, common to both paths. */
-		if (MachineProfileIsNewWorld() && SheepExcDeliverPending())
-			return true;
+		if (MachineProfileIsNewWorld()) {
+			if (SheepExcDeliverPending())
+				return true;
+			/* M7 item 2 / W2-4 item 1b (INTERRUPT-INJECTION-RECON.md Q4): on
+			 * EXC_DECIDE_DEFER_NATIVE the delivery hook RE-ARMS the HANDLE flag
+			 * so this poll repeats at the next block boundary (the post-deferral
+			 * wake-up edge — without it the latched DEC slept forever once the
+			 * one HANDLE event was consumed inside a transient native window).
+			 * Skip the legacy fall-through on that path: re-polling HandleInterrupt
+			 * per block boundary for the length of a native window would storm
+			 * SDL_PumpEvents and the (unfenced) MODE_EMUL_OP Execute68k injection
+			 * arm. Only the hook's DEFER_NATIVE arm ever re-sets HANDLE here (it
+			 * was cleared above; TriggerInterrupt sets TRIGGER, not HANDLE), so
+			 * the test is unambiguous. All other outcomes (NONE, DEFER_EE,
+			 * DEFER_DEPTH) keep today's single legacy fall-through. Paravirtual
+			 * path byte-identical (outer profile gate). */
+			if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT))
+				return true;
+		}
 		static bool processing_interrupt = false;
 		if (!processing_interrupt) {
 			processing_interrupt = true;

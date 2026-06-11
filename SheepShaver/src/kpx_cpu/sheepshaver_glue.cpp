@@ -208,6 +208,14 @@ static uint64_t exc_stat_delivered_sc   = 0;	// NK-syscall-surface Task A (plan 
 static uint64_t exc_stat_delivered_program = 0;	// FE1F-service-surface Task A: delivered 0x700 (trap) count
 static uint64_t exc_stat_delivered_ext  = 0;	// Wave-2 W2-3: delivered EXC_EXTERNAL count (7th field, appended LAST)
 
+/* M7 item 2 (DEFER_NATIVE wake-up edge, INTERRUPT-INJECTION-RECON.md Q4 +
+ * re-pin addendum): per-episode re-arm budget. Reset on any non-native
+ * decision; spent budget = polling falls back to kick-driven. CPU-thread-only
+ * like the stats above. The cap is sized >> the observed transient-window
+ * length (~10^2-10^3 records) so window-exit delivery is unaffected. */
+#define EXC_NATIVE_REARM_CAP 65536u
+static uint32_t exc_native_rearm_used = 0;
+
 /* --- Wave-2 W2-3: the EXC_EXTERNAL pending source (the OpenPIC output) -----
  *
  * F5 atomicity contract: the PIC's bound-output callback (main_unix) runs
@@ -1019,17 +1027,59 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		                               msr_reg(), ReadMacInt32(XLM_RUN_MODE));
 	switch (decision) {
 	case EXC_DECIDE_NONE:
+		exc_native_rearm_used = 0;	// M7 item 2: non-native decision resets the re-arm budget
 		return false;
 	case EXC_DECIDE_DEFER_DEPTH:
 		exc_stat_deferred_depth++;
+		exc_native_rearm_used = 0;
 		return false;
 	case EXC_DECIDE_DEFER_EE:
 		exc_stat_deferred_ee++;
+		exc_native_rearm_used = 0;
 		return false;
 	case EXC_DECIDE_DEFER_NATIVE:
 		exc_stat_deferred_native++;
+		/* M7 item 2 / W2-4 item 1b — the post-DEFER_NATIVE wake-up edge
+		 * (INTERRUPT-INJECTION-RECON.md Q4, option (c)): a native-window
+		 * deferral consumed the HANDLE spcflag, and between windows EE in the
+		 * 68k world is 0, so no EE-edge ever re-raises — the latched DEC slept
+		 * through every subsequent native->68k window (97 deferrals,
+		 * delivered_dec=0, D-7 acceptance boot). Re-arm the poll: check_spcflags
+		 * re-asks at every subsequent block boundary until the window exits.
+		 * For a TRANSIENT window (the recon's 151 balanced set/clear pairs,
+		 * ~10^2-10^3 records) the first run_mode==0 boundary delivers.
+		 *
+		 * RE-PIN (2026-06-12, recon addendum "wake-up edge re-pin"): the recon's
+		 * "self-terminating, bounded by window length" claim is FALSIFIED at the
+		 * post-P-M5-fix frontier — the riser-on boot now PARKS inside a native
+		 * window that never exits (deferred_native == executed blocks == 5.3e9
+		 * over 50s, ~107M re-polls/s, frontier regressed). Unbounded re-arm is
+		 * therefore capped per pending episode: budget EXC_NATIVE_REARM_CAP
+		 * (>> window length, so transient-window delivery is unaffected); the
+		 * budget resets whenever the decision leaves the native regime (DELIVER /
+		 * NONE / DEFER_EE / DEFER_DEPTH). Cap exhaustion leaves the latch SET and
+		 * stops re-arming (one stderr line) — the pre-fix kick-driven behavior:
+		 * any later TriggerInterrupt/EE-edge re-raise polls again (single-shot,
+		 * the budget stays spent until the regime changes).
+		 * Tuple-semantics note: deferred_native now counts every re-poll inside
+		 * a window (the honest re-poll cost meter), not one count per window.
+		 * Newworld-gated by construction (sole caller is check_spcflags'
+		 * MachineProfileIsNewWorld() branch). The consumption-side guard in
+		 * check_spcflags keeps the re-armed flag from re-entering the legacy
+		 * HandleInterrupt fall-through per block boundary. */
+		if (exc_native_rearm_used < EXC_NATIVE_REARM_CAP) {
+			exc_native_rearm_used++;
+			spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
+		}
+		else if (exc_native_rearm_used == EXC_NATIVE_REARM_CAP) {
+			exc_native_rearm_used++;	/* log once per episode */
+			fprintf(stderr, "[EXC] DEFER_NATIVE re-arm budget exhausted (%u) — "
+			        "parked native window; latch stays set, polling returns to "
+			        "kick-driven\n", EXC_NATIVE_REARM_CAP);
+		}
 		return false;
 	case EXC_DECIDE_DELIVER:
+		exc_native_rearm_used = 0;	// M7 item 2: delivery resets the re-arm budget
 		break;
 	}
 

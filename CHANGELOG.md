@@ -11,6 +11,26 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] Machine Layer W2-4 steps 1+2 — the EE riser lands; FIRST DEC deliveries ever (12.4M, zero crashes), storm-bounded (`10b1b3e8`)
+
+The trap_return replacement stub at ROM 0x318000 gains an env-gated **EE riser**
+(`SS_NW_EE_RISER=1`, newworld-only, default OFF — the flip is W2-4 final acceptance):
+an EE-only MSR compose `mfmsr r10; rlwimi r10,r11,0,16,16; mtmsr r10` consuming the
+SRR1 image in r11, per EE-CHAIN-RECON "W2-4 entry decision" candidate (a) with all
+coordinator sign-offs. mtmsr's interpreter EE-edge re-raise drives delivery through the
+proven W2-0/W2-1 machinery — no new mechanism. Word budget verified against the RAW
+ROM (the stub area is the NK AltiVec lvebx thunk table; +3 words = the same
+reachability class as the accepted upstream clobber). Gate-off byte-identical
+(SS_DUMP_ROM A/B: delta is exactly the 4 designed words; paravirtual structurally
+inert). **Scored boot** (`SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1`, the deferred P3
+session): **delivered_dec > 0 for the first time — 12.4M deliveries in 50s, all on
+the published 0x50313200 2-SPR route, zero corruption** — but a DEC re-expiry storm
+(~250K/s; mtspr_dec ≈ dec_expiries = 14.68M) starves the 68k world (jDR=14, Ticks
+frozen, nest drifting −1/delivery). Links 3/5/6/10 score READY, links 7/8 BROKEN as
+predicted; falsifications NONE. W2-4's remaining body re-shaped: DEC reload cadence
+first, then XLM_IRQ_NEST ownership, then the tick consumption path. Full per-link
+table + storm anatomy: EE-CHAIN-RECON.md D-6.
+
 ### [SheepShaver] Machine Layer — tm_task ROM-patch misalignment fixed (the 0x505bb060 slide wall); new frontier = SysError 12 at _InsXTime (`2ff7765f`)
 
 The 0x505bb060 slide (SLIDE-WALL-RECON.md `f786fd99`) is fixed with a

@@ -451,10 +451,28 @@ task out as its own follow-on milestone: capture, name the frontier, stop.** No 
   default-ON flip; (P3) stub=1 writes 6 words not 4 (inert, fresh-process zero RAM). Flip-risk
   note: the first end-to-end execution of 0x50313200 arrives with step 1's riser — it reads
   NK-maintained [KDP-0x10]/[KDP-0x14] state never exercised under emulated delivery.
-- [ ] **Step 1 — the `mtmsr r11` insert in the 0x318000 stub** (candidate (a), partial-rfi;
-  env-gated, default OFF; EE-only compose first). HELD until the tmtask-fix agent releases
-  its rom_patches.cpp claim.
-- [ ] **Step 2 — scored boot against the W2-2 READY/BROKEN table** (discharges the deferred P3).
+- [x] **Step 1 — the EE riser in the 0x318000 stub** (`10b1b3e8`, 2026-06-12): candidate (a),
+  partial-rfi, EE-ONLY compose per sign-off item 3 (mfmsr r10; rlwimi r10,r11,0,16,16;
+  mtmsr r10 — 3 words after the nest decrement). `SS_NW_EE_RISER` gate (newworld +
+  env, default OFF, applied at patch time). Word budget verified [RAW-ROM]: the stub
+  area is the NK AltiVec lvebx thunk table; +3 words = same reachability class as the
+  accepted upstream clobber. SS_DUMP_ROM A/B: gate-on delta is exactly the 4 designed
+  words at 0x31800c-0x318018; gate-off byte-identical. Fresh gated-off baseline (post
+  tm_task-guard): exc=0/5/0/0/173/4, SIGTERM park, HOT-PC 0x50467ed4/r9=0x50004a9e.
+- [x] **Step 2 — scored boot against the W2-2 READY/BROKEN table** (deferred P3
+  DISCHARGED, 2026-06-12; 4 of ≤5 boots): `SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1` →
+  **delivered_dec > 0 for the FIRST TIME — 12.4M deliveries in 50s, all on the
+  published 0x50313200 2-SPR route, zero crashes** (no SIGSEGV / no 68k reset ring /
+  deferred_native=0). BUT a DEC delivery STORM: expire→deliver→handler mtspr DEC→tail
+  exit→riser EE-raise→immediate re-expiry (~250K/s; mtspr_dec=14.68M ≈ dec_expiries);
+  68k world starved (jDR=14, sc=0, mmio=0 — frontier REGRESSED vs the gated-off park);
+  nest drift −1/delivery at storm scale ([0x2818] → −10.0M ≈ −deliveries); Ticks [0x168]
+  frozen at 0. Per-link table + full storm anatomy: EE-CHAIN-RECON "W2-4 step 1+2".
+  Riser+published-route mechanics PASS; links 7/8 confirmed BROKEN as predicted — the
+  W2-4 body (nest ownership + DEC reload cadence + tick path) is the remaining work.
+  Default stays OFF in tree. Falsifications: NONE (storm = the predicted intended risk).
+  Side evidence (boot 3): riser WITHOUT SS_NW_DEC_PUBLISHED → SIGTRAP crash at
+  0x50412be0 (the legacy-KDP r9 hazard) — step 0's re-point is load-bearing, as designed.
 
 ### Task Z: docs
 

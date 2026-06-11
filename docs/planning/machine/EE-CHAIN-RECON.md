@@ -1059,3 +1059,66 @@ today's boot path), 12/12 lane, gate-OFF boot signature md5-identical to baselin
 gate-ON live-inert (terminal tuple unchanged). Full record: M3A-ENTRY-TABLE.md
 "W2-4 step 0". Step 1 (the mtmsr r11 riser) may now deliver onto a self-contained
 handler from delivery #1.
+
+### D-6. W2-4 step 1+2 LANDED (2026-06-12, label w2-4-step1) — the riser as built + the scored boot
+
+**Step 1 — the riser as landed (`10b1b3e8`, default OFF).** EE-ONLY compose (sign-off
+item 3), inserted between the nest decrement and the reload-region branch in the
+0x318000 stub:
+
+```
+lwz   r10,XLM_IRQ_NEST      ; existing
+subi  r10,r10,1             ; existing
+stw   r10,XLM_IRQ_NEST      ; existing
+mfmsr r10                   ; 7d4000a6  (r10 dead: value already in CTR; nest stw was last read)
+rlwimi r10,r11,0,16,16      ; 516a0420  (insert MSR[EE]=0x8000 from the SRR1 image)
+mtmsr r10                   ; 7d400124  (interpreter-executed, block-ending, EE-edge re-raise)
+b     reload_region         ; relocated; same target 0x3244e4
+```
+
+Gate: `MachineProfileIsNewWorld() && MachineEnvFlag("SS_NW_EE_RISER")`, applied at patch
+time. **Word budget (sign-off item 5) [RAW-ROM rom901_inventory.bin]:** 0x318000 lies in
+the NK AltiVec element-load thunk table (8-byte `lvebx vN; b` pairs, 0x317e20–0x318628);
+the upstream 4-word stub already clobbers the v28/v29 entries; the +3 words extend into
+v30 + the first word of v31 — same dispatcher, same reachability class as the
+long-accepted clobber. Byte evidence: SS_DUMP_ROM A/B — gate-on vs gate-off diffs are
+EXACTLY words 0x31800c/0x318010/0x318014/0x318018; gate-off stub words match the
+manifest rom901.bin verbatim. Fresh gated-off baseline (post-tm_task-guard `2ff7765f`,
+60s slot boot): terminal `exc=0/5/0/0/173/4` (delivered_dec=0, deferred_ee=5,
+sc=173/16-distinct, program=4), SIGTERM park (no SIGSEGV), HOT-PC 0x50467ed4 with
+r9=0x50004a9e, VCLK dec_expiries=5 pending=1, CUDA packets=13.
+
+**Step 2 — the scored boot (deferred P3 DISCHARGED; boots 4/≤5 used total).**
+`SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1`, probe on 0x50313200 (r1,r6,r11,[0x168],[0x2818]),
+60s, SIGTERM exit (survived the full window):
+
+| P2 link / signature | Verdict | Evidence |
+|---|---|---|
+| delivered_dec climbing (READY core) | **PRESENT — first deliveries EVER** | exc=12,412,210/543/0/0/0/0 at 50s; `[EXC] DEC delivered #1: restart=50429d00 srr1=0000f072 → entry=50313200 (2-SPR)` |
+| Delivery route (link 5/6, R-9 arm) | **READY on the published route** | all deliveries land 0x50313200; handler runs ~12M times, zero corruption; probe steady r1=0x68ffe000(KDP) r6=0x68fff000(ECB) r11=0x9040 |
+| EE-edge predicate (link 10) | READY | deliver→exit→re-raise cadence sustained for 59s |
+| Composition fence (link 3) | READY | deferred_native=0 throughout ([0x2810] never stuck) |
+| 68k reset ring / SIGSEGV slide (link 6 BROKEN sigs) | ABSENT | clean SIGTERM, no reset signature |
+| Nest balance (link 8) | **BROKEN — confirmed at storm scale** | [0x2818] drifts −1/delivery: 0xffffffff → 0xff6769b2 (≈ −10.0M at 10M handler visits) |
+| Ticks / tick path (link 7) | **BROKEN (starved)** | [0x168]=0 at every probe sample; Ticks never moves |
+| Boot frontier vs the 0x500047ae park | **REGRESSED under storm** | jDR=14 (vs billions baseline), sc=0, program=0, mmio=S:0/V:0 — the 68k world is never entered |
+
+**Storm anatomy:** expire → deliver → NK handler reprograms DEC (`mtspr_dec=14,681,798 ≈
+dec_expiries=14,681,790`) → exit through the patched tail → riser raises EE → the
+reprogrammed DEC has already expired → immediate redelivery (~250K/s; HOT-PC 0x503244e8 =
+the reload region). First delivery interrupted the 0xf072 image (the 68k-world fiction
+0x7072 + the riser's EE), all subsequent 0x9040 (NK contexts). **Falsifications: NONE** —
+the storm is exactly the memo's named intended risk ("first DEC delivery onto the
+link-7 starved tick path"); no pinned fact disturbed. **Side finding (boot 3, the
+gate-on dump boot):** riser WITHOUT `SS_NW_DEC_PUBLISHED` → SIGTRAP at 0x50412be0
+(the legacy-KDP save-and-switch r9 hazard) — step 0's re-point is load-bearing.
+
+**What this re-shapes in W2-4's remaining body:** tm_task retirement is moot on 9.0.1
+(the `2ff7765f` guard already skips it). The body is now: (1) **DEC reload cadence** —
+why every NK reprogram expires instantly (VCLK reload value vs tb_freq=25MHz; the
+~250K/s rate is the tick-frequency bug to fix FIRST, else any EE-on boot starves);
+(2) **XLM_IRQ_NEST ownership** (the −1/delivery decrement has no matching increment —
+the stub decrements per traversal, nothing increments at delivery); (3) the tick path —
+deliveries run the NK handler but nothing posts toward the 68k Ticks word (link 7
+consumption side); (4) via_int cluster disposition unchanged. Default gate stays OFF;
+the flip remains W2-4 final acceptance.

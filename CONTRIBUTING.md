@@ -101,7 +101,8 @@ checklists below say *which* gates a given change touches; this table is the men
 | **Microbench** | `make bench` (`SheepShaver/rom-harness/`) | ns/insn for codegen kernels — boot-free A/B (`--save-baseline` / `--compare`) | Codegen perf changes | See **Benchmarking** below; `SheepShaver/rom-harness/README.md` |
 | **ROM harness** | `make test-rom` (`SheepShaver/`) | Standalone headless JIT exerciser against a real OldWorld ROM | Broad JIT coverage check | `SheepShaver/rom-harness/README.md` |
 
-From the repo root, `make test` / `make test-jit` delegate to the SheepShaver harness.
+Run the SheepShaver gates from `SheepShaver/` — the repo-root `make test` / `make test-jit`
+target the **BasiliskII** harness (which doesn't build on macOS arm64 today).
 
 **Which gates on which commit — the gate TIERS** (`docs/MILESTONE-WORKFLOW.md` §6, rev
 2026-06-11): per-commit inner tier (`make build-ss` + `SS_HARNESS_BATCH=1 make test-jit` +

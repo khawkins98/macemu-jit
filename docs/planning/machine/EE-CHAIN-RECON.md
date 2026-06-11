@@ -885,3 +885,161 @@ the new default-config ceiling is the **0x505bb060 garbage-return slide**
 (SIGSEGV ea=0x400055590000; sc=169/16-distinct incl. 0xfffffffe/0xffffffff;
 program=4) — see M6A-WAVE2-SHIM-RECON.md frontier update. W2 pins anchored on
 the OLD signature should re-anchor or boot with the opt-out.
+
+---
+
+## W2-4 entry decision — the minimal EE-riser design (label: w2-4-decision) — 2026-06-11
+
+> **Status:** 📋 Decision memo (Stream B evidence-decision agent; READ-ONLY session,
+> 1 of ≤2 boots used, zero source edits). **Mandate:** W2-4 is evidence-gated (Wave-2
+> plan entry gate + stop-rule 4); the gathered evidence — W2L-3 "EE has no riser on any
+> current path" (trap_return is THE EE-parker, the storm lever structurally dead), W3-2
+> "PIC initialized: NO" + the chain live-proven to the EE gate, and the desync closeout's
+> trap_return resume-PC exoneration — leaves one question: **what minimal riser lets
+> W2-4 proceed without the full rfi restoration?** Three candidates evaluated below.
+> **The rfi/MSR-semantics sign-off (desync plan Rev-2 F1) is NOT discharged by this
+> memo — it is the headline coordinator item.**
+> **Frontier anchor (F8):** the NEW default ceiling (0x505bb060 slide; this session's
+> boot terminal tuple `delivered_dec=0 deferred_ee=5 deferred_depth=0 deferred_native=0
+> delivered_sc=169 delivered_program=4`, 16-distinct selectors, SIGSEGV) — all pins
+> below are anchored on the post-`25be4342` default config.
+
+### D-1. New evidence this session [PROBE✓] — the tail-image census (the (a)-discriminator)
+
+One capture-only slot boot (`/tmp/ss-slots/slot0/runs/20260611-232647.47687/`, exit 139 =
+the expected frontier SIGSEGV), probes on the patched trap_return family with
+`SS_PROBE_LINEAR=1`:
+`SS_PROBE_PC='0x503244cc:r10,r11,r12,r13;0x504244cc:…;0x50318000:r10,r11;0x50418000:…;0x50324524:r10,r11;0x50424524:…'`.
+Per desync-F2's structure pin, **r10/r11 at block-entry 0x503244cc ARE the SRR0/SRR1
+images** the raw merged tail would have latched (`mtspr SRR0,r10; mtspr SRR1,r11` at
+0x3244d8, patched to `mtctr r10; mtcrf 0xff,r13; b 0x318000`).
+
+| Visits | r10 (SRR0 image / resume PC) | r11 (SRR1/MSR image) | Reading |
+|---|---|---|---|
+| 1–3 | `0x5046e8c0` (the DR entry-vector table base — **the 68k/DR world**) | **`0x0000d032` — EE=1** (matches the rung-1 night-run srr1=0xd032 datum) | The NK resumes the emulator world with EE=1 images, live, TODAY — the W2S-0 EE-parker fact made concrete: the raw rfi would have raised EE at the boot's third-ish tail traversal |
+| 4–15 | `0x500d639c`/`0x500d6404` (ROM code) | `0x00021040` — **EE=0** | The NK resumes most contexts EE-MASKED — per-context EE discipline is real and live |
+| 0x50318000 visit 1 | r10 already stub-clobbered (`lwz r10,XLM_IRQ_NEST`) | **r11=0xd032 survives to the stub** | An MSR-honoring insert AT THE STUB still sees the image (r11 reload from ctx happens after 0x3244e4) |
+
+Honest caveats: 15 slow-tail traversals captured (chaining swallows later visits —
+W2L-R2); the fast-exit family (0x50324524, where 28/30 of the watch-record delivery
+exits attributed) probed ZERO visits and its image lives in the SRR1 SPR (no SPR probe
+fields, desync-F7) — fast-exit images are known only by construction (sc/program
+deliveries: srr1 = interrupted MSR = EE=0 today). Staged copies (0x504244cc etc.):
+zero visits — the live tail traversals run the PRIMARY copy, consistent with W2L-2's
+watch attribution.
+
+**Verdict: R-7 does NOT block candidate (a).** Its static half was already pinned
+(ctx+0xa4 is the image slot, W2S-1); the live half is now pinned: EE=1 images
+(0xd032) flow through the patched tail exactly on the DR-world resumes, EE=0 images
+(0x21040) on the rest. An SRR1.EE-honoring tail is selective by construction — it
+raises EE only where the NK designed it raised.
+
+### D-2. The candidates
+
+**(a) Newworld-gated SRR1-honoring variant of the patched tail — RECOMMENDED.**
+- **Shape:** insert `mtmsr r11` into the 0x318000 stub (rom_patches.cpp:2521ff —
+  currently 4 words: nest-decrement + `b` back to the reload region). r11 holds the
+  SRR1 image there [PROBE✓ D-1]; the raw tail consumed r11 at the same point
+  (`mtspr SRR1,r11`) before the ctx reload — register-lifetime-identical to raw.
+  bctr resume preserved ⇒ the desync exoneration (resume-PC-wise) is undisturbed;
+  this is partial rfi semantics: MSR honored, PC via the proven bctr path. mtmsr is
+  interpreter-executed + block-ending + carries the EE-edge re-raise
+  (ppc-execute.cpp:1336ff) ⇒ the riser drives delivery through the EXACT machinery
+  W2-0/W2-1 proved (U7/U8 unit, H1 harness — no new delivery mechanism).
+  Newworld-gated at patch time (the trap_return patch is profile-unconditional today;
+  paravirtual stays byte-identical), env-gated default-OFF, flip-last.
+- **Needs:** (i) the F1 coordinator sign-off (below); (ii) stub word-budget
+  verification (one extra word at 0x318000; the area looks free but the trampoline
+  49>48 precedent says verify before writing); (iii) **the DEC-target re-point should
+  land FIRST** (D-3 — otherwise delivery #2 lands on the 0x412b1c r9 hazard);
+  (iv) the EE-only-vs-full-image compose decision (full `mtmsr r11` with 0xd032 also
+  CLEARS FP(0x2000)/IP(0x40) vs the current 0x7072 fiction — if the core ignores
+  those bits it is benign and full-image is the faithful choice; EE-only
+  (`MSR := (MSR&~0x8000)|(r11&0x8000)`) needs extra stub words and is NOT raw
+  semantics — sign-off item).
+- **Risks / W2 facts disturbed:** none of the pinned facts — nest drift unchanged
+  (the −1/delivery signature stands until W2-4's ownership fix), bctr exit regime
+  stands, the EE-parker fact is *partially retired by design* (MSR un-parks; PC
+  stays bctr). The real risk is the INTENDED one: first DEC delivery onto the R-9
+  arm + the link-7 starved tick path — exactly what W2-4 exists to exercise, now in
+  a bounded session instead of mid-M4/M5. Fast-exit resumes stay MSR-dead initially:
+  a DEC delivery interrupting an EE=1 context and exiting via the fast-exit family
+  would lose EE again — acceptable for bring-up (the slow tail re-raises on the next
+  switch), recorded as the known follow-up (full rfi restoration at the fast exit =
+  the F1 escalation path, NOT this proposal).
+- **Test it must pass:** harness — existing lane green (the riser adds no harness
+  surface; H1/H3 already prove edge→delivery both modes); unit — 13/13 unchanged;
+  live — ONE bounded env-on boot scored against the W2-2 P2 READY/BROKEN per-link
+  signature table (BINDING, finally scoreable — this boot IS the storm session that
+  was lever-dead in W2L-3), plus a gated-off A/B byte-identical boot. One
+  falsification → stop (the one-iteration discipline).
+
+**(b) Host-side "EE fiction" 0xf072 for the 68k world (no guest riser) — REJECTED as
+design; retained as the P3-class diagnostic lever only.**
+- The premise ("the DR world ran at fiction 0x7072; what if 0xf072?") is now
+  evidence-answerable: D-1 shows the NK's live image stream is NOT uniformly EE=1 —
+  **12 of 15 probed resumes carry EE=0 images (0x21040)**. A blanket fiction
+  delivers inside contexts the NK deliberately resumed masked — it violates the
+  per-context EE discipline that candidate (a) gets for free, and it diverges from
+  raw semantics in the opposite direction from the current parking. The M3a cold-EE
+  precedent (delivery #1 survived at fiction 0xf072) predates the MM switch, the
+  V-seed (R-9 arm now armed), FE1F, and the 4.5M-record frontier — it does not
+  transfer.
+- No env-gated means exists today (`SS_M6A_USER_MSR` is structurally quarantined,
+  rom_patches.cpp:964ff; `SS_EXC_FORCE_EE_AT` was spec'd, never landed) — so (b)
+  needs new code anyway, at the same cost class as (a) with less fidelity. **Spec
+  disposition:** if (a) stalls at sign-off, land `SS_EXC_FORCE_EE_AT=0xPC` per the
+  Rev-2 Tension-5 classification (diagnostic-lever commit, default-off, full gates)
+  and run ONE bounded P2-scoring boot — diagnostic, never the W2-4 design.
+- Test if used: the same P2 READY/BROKEN table, one boot, quarantined env.
+
+**(c) Defer W2-4 until the boot itself programs the PIC / raises EE — REJECTED.**
+- The evidence says the boot will NOT: zero risers on any current path (W2L-3 —
+  trap_return parked the designed one; the un-patched rfi sites are off the boot's
+  path); guest PIC init absent (`[PIC] reads=0 writes=0`, CTPR still 15, W3-2) and
+  the registered-handler table not installed (`[[KDP-0x338]+0x20]=1`, W2L-1) — both
+  are Mac OS-side installs far beyond the 0x505bb060 frontier. Worse, the dependency
+  plausibly runs the OTHER way: the 9.2 System handoff expects time services (Ticks
+  advancing, deferred tasks); link-7 starvation is total (Ticks watch: zero hits) —
+  waiting for the boot to arm interrupts while the tick is starved inverts the
+  dependency. Deferral re-creates the unbounded mid-M4/M5 surprise Re-score #2
+  named. No test can pass it: its falsifier ("frontier advances past PIC init
+  without ticks") has no supporting evidence.
+
+### D-3. Rider recommendation — harmonize the DEC delivery target BEFORE arming the riser
+
+With a real riser, delivery #2+ goes wherever `interrupt_entry` points: today that is
+**0x50412b1c, the save-and-switch body — the only delivery class still on the heavy
+KDP/ECB shim, carrying the W2S-R1 r9 hazard** (r9 unseeded by the shim; the entry
+consumes it as the new ctx ⇒ garbage [KDP-0x14] + garbage register restore). SC,
+PROGRAM, and EXT all moved to NK-PUBLISHED handlers + the 2-SPR shim
+(0x50314ac0 / 0x50314700 / 0x50314880). The W2S-2 #5 follow-up ("re-point DEC at the
+published 0x50313200 — self-contained, r9-free, same prologue/EE-guard/bounce exit")
+should land as W2-4's step 0: it retires the r9/cr6 hazards instead of probing them,
+harmonizes all four exception classes on one shim shape, is harness-provable
+(SS_EXC_ENTRY + an H-vector) and live-inert until the riser arms. It changes the M3A
+delivery-hook contract ⇒ named in the sign-off list.
+
+### D-4. Recommendation + the coordinator sign-off items
+
+**Proceed with W2-4 on candidate (a), staged:** (0) DEC target re-point to the
+published 0x50313200 + 2-SPR shim (harness-gated, live-inert); (1) the newworld-gated,
+env-gated `mtmsr r11` stub insert (default OFF, flip-last, revert-on-red); (2) ONE
+bounded env-on boot scored against the W2-2 P2 READY/BROKEN table — this discharges
+the deferred P3 session (no `SS_EXC_FORCE_EE_AT` needed); (3) the W2-4 body proper
+(tm_task/via_int retirement A/B, XLM_IRQ_NEST ownership — now with live deliveries to
+retire against). Stop-rule 4 stands: if (2) shows the consumption side needs NK→68k
+forwarding beyond retirements, W2-4 spins off as its own milestone.
+
+| # | Sign-off item (coordinator) | Why it blocks |
+|---|---|---|
+| 1 | **Desync Rev-2 F1**: the stub `mtmsr r11` changes the NK exit's MSR semantics on newworld — F1 requires sign-off BEFORE any such change, gated or not. This memo is the request; note it is mtmsr-insert with bctr preserved, NOT the rfi restoration (which stays the escalation path). | W2-4 step 1 cannot start without it |
+| 2 | DEC delivery-target re-point 0x50412b1c → 0x50313200 (M3A hook-contract change; retires the W2S-R1 hazard) — or explicit acceptance of the r9 hazard if declined | W2-4 step 0 |
+| 3 | Full-image `mtmsr r11` vs EE-only compose (FP/IP fiction-bit exposure vs raw fidelity) | Step 1 patch shape |
+| 4 | Confirm the P3 session is FOLDED into W2-4 step 2 (the riser boot doubles as the storm scoring; `SS_EXC_FORCE_EE_AT` stays unlanded) | Budget/sequencing |
+| 5 | Implementer pre-check, delegated: 0x318000 stub word budget (+1 word; +~3 if EE-only) | Step 1 |
+
+**Boots used this session: 1 of ≤2** (the D-1 tail census). Residues: W2S-R1's live
+half now has a retirement path (item 2) instead of a probe path; W2L-R1 ([KDP+0x67c]
+resolved target) rides W2-4 step 2's first delivery; the fast-exit MSR-dead follow-up
+recorded in (a).

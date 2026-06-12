@@ -913,3 +913,35 @@ the staging decision doesn't land first). Pre-flip checklist now carries FOUR it
 above). The flip decision is orthogonal to the level-source staging decision: the flip
 makes the latch default; the staging decision governs whether deliveries ever carry a
 nonzero level pre-guest-init.
+
+### Coordinator sign-off: the level-source staging (2026-06-12, post-Task-B)
+
+**SIGNED OFF — shape (i): the host source joins the PIC rail.** Rationale: it is the
+architecture-consistent shape (device sources — SCC/VIA — land on the same rail later;
+the QEMU-oracle-tested OpenPIC model finally gets a live consumer; shape (ii)'s
+synthesized-vector fiction would need unwinding the moment real devices arrive), and the
+proposal's config-vs-event distinction holds: the staged words are init-time platform
+constants that Mac OS's native interrupt init writes, after which EVERY interrupt still
+traverses PIC-IACK → vector table → NK post level test → 68k chain. Same sanctioned
+class as [KDP+0x1074/0x1078] and [KDP+0xf2c].
+
+**Binding constraints on the implementation (Task B-2):**
+1. The staged set is the MINIMAL PIC + memory state the IACK path actually needs —
+   enumerate it from the fallback's lwbrx walk + the OpenPIC model (expect: the NK-held
+   PIC virtual base [[KDP-0x20]+0xf18], the lowmem vector→level table entry
+   [0x3f00+vector], the host source's IVPR/IDR unmask, and CTPR lowered from reset-15 —
+   each staged word individually justified in the commit as "what the real init writes",
+   values cited against the QEMU oracle / dev_openpic.cpp semantics with SHAs).
+2. The per-interrupt EVENT path stays fully guest-traversed — zero host writes to the
+   pending halfword, CR bits, or any per-delivery state (the fake-poke fence stays).
+3. Env-gating: the staging rides the existing cluster (newworld + SS_NW_HOST_IRQ for the
+   host-source assert; SS_NW_PIC=1 joins the ENV-ON TEST CLUSTER for acceptance —
+   its DEFAULT flip stays HELD per Task C; if the staging is structurally tied to the
+   PIC being registered, gate the staging on the same condition and state it).
+4. Acceptance: the Task-B chain-walk table re-run — the level test now passes (r28≠0,
+   post writes level|0x8000, CR bits SET), via_int 0xef2c / OP_IRQ fe6b probes fire,
+   and the Ticks rider gets its real attempt (addq.l #1,$16a). Ticks moving is the
+   milestone headline; the gate is the post-value + 68k-entry probes (falsifiable).
+   R-II9 caveat: do NOT use SS_PROBE_LINEAR under env-on; hold instrument sets constant.
+5. One-iteration rule; ≤5 boots; stop-rule 2 unchanged (a second break link past the
+   level test → frontier-record it, ship-gated-off-green remains the fallback).

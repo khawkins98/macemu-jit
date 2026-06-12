@@ -612,3 +612,16 @@ Full addendum (the blocking-answer table, per-gate evidence, the fix table):
   tail/reload window), files ppc-execute.cpp + ppc-cpu.cpp/exc_core (latch),
   rom_patches.cpp untouched, gate `SS_NW_IRQ_CONSUME` default OFF, riser-conditional
   per A7. **PROCEED awaits the one-line coordinator ACK.**
+
+### Task 0.5 — coordinator ACK (2026-06-12)
+
+**ACKed as proposed** (fork-(iii), the Task-0 fix table): rfi-atomicity emulation via a
+deferred EE-edge latch — when execute_mtmsr's EE 0→1 edge fires with the guest PC inside
+the riser-stub window [0x50318000,0x50318020), latch instead of trigger_interrupt; fire
+at the first block boundary outside the tail/reload window (past the 0x324524 bctr).
+One latch + one predicate; ppc-execute.cpp/ppc-cpu.cpp/exc_core only; rom_patches
+untouched; SS_NW_IRQ_CONSUME default OFF, riser-conditional, flip-last at Task C.
+Coordinator notes: (1) the window constants must reference/derive from the same stub
+constants rom_patches.cpp:2522ff emits (one source of truth, or a cross-checked static
+assert — no second hand-copied magic range); (2) the Q-C3 shape-B ordering fix stays
+Task B scope per the plan; do not fold it into Task A.

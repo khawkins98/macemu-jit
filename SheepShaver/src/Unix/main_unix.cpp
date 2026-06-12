@@ -101,6 +101,7 @@
 #include "prefs.h"
 #include "prefs_editor.h"
 #include "machine_profile.h"
+#include "exc_core.h"
 #include "cpu_emulation.h"
 #include "emul_op.h"
 #include "xlowmem.h"
@@ -2722,6 +2723,26 @@ static void *tick_func(void *arg)
 			tick_counter = 0;
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
+
+		// M8 Task B re-pin (one-iteration rule, plan addendum): the deferred-
+		// EE-edge STARVATION BACKSTOP. Task A's passive latch relies on "the
+		// next natural kick" (DEC cadence / host EXT edge) to poll delivery at
+		// an out-of-window boundary — boot s4tb-b4 falsified that guarantee in
+		// the slot-4 consumption cycle: the DEC's own expiry IS the latched
+		// edge (VCLK pending=1, DEC nap-parked, no future mtspr kick) and the
+		// host EXT edge is one-shot pre-WLSC (InterruptFlags never clears), so
+		// the latch starved (deferred=1.43e6 fired=0, DR<->NK twi loop). The
+		// backstop: while the latch is set, this 60 Hz thread re-kicks the CPU
+		// thread (TriggerInterrupt — the existing DEC-expiry idiom; a poll
+		// kick, NOT guest state: the fake-poke fence is untouched). Each kick
+		// polls once; if the entry PC is still in-window the poll suppresses
+		// again and the next tick retries — bounded 60 Hz retry, no dispatcher
+		// spin (the b1r starvation shape needed a PERMANENTLY re-armed flag;
+		// this is one poll per 16.7 ms). Gate: the latch can only be set
+		// inside ExcIrqConsumeEnabled()+riser-armed code (newworld), so the
+		// read of a zero global is the only paravirtual/default-boot effect.
+		if (ExcIrqConsumeEnabled() && g_exc_deferred_ee_edge)
+			TriggerInterrupt();
 
 		// Trigger 60Hz interrupt
 		// M3a Task 5 (tick interplay; M3A-ENTRY-TABLE.md finding 3): on the

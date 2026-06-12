@@ -459,6 +459,34 @@ fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
   commit (gated the same way); otherwise record still-deferred in the addendum.
 - [ ] Gates: task tier + sub-contracts. Commit (separate commits per the above).
 
+#### Task B addendum (2026-06-12, one-iteration rule): the "next natural kick" premise FALSIFIED in the slot-4 cycle — re-pinned with the starvation backstop kick
+
+Boot s4tb-b4 (rundir 20260612-063939.81376) carried the round trip through THREE new
+legs live: EXT delivered #1 → post armed (watch 68fff070=0x8001 @50325520, block
+50325520→502fd280 = the Q-C3 detour) → **the Q-C3 stub staged the deferred pair**
+([PROBE 0x502fd280 visit=1] r28=0x8001 r31=0x00e00000; watch [KDP-0x440]=0x00e00000 +
+[KDP-0x43c]=0x8001 at record #3568016) → **the scheduler-restore drain consumed it**
+(watch: @0x503246b0 mask→0, @0x50324734 halfword re-posted + sentinel 0xffff reset,
+record #3568082-84) → **the slot-4 twi FIRED** (`PROGRAM delivered #5: srr0=5046e8d0
+word=0fff0004 slot=4 lr=5046c4f4` — the re-graded PROGRAM#4 gate, GREEN). Then the NEW
+terminal shape: the DR↔NK twi cycle with `[IRQ-CONSUME] deferred=1434126 fired=0
+latch=1` — every tail mtmsr EE-edge latches in-window and the latch NEVER fires,
+because Task A's fire path relies on "the next natural kick" and both kicks are dead in
+this regime: **the latched edge IS the DEC's own delivery** (VCLK pending=1, DEC
+nap-parked, no future mtspr kick until the delivery the latch is holding) and the host
+EXT edge is one-shot pre-WLSC (InterruptFlags never clears — Q-I4). This is exactly the
+coordinator's Task-C flip-criteria item (a) "EXT-only strand," observed live one task
+early.
+
+**ONE re-pin (committed with this addendum): the starvation backstop kick.** The 60 Hz
+tick thread re-kicks the CPU thread (`TriggerInterrupt()` — the existing DEC-expiry
+idiom; a poll kick, not guest state — the fake-poke fence is untouched) while
+`g_exc_deferred_ee_edge` is set. One poll per 16.7 ms: an in-window poll suppresses
+again (no flag re-arm — the b1r dispatcher-spin shape cannot form), an out-of-window
+poll fires the latch and delivers. Gated by construction (the latch is set only inside
+consume+riser-armed code). Second falsification of the round-trip contract stops the
+task.
+
 ### Task C: acceptance + default flip (flip LAST, revert-on-red) — size S, ≤4 boots
 
 - [ ] **PASS/FAIL battery first, env-on (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`):** (a) full

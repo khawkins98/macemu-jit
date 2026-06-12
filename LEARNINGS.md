@@ -106,4 +106,34 @@ registers in the trace ring → the VBL timer died → restart.
 
 ---
 
+---
+
+## 2026-06-12 (session 4) — NK EXT handler PR-bit gate; CGRP is function pointers, not counters
+
+**NK EXT delivery requires user-mode (PR=1) at interrupt time.**
+The NK EXT handler at 0x50314880 extracts `r11.bit16` (= PR, the PPC user-mode flag)
+immediately after saving context. If PR=0 (kernel mode) → jumps to fallback at 0x50314660
+and returns without touching CGRP. The DR emulator runs in kernel mode by default
+(`SS_M6A_USER_MSR=0`), so **every** external interrupt fires in kernel mode → CGRP delivery
+path is never reached → 68k interrupt handler at 0x5000ed08 never fires, regardless of CGRP
+state.
+
+**CGRP+0x20 is a function pointer, not a "registered group count."**
+The `cmpwi r9, 2; blt bail` guard at 0x50314894 is checking whether the function pointer
+is a valid address (≥2 = non-null). NK cold-start writes `NK_base + 0x3da0 = 0x503143a0`
+there via init code at 0x503115f8. Value 1 in our boot means that init code never ran for
+this CGRP instance. Do not read this field as a count.
+
+**The ROM patch stall (dec_expiries=5) was a DATA corruption, not code-path skipping.**
+The 8 bytes at 0x5000ed08 are scanned as PPC data by the NK during boot. Replacing them
+with OP_IRQ_NW+rte corrupted the pattern the NK was looking for, breaking NK scheduler
+initialization before DEC ever fires real tasks. No 68k execution is involved.
+
+**SS_PROBE_68K can arm but never fire for structural reasons (not a probe bug).**
+If the target address is unreachable due to a mode check (e.g., the PR-bit gate above),
+the probe will never match even in long runs. Rule out structural delivery blockers before
+concluding the probe is wrong.
+
+---
+
 *For the full session journal (pre-archive), see `docs/archive/2026-06/LEARNINGS-2026-06.md`.*

@@ -12,20 +12,42 @@
 
 Paste this to start the next session:
 
-> Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (the standing context pack —
-> its "Current frontier" block is authoritative), then the header of
+> Read `docs/HANDOFF.md` in full — including the "Recommended resumption order" and
+> the queued ideas — then `docs/AGENT-CONTEXT.md` (the standing context pack — its
+> "Current frontier" block is authoritative), then the header of
 > `docs/planning/ROADMAP.md`. The development process is BINDING:
 > `docs/MILESTONE-WORKFLOW.md` (plan → red-team → rev-2 fold → binding Task-0 recon →
 > env-gated implementation → flip-last acceptance → docs close-out), with the
 > parallel-workstream layer (file-ownership claims, slot-protocol boots, always-green
-> fusion). The named next milestone is **the VIA-IFR surface** — make `dev_via6522`
-> present the 60 Hz interrupt source to the 68k level-1 handler so the interrupt
-> round trip retires and Ticks becomes guest-claimed. Its Task-0 opens with one
-> pinned question: resolve `a4` at 68k PC `0x5000ee9a` — the concrete MMIO address
-> of the IFR the handler bit-tests — and which IFR bit `d6` indexes (full seed:
-> the M8 plan's Task-B/Task-C results and `docs/planning/machine/
-> INTERRUPT-INJECTION-RECON.md`). Run the milestone machine: draft the plan on the
-> house template, red-team it, then execute. Never push without being asked.
+> fusion). **Follow the recommended resumption order below** unless Ken redirects:
+> QEMU rig first (half-day cap), then the two-gear sprint toward the first visible
+> boot screen, with the VIA-IFR surface as the first wall. Never push without being
+> asked.
+
+## Recommended resumption order (coordinator + Ken, decided at pause time)
+
+1. **The QEMU differential rig FIRST (≤ half a day).** Build idea 2 below on Spike
+   S1's working mac99 boot of our 9.0.1 ROM (`docs/planning/spikes/
+   SPIKE-S1-QEMU-GATE-CHECK.md`). Its first customer is the VIA-IFR Task-0 itself:
+   observe on the reference boot what the VIA IFR presents at tick time, what the
+   68k level-1 handler reads (the a4@0x5000ee9a address, the d6 bit), and what the
+   $6e4 vector chain expects on dismissal — answers by observation instead of recon
+   boots. If the rig stalls past the half-day cap, fall back to the standard
+   Task-0-by-probes and finish the rig later.
+2. **Then the two-gear sprint toward pixels** (idea 1 below): VIA-IFR first
+   (pre-answered by the rig), the M5 framebuffer early (recon complete — a visible
+   screen converts later debugging from ring-forensics to looking at it), then
+   frontier-chase. Light gear for seed-class walls (evidence-tagged root cause →
+   gated fix → inner gates → one-line log); the FULL milestone machine for anything
+   touching delivery/world-switch semantics or paravirtual-reachable code.
+   Non-negotiables in either gear: slot protocol, falsifiable evidence before fixes,
+   env gates. One consolidated review + docs pass at sprint end (scheduled review
+   debt, not skipped review).
+3. **Day one, inside the sprint:** sketch the M9+ milestone map (item 6, rough is
+   fine) and kick off the QEMU wall census (item 7) as a background task once the
+   rig works.
+4. **Defer doc restructuring** (item 4's residual) to the next doc-sweep trigger —
+   it is not the bottleneck.
 
 ## Where the project stands (2026-06-12)
 

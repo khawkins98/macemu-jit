@@ -1384,6 +1384,12 @@ extern "C" int SheepExcHostIrqFormatStats(char *buf, int len);
 // step). volatile-free plain bool: written once single-threaded before the
 // timer/tick threads start, read-only afterwards.
 static bool nw_host_irq_on = false;
+// M7 Task B-2 (sign-off shape (i)): the host source joins the PIC rail —
+// resolved true only when BOTH SS_NW_HOST_IRQ and SS_NW_PIC are on (the
+// staging is structurally tied to the PIC being registered: the fallback's
+// IACK has no model to read otherwise — binding constraint 3, stated).
+// Same write-once-single-threaded discipline as nw_host_irq_on.
+static bool nw_host_irq_pic_on = false;
 
 // Byte-lane trampolines — the F16 DECISION ([STATIC-oracle]: LE VALUE-SWAP).
 // QEMU maps KeyLargo's MPIC with the little-endian ops table; the model speaks
@@ -2202,6 +2208,51 @@ int main(int argc, char **argv)
 			        "InterruptFlags!=0 -> once-per-assert-edge EXT latch "
 			        "(deliver-once-per-edge; PIC level-held semantics untouched)\n");
 		}
+		/* M7 Task B-2 (interrupt-injection plan, "Coordinator sign-off: the
+		 * level-source staging", shape (i)): the host source joins the PIC
+		 * rail.  Init-time PIC source configuration for the reserved host
+		 * input — the exact registers Mac OS's native MPIC init writes for
+		 * each source it uses (config, not event state; the per-interrupt
+		 * EVENT path stays fully guest-traversed: assert -> EXT delivery ->
+		 * NK fallback IACK lwbrx [STATIC rom901.bin 0x50326068] -> vector ->
+		 * lbz [0x3f00+vector] level [0x503260a4] -> post 0x3254e0).
+		 *
+		 * Staged words, each justified as "what the real init writes":
+		 *   IVPR[0x3F] = prio8 | vector 0x3F, UNMASKED, EDGE sense — the real
+		 *     init unmasks + assigns vector/priority per source (QEMU
+		 *     write_IRQreg_ivpr semantics, openpic.c:503 @ de5d8bfd…).  EDGE
+		 *     (SENSE=0) deliberately, vs the [DIAG-FORCED] level choice for
+		 *     devices that hold level conditions: the host latch is
+		 *     deliver-once-per-assert-edge (Task A) and the oracle consumes
+		 *     edge sources at IACK (openpic_iack :1056 -> dev_openpic.cpp
+		 *     do_iack) — retirement is guest-side IACK, zero host writes per
+		 *     event.  Vector 0x3F = identity with the input (the bring-up
+		 *     convention; < 0x40 keeps the fallback's in-range IACK leg).
+		 *   IDR[0x3F] = 1 — route to CPU0 (the only CPU; write_IRQreg_idr
+		 *     :445, masked to bit 0).
+		 *   CTPR = 0 — lowered from reset-15 (openpic_reset :1254 resets to
+		 *     15 = nothing deliverable; the real init lowers it when it
+		 *     enables interrupts; same value the [DIAG-FORCED] knob uses).
+		 * Direct MODEL calls, natural values (the [DIAG-FORCED] precedent:
+		 * single-threaded bring-up, the byte-lane swap is for the BE guest).
+		 * The guest-memory half of the staging ([IRP+0xf18] PIC base +
+		 * [0x3f00+vector] level byte) lives in the NW trampoline block
+		 * (sheepshaver_glue.cpp), gated on the same env pair. */
+		if (nw_host_irq_on && nw_pic_on) {
+			uint32_t ivpr = (8u << OPENPIC_IVPR_PRIO_SHIFT) | OPENPIC_IRQ_HOST;
+			OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+			             (OPENPIC_IRQ_HOST << 5), 4, ivpr);
+			OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+			             (OPENPIC_IRQ_HOST << 5) + 0x10, 4, 1u);
+			OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x20080, 4, 0);  // CTPR=0
+			nw_host_irq_pic_on = true;
+			fprintf(stderr, "[PIC-HOST] host source joined the PIC rail "
+			        "(SS_NW_HOST_IRQ+SS_NW_PIC, sign-off shape (i)): input 0x%02x "
+			        "IVPR=edge prio=8 vec=0x%02x IDR=cpu0 CTPR=0; level from "
+			        "lowmem [0x%04x]; every event guest-traversed via IACK\n",
+			        (unsigned)OPENPIC_IRQ_HOST, (unsigned)OPENPIC_IRQ_HOST,
+			        0x3f00 + (unsigned)OPENPIC_IRQ_HOST);
+		}
 	}
 
 	if (RAMBase > ROMBase) {
@@ -2834,8 +2885,44 @@ void SetInterruptFlag(uint32 flag)
 	// store-release inside Assert, then kick — spurious-safe, missed-unsafe).
 	// Paravirtual is structurally inert here: nw_host_irq_on is set only
 	// inside the MachineProfileIsNewWorld() bring-up block.
-	if (nw_host_irq_on && SheepExcHostIrqAssert())
+	if (nw_host_irq_on && SheepExcHostIrqAssert()) {
+		// M7 Task B-2 (sign-off shape (i)): on exactly the assert edges, the
+		// host source also wiggles its reserved PIC input — the device-rail
+		// analog of a line edge (event ENTRY, not pending/CR/per-delivery
+		// state; constraint 2 holds — retirement is the guest's own IACK,
+		// which consumes an edge source in the model, dev_openpic.cpp
+		// do_iack). Under the PIC region lock from this (timer/tick/ADB)
+		// thread — the documented device->pic direction, the nw_via_irq_edge
+		// idiom; none of SetInterruptFlag's callers run on a signal handler
+		// or hold a device lock here.  Raise precedes the kick so the IACK
+		// cannot beat the raised bit.
+		if (nw_host_irq_pic_on) {
+			// One-shot lowmem re-assert (config, not event state): glue-time
+			// low-memory writes are documented WIPED before the 68k world
+			// starts (the W2 68k-vector evidence) — re-assert the staged
+			// vector->level byte [0x3f00+vec] once, at the first edge (well
+			// past lowmem init, before the first delivery this staging must
+			// serve), and log what survived as evidence either way.
+			static bool lowmem_checked = false;
+			if (!lowmem_checked) {
+				lowmem_checked = true;
+				uint32 lvl = ReadMacInt8(0x3f00 + OPENPIC_IRQ_HOST);
+				if (lvl != 1) {
+					WriteMacInt8(0x3f00 + OPENPIC_IRQ_HOST, 1);
+					fprintf(stderr, "[PIC-HOST] lowmem level byte [0x%04x] was %u "
+					        "at edge #1 - re-staged to 1 (trampoline write wiped)\n",
+					        0x3f00 + (unsigned)OPENPIC_IRQ_HOST, (unsigned)lvl);
+				} else {
+					fprintf(stderr, "[PIC-HOST] lowmem level byte [0x%04x]=1 "
+					        "survived to edge #1 (trampoline staging intact)\n",
+					        0x3f00 + (unsigned)OPENPIC_IRQ_HOST);
+				}
+			}
+			PICInputCtx c = { OPENPIC_IRQ_HOST, true };
+			MMIOBusWithRegion(OPENPIC_CORE99_BASE, pic_input_locked, &c);
+		}
 		TriggerInterrupt();
+	}
 }
 
 void ClearInterruptFlag(uint32 flag)
@@ -2847,6 +2934,10 @@ void ClearInterruptFlag(uint32 flag)
 	// stale-zero read here is always followed by the asserting thread
 	// re-arming the latch. (Pre-warm-start this path never runs — OP_IRQ's
 	// flag-consuming block is HasMacStarted()-gated, Task 0 Q-I4(a).)
+	// Task B-2 note: NO PIC Lower here — the host input is EDGE-sensitive
+	// (Lower is an oracle no-op, openpic_set_irq :388); a latched-but-retired
+	// edge stays pending in the PIC until the next delivery's IACK, which only
+	// happens after a NEW assert edge re-raised it anyway (benign by pairing).
 	if (nw_host_irq_on && InterruptFlags == 0)
 		SheepExcHostIrqDeassert();
 }

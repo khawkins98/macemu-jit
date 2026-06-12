@@ -3077,6 +3077,58 @@ void init_emul_ppc(void)
 		        "(mirror dispatch table) [KDP+0x1078]=%08x (mirror emulator base)\n",
 		        (uint32)ROMBase + 0x480000, (uint32)ROMBase + 0x460000);
 
+		/* M7 Task B-2 (interrupt-injection plan, "Coordinator sign-off: the
+		 * level-source staging", shape (i)) — the guest-memory half of the
+		 * host-source-joins-the-PIC-rail staging.  Init-time PLATFORM
+		 * CONSTANTS that Mac OS's native interrupt init (MPIC driver /
+		 * Interrupt Manager) writes on a real boot, never per-interrupt event
+		 * state (the fake-poke fence stays: every delivery still traverses
+		 * PIC-IACK -> vector -> level test -> 68k chain).  Same sanctioned
+		 * class as [KDP+0x1074/0x1078] and [KDP+0xf2c] above.
+		 *
+		 *   [[KDP-0x20]+0xf18] := 0xF3040000 — the NK-held PIC base the EXT
+		 *     fallback reads at 0x50325f48 (lwz r22,0xf18(r20), [STATIC]
+		 *     rom901.bin md5 d1a267a9); its IACK lwbrx is r22+0x200a0 and EOI
+		 *     stwx r22+0x200b0 = the model's CPU0 IACK/EOI registers
+		 *     (dev_openpic.h: CPU bank +0x20000, regs 0xA0/0xB0).  Value =
+		 *     OPENPIC_CORE99_BASE (MacIO BAR + 0x40000, donor study Q6): the
+		 *     guest mapping the real init would create for the MPIC — guest
+		 *     addressing is physical here.  Survives NK cold-init (the IRP
+		 *     page is the durable side of the Hnfo precedent; [KDP-0x20] is
+		 *     live-proven re-read by the fallback).  Recorded in the sub-KDP
+		 *     occupancy map (M6A-ONGOING-ENTRY-DESIGN.md).
+		 *   [0x3f00+0x3f] := 1 — the lowmem vector->level table byte the
+		 *     fallback's lbz r28,0x3f00(r26) reads (0x503260a4) for vector
+		 *     0x3F (= OPENPIC_IRQ_HOST, main_unix.cpp/dev_openpic.h — the
+		 *     reserved host input, vector=input identity).  Level 1: the host
+		 *     tick source stands in for the platform's 60 Hz/VIA-class
+		 *     interrupt, which is the 68k LEVEL-1 autovector chain (Q-I3:
+		 *     CHRP level-1 @0xec50 -> via_int -> OP_IRQ -> Ticks); must be
+		 *     >0 (post skips on 0 — the Task-B break link) and !=7 (the
+		 *     deferred-slot leg 0x503260a8).  Lowmem may be wiped before the
+		 *     68k world starts (the W2 68k-vector evidence) — SetInterruptFlag
+		 *     re-asserts this byte once at the first edge and logs which copy
+		 *     survived.
+		 * Gating (binding constraint 3, stated): structurally tied to the PIC
+		 * being registered — same env pair as the main_unix staging
+		 * (SS_NW_HOST_IRQ + SS_NW_PIC, both re-parsed here with identical
+		 * semantics), inside the MachineProfileIsNewWorld() trampoline block:
+		 * gated-off and paravirtual boots are byte-identical. */
+		{
+			const char *hirq_env = getenv("SS_NW_HOST_IRQ");
+			const char *pic_env  = getenv("SS_NW_PIC");
+			const bool hirq_on = hirq_env && hirq_env[0] && hirq_env[0] != '0';
+			const bool pic_on  = pic_env  && pic_env[0]  && pic_env[0]  != '0';
+			if (hirq_on && pic_on) {
+				WriteMacInt32(irp_base + 0xf18, 0xF3040000);  // OPENPIC_CORE99_BASE
+				WriteMacInt8(0x3f00 + 0x3f, 1);
+				fprintf(stderr, "[NW-TRAMP] PIC-rail level source staged: "
+				        "[[KDP-0x20]+0xf18]=%08x=0xF3040000 (NK-held PIC base) "
+				        "[0x3f3f]=1 (vector 0x3f -> 68k level 1)\n",
+				        irp_base + 0xf18);
+			}
+		}
+
 		/* SS_SEED_MEM (immediate form): apply the no-PC seeds now — the natural
 		 * "post-init" point, after the nanokernel trampoline has populated the KDP /
 		 * ECB. The PC-triggered form fires later at its target block entry. */

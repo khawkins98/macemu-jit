@@ -113,6 +113,19 @@
 #define OPENPIC_IRQ_VIA_CUDA 0x19
 #define OPENPIC_IRQ_ESCC_B   0x24
 #define OPENPIC_IRQ_ESCC_A   0x25
+// M7 Task B-2 (interrupt-injection sign-off shape (i)): the HOST interrupt
+// source's reserved input.  The real platform has NO PIC input for the
+// decrementer/timer — the DEC is a CPU-internal exception (PowerPC
+// architecture), and KeyLargo's MPIC has zero timer sources
+// (KEYLARGO_MAX_TMR = 0, "Timers don't exist but this makes the code happy",
+// QEMU openpic.h:41 @ de5d8bfd…) — so this is a documented RESERVED choice:
+// input 0x3F, the top of the 64-source KeyLargo external bank, unassigned in
+// the Q8 device map above and in QEMU's NewWorld macio realize assignments at
+// the pinned SHA.  Vector = input number (identity — the same convention the
+// [DIAG-FORCED] bring-up uses); 0x3F is also the LAST in-range vector for the
+// NK fallback's IACK leg (vector < 0x40, [STATIC] rom901.bin 0x50326070).
+// Constant only — no model behavior change rides this define.
+#define OPENPIC_IRQ_HOST     0x3F
 
 // IVPR bits (guest-visible; QEMU openpic.h IVPR_* @ de5d8bfd…)
 #define OPENPIC_IVPR_MASK     0x80000000u   // 1 = source masked

@@ -36,20 +36,48 @@ fidelity (interpreter-only; GPLv3 reuse feasible — cite per backport hygiene; 
 
 # Machine Layer milestones
 
-## M9: VIA-IFR → guest-claimed 68k ticks (ACTIVE — stalled)
+## M9: VIA-IFR — PARTIALLY COMPLETE (2026-06-12 session 4)
 
-- [x] **Infrastructure**: OP_IRQ_NW (frame-aware handler) + M68kRegisters.pc writeback (harness 353/353)
-- [ ] **Blocker**: boot stall cause unknown — trampoline tp[25-26] vs ROM patch (need isolation boot)
-- [ ] **Verify**: `SS_PROBE_68K=0x5000ed08` fires, dec_expiries ~2393, boot advances
+- [x] **Infrastructure**: OP_IRQ_NW + M68kRegisters.pc writeback (harness 353/353)
+- [x] **Stall fixed**: ROM patch at 0x5000ed08 was corrupting NK boot-time data. Removed.
+  `dec_expiries≈1577, irq_fired≈376` on baseline with full env-on cluster.
+- [ ] **Verify**: `SS_PROBE_68K=0x5000ed08` fires — **deferred to M10** (structural blocker)
 - [ ] **Ship**: one-line CHANGELOG; retire pre-M7 default-ON gates
 
-See `docs/HANDOFF.md` §Root cause for next step. Gate: `SS_NW_VIA_IFR`.
+Gate: `SS_NW_VIA_IFR` (currently a no-op — kept for M10 use). See `docs/HANDOFF.md` §S4.
 
-## M10: Framebuffer (recon done, not started)
+**Why the probe criterion moves to M10:** The NK EXT handler at 0x50314880 checks `r11.bit16`
+(PR = user-mode bit) before routing to CGRP. The DR emulator runs in kernel mode
+(SS_M6A_USER_MSR=0, quarantined), so PR=0 always → EXT always takes the fallback
+(0x50313ab0), CGRP path unreachable. The 68k handler at 0x5000ed08 cannot fire until M10
+fixes user-mode DR AND initializes CGRP. Full root cause: `docs/HANDOFF.md` §Session 4.
+
+## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires
+
+**Goal:** `SS_PROBE_68K=0x5000ed08:5` fires (the 68k level-1 interrupt handler executes).
+
+**Prerequisites (both required, in order):**
+
+1. **User-mode DR** — fix `SS_M6A_USER_MSR` (quarantined: zero-page slide crash on first
+   attempt) so the DR emulator's MSR has PR=1 at interrupt time. Without this, the NK EXT
+   handler at 0x50314880 always takes the kernel-mode fallback, skipping CGRP entirely.
+
+2. **CGRP initialization** — populate the CGRP struct at `*(KDP-0x338)` = 0x68ffc1c0 before
+   Mac OS boot (Mac OS normally does this during System startup, but we stall before that):
+   - `+0x20` = 0x503143a0 (`NK_base + 0x3da0` — valid function pointer, currently 0x00000001)
+   - `+0x38` = non-zero guard
+   - `+0x3c` = TABLE_BASE (array of context-descriptor pointers; entry[9] = RFI_target for
+     68k interrupt injection in the DR emulator — TBD from RE of NK handler at 0x503148e0)
+   - `+0x40` = STACK_TABLE (stack pointer per interrupt group)
+   - `+0x44` = COUNT ≥ 10 (NK EXT posts source index 9)
+
+Gate: `SS_NW_VIA_IFR` (reuse; gate currently a no-op placeholder).
+
+## M11: Framebuffer (recon done, not started)
 
 Recon complete — a visible screen is itself an instrument.
 See `docs/planning/machine/FRAMEBUFFER-RECON.md` (HOLD — verify M5 framebuffer status first).
-Status: waiting on M9.
+Status: waiting on M10.
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

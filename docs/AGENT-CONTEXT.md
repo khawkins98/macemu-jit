@@ -4,76 +4,75 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-12, post-M8-slot-4-consumption)
+## Current frontier (2026-06-12, post-M9-partial)
 
-**The M8 slot-4 consumption milestone SHIPPED GATED-OFF-GREEN** (`42ce3e0e`…`52b69cd7`;
-`SS_NW_IRQ_CONSUME` stays default OFF — a standalone 17th gate, acceptance recipe
-`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`). On the env-on test cluster the **consumption round
-trip is GREEN through leg 7**: EXT delivery → NK from-emulator post (0x8001@0x68fff070)
-→ the Q-C3 staging detour (deferred pair `[KDP-0x440]/[KDP-0x43c]` + task-flag) → the
-scheduler-restore drain (0x324720) → **the slot-4 twi fires** (PROGRAM srr0=5046e8d0
-word=0fff0004 slot=4) → world switch completes (the R-II10 livelock shapes are FIXED —
-torn-ctx root cause fork-(iii), the riser's mtmsr re-raise mid-tail, cured by the
-deferred EE-edge latch + 60 Hz backstop) → **the 68k level-1 handler runs at 60 Hz**.
-**RED at leg 8, the via6522 IFR surface**: the handler's source dispatch finds NO VIA IFR
-source bit in the via6522 model and **rte's source-less** (0x5000eecc) — OP_IRQ retire
-never runs, the un-retired post re-traps slot-4 ~1.2k/s, Ticks is NOT guest-claimed (the
-60 Hz 0x16c movement is the host keep-set, census-proven via `ticks_keepset`).
-**Correction (2026-06-12, QEMU rig + static disassembly):** The prior description
-`btst d6,(a4) @0x5000ee9a` was WRONG — `0x5000ee9a` is mid-word of a 4-byte
-`tst.l $d94.w` starting at `0x5000ee98`. The actual ROM stub source-dispatch is:
-`tst.l $d94.w; beq $5000eea4; movea.l $6e4.w,a0; jsr (a0)` — it tests the 68k
-low-memory flag `$0d94` (NOT a VIA MMIO register). No `btst d6,(a4)` exists in the ROM
-near that address; no `movea.l #$F3016xxx, a4` exists anywhere in the ROM.
-The real question is what sets `$0d94` at tick time (and whether it is even the active
-handler path — at Finder, Mac OS 9.2.1 installs its own handler in RAM, replacing the ROM
-stub). See `docs/archive/2026-06/machine/VIA-IFR-RECON.md` for the full corrected picture.
-**Named next task: the VIA-IFR surface** (M-class device-model work — `dev_via6522`
-exists). **Task A COMPLETE (2026-06-12 session 2 probe campaign).**
+**M8** — shipped gated-off-green (`SS_NW_IRQ_CONSUME`). Acceptance recipe: `SS_NW_PIC=1
+SS_NW_IRQ_CONSUME=1`. The 68k level-1 handler runs at 60 Hz under that cluster.
 
-**Corrected addresses (the AGENT-CONTEXT and RECON doc both had this wrong):**
-`[KDP+0xfd0]` (= address `0x68ffefd0`) is the POINTER FIELD holding the Hnfo record
-address; the record itself is at `hnfo_rec = 0x68ff4f00` (= irp_base + 0xf00).
-Fields: source-table-ptr = `hnfo_rec+0x14` = **`0x68ff4f14`**;
-pending-bits = `hnfo_rec+0x28` = **`0x68ff4f28`**. The previously cited
-`0x68ffeff8`/`0x68ffefe4` were wrong.
+**M9 VIA-IFR — PARTIALLY COMPLETE (2026-06-12 session 4).**
 
-**Probe results at first EXT interrupt (SS_PROBE_PC=0x50314880 visit=1):**
-- `*(0x64)` = **`0x5000ed08`** ← the active handler in OUR boot is the SECONDARY dispatch
-  table (NOT the QEMU-observed `0x5000ec50`; these are two different 9.0.1 ROM paths —
-  QEMU boots 9.2.1 Mac OS which may install the primary path early; our trampoline or
-  rom_patches writes something different to 0x64)
-- `hnfo_rec+0x14` = **`0x00000000`** — source table pointer NIL (never initialized)
-- `hnfo_rec+0x28` = **`0x80000000`** — pending bit set by NK/init before first interrupt
+- ✅ Stall fixed: the ROM patch at 0x5000ed08 (`OP_IRQ_NW+rte`) was corrupting bytes the
+  NK reads as DATA during boot (pattern scan), causing `dec_expiries=5`. Patch removed.
+  `SS_NW_VIA_IFR=1` is now a **no-op**. Baseline: `dec_expiries≈1577, irq_fired≈376`.
+- ✅ Harness 353/353 unchanged.
+- ❌ `SS_PROBE_68K=0x5000ed08` never fires — the 68k handler is structurally unreachable.
 
-**Root cause:** With source-table-ptr NIL, the secondary dispatch (0x5000ed36) does
-`and.l (0, 1*4), d0` = read from 68k address 4 (= Initial PC = 0x50010000); bit 31 = 0
-→ AND = 0 → both primary and secondary checks fail → no source found → hardware-reset
-path at 0x5000980a (which in our emulation likely loops or soft-falls-through without
-visible reset) → epilogue at 0x5000ee58 → `tst.l $d94.w` = 0 → rte source-less.
+**Root cause chain for 68k handler never firing:**
 
-**Fix target (identified):** Patch ROM offset 0xed08 (= 0x5000ed08) with
-`M68K_EMUL_OP_IRQ; rte; nop; nop`. The via_int3_dat pattern is confirmed present there;
-the existing via_int3 search range (0x15000–0x19000) misses it, and the via_int
-pre-condition also blocks. A new 9.0.1-specific patch with range 0xed00–0xee00 lands it.
-**Prerequisite:** `KernelDataAddr+0x67c` (`0x68ffe67c`) must not be zero before OP_IRQ
-runs — set it to a scratch address in the NewWorld trampoline init to avoid a write to
-68k address 0 (Initial SSP corruption). Gate: `SS_NW_VIA_IFR`.
-Full implementation plan: `docs/archive/2026-06/machine/VIA-IFR-RECON.md` §5e–5f.
+**Layer 1 — NK EXT handler PR-bit gate (0x50314880):**
+```
+bl 0x50313d40                        ← save context (r11 = saved MSR)
+rlwinm. r9, r11, 0, 0x10, 0x10      ← extract bit 16 = PR (user-mode flag)
+beq 0x50313ab0                       ← if PR=0 (kernel mode) → fallback, skip CGRP
+```
+In our boot r11=0x0000000a → PR=0 → ALWAYS takes fallback. The DR emulator runs in
+**kernel mode** (SS_M6A_USER_MSR=0 by default, quarantined — zero-page slide crash).
+Every external interrupt fired during 68k emulation takes the fallback branch; the CGRP
+68k-delivery path is **never reached**, regardless of CGRP state.
 
-**Tooling lesson (load-bearing):** Use `SS_PROBE_68K=0xPC:N` for 68k code paths, NOT
-`SS_PROBE_PC`. SS_PROBE_PC is PPC block-entry only and is probe-blind to 68k addresses.
-A single `SS_PROBE_68K=0x5000ed08:5` would have shown a2=hnfo_rec and *(a2+0x14)=0
-directly, without the address confusion or QEMU comparison step.
-Default boots are unchanged (PROGRAM#5 srr0=0x50324fec park + the M7 delivery
-chronology; level-0 posts per R-II7 keep consumption unreachable by design until the
-SS_NW_PIC flip). **NEW named residue: SC#1 r0=0x0d** (r1=1017ffde lr=5046c5ac) —
-deterministic 2/2 on default+consume-on boots vs 0/19 without; candidate mechanism =
-the Q-C3 stub's unconditional level-0 staging re-arming at the drain; a flip
-prerequisite and a VIA-IFR Task-0 recon question. Do not treat "the post is never
-polled" / "PROGRAM#4 never fires" / "the slot-4/0x3244e8 livelock" / "Ticks never
-moves" / "EE has never risen" / "delivered_ext stays 0 on live boots" / "SysError 12"
-as current claims — they are historical.
+**Layer 2 — CGRP uninitialized:**
+CGRP base = `*(KDP-0x338)` = 0x68ffc1c0. Fields as of any current boot:
+- `+0x20` = 0x00000001 — a **function pointer** (NOT a counter), should be `NK_base+0x3da0
+  = 0x503143a0`; value 1 means NK cold-start never ran `init_503115f8` for this CGRP instance.
+  The `cmpwi r9, 2; blt` guard at 0x50314894 is a null-pointer check (≥2 = non-null).
+- `+0x38` = 0x00000000 — guard (must be non-zero for delivery)
+- `+0x3c` = 0x00000000 — TABLE_BASE (array of context descriptor pointers)
+- `+0x40` = 0x00000000 — STACK_TABLE (array of stack pointers per interrupt group)
+- `+0x44` = 0x00000000 — COUNT (must be ≥10; NK EXT posts source index 9)
+Mac OS normally populates CGRP via NK interrupt-registration services during System
+startup — our boot stalls before that point (Mac OS never reaches the Toolbox).
+
+**Named next task: M10 — user-mode DR + CGRP initialization.**
+
+M10 prerequisites:
+1. **User-mode DR** — fix SS_M6A_USER_MSR (quarantined: zero-page slide crash) or provide
+   an equivalent mechanism so the DR emulator's MSR PR=1 at interrupt time.  This makes NK
+   EXT handler take the CGRP path (r11.bit16=1) instead of the fallback.
+2. **CGRP initialization** — once PR=1 works, populate CGRP before Mac OS boot:
+   - `+0x20` = `NK_base + 0x3da0` = 0x503143a0 (valid function pointer)
+   - `+0x38` = non-zero guard value
+   - `+0x3c` = TABLE_BASE: array of pointers, each pointing to a 2-word descriptor
+     `[RFI_target, r2]`; entry[9] must point to the 68k interrupt-injection entry in the
+     DR emulator (TBD from RE of NK EXT handler completion path at 0x503148e0)
+   - `+0x40` = STACK_TABLE: array of stack pointers (one per interrupt group)
+   - `+0x44` = COUNT ≥ 10
+
+Verify criterion (unchanged): `SS_PROBE_68K=0x5000ed08:5` fires.
+
+**Historical context (do NOT treat as current claims):**
+"the handler rte's source-less" / "btst d6,(a4) @0x5000ee9a" / "source-table-ptr NIL"
+describe the M8-era frontier BEFORE session-4 RE. The real question is now upstream of
+source dispatch — it's whether the handler is ever invoked at all.
+
+**Tooling lesson (load-bearing):** `SS_PROBE_68K=0xPC:N` for 68k code paths, NOT
+`SS_PROBE_PC`. SS_PROBE_PC is PPC block-entry only — probe-blind to 68k addresses.
+`SS_PROBE_68K` can arm but never fire if the target is structurally unreachable (e.g.,
+the PR-bit gate above). Rule out structural delivery blockers before concluding the probe
+is wrong.
+
+Do not treat "the post is never polled" / "PROGRAM#4 never fires" / "the slot-4/0x3244e8
+livelock" / "Ticks never moves" / "EE has never risen" / "delivered_ext stays 0 on live
+boots" / "SysError 12" as current claims — they are historical.
 
 ## Boot recipes
 

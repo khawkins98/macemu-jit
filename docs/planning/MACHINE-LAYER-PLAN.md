@@ -1,9 +1,9 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
 > **Status:** 🟢 Approved architecture (rev 4) · ⏸ project PAUSED 2026-06-12 (resume: `docs/HANDOFF.md`)
-> **Current state (header budget = 5 lines):** M0–M8 shipped. **Active: M9 VIA-IFR** —
-> OP_IRQ_NW infrastructure committed (harness 353/353); boot stall with `SS_NW_VIA_IFR=1`
-> unresolved (root cause: trampoline tp[25-26] vs ROM patch — not yet isolated).
+> **Current state (header budget = 5 lines):** M0–M9 partial. M9 stall fixed (ROM patch
+> removed; dec_expiries≈1577 baseline). Probe criterion `SS_PROBE_68K=0x5000ed08` → M10:
+> NK EXT requires PR=1 (user-mode DR, quarantined) + CGRP init. Active: M10 scoped.
 > Re-scores: #3 CONFIRMED, #4 trigger recorded (§9). Live frontier: `docs/AGENT-CONTEXT.md`.
 > Full arc: `CHANGELOG.md` + §"Archived status narratives" below.
 > · **Created:** 2026-06-10 · **Updated:** 2026-06-12

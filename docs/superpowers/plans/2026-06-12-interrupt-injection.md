@@ -729,3 +729,21 @@ No pinned contract falsified.
 
 **GO for Task A** (Q-I1/Q-I2/Q-I4/Q-I6 pinned; design inputs complete). **Task B holds for
 the R-II7 re-scope decision** on the post-value expectation; its Q-I2/Q-I3 inputs are pinned.
+
+### Coordinator re-grade of Task B (2026-06-12, post-Task-0) — the R-II7 decision
+
+Task B's "post observed = level|0x8000" PASS/FAIL gate is **re-graded to write-EVENT
+grading**: PASS = a write to the resolved target 0x68fff070 from the pinned post-family
+writer (the 0x3254e0 tails), following an EXT delivery, observed via
+`SS_JIT_WATCH_ADDR=68fff070` — falsifiable and satisfiable at this frontier. The written
+VALUE is recorded as a diagnostic, not gated (R-II7: the level derives from PIC IACK +
+the lowmem 0x3f00 table, both guest-init-owned and zero pre-init — a zero post is the
+correct behavior of the real chain at this frontier, not a failure).
+
+**Level-source staging is NOT pre-authorized.** It becomes a named follow-on decision
+ONLY if Task B's consumption probes prove the 68k chain tests-and-skips on a zero level
+(i.e. the round trip dies exactly at the level test). In that case: capture the evidence,
+write the staging proposal as a dated addendum (which word, who owns it on a real boot,
+why staging is not the fake-poke pattern), and bring it back for sign-off — do not
+improvise it in-task. If the 68k chain consumes regardless of level (the OP_IRQ d0=1
+pre-WLSC arm), no staging is needed and the gate stands as re-graded.

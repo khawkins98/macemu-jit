@@ -1514,8 +1514,15 @@ bool PatchROM(void)
 	};
 	PatchROM_NW_trampoline();
 
-	// SS_DUMP_ROM: dump full decompressed ROM image for offline disassembly.
+	// SS_DUMP_ROM: dump decompressed ROM image for offline disassembly.
 	// Lives here (PatchROM) not in patch_68k() so it fires even when patch_68k fails on parcels.
+	//
+	// LIMITATION: writes ROM_SIZE (4MB) bytes — the file content only.  The extra 1MB
+	// patch/mirror area (ROM_AREA_SIZE - ROM_SIZE = 0x100000, offsets 0x400000–0x4fffff)
+	// is NOT included.  Addresses like the trampoline (ROM+0x429b40) and the DR emulator
+	// mirror (ROM+0x46e964) live in that region and will not appear in the dump file.
+	// To disassemble those, read from the live process (ROMBaseHost + offset) in lldb after
+	// the emulator has started and PatchROM has run.
 	{
 		const char *dump_path = getenv("SS_DUMP_ROM");
 		if (dump_path && *dump_path) {
@@ -1523,7 +1530,9 @@ bool PatchROM(void)
 			if (f) {
 				fwrite(ROMBaseHost, 1, ROM_SIZE, f);
 				fclose(f);
-				fprintf(stderr, "[ROM-DUMP] wrote %u bytes to %s\n", (unsigned)ROM_SIZE, dump_path);
+				fprintf(stderr, "[ROM-DUMP] wrote %u bytes (ROM_SIZE, 4MB file content only; "
+				        "patch/mirror area 0x400000-0x4fffff NOT included) to %s\n",
+				        (unsigned)ROM_SIZE, dump_path);
 			} else {
 				fprintf(stderr, "[ROM-DUMP] failed to open %s for writing: %s\n", dump_path, strerror(errno));
 			}
@@ -3988,6 +3997,20 @@ static bool patch_68k(void)
 	// path for the DR emulator so PR=1 at EXT time; (b) initialize CGRP+0x20/+0x38/
 	// +0x3c/+0x40/+0x44 with valid NK function pointers and descriptor tables so the
 	// NK can route the EE interrupt to the 68k handler at 0x5000ed08.
+	//
+	// Analysis: docs/archive/2026-06/machine/VIA-IFR-RECON.md; docs/HANDOFF.md §Session 4.
+	if (ROMType == ROMTYPE_NEWWORLD && getenv("SS_NW_VIA_IFR") &&
+	    strcmp(getenv("SS_NW_VIA_IFR"), "0") != 0) {
+		fprintf(stderr,
+		        "[VIA-IFR] SS_NW_VIA_IFR=1 — gate is currently a NO-OP.\n"
+		        "[VIA-IFR]   What it does: nothing (no ROM patch applied).\n"
+		        "[VIA-IFR]   Why: the previous ROM patch at 0x5000ed08 caused a\n"
+		        "[VIA-IFR]   dec_expiries=5 stall by corrupting bytes the NK reads\n"
+		        "[VIA-IFR]   as data during boot.  Patch removed; gate kept for M10.\n"
+		        "[VIA-IFR]   The 68k interrupt handler does NOT fire in any current\n"
+		        "[VIA-IFR]   boot: NK EXT handler requires PR=1 (user-mode) + valid\n"
+		        "[VIA-IFR]   CGRP — neither is true yet.  See: docs/HANDOFF.md §S4.\n");
+	}
 
 	// Patch ZeroScrap() for clipboard exchange with host OS
 	uint32 zero_scrap = find_rom_trap(0xa9fc);	// ZeroScrap()

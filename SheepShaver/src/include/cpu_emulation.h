@@ -27,8 +27,14 @@
  */
 
 // Constants
-const uint32  ROM_SIZE = 0x400000;				// Size of ROM file
-const uint32  ROM_AREA_SIZE = 0x500000;			// Size of ROM area
+const uint32  ROM_SIZE = 0x400000;				// Size of ROM file (4MB — what SS_DUMP_ROM writes)
+const uint32  ROM_AREA_SIZE = 0x500000;			// Size of ROM area (5MB — ROM file + 1MB patch/mirror space)
+// NOTE: ROM_AREA_SIZE > ROM_SIZE.  The extra 1MB (offsets 0x400000–0x4fffff from ROMBase)
+// is NOT from the ROM file; it is populated at runtime by PatchROM (mirror copy of the last
+// 1MB of the ROM file, plus patch tables).  SS_DUMP_ROM writes only ROM_SIZE bytes — any
+// addresses above ROMBase+0x3fffff (e.g. trampoline at 0x429b40, DR mirror at 0x46e964)
+// will NOT appear in the dump.  To inspect those, read from ROMBaseHost+offset in a debugger
+// after PatchROM has run.
 const uintptr DR_EMULATOR_BASE = 0x68070000;	// Address of DR emulator code
 const uint32  DR_EMULATOR_SIZE = 0x10000;		// Size of DR emulator code
 const uintptr DR_CACHE_BASE = 0x69000000;		// Address of DR cache

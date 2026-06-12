@@ -17,6 +17,101 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-12 — QEMU rig bringup: five pitfalls to know before using it
+
+Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`. Full context: `docs/planning/machine/VIA-IFR-RECON.md`.
+
+### 1. The monitor socket echoes every keystroke (ANSI escape sequences)
+
+The QEMU monitor Unix socket runs in **terminal mode**: it echoes each character
+you send — including cursor-movement escape sequences (`\x1b[K`, `\x1b[D` etc.) — before
+returning the actual response. A naive recv-and-parse will see interleaved echo and data
+that looks like garbage.
+
+**Fix:** strip all ANSI/VT100 escape sequences (`re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', ...)`)
+AND skip everything before the first `\n` in the response (everything before the first
+newline is the terminal echo of the command; the actual output starts on the next line).
+Read until `(qemu)` appears to know you have the complete response. `qemu-mon.py` does
+all of this; use it instead of raw sockets.
+
+Also: **the monitor accepts only one connection at a time**. If a previous Python session
+connected and exited without a clean close, QEMU may refuse the next connection until it
+times out. Symptom: `ConnectionRefusedError: [Errno 61]` despite the socket file existing.
+Kill and restart QEMU.
+
+### 2. `xp` reads physical RAM; `x` reads virtual (guest) address space — and you almost always want `x`
+
+After the NK takes over and enables the PPC MMU, physical address 0 is no longer where
+Mac OS 68k low memory lives. `xp /wx 0x168` returns zeros; `x /wx 0x168` returns the
+live Ticks counter. **Always use `x` for Mac OS guest memory inspection.** The one time
+`xp` is useful: reading ROM (`xp /wx 0xfff00000`) or confirming the physical DRAM layout.
+
+### 3. QEMU mac99 device MMIO addresses differ from real hardware — use QEMU for behavior, not addresses
+
+The QEMU mac99 MacIO (KeyLargo) is a PCI device. OpenBIOS assigns it `BAR0 = 0x80000000`.
+Real G4 hardware hardwires the MacIO at `0xF3000000`. Consequently:
+
+| Device | QEMU mac99 | Real G4 hardware |
+|---|---|---|
+| MacIO base | `0x80000000` | `0xF3000000` |
+| VIA (Cuda) | `0x80016000` | `0xF3016000` |
+| SCC (ESCC) | `0x80012000` | `0xF3012000` |
+
+Hardware watchpoints set at `0xF3016000` won't fire in QEMU. Our SheepShaver machine
+layer targets `0xF3016000` (real hardware). The QEMU rig is valid for **behavioral**
+reference (what the guest code does, what values it reads) but **not** for address
+reference. Cite behavior, not addresses, when using QEMU as the oracle.
+
+### 4. The 68k level-1 interrupt handler address is heap-allocated — read the vector first, then the code, and do it once
+
+In a running Mac OS 9.2.1, the level-1 interrupt handler is at virtual address
+`[0x64]` (the Mac interrupt vector table). This address is **not fixed** across boots — it
+is heap-allocated by the Mac OS System file during boot, so different boots place
+different code at the same reported address. Two implications:
+
+- **Always read `x /1wx 0x64` first** to get the current handler address, then
+  `--disasm` that address. Don't hardcode `0x47d0ba` — it happened to be the address
+  in one session.
+- **Read the vector exactly once and reuse that value.** During boot the vector changes
+  rapidly: early on it points to a ROM dispatch thunk (`0xffc00530`), then to successive
+  ROM stubs, then finally to the system-installed handler in RAM (`0x47d0ba` or
+  wherever). If you read it once for display and then again a few seconds later to extract
+  VEC, you can get two different values — and the disassembly will silently be for the
+  wrong address. This is the root cause of the `0xffc0ec50 vs 0xffc00530` discrepancy
+  seen in a `--timeout 5` test run. The fix: read the vector once, parse it, use both
+  the raw string and the extracted address from that single result.
+- **Don't infer handler behavior from a read taken at a different boot stage.** The
+  early-boot ROM stub (at ROM addresses like `0x5000ee58` or `0xffc0ec50`) is replaced
+  by the system handler once the System file loads. Reads at Finder ≠ reads mid-boot.
+  The ROM dispatch thunk at `0xffc00530` contains `jmp (a2)` — it routes through a
+  runtime register, not a literal target. Only the final system-installed handler at
+  Finder steady-state gives you the observable behavior you want.
+
+### 5. The AGENT-CONTEXT description of `btst d6,(a4)` at 0x5000ee9a was WRONG
+
+The AGENT-CONTEXT frontier block stated the ROM handler does `btst d6,(a4); beq;
+movea.l $6e4.w,a0; jsr (a0)` at `0x5000ee9a`. Static ROM disassembly (capstone,
+9.0.1 ROM file) shows:
+
+```
+0x5000ee98  4ab80d94    tst.l   $d94.w     ← 4-byte instruction; 0x9a is mid-word
+0x5000ee9c  6706        beq.b   $5000eea4
+0x5000ee9e  207806e4    movea.l $6e4.w, a0
+0x5000eea2  4e90        jsr     (a0)
+```
+
+The address `0x5000ee9a` is byte 2 of `tst.l $d94.w` — mid-instruction. There is no
+`btst d6,(a4)` in the ROM near that address, and no `movea.l #$F3016xxx, a4` anywhere
+in the ROM. The VIA IFR is not read directly by this handler. The actual source dispatch
+tests the 68k low-memory flag `$0d94` (zero = no tick dispatch; non-zero = call $6e4 chain).
+
+**General rule:** when a runtime probe or ring-buffer observation gives you "the
+instruction at 0xPC is X" — verify it against the static ROM disassembly before
+building on it. Runtime observations can capture mid-instruction PCs, DR-internal PCs,
+or patched versions; the static file is ground truth for unpatched ROM bytes.
+
+---
+
 ## 2026-06-11 (latest) — 68k PC-desync: some registers are CONTRACTS, not state — the r0-invariant class
 
 One durable lesson from the 68k PC-desync milestone (plan

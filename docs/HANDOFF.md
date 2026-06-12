@@ -20,32 +20,32 @@ Paste this to start the next session:
 > env-gated implementation → flip-last acceptance → docs close-out), with the
 > parallel-workstream layer (file-ownership claims, slot-protocol boots, always-green
 > fusion). **Follow the recommended resumption order below** unless Ken redirects:
-> QEMU rig first (half-day cap), then the two-gear sprint toward the first visible
-> boot screen, with the VIA-IFR surface as the first wall. Never push without being
-> asked.
+> the QEMU rig is DONE (shipped 2026-06-12; see `docs/planning/machine/VIA-IFR-RECON.md`
+> for findings + Task A questions); the two-gear sprint toward the first visible boot
+> screen is next, with VIA-IFR Task A as the first wall. Never push without being asked.
 
 ## Recommended resumption order (coordinator + Ken, decided at pause time)
 
-1. **The QEMU differential rig FIRST (≤ half a day).** Build idea 2 below on Spike
-   S1's working mac99 boot of our 9.0.1 ROM (`docs/planning/spikes/
-   SPIKE-S1-QEMU-GATE-CHECK.md`). Its first customer is the VIA-IFR Task-0 itself:
-   observe on the reference boot what the VIA IFR presents at tick time, what the
-   68k level-1 handler reads (the a4@0x5000ee9a address, the d6 bit), and what the
-   $6e4 vector chain expects on dismissal — answers by observation instead of recon
-   boots. If the rig stalls past the half-day cap, fall back to the standard
-   Task-0-by-probes and finish the rig later.
-2. **Then the two-gear sprint toward pixels** (idea 1 below): VIA-IFR first
-   (pre-answered by the rig), the M5 framebuffer early (recon complete — a visible
-   screen converts later debugging from ring-forensics to looking at it), then
-   frontier-chase. Light gear for seed-class walls (evidence-tagged root cause →
-   gated fix → inner gates → one-line log); the FULL milestone machine for anything
-   touching delivery/world-switch semantics or paravirtual-reachable code.
-   Non-negotiables in either gear: slot protocol, falsifiable evidence before fixes,
-   env gates. One consolidated review + docs pass at sprint end (scheduled review
-   debt, not skipped review).
+1. ~~**The QEMU differential rig FIRST (≤ half a day).**~~ **DONE (2026-06-12).**
+   Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`. VIA-IFR Task-0 answered:
+   the `btst d6,(a4)` description in AGENT-CONTEXT was wrong; the ROM handler at
+   0x5000ee98 does `tst.l $d94.w` (tests a low-memory flag, not a VIA MMIO register).
+   Key finding: QEMU's Cuda model never exposes VIA IFR bits to the guest — the
+   question is what sets `$0d94` and what the active handler at 0x64 is in our
+   early-boot guest. Full findings: `docs/planning/machine/VIA-IFR-RECON.md`.
+2. **The two-gear sprint toward pixels** (idea 1 below): VIA-IFR Task A first
+   (what sets `$0d94`; what handler is at 0x64 in our early-boot guest; what
+   `jsr $47c526(pc)` returns as the source pointer), the M5 framebuffer early
+   (recon complete — a visible screen converts later debugging from ring-forensics to
+   looking at it), then frontier-chase. Light gear for seed-class walls
+   (evidence-tagged root cause → gated fix → inner gates → one-line log); the FULL
+   milestone machine for anything touching delivery/world-switch semantics or
+   paravirtual-reachable code. Non-negotiables in either gear: slot protocol,
+   falsifiable evidence before fixes, env gates. One consolidated review + docs pass
+   at sprint end (scheduled review debt, not skipped review).
 3. **Day one, inside the sprint:** sketch the M9+ milestone map (item 6, rough is
-   fine) and kick off the QEMU wall census (item 7) as a background task once the
-   rig works.
+   fine) and kick off the QEMU wall census (item 7) as a background task — the rig
+   now exists, so this can start immediately.
 4. **Defer doc restructuring** (item 4's residual) to the next doc-sweep trigger —
    it is not the bottleneck.
 
@@ -75,7 +75,10 @@ Shipped in the final two days before the pause (details: `CHANGELOG.md` 2026-06-
 
 The honest red: **Ticks is still host-attributed.** The 68k handler `rte`s source-less
 because the VIA 6522 IFR presents no interrupt source — that is exactly the named next
-milestone.
+milestone. **Task-0 of that milestone is now answered** (2026-06-12, post-pause): the
+ROM dispatch at 0x5000ee98 tests low-memory flag `$0d94`, not a VIA MMIO register; Task A
+is what sets `$0d94` and what handler is actually at 0x64 in our early-boot guest. See
+`docs/planning/machine/VIA-IFR-RECON.md`.
 
 ## Reading order for a fresh session
 
@@ -87,7 +90,8 @@ milestone.
 | `CHANGELOG.md` (top) | What just happened, by commit. |
 | `docs/superpowers/plans/2026-06-12-slot4-consumption.md` | The last milestone — its Task-C flip criteria and residues seed the next one. |
 | `docs/planning/machine/INTERRUPT-INJECTION-RECON.md` | The evidence base + the consolidated residue table (R-II7..R-II10, SC#1=0x0d). |
-| `LEARNINGS.md` | Non-obvious lessons; read before theorizing. |
+| `docs/planning/machine/VIA-IFR-RECON.md` | **Task-0 complete** — corrected ROM dispatch description, QEMU rig findings, Task A questions (what sets `$0d94`; what handler is at 0x64; the `$6e4` chain). The VIA-IFR milestone's entry document. |
+| `LEARNINGS.md` | Non-obvious lessons; read before theorizing. QEMU rig pitfalls added 2026-06-12. |
 
 ## Ideas queued at the pause (2026-06-12 discussion — candidates, not commitments)
 
@@ -106,17 +110,13 @@ weigh them against the default next milestone (VIA-IFR):
    accumulates review debt deliberately — schedule the hardening pass). Suggested
    day-one items: the M5 framebuffer (recon complete — a visible screen is itself
    an instrument) and the QEMU differential rig below.
-2. **QEMU mac99 as a differential boot oracle.** Spike S1
-   (`docs/planning/spikes/SPIKE-S1-QEMU-GATE-CHECK.md`, 2026-06-10) already boots
-   our exact 9.0.1 ROM to Finder under QEMU mac99 — the rig is half-built (working
-   invocation, QEMU 11.0.1, hfsutils). Upgrade it from a one-off gate check to a
-   routine instrument: `-d` traces / gdbstub captures diffed against our boot at
-   the same PC regions, so "what does the NK expect here?" becomes observation
-   instead of RE. Caveat (already noted in MACHINE-LAYER-PLAN §oracles): QEMU boots
-   via OpenBIOS, not Apple OF — the oracle is valid from NK entry onward, which is
-   where our walls live. First customers: the VIA-IFR question (what does the IFR
-   present at tick time on a working boot?), the SC#1=0x0d divergence, the
-   0x500eXXXX crash class.
+2. ~~**QEMU mac99 as a differential boot oracle.**~~ **DELIVERED (2026-06-12).**
+   Tools: `SheepShaver/tools/qemu-rig.sh` (self-contained boot + probe runner, auto-
+   rebuilds the test ISO) and `qemu-mon.py` (ANSI-stripping monitor client with
+   `--disasm`). VIA-IFR Task-0 was the first customer — see resumption order item 1
+   above and `docs/planning/machine/VIA-IFR-RECON.md` for findings.
+   Remaining customers from the original list: SC#1=0x0d divergence, the 0x500eXXXX
+   crash class, the QEMU wall census (item 7 — now unblocked).
 3. **DingusPPC as the fidelity second-opinion.** For NewWorld/Core99 behaviors it
    is the most faithful modern reference (real Apple-OF-path focus). Use when QEMU
    and our RE disagree (Cuda/KeyLargo/VIA). Standing rules apply: import GPL code

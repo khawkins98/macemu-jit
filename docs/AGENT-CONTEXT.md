@@ -15,15 +15,23 @@ scheduler-restore drain (0x324720) → **the slot-4 twi fires** (PROGRAM srr0=50
 word=0fff0004 slot=4) → world switch completes (the R-II10 livelock shapes are FIXED —
 torn-ctx root cause fork-(iii), the riser's mtmsr re-raise mid-tail, cured by the
 deferred EE-edge latch + 60 Hz backstop) → **the 68k level-1 handler runs at 60 Hz**.
-**RED at leg 8, the via6522 IFR surface**: the handler's source dispatch
-(`btst d6,(a4); beq; movea.l $6e4.w,a0; jsr (a0)` @0x5000ee9a) finds NO VIA IFR source
-bit in the via6522 model and **rte's source-less** (0x5000eecc) — OP_IRQ retire never
-runs, the un-retired post re-traps slot-4 ~1.2k/s, Ticks is NOT guest-claimed (the 60 Hz
-0x16c movement is the host keep-set, census-proven via `ticks_keepset`). **Named next
-task: the VIA-IFR surface** (M-class device-model work — `dev_via6522` exists; the
-question is presenting the 60 Hz source to the 68k handler's IFR read, **and the next
-milestone's Task-0 must first resolve a4 at 0x5000ee9a** — the MMIO address of the IFR
-the handler bit-tests — and which bit d6 indexes; plus the `$6e4` vector-chain dismissal).
+**RED at leg 8, the via6522 IFR surface**: the handler's source dispatch finds NO VIA IFR
+source bit in the via6522 model and **rte's source-less** (0x5000eecc) — OP_IRQ retire
+never runs, the un-retired post re-traps slot-4 ~1.2k/s, Ticks is NOT guest-claimed (the
+60 Hz 0x16c movement is the host keep-set, census-proven via `ticks_keepset`).
+**Correction (2026-06-12, QEMU rig + static disassembly):** The prior description
+`btst d6,(a4) @0x5000ee9a` was WRONG — `0x5000ee9a` is mid-word of a 4-byte
+`tst.l $d94.w` starting at `0x5000ee98`. The actual ROM stub source-dispatch is:
+`tst.l $d94.w; beq $5000eea4; movea.l $6e4.w,a0; jsr (a0)` — it tests the 68k
+low-memory flag `$0d94` (NOT a VIA MMIO register). No `btst d6,(a4)` exists in the ROM
+near that address; no `movea.l #$F3016xxx, a4` exists anywhere in the ROM.
+The real question is what sets `$0d94` at tick time (and whether it is even the active
+handler path — at Finder, Mac OS 9.2.1 installs its own handler in RAM, replacing the ROM
+stub). See `docs/planning/machine/VIA-IFR-RECON.md` for the full corrected picture.
+**Named next task: the VIA-IFR surface** (M-class device-model work — `dev_via6522`
+exists; the question is presenting the 60 Hz source so the active handler dispatches
+correctly; Task-0 questions: what sets `$0d94` + what handler is at 0x64 in our early-boot
+guest + the `$6e4` vector-chain dismissal).
 Default boots are unchanged (PROGRAM#5 srr0=0x50324fec park + the M7 delivery
 chronology; level-0 posts per R-II7 keep consumption unreachable by design until the
 SS_NW_PIC flip). **NEW named residue: SC#1 r0=0x0d** (r1=1017ffde lr=5046c5ac) —
@@ -97,6 +105,22 @@ as current claims — they are historical.
 - **mtspr-DEC capture is default-on** in the `[VCLK]` exit dump (`21704614`): last-8
   (value@PC) ring + zero/tiny/small/mid/msb value-class buckets — the DEC-cadence
   evidence channel.
+- **QEMU differential rig** (`SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`) —
+  behavioral reference oracle for NewWorld/mac99 boot (shipped 2026-06-12). Use when a
+  Task-0 question is "what does the guest do on a working boot?" — answers by observation
+  instead of static RE. Invoke: `bash SheepShaver/tools/qemu-rig.sh --timeout 50` →
+  `python3 SheepShaver/tools/qemu-mon.py --sock /tmp/qemu-rig-*/mon.sock '<cmd>'`.
+  **Two load-bearing caveats:**
+  (1) **Behavioral oracle only, never address oracle** — QEMU mac99 MacIO is at PCI
+  BAR0 `0x80000000` (not `0xF3000000`); VIA=`0x80016000`, SCC=`0x80012000`. Never cite
+  QEMU MMIO addresses as reference values for our machine layer.
+  (2) **QEMU's Cuda model handles 60 Hz ticks internally** — hardware watchpoints on
+  the VIA MMIO range never fire during interrupt handling in QEMU. On real hardware,
+  Cuda asserts VIA IFR bit 3; Mac OS's Cuda driver may read it. "MMIO never read" is a
+  property of QEMU's model, not of Mac OS in general — `dev_via6522` may still need to
+  present the correct IFR bit via the Cuda protocol.
+  Oracle scope: valid from NK entry onward (OpenBIOS ≠ Apple OF pre-NK).
+  Pitfalls: `LEARNINGS.md` "2026-06-12". First-session findings: `VIA-IFR-RECON.md`.
 - ROM dumps — canonical location: **`/Users/Shared/macemu/dumps/`** with `MANIFEST.txt`
   (filename + md5 + provenance). `rom901_inventory.bin` = RAW (md5 7b1378be…, 16
   placeholder words at file 0x36e8c0); `rom901.bin` = PATCHED (md5 d1a267a9…,
@@ -183,8 +207,9 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 Plans: `docs/superpowers/plans/` (canonical exemplar: 2026-06-11-nk-syscall-surface.md;
 2026-06-12-interrupt-injection.md and 2026-06-12-slot4-consumption.md are COMPLETE —
-**next named task: the VIA-IFR surface** [device-model M-class; Task-0 questions: a4 at
-0x5000ee9a + the d6 bit index + the $6e4 vector chain + the SC#1=0x0d residue],
+**next named task: the VIA-IFR surface** [device-model M-class; Task-0 questions: what
+sets `$0d94` at tick time + what handler is at 0x64 in our early-boot guest + the `$6e4`
+vector chain + the SC#1=0x0d residue; see VIA-IFR-RECON.md for full corrected picture],
 frontier evidence in INTERRUPT-INJECTION-RECON.md "Slot-4 consumption Task B" leg 8
 + "Task C"). Evidence/addenda: `docs/planning/machine/`
 (M6A-ONGOING-ENTRY-DESIGN.md, M6A-WAVE2-SHIM-RECON.md, M3A-ENTRY-TABLE.md,

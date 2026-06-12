@@ -1,5 +1,15 @@
 # M3b Wave 2 — the EE/interrupt-delivery chain, verification-first: prove the chain under the current armed state, then wire the OpenPIC, then restore the tick
 
+> **STATUS: CLOSED / SUPERSEDED (2026-06-12).** W2-0…W2-3 shipped from this plan;
+> **W2-4's remainder — including the reserved riser/published flip — shipped via the M7
+> interrupt-injection milestone** (`2026-06-12-interrupt-injection.md`, arc
+> `153c088b`…`81d60cc1`), per its rev-2 B1 supersession table. Final per-item
+> dispositions: the table in this plan's W2-4 section below. Current state: the
+> SS_NW_EE_RISER + SS_NW_DEC_PUBLISHED + SS_NW_HOST_IRQ cluster is the **newworld
+> DEFAULT** (`81d60cc1`); EXT delivery + guest IACK live; consumption (Ticks) is the
+> named next task (slot-4 round trip, slot5-recon `b3e51b8d`). Body text below is
+> historical — claims like "EE has never risen" describe the 2026-06-11 state.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps
 > use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — W2-0 edits
@@ -411,6 +421,19 @@ newworld byte-identical).
   recorded). Gates: full gates throughout. Commit per sub-step.
 
 ### Task W2-4: tick restoration — tm_task/via_int retirement + XLM_IRQ_NEST ownership (link 7 + 8; EVIDENCE-GATED on W2-2/W2-3 findings)
+
+> **FINAL DISPOSITION (2026-06-12, M7 close-out — the supersession table, per
+> M7 rev-2 B1 + M7 Task C results):**
+>
+> | W2-4 item | Final disposition |
+> |---|---|
+> | tm_task retirement A/B | **MOOTED** by `2ff7765f` (verify-EXPECTED-first guard; the 9.0.1 misalignment was the real bug) — no retirement A/B owed |
+> | via_int cluster disposition (rom_patches :3474–3511) | **RETAINED, load-bearing** — M7 Q-I3 pinned the patched chain as THE consumption path (level-1 @0xec50 → via_int 0xef2c → 60 Hz proc 0xbbb8 → fe6b OP_IRQ → `addq.l #1,$16a`); B-2's level fix arms exactly its trigger inputs. It is the next milestone's consumption rail, not dead code |
+> | XLM_IRQ_NEST ownership (link 8) | **DOCUMENT-AS-DEAD** (M7 Task C disposition 1): both consumers' predicates unreachable from −1 downward; ~2³¹-delivery wrap caveat recorded; re-base/retire not owed |
+> | Polled-trampoline + SDL_PumpEvents | **NAMED-DEFERRED** — ROADMAP follow-on row (default: leave / keep+decouple); untouched by the M7 chain |
+> | Acceptance headline — Ticks advancing | **ABSORBED into M7 Task B/B-2 rider, honestly NOT achieved by the guest**: the host keep-set ticks Ticks (watch-word 0x16c correction); the guest `addq.l #1,$16a` has never run — the break is the slot-4 consumption livelock (the named next task) |
+> | The reserved riser/published flip | **SHIPPED as the M7 Task-C cluster flip** (`81d60cc1`): SS_NW_EE_RISER + SS_NW_DEC_PUBLISHED + SS_NW_HOST_IRQ newworld DEFAULT, explicit-"0" opt-outs; all-OFF byte-identical A/B |
+> | Wave2 Task Z (docs) | **ABSORBED into the M7 Task-Z close-out** (DIAGNOSTICS M7 section, MACHINE-LAYER-PLAN re-score #3, this table) |
 
 **Entry gate (explicit):** W2-2's P2 verdict READY-or-mapped + W2-3's acceptance (or its
 pre-declared downgrade verdict) determine this task's shape. **If the evidence says the

@@ -1208,3 +1208,14 @@ run-mode clearing, NOT fence changes.]**; (2) XLM_IRQ_NEST ownership
 (unchanged). Boots used: 5/5 (probe, PC-attrib [SIGTRAP at 0x5046dc1c — delivery
 onto the DR-emulator init loop, one-off, not reproduced], seed, watchpoint,
 acceptance). Falsifications: NONE.
+
+**[CLOSED 2026-06-12 — the M7 interrupt-injection milestone shipped this remaining
+body: item 1b RESOLVED (`3cb3b16e` wake-up re-arm; then the M7 Q-I6 fence narrowing
+took deferred_native to 0); item 2 documented-as-dead (M7 Task C disposition 1);
+item 3 = the chain is now LIVE through the NK post — first host-sourced EXT delivery,
+first guest IACK of the OpenPIC model, the level test passes env-on; the riser/
+published/host-irq cluster is the newworld DEFAULT (`81d60cc1`) — but guest
+CONSUMPTION (link 7's Ticks) remains open: the slot-4 round trip is the named next
+task (INTERRUPT-INJECTION-RECON.md "R-II10 / slot-5 park recon" `b3e51b8d`); item 4
+via_int RETAINED as the consumption rail. Final disposition table: the wave2 plan's
+W2-4 section.]**

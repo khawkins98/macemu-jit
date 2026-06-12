@@ -19,20 +19,32 @@ the 68k via_int chain runs (probes **0x5000ec52 / 0x5000ef22 / 0x5000bbca** fire
 **(4)** the armed post (0x8001 at 0x68fff070) is RETIRED on the real consumption path
 (a guest writer clears it — zero host writes to per-event state). **RIDER (diagnostic,
 the project headline if it lands): Ticks guest-claimed** — watch word **0x16c** (B-2's
-corrected LSB word) moving inside a DR-dispatch record window (the `addq.l #1,$16a` at
-~0x5000bbc8), NOT the host `HandleInterrupt` keep-set.
+corrected LSB word) moving with GUEST attribution per the rev-2 respecified evidence
+triplet (r24≈0xbbca-class watch record + the 0x5000bbca probe coincidence + the host
+keep-set counter census — see Task B's rider step), NOT the host `HandleInterrupt`
+keep-set.
 
 **Architecture:** seeds-not-services (the pattern has held ~7 consecutive times; M7's
 entire guest-visible fix set was ~6 staged init words + one latch + one fence narrowing).
 The NK side of slot 4 already exists and is 3 instructions; the 68k via_int cluster is
 patched-present and load-bearing (M7 Task C disposition: "the next milestone's
-consumption rail"). The expected fix class is a small number of staged init words / a
-restore-ordering correction, NOT new machinery. **Task 0 is a BINDING recon gating Tasks
-A..C**, and it owns the named M3-class fork up front (MACHINE-LAYER-PLAN re-score #3):
-if the restore tail cycles because of **NK state we never staged** (a scheduler/run-queue
-word; the R-II8 junk-queue family), the fix is another seed — in scope; if it cycles
-because the **DR↔NK world-switch protocol needs machinery we don't model**, that is
-M3-class and the **STOP-RULE fires at the addendum**, not after improvised machinery.
+consumption rail"). **[rev 2 / A1]** The expected fix class is NOT only seeds: the
+leading shape-A hypothesis (statically confirmed at fold time, see Rev 2 §A1) is that
+the livelock is **patch-created non-atomicity in OUR riser stub** — the raw NK exits via
+`rfi` (MSR+PC raised ATOMICALLY); our patched tail raises EE via `mtmsr` BEFORE the ctx
+reloads and the `bctr`, and `execute_mtmsr` re-raises on the EE 0→1 edge whenever a
+source pends (DEC ~88/s), delivering a TORN context (srr0 in the reload region,
+r10=composed-MSR scratch 0x9040, r12=LR image 0x5046c4f4) whose restore re-enters the
+same window. The expected fix class is therefore a **bounded rfi-atomicity correction in
+the riser-cluster code** (defer the EE-edge re-raise past the bctr / move the rise to
+the bctr boundary) and/or staged init words — still NO new service bodies, NO new
+machinery. **Task 0 is a BINDING recon gating Tasks A..C**, and it owns the named
+M3-class fork up front (MACHINE-LAYER-PLAN re-score #3), now THREE-WAY: (i) **unstaged
+NK state** (a scheduler/run-queue word; the R-II8 junk-queue family) ⇒ the fix is
+another seed — in scope; (iii) **patched-tail non-atomicity** ⇒ an in-scope
+riser-cluster code fix (rfi-atomicity emulation); only (ii) the **DR↔NK world-switch
+protocol needs machinery we don't model** is M3-class and the **STOP-RULE fires at the
+addendum**, not after improvised machinery.
 New code is env-gated **`SS_NW_IRQ_CONSUME`** (default OFF; structurally inert off) and
 flipped to the newworld default only as Task C's LAST step, revert-on-red. The M7
 cluster (`SS_NW_EE_RISER`/`SS_NW_DEC_PUBLISHED`/`SS_NW_HOST_IRQ`) is already default-ON
@@ -76,10 +88,17 @@ NON-GOAL here).
 - **Shape A anatomy** (what Task 0 must explain): one PROGRAM#4 (counters then froze —
   the cycle is NOT re-trapping through the twi); the spin is pure-NK downstream of one
   delivery; 0x503244e8 = the reload region executing 34–71M blocks/s without completing
-  a world switch; probe constants r10=0x9040 (an MSR-image value where the bctr resume
-  PC is expected — suspicious on its face), r12=0x5046c4f4. The bctr resume target at
-  livelock is THE first open question. The livelock-time ctx was never captured
-  (slot5-recon budget cap) — `[r6:0x180]` at the livelock is the designed probe.
+  a world switch; probe constants r10=0x9040, r12=0x5046c4f4. **[rev 2 / A3 — corrected
+  framing]**: r10 at 0x3244e8 is NEVER the resume PC by construction — the patched tail
+  moved it to CTR (`mtctr r10` at 0x3244d8) and the 0x318000 stub then clobbers r10
+  twice (`lwz r10,XLM_IRQ_NEST`, then the riser's `mfmsr r10; rlwimi r10,r11; mtmsr
+  r10`). r10=0x9040 is exactly the riser's composed-MSR scratch (EE=0x8000 | 0x1040) —
+  statically explained, NOT an anomaly to adjudicate. CTR is unprobeable: pin the bctr
+  target via the **ctx SRR0-image slot (+0xa4, verify the offset in Q-C1a) inside the
+  already-planned `[r6:0x180]` probe**. The livelock-time ctx was never captured
+  (slot5-recon budget cap) — `[r6:0x180]` at the livelock is the designed probe; its
+  job is now CONFIRMING the torn-ctx mechanism live (srr0-image in the reload region),
+  not open-ended root-causing.
 - **Shape B anatomy**: EXT delivered at restart=0x50465f28 (mid-DR) → the CR arm never
   reached the LIVE DR context (the post ORs `[KDP+0x674]` into a SAVED r13 image; which
   image, and is it the one the next restore loads?) → guest 68k busy-wait. The
@@ -106,6 +125,12 @@ NON-GOAL here).
   probes can't count — counters (the exc-tuple idiom) for counts.
 - **ROM provenance**: `/Users/Shared/macemu/dumps/` MANIFEST — rom901.bin
   md5 d1a267a9 (PATCHED, post-f808a7fb), rom901_inventory.bin md5 7b1378be (RAW).
+  **[rev 2 / A2 — VERIFIED at fold time]: rom901.bin PREDATES the 81d60cc1 cluster
+  flip — its 0x318000 stub is the 4-word riser-LESS shape (`81402818 394affff 91402818
+  4800c4d8`, no mfmsr/rlwimi/mtmsr). Any Q-C1 static walk of the tail/stub MUST use
+  `rom_patches.cpp:2522ff` as the stub authority (the 7-word default-ON shape), or
+  re-dump from a current default boot and re-baseline the MANIFEST. `/tmp/rom901.bin`
+  is the retired pre-f808a7fb image (md5 e432df64) — never use it.**
   `tools/dump-manifest.sh --check` before tagging [RAW-ROM]/[PATCH]; mirror-region
   (0x5046xxxx) facts are [PROBE✓]-only; capstone-M68K mis-decodes fe1f-class words —
   `tools/m68k-dis.py`.
@@ -140,8 +165,15 @@ re-score #3 is confirmed. No in-flight prerequisite. The gate is REPRODUCTION:
   delivery-green/consumption-livelock class: watch-or-log evidence of the 0x8001 post
   + one of shapes A/B/C identified BY ITS SIGNATURE (A: PROGRAM#4 + 0x3244e8-class
   spin, comp frozen, jDR static; B: no PROGRAM#4, jDR flat-out; C: park reached,
-  post armed). Record which shape this machine/instrument set produces — it is the
-  baseline shape for all A/B comparisons in this plan.
+  post armed). **[rev 2 / B6]** Pin the verdict as grep targets, not log reading:
+  `--expect 'first-iacks: src=0x3f vec=0x3f;;EXT delivered #1' --absent 'TRIPWIRE'`
+  + BOOT-VERDICT PASS, with the shape classifier recorded as the grep used
+  (A: `PROGRAM delivered #4`-class line present + the livelock-block probe/HB
+  signature; B: absent; C: `srr0=50324fec`-class park line). Record which shape this
+  machine/instrument set produces — it is the baseline shape for all A/B comparisons
+  in this plan. **[rev 2 / B3]** If the entry baseline shape is C (ring-slowed class),
+  Task B's shape-B arm needs a config-discovery boot to find a B-producing config —
+  that boot comes out of Task B's ≤5-boot cap; state it in Task B's accounting.
 - [ ] Both boots within the Task-0 budget (they double as Task 0 boots 1–2 if probed
   accordingly — co-scheduling encouraged).
 
@@ -162,24 +194,42 @@ probed. Capture-only telemetry commits allowed (inner gates).
 
 - [ ] **(Q-C1, BLOCKING for A — the restore-tail livelock root cause, shape A; owns
   re-score #3's named surprise.)** Why does 0x503244e8 cycle without completing the
-  world switch? Method, in order: (a) [STATIC] the full restore path from the slot-4
-  service's `blr` through the fallback 0x50325f00 exit legs → the reschedule gate
-  (`r7&0x8000` / `[KDP-0x118]`) → 0x3244cc tail → 0x318000 stub → reload region —
-  name every ctx field read (which ctx? `[KDP+0x65c]`? `[KDP-0x14]`?) and where r10
-  (the bctr target) comes from; explain the observed r10=0x9040 (an MSR image in the
-  resume-PC slot is either a mis-read of WHICH block iteration the probe sampled, or
-  the smoking gun — decide which); (b) one env-on boot with `[r6:0x180]` +
-  r1/r6/r7/r10/r12/r13 probes ON the livelock block (logarithmic sampling reaches
-  10⁹-visit regimes fine) — capture the LIVELOCK-TIME ctx slot5-recon never got;
-  (c) ring window (`SS_RING_WINDOW`/`ring-walk.py --window`) around livelock onset for
-  the actual cycle path (what re-enters 0x3244e8: bctr-to-self-region? per-DEC-delivery
-  re-entry? the scheduler leg looping?). **Deliverable: the root-cause statement +
+  world switch? **[rev 2 / A1] The leading hypothesis is PINNED and statically
+  confirmed (Rev 2 §A1): the riser's mtmsr fires the EE-edge re-raise MID-TAIL** —
+  `execute_mtmsr` (ppc-execute.cpp:1432-1439) triggers on the EE 0→1 edge with any
+  pending source; the stub's mtmsr precedes the ctx reloads (r10/r11 at
+  0x3244fc/0x324500 from r6+0x154/+0x15c) and the bctr, so with DEC pending ~88/s
+  each restore pass is interrupted mid-reload, saving a TORN ctx (srr0 in the reload
+  region, r10=composed-MSR scratch 0x9040, r12=LR image 0x5046c4f4) whose restore
+  re-enters the same window — the 0x3244e4↔0x3244e8 self-loop. Raw rfi is atomic
+  (MSR+PC together); this window is patch-created. Task 0's job is the CHEAP LIVE
+  CONFIRMATION, not open-ended discovery. Method, in order: (a) [STATIC] the full
+  restore path from the slot-4 service's `blr` through the fallback 0x50325f00 exit
+  legs → the reschedule gate (`r7&0x8000` / `[KDP-0x118]`) → 0x3244cc tail → 0x318000
+  stub → reload region — **stub authority = `rom_patches.cpp:2522ff` (the 7-word
+  default-ON shape), NOT rom901.bin (riser-less, A2)**; name every ctx field read
+  (which ctx? `[KDP+0x65c]`? `[KDP-0x14]`?), pin the ctx SRR0-image offset (+0xa4
+  expected) and where CTR (the bctr target) comes from — r10 at the livelock block is
+  the riser scratch by construction (A3), not the resume PC; (b) one env-on boot with
+  `[r6:0x180]` + r1/r6/r7/r10/r12/r13 probes ON the livelock block (logarithmic
+  sampling reaches 10⁹-visit regimes fine) — capture the LIVELOCK-TIME ctx
+  slot5-recon never got; **CONFIRMATION predicate: the ctx srr0-image slot holds a
+  reload-region/tail PC** (torn ctx) — if instead it holds a DR/foreign PC, the
+  torn-ctx hypothesis is falsified and the fork re-opens; (c) **[rev 2 / A4+B3:
+  DEMOTED to optional/confirmatory]** — the ring changes the shape (ring ⇒ C, the
+  instrument rule's own statement), so a ring window at livelock onset is
+  self-defeating as primary evidence; the cycle path is statically derivable. If run
+  at all: a pre-authorized `SS_RING_WINDOW`-minimized NAMED config, its shape RECORDED
+  (not A/B-compared against no-ring boots). **Deliverable: the root-cause statement +
   THE FORK VERDICT in writing — (i) unstaged NK state (name the word(s), the seed
   value, who writes it on a real boot — sanctioned-class justification per the B-2
-  staged-word table discipline) ⇒ Task A is a seed; or (ii) the world-switch protocol
-  needs unmodeled machinery ⇒ STOP-RULE 1 fires here, after the addendum.** Fallback
-  if 2 boots inconclusive: shape A's root cause becomes a residue ⇒ blocking ⇒
-  stop-rule 3 (re-scope, not improvisation).
+  staged-word table discipline) ⇒ Task A is a seed; (iii) patched-tail non-atomicity
+  confirmed ⇒ Task A is the rfi-atomicity fix in the riser-cluster code (defer the
+  EE-edge re-raise past the bctr / move the rise to the bctr boundary — bounded code,
+  no new service bodies); or (ii) the world-switch protocol needs unmodeled machinery
+  ⇒ STOP-RULE 1 fires here, after the addendum.** Fallback if 2 boots inconclusive:
+  shape A's root cause becomes a residue ⇒ blocking ⇒ stop-rule 3 (re-scope, not
+  improvisation).
 - [ ] **(Q-C2, BLOCKING for B — retirement on the real path.)** What retires the CR arm
   and the post halfword when consumption WORKS? [STATIC] both sides: (a) the NK post
   family's own and-clear leg (`and r13,r13,[KDP+0x678]` — level-0 path today; is it
@@ -197,16 +247,27 @@ probed. Capture-only telemetry commits allowed (inner gates).
   forced consumption attempt decides; still inconclusive ⇒ residue ⇒ Task B's
   retirement gate downgrades to "watch-evidenced clear by a non-host writer" with the
   site as a recorded diagnostic — NOT blocking-fatal (the round-trip gate stands).
+  **[rev 2 / B1] The downgrade is HARDENED — it requires all three:** (a) the
+  watch-attributed writer-PC falls in a PINNED family (the via_int 0x5000exxx/
+  0x5000bbxx chain, or the NK post family's and-clear leg — families ENUMERATED in the
+  Task-0 addendum, not post-hoc); (b) temporal ordering: the clear lands AFTER the
+  via_int probes fire (by ring record number / probe visit order); (c) the multi-edge
+  invariant (Task B's `edges/consumed/deasserts` advancing past 1) is bound to the
+  downgrade explicitly — a "clear" that does not unlock a second edge does not count.
 - [ ] **(Q-C3, BLOCKING for B's shape-B arm — the mid-DR delivery discriminator.)** Why
   did shape B's delivery never arm the LIVE CR? [STATIC] the post's r13 selection
   (live CR r13 from-emulator vs the saved image / `[KDP-0x440]` deferred-post mask —
   the slot-5 nap check reads BOTH; does the POST write both?) vs the restore ordering
   (is the OR applied to a ctx image that the in-progress DR never reloads?).
   **Deliverable: the discriminator + whether the fix is ordering (code), a seed, or
-  "shape B resolves itself once shape A's restore completes" (plausible: B is A's
-  sibling — delivery interrupted the DR, the restore back into the DR is exactly the
-  broken tail).** Fallback: if static-only is inconclusive, classify shape B as a
-  post-A re-test item: Task B re-runs the shape-B config after Task A and re-pins.
+  "shape B resolves itself once shape A's restore completes".** **[rev 2 / A6] The
+  "B is subsumed by A" framing is WEAKENED, not load-bearing: in shape B the tail
+  COMPLETED (no PROGRAM#4; jDR flat-out at +100M blocks/s — the restore back into the
+  DR worked). B's defect is the CR-arm landing in a NEVER-RELOADED r13 image. So the
+  static r13-image selection analysis here is the PRIMARY deliverable, not a
+  contingency.** Fallback: if static-only is inconclusive, classify shape B as a
+  post-A re-test item: Task B re-runs the shape-B config after Task A and re-pins —
+  but expect "B no longer forms" to FAIL (see Task B's shape-B arm).
 - [ ] **(Q-C4 — R-II8 on this path.)** Is the junk `[KDP+0x910]` queue load-bearing for
   the CONSUMPTION leg (it already selects the IACK leg)? One probe word `[0x68ffe910]`
   riding any env-on boot + [STATIC] the queue-drain reads on the restore/scheduler
@@ -214,7 +275,9 @@ probed. Capture-only telemetry commits allowed (inner gates).
   inert / load-bearing-as-is / needs a clean seed (if a seed: stop and bring it through
   the Q-C1 fork's sanctioned-class test).** Non-blocking unless Q-C1's answer names it.
 - [ ] **Probe pack** (within budget, co-scheduled): [P-1] livelock-block register+ctx
-  probe (Q-C1b); [P-2] ring window at livelock onset (Q-C1c); [P-3] watch set
+  probe (Q-C1b — includes the ctx srr0-image slot, the torn-ctx confirmation field);
+  [P-2] ring window at livelock onset (Q-C1c — OPTIONAL/confirmatory per rev 2 A4,
+  named-config only); [P-3] watch set
   68fff070 + 0x16c (`SS_JIT_WATCH_DUMPS=8`) on whichever boot attempts consumption;
   [P-4] `[0x68ffe910]` + nap-coupling words `[0x68ffe670]`/`[0x68ffdbc0]`-class reads
   riding boots 1–2. SS_PROBE_68K probes (0x5000ec52:8 etc.) reserved for Task B —
@@ -228,22 +291,42 @@ probed. Capture-only telemetry commits allowed (inner gates).
 
 ### Task 0.5 (conditional, coordinator checkpoint): the fork sign-off
 
-- [ ] If Q-C1's verdict is fork-(i) seed-class: record the seed table (word, value,
-  real-boot owner, oracle citation) in the addendum and PROCEED — no separate sign-off
-  needed (the B-2 staged-word precedent governs). If fork-(ii) or any seed fails the
-  sanctioned-class test (it would be per-event state — the fake-poke fence): **STOP;
-  this plan terminates at the addendum** and the coordinator re-scopes (M3-class
-  machinery is a milestone of its own, red-teamed on its own).
+- [ ] **[rev 2 / B2]** If Q-C1's verdict is fork-(i) seed-class or fork-(iii)
+  atomicity-fix-class: record the seed table (word, value, real-boot owner, oracle
+  citation) / the fix-shape table (mechanism, code site, why it restores rfi
+  atomicity, why no new machinery) in the addendum, and **PROCEED requires a one-line
+  coordinator ACK of that table** (async, cheap — post the table, get the ACK, no
+  meeting). Only fork-(ii) STOPs: **this plan terminates at the addendum** and the
+  coordinator re-scopes (M3-class machinery is a milestone of its own, red-teamed on
+  its own). Any "seed" that is per-event state fails the sanctioned-class test (the
+  fake-poke fence) and takes the fork-(ii) STOP too.
+- [ ] **[rev 2 / B2] Middle case (escalation, per-fork):** if a fork-(i) seed (or a
+  fork-(iii) fix) fails Task A's world-switch sub-contract and ONE re-pin (the
+  one-iteration rule) also fails, that escalates to stop-rule 1 — per FORK-BRANCH,
+  not per individual seed/word (no seed-shopping).
+- [ ] **[rev 2 / B2] Termination clause:** a Task-0.5 STOP includes a mini-Z — the
+  addendum committed, the ROADMAP row updated to the stopped state, the re-score #4
+  trigger flagged, and an AGENT-CONTEXT frontier note (no silent abandonment).
 
 ### Task A: the restore-tail fix (env-gated `SS_NW_IRQ_CONSUME`, default OFF) — size S/M, ≤4 boots
 
-- [ ] Implement EXACTLY Q-C1's pinned fix: expected shape = staged init word(s)
-  (PatchROM-time/trampoline, occupancy-map-first, verify-zero-first, per the B-2
-  staged-word table discipline: each word justified as "what the real init writes",
-  oracle/donor SHAs cited at the site) and/or a bounded ordering correction. All new
-  lines gated `MachineProfileIsNewWorld() && SS_NW_IRQ_CONSUME`; gated OFF ⇒
-  byte-identical baseline. NO host writes to per-event state (fence). NO new service
-  bodies (fork-(i) only reaches this task).
+- [ ] Implement EXACTLY Q-C1's pinned fix. **[rev 2 / A1 — corrected expected shape]:**
+  per the fork verdict, EITHER fork-(iii) the **rfi-atomicity correction in the
+  riser-cluster code** (the LIKELY shape: defer the EE-edge re-raise past the bctr /
+  move the rise to the bctr boundary, so MSR.EE and the resume PC become effectively
+  atomic as the raw rfi was — bounded edit to the stub/`execute_mtmsr` re-raise
+  predicate, oracle = the raw NK rfi semantics cited at the site), OR fork-(i) staged
+  init word(s) (PatchROM-time/trampoline, occupancy-map-first, verify-zero-first, per
+  the B-2 staged-word table discipline: each word justified as "what the real init
+  writes", oracle/donor SHAs cited at the site), and/or a bounded ordering correction.
+  All new lines gated `MachineProfileIsNewWorld() && SS_NW_IRQ_CONSUME`; gated OFF ⇒
+  byte-identical baseline. NO host writes to per-event state (fence). **NO new service
+  bodies stands** (only fork-(i)/(iii) reach this task). **[rev 2 / A7] Gate-coherence
+  note:** if the fix edits the riser stub or the mtmsr re-raise path, the combination
+  `SS_NW_IRQ_CONSUME=1` + `SS_NW_EE_RISER=0` is UNDEFINED (state consumption requires
+  the riser) — implement it as riser-conditional (consume code inert when the riser is
+  opted out), record that, and carry the cluster-join question to Task C's deliberate
+  decision.
 - [ ] **World-switch sub-contract (PASS/FAIL), env-on test cluster +
   `SS_NW_IRQ_CONSUME=1`:** after `EXT delivered #1`: PROGRAM#4 fires (slot-4 counter
   `[KDP+0xe50]`-family or the PROGRAM census), AND **no 0x503244e8/restart-block
@@ -269,21 +352,37 @@ probed. Capture-only telemetry commits allowed (inner gates).
   attribution, investigate an Execute68k excursion before calling FAIL); (c) **the
   post is RETIRED per Q-C2's predicate** — the watch on 68fff070 shows the guest clear
   (0x8001→0-class change) from a guest writer PC, **zero host writers** (fence gate
-  re-asserted).
+  re-asserted). **[rev 2 / A4] Watch-needs-ring tension named:** the watch requires
+  `SS_JIT_TRACE_RING=1`, and the ring historically forces shape C — this boot is
+  acceptable ONLY POST-FIX (after Task A the livelock shapes should no longer form, so
+  the ring no longer selects the shape; if the ring boot still parks pre-consumption,
+  that is a Task-A falsification signal, not a watch problem).
 - [ ] **Shape-B arm (per Q-C3):** one boot in the shape-B-producing config (no-ring
-  class) — either shape B no longer forms (A's fix subsumed it — record), or apply
-  Q-C3's pinned ordering fix (same gate, separate commit) and re-run. If shape B
-  persists with a NEW signature: one-iteration rule (dated addendum entry, ONE re-pin
-  boot, resume); second falsification ⇒ stop-rule.
+  class; **[rev 2 / B3]** if the entry baseline shape was C, the config-discovery boot
+  to find a B-producing config comes out of THIS task's ≤5-boot cap — account for it).
+  **[rev 2 / A6] EXPECT the "B no longer forms" branch to FAIL** — B's tail completed
+  (its defect is the CR-arm in a never-reloaded r13 image, not the torn tail), so the
+  default path is applying Q-C3's pinned ordering/image-selection fix (same gate,
+  separate commit) and re-running; "A's fix subsumed it" is the surprise outcome,
+  recorded if observed. If shape B persists with a NEW signature: one-iteration rule
+  (dated addendum entry, ONE re-pin boot, resume); second falsification ⇒ stop-rule.
 - [ ] **Exactly-once/latch invariants:** `edges/consumed/deasserts` now advance past 1
   (retirement → deassert → a later edge re-arms) — pin the observed cycle count as the
   new invariant class; zero TRIPWIRE; deferred_native within the Q-I4(d) bound; DEC
   cadence healthy (≈2.0 mtspr/delivery class, no zero/tiny storm).
 - [ ] **THE RIDER (diagnostic, recorded, NOT a gate): Ticks guest-claimed** — watch word
-  **0x16c** +1 with DR-window attribution (ring record window = DR dispatch, not
-  HandleInterrupt keep-set; the keep-set's host +1s are the known confounder — count
-  both classes separately). If it lands, it is the project headline; if not, record
-  where the 60 Hz proc chain stops (the next frontier candidate).
+  **0x16c** +1 attributed to the GUEST. **[rev 2 / A5 — attribution respecified]:**
+  "ring record window = DR dispatch" is UNSOUND alone — the watch attributes a change
+  to the NEXT ring record's block pc, and host keep-set writes also land inside
+  DR-window records (both classes present identically). The guest-claim evidence is
+  the conjunction of: (a) the attributing watch record carrying an
+  **r24≈0xbbca-class value** (the 68k PC at the `addq.l #1,$16a` site); (b) the
+  **`SS_PROBE_68K=0x5000bbca` match coinciding** with the watch trip (visit/record
+  ordering); (c) a **host keep-set counter** (add/read one if absent) whose delta over
+  the window accounts for the confounder census — guest claims = total 0x16c
+  increments minus keep-set increments, and the claim requires that difference > 0.
+  If it lands, it is the project headline; if not, record where the 60 Hz proc chain
+  stops (the next frontier candidate).
 - [ ] **Default-boot diagnostic (recorded):** one default boot (gate on post-flip
   preview is NOT available pre-Task-C — run `SS_NW_IRQ_CONSUME=1` only): does the nap
   park behavior change per the NK's designed coupling (slot-5 nap suppression while a
@@ -305,6 +404,18 @@ probed. Capture-only telemetry commits allowed (inner gates).
 - [ ] **Fix budget:** at most ONE small in-scope fix iteration per falsified contract,
   full gates re-run after any fix; second falsification of the same contract ⇒
   stop-rule.
+- [ ] **[rev 2 / B4+A7] The 17th-gate decision — OWNER: Task C's implementer, DEADLINE:
+  this flip step (decided, recorded, not drifted into):** EITHER (1) **fold
+  `SS_NW_IRQ_CONSUME` into the M7 cluster** (atomic opt-out with
+  EE_RISER/DEC_PUBLISHED/HOST_IRQ; mandatory if Task A's fix edits the riser stub —
+  consume-on+riser-off is undefined per A7 — gate census stays 16), OR (2) keep it a
+  **standalone 17th gate** + flag it a retirement candidate in Task Z, with the rule
+  that IRQ_CONSUME-off-alone is diagnostic-only after the one-time A/B below (only
+  defensible if Task A turned out pure-staging, where the ungated-seed precedent
+  f31d475e/34d3d441 governs unless deliberately deviated — state which). **Named
+  sanctioned exception:** this task's own opt-out A/B boot IS a partial-opt-out-class
+  boot — it is the one-time validation run that licenses the opt-out's existence, not
+  a supported config.
 - [ ] **THEN flip** `SS_NW_IRQ_CONSUME` to the newworld default (explicit-"0" opt-out,
   SS_NW_SC_SURFACE polarity; supported configs remain all-ON/all-OFF). Re-run the
   battery with NO gate env: the default boot now carries the fix (still level-0
@@ -328,14 +439,20 @@ probed. Capture-only telemetry commits allowed (inner gates).
   the test-cluster acceptance recipe); the multi-edge latch counter class.
 - [ ] AGENT-CONTEXT.md: frontier rewrite (the consumption claim flips from "never
   consumed" to its new honest state; stale-claims list updated), gate census 16→17
-  (or 16 stays if the gate retired into the cluster — state which).
+  (or 16 stays if the gate folded into the cluster — state which, per Task C's
+  recorded decision). **[rev 2 / B5]** Add the "named next task" pointer line AND
+  extend the cross-tracker stale-claim grep to cover it.
 - [ ] MACHINE-LAYER-PLAN: header + the M7-follow-on row; **re-score #4 trigger check**
   (the named surprise's outcome — fired/resolved/avoided — is the §9 input; flag if
   a re-score is due, drafting per the convention).
-- [ ] ROADMAP: this row closed; next named task row added; the SS_NW_PIC flip-criteria
-  row updated with the consumption input; the deferred gate-retirement candidates
-  un-deferred (re-score #3's coordinator addition expires with this task — flag, do
-  not execute).
+- [ ] ROADMAP: **[rev 2 / B5]** this row closed BY NAME (header/status line named, not
+  implied); next named task row added; the SS_NW_PIC flip-criteria row updated with
+  the consumption input; the deferred gate-retirement candidates un-deferred
+  (re-score #3's coordinator addition expires with this task — flag, do not execute).
+- [ ] **[rev 2 / B5] Tabulated residue disposition** (one row each, in the addendum or
+  Task Z commit): R-II7 stays-open-until-PIC-flip; R-II8 per Q-C4's verdict; R-II9
+  still-open instrument suspect; R-II10 closed-by-this-milestone or its named
+  remainder.
 - [ ] CHANGELOG + LEARNINGS (at minimum: the fork outcome, the retirement-chain
   anatomy, any instrument lesson); cross-tracker grep for stale "post never
   consumed"/"Ticks never guest-claimed"/"slot-4 livelock" claims (historical sections
@@ -349,7 +466,10 @@ probed. Capture-only telemetry commits allowed (inner gates).
    restore tail cycles because the DR↔NK world-switch protocol needs machinery we do
    not model (not a seedable state hole), STOP after the addendum — Task 0.5 terminates
    the plan for coordinator re-scope. Any "seed" that is per-event state is the
-   fake-poke by another name and takes this trigger too.
+   fake-poke by another name and takes this trigger too. **[rev 2 / A1] EXCEPTION —
+   fork branch (iii) does NOT trigger this rule:** patched-tail non-atomicity is a
+   defect in OUR riser-cluster code, not unmodeled NK protocol; its fix (rfi-atomicity
+   emulation) is in-scope Task-A work, gated by the Task-0.5 ACK like a seed.
 2. If consumption works but the chain dies on the NEXT surface (the 60 Hz proc's
    downstream, a second service class, WLSC-regime divergence), that is the next
    milestone's frontier — capture and stop; record where pre-WLSC behavior diverges
@@ -385,13 +505,68 @@ constant instrument sets, watch-word and change-blindness rules, nested-execute
 blindness), one-iteration rule, slot protocol. The acceptance subtlety (live consumption
 requires the env-on test cluster because default boots post level 0 — R-II7) is stated
 as a codebase fact so the gates are falsifiable as written. Known tensions flagged for
-the red team: (1) the r10=0x9040 anomaly may be probe-sampling artifact vs smoking gun —
-Q-C1 must adjudicate, not assume; (2) Q-C2's retirement predicate has a pre-authorized
-downgrade path (site-unpinned) — is that too soft? (3) shape B may be subsumed by A's
-fix (claimed plausible, not proven); (4) the rider's DR-attribution method (ring-window
-class) vs the keep-set confounder; (5) whether `SS_NW_IRQ_CONSUME` should instead join
-the existing M7 cluster rather than be a 17th gate.
+the red team *(rev 2: all five were adjudicated — see the Rev 2 table; statuses noted
+inline)*: (1) the r10=0x9040 anomaly may be probe-sampling artifact vs smoking gun —
+*(rev 2: NEITHER — it is the riser's composed-MSR scratch by construction, A1/A3)*;
+(2) Q-C2's retirement predicate has a pre-authorized downgrade path (site-unpinned) —
+is that too soft? *(rev 2: yes — hardened, B1)*; (3) shape B may be subsumed by A's
+fix (claimed plausible, not proven) *(rev 2: expectation inverted — expect NOT
+subsumed, A6)*; (4) the rider's DR-attribution method (ring-window class) vs the
+keep-set confounder *(rev 2: respecified, A5)*; (5) whether `SS_NW_IRQ_CONSUME` should
+instead join the existing M7 cluster rather than be a 17th gate *(rev 2: a deliberate
+Task-C decision with owner+deadline; cluster-join mandatory if the fix edits the
+riser, A7/B4)*.
 
 ## Red-team record
 
-*(empty — a red-team round follows this draft; findings to be folded as rev 2 markers)*
+Two red-team reviews received 2026-06-12: A (technical, verdict SOUND-WITH-FIXES, 7
+findings) and B (process, verdict SOUND-WITH-FIXES, 6 findings). Folded below as rev 2.
+
+## Rev 2 (red-team fold, 2026-06-12)
+
+Every finding was independently re-verified against the evidence before folding (the
+fold agent re-walked the code/dumps; verification notes inline). Markers `[rev 2 / Xn]`
+in the body locate each in-place edit.
+
+| # | Finding | Verification | Disposition |
+|---|---|---|---|
+| A1 | BLOCKER — Q-C1 fork missing branch (iii): the livelock is likely OUR riser's mtmsr firing the EE-edge re-raise MID-TAIL (between mtmsr and bctr), delivering a torn ctx whose restore self-loops 0x3244e4↔0x3244e8; raw rfi is atomic, the window is patch-created | **CONFIRMED by static re-walk.** (1) rom_patches.cpp:2546-2556: the default-ON 7-word stub emits `mfmsr r10; rlwimi r10,r11,0,16,16; mtmsr r10` BEFORE `b reload-region`; the ctx reloads (r10←r6+0x154 @0x3244fc, r11←r6+0x15c @0x324500, per the patch comment + EE-CHAIN D-1) and the bctr all execute AFTER the EE rise. (2) ppc-execute.cpp:1432-1439: `execute_mtmsr` calls `trigger_interrupt()` iff old EE=0 ∧ new EE=1 ∧ (DEC ∨ EXT ∨ host-latch pending) — with DEC delivering ~88/s underneath shape A, the window is hit on every restore pass. (3) The fingerprint is by-construction: r10=0x9040 (=EE 0x8000 \| 0x1040) is EXACTLY the riser's composed-MSR scratch — no other mechanism places an MSR image in r10 at reload-region entry; r12=0x5046c4f4 is the tail's `mtlr r12` LR image, constant because the same torn ctx is saved/restored each cycle. Raw NK tail = `mtspr SRR0,r10; mtspr SRR1,r11; rfi` (EE-CHAIN :381) — atomic by design. | FOLDED: fork branch (iii) added (Architecture, Q-C1, Task 0.5, Task A, stop-rule 1 exception); Task A's expected shape corrected to "rfi-atomicity fix OR seed"; "NO new service bodies" stands; Q-C1 reframed from open-ended discovery to cheap live confirmation (srr0-image predicate) |
+| A2 | BLOCKER — rom901.bin (d1a267a9) predates the 81d60cc1 flip; its 0x318000 stub is riser-less; /tmp/rom901.bin is the retired image | **CONFIRMED by byte inspection**: rom901.bin @0x318000 = `81402818 394affff 91402818 4800c4d8` (4 words, no mfmsr/rlwimi/mtmsr); MANIFEST provenance "inj-task0 boot" = pre-Task-C-flip; /tmp/rom901.bin md5 = e432df64 (the retired pre-f808a7fb image) | FOLDED: ROM-provenance fact + Q-C1(a) — stub authority is rom_patches.cpp:2522ff or a re-dumped re-baselined image; /tmp copy banned |
+| A3 | MAJOR — r10 at 0x3244e8 is never the resume PC (mtctr r10 @0x3244d8 moved it; the stub clobbers r10 twice); CTR unprobeable — pin the bctr target via the ctx SRR0-image slot (+0xa4) in the planned [r6:0x180] probe | CONFIRMED (same code walk as A1; the patched tail is `mtctr r10; mtcrf; b 0x318000`, then `lwz r10,XLM_IRQ_NEST` then `mfmsr r10`) | FOLDED: Shape-A anatomy fact rewritten (the rev-1 "MSR image in the resume-PC slot — suspicious" framing was WRONG and would have misled the implementer); +0xa4 offset carried as expected-verify-in-Q-C1a |
+| A4 | MAJOR — Q-C1c (ring at livelock onset) is self-defeating: ring ⇒ shape C | CONFIRMED by the plan's own instrument rule ("ring-slowed boots park, no-ring boots spin") | FOLDED: Q-C1c demoted to optional/confirmatory, named SS_RING_WINDOW-minimized config, shape recorded not A/B-compared; Task B's watch-needs-ring tension named acceptable-only-post-fix |
+| A5 | MAJOR — the Ticks rider's "ring record window = DR dispatch" attribution is unsound (host keep-set writes also attribute to the next ring record's block pc) | CONFIRMED conceptually (the watch check lives in the ring recorder; host writes generate no records of their own) | FOLDED: rider respecified — r24≈0xbbca-class watch-record value + SS_PROBE_68K=0x5000bbca coincidence + host keep-set counter delta census |
+| A6 | MINOR — shape B's tail COMPLETED (jDR flat-out); its defect is the CR-arm in a never-reloaded r13 image; "B no longer forms" should be expected to FAIL; Q-C3's static r13-image analysis is load-bearing | CONFIRMED against the recorded shape-B signature (no PROGRAM#4, jDR +100M blocks/s = the restore worked) | FOLDED: Q-C3 deliverable re-weighted; Task B shape-B arm expectation inverted |
+| A7 | MINOR — if the fix is a riser-stub edit, consume-on+riser-off is undefined; decide cluster-join vs 17th gate deliberately | CONFIRMED (follows from A1's fix shape) | FOLDED: Task A gate-coherence note (riser-conditional implementation) + merged into B4's Task-C decision step |
+| B1 | MAJOR — harden the Q-C2 retirement downgrade | Sound (the rev-1 downgrade accepted any non-host writer) | FOLDED: three-condition hardening (pinned writer-PC family, temporal ordering, multi-edge invariant bound) |
+| B2 | MAJOR — Task 0.5: fork-(i)/(iii) PROCEED needs a one-line coordinator ACK; only (ii) STOPs; per-fork escalation after ONE failed re-pin; STOP includes a mini-Z | Sound | FOLDED: Task 0.5 rewritten with all three clauses |
+| B3 | MAJOR — same ring contradiction as A4 (folded once) + shape-B config-discovery boot accounting | Sound | FOLDED: entry gate + Task B shape-B arm carry the boot-cap accounting; ring item folded under A4 |
+| B4 | MAJOR — 17th-gate decision gets owner+deadline; name Task C's own opt-out boot as the sanctioned partial-opt-out exception | Sound | FOLDED: new Task-C decision step (owner = Task C implementer, deadline = the flip step; fold-into-cluster mandatory if the fix edits the riser; standalone+retirement-flag path conditioned on pure-staging with the f31d475e/34d3d441 precedent) |
+| B5 | MINOR — Task Z: ROADMAP row closed by name; AGENT-CONTEXT named-next-task pointer in the stale-claim grep; tabulated residue disposition (R-II7/8/9/10) | Sound | FOLDED into Task Z |
+| B6 | MINOR — pin the env-on entry boot's --expect patterns as grep-verdicts | Sound | FOLDED into the entry gate |
+
+### Re-stated critical path (post-fold)
+
+A1 is CONFIRMED at the static level, so the likely critical path is now:
+
+1. **Task 0** — confirm the torn-ctx fingerprint LIVE (cheap, ≤2 boots): the
+   livelock-block `[r6:0x180]` probe's ctx srr0-image slot holds a reload-region/tail
+   PC. Q-C2/Q-C3/Q-C4 proceed in parallel within budget (static-first).
+2. **Task 0.5** — fork-(iii) verdict table → one-line coordinator ACK.
+3. **Task A** — the rfi-atomicity fix in the riser-cluster code (env-gated
+   `SS_NW_IRQ_CONSUME`, riser-conditional), world-switch sub-contract.
+4. **Task B** — the consumption round trip + retirement (hardened predicate) + the
+   shape-B r13-image fix (expected NOT subsumed) + the respecified Ticks rider.
+5. **Task C/Z** — battery, the deliberate cluster-join-vs-17th-gate decision, flip
+   last, docs.
+
+If Task 0's live probe FALSIFIES the torn-ctx mechanism (srr0-image holds a DR/foreign
+PC), the fork re-opens to (i)/(ii) and the original seed-vs-machinery path governs.
+
+### Errors found in the reviews themselves
+
+None falsified. One precision note: A1's phrase "between mtmsr and bctr" spans the
+whole reload region (mtmsr is block-ending; delivery lands at the next block boundary,
+i.e. at reload-region entry or mid-reload, not literally mid-instruction) — the folded
+text states the window as "before the ctx reloads + bctr complete", which is the
+verified form. A3's +0xa4 ctx SRR0-image offset was NOT independently re-verified at
+fold time — carried as expected-verify-in-Q-C1a, not as fact.

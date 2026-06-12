@@ -242,6 +242,41 @@ int main()
 		CHECK(!VirtClockDECPending(&c));
 	}
 
+	/* --- U14 (M8 slot-4 consumption Task A): the deferred-EE-edge window
+	 *    predicates (rfi-atomicity emulation). Boot-real window values
+	 *    (9.0.1 primary copy, Task-0 recon Q-C1 [STATIC]+[PROBE✓]):
+	 *    stub [0x50318000, 0x50318020) — the 7-word riser stub + final b;
+	 *    reload [0x503244e4, 0x50324528) — exclusive end one word PAST the
+	 *    bctr at 0x324524 (the replaced rfi). The live windows are filled at
+	 *    patch time by rom_patches.cpp (single source); these literals pin
+	 *    the PREDICATE SEMANTICS, not the addresses. --- */
+	{
+		const uint32_t sb = 0x50318000u, se = 0x50318020u;
+		const uint32_t rs = 0x503244e4u, re = 0x50324528u;
+
+		/* latch: fires only inside the stub window */
+		CHECK( ExcDeferredEdgeLatch(0x50318014u, sb, se));  /* the riser's mtmsr itself */
+		CHECK( ExcDeferredEdgeLatch(0x50318018u, sb, se));  /* the post-mtmsr boundary (b4's torn restart) */
+		CHECK( ExcDeferredEdgeLatch(0x50318000u, sb, se));  /* base inclusive */
+		CHECK( ExcDeferredEdgeLatch(0x5031801cu, sb, se));  /* last stub word */
+		CHECK(!ExcDeferredEdgeLatch(0x50318020u, sb, se));  /* end exclusive */
+		CHECK(!ExcDeferredEdgeLatch(0x50317ffcu, sb, se));  /* below the window */
+		CHECK(!ExcDeferredEdgeLatch(0x503244e8u, sb, se));  /* reload region is NOT a latch site */
+		CHECK(!ExcDeferredEdgeLatch(0x50318014u, 0u, 0u));  /* riser not armed: empty window never latches */
+
+		/* fire: held inside stub OR reload, fires everywhere else */
+		CHECK(!ExcDeferredEdgeFire(0x50318018u, sb, se, rs, re)); /* still in the stub */
+		CHECK(!ExcDeferredEdgeFire(0x503244e4u, sb, se, rs, re)); /* reload entry */
+		CHECK(!ExcDeferredEdgeFire(0x503244e8u, sb, se, rs, re)); /* THE shape-A livelock block */
+		CHECK(!ExcDeferredEdgeFire(0x503244f8u, sb, se, rs, re)); /* b2's run-variant block */
+		CHECK(!ExcDeferredEdgeFire(0x50324524u, sb, se, rs, re)); /* the bctr word itself */
+		CHECK( ExcDeferredEdgeFire(0x50324528u, sb, se, rs, re)); /* first word past the bctr */
+		CHECK( ExcDeferredEdgeFire(0x5046e1a0u, sb, se, rs, re)); /* the DR resume PC (b4 ctx+0xfc) */
+		CHECK( ExcDeferredEdgeFire(0x50313200u, sb, se, rs, re)); /* the published DEC entry */
+		CHECK( ExcDeferredEdgeFire(0x503244e8u, 0u, 0u, 0u, 0u)); /* empty windows: degenerate fire
+		                                                           * (moot — empty window never latches) */
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

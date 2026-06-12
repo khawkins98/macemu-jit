@@ -215,6 +215,61 @@ extern ExcDecision ExcDeliveryDecision(int pending, int execute_depth,
  */
 extern int ExcEdgeReRaise(uint32_t old_msr, uint32_t new_msr, int pending);
 
+/* --- M8 slot-4 consumption Task A: rfi-atomicity emulation (deferred EE edge)
+ *     (docs/superpowers/plans/2026-06-12-slot4-consumption.md Task A, coordinator
+ *     ACK 2026-06-12; root cause: INTERRUPT-INJECTION-RECON.md "Slot-4 consumption
+ *     recon (M8 Task 0)" Q-C1, fork-(iii)).
+ *
+ *     The patched trap_return tail raises MSR.EE via mtmsr BEFORE the ctx reloads
+ *     and the bctr complete (rom_patches.cpp trap_return riser stub); the raw NK
+ *     exits via rfi, which raises MSR and the resume PC ATOMICALLY (oracle: raw
+ *     tail `mtspr SRR0,r10; mtspr SRR1,r11; ...; rfi`, rom901_inventory.bin
+ *     0x3244d8-0x324524). When the EE 0->1 edge re-raise fires with the guest PC
+ *     inside the stub, delivery lands at a block boundary inside the reload
+ *     region and saves a TORN context (ctx r10/r11 images = the riser's 0x9040
+ *     composed-MSR scratch; the 0x3244e4<->0x3244e8 self-loop — Task-0 [PROBE✓]).
+ *     The emulation: LATCH that edge instead of firing it, and FIRE at the first
+ *     block boundary whose entry PC is outside the stub + reload windows (past
+ *     the bctr — the resume PC is real again), restoring the rfi's atomicity.
+ *
+ *     Window single-source (ACK note 1): the windows are NOT hand-copied
+ *     constants — rom_patches.cpp fills g_exc_riser_window at patch time from
+ *     the very values it emits (the stub emission extent, the trap_return
+ *     find_rom_data result, the reload-region branch target). The predicates
+ *     below are pure (windows passed in) so test_exc_chain pins them. */
+
+struct ExcRiserWindow {
+	uint32_t stub_base;     /* guest addr of the trap_return riser stub (ROMBase+0x318000) */
+	uint32_t stub_end;      /* exclusive end = the emission extent (8 words riser-on -> +0x20) */
+	uint32_t reload_start;  /* guest addr of the ctx reload region (the stub's branch-back target) */
+	uint32_t reload_end;    /* exclusive end one word PAST the bctr (the replaced rfi word + 4) */
+	uint32_t armed;         /* 1 iff the riser words were actually emitted (newworld +
+	                         * SS_NW_EE_RISER not opted out) — recorded at the rom_patches
+	                         * gate's ONE eval site (the same predicate, single-source,
+	                         * rev-2 A7 riser-conditional by construction). Primary copy
+	                         * only: the staged +0x100000 NK copy has zero visits
+	                         * (EE-CHAIN-RECON.md D-1) — no staged window. */
+};
+
+/* ExcDeferredEdgeLatch — 1 iff a rising-EE edge at pc must be LATCHED (deferred)
+ * rather than fired: pc inside [stub_base, stub_end). Empty window -> never. */
+extern int ExcDeferredEdgeLatch(uint32_t pc, uint32_t stub_base, uint32_t stub_end);
+
+/* ExcDeferredEdgeFire — 1 iff a latched edge may FIRE at this block boundary:
+ * entry_pc outside BOTH [stub_base, stub_end) and [reload_start, reload_end). */
+extern int ExcDeferredEdgeFire(uint32_t entry_pc, uint32_t stub_base, uint32_t stub_end,
+                               uint32_t reload_start, uint32_t reload_end);
+
+/* Emulator-owned deferred-edge state (declaration-only here, the
+ * g_exc_entry_table pattern; the pure module never references these —
+ * standalone tests stay link-clean): */
+extern ExcRiserWindow g_exc_riser_window;   /* defined in rom_patches.cpp (patch-time fill) */
+extern uint32_t g_exc_deferred_ee_edge;     /* the latch — defined in ppc-cpu.cpp */
+struct ExcConsumeStats { uint32_t deferred, held, fired; };
+extern ExcConsumeStats g_exc_consume_stats; /* defined in ppc-cpu.cpp */
+extern int ExcIrqConsumeEnabled(void);      /* SS_NW_IRQ_CONSUME gate (default OFF,
+                                             * SS_NW_PIC polarity) — ppc-cpu.cpp */
+
 /*
  * The emulator's resolved entry table (defined in sheepshaver_glue.cpp, filled
  * at newworld init from M3A-ENTRY-TABLE.md / SS_EXC_ENTRY). Declaration lives

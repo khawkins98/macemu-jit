@@ -31,6 +31,7 @@
 #include "main.h"
 #include "prefs.h"
 #include "machine_profile.h"
+#include "exc_core.h"		// M8 Task A: ExcRiserWindow (trap_return window export)
 #include "cpu_emulation.h"
 #include "emul_op.h"
 #include "xlowmem.h"
@@ -71,6 +72,14 @@ const uint32 TIME_MANAGER_PATCH_SPACE = 0x2fd240;	// 4 TM EMUL_OP stub bodies (S
 // Global variables
 int ROMType;				// ROM type
 static uint32 sony_offset;	// Offset of .Sony driver resource
+
+// M8 slot-4 consumption Task A (2026-06-12 plan, coordinator ACK note 1):
+// the trap_return riser/reload windows for the deferred-EE-edge rfi-atomicity
+// emulation (ppc-execute.cpp/ppc-cpu.cpp). SINGLE SOURCE OF TRUTH: filled at
+// the trap_return patch site below from the very values that patch emits —
+// no hand-copied magic ranges anywhere else. All-zero (e.g. trap_return
+// skipped, or pre-patch) = empty windows = the latch is dead.
+ExcRiserWindow g_exc_riser_window = { 0, 0, 0, 0, 0 };
 
 // Prototypes
 static bool patch_nanokernel_boot(void);
@@ -2513,13 +2522,17 @@ static bool patch_nanokernel(void)
 	lp = (uint32 *)(ROMBaseHost + base + 8);	// Replace rfi
 	*lp = htonl(POWERPC_BCTR);
 
+	// M8 Task A: riser_stub_off is THE stub-location constant (single source —
+	// g_exc_riser_window below derives from it and from this patch's own
+	// emission extent; no second hand-copied copy of the window exists).
+	const uint32 riser_stub_off = 0x318000;
 	while (ntohl(*lp) != 0x7d5a03a6) lp--;
 	*lp++ = htonl(0x7d4903a6);					// mtctr	r10
 	*lp++ = htonl(0x7daff120);					// mtcr	r13
-	*lp = htonl(0x48000000 + ((0x318000 - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		ROMBase+0x318000
+	*lp = htonl(0x48000000 + ((riser_stub_off - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		ROMBase+0x318000
 	uint32 npc = (uintptr)(lp + 1) - (uintptr)ROMBaseHost;
 
-	lp = (uint32 *)(ROMBaseHost + 0x318000);
+	lp = (uint32 *)(ROMBaseHost + riser_stub_off);
 	*lp++ = htonl(0x81400000 + XLM_IRQ_NEST);	// lwz	r10,XLM_IRQ_NEST
 	*lp++ = htonl(0x394affff);					// subi	r10,r10,1
 	*lp++ = htonl(0x91400000 + XLM_IRQ_NEST);	// stw	r10,XLM_IRQ_NEST
@@ -2550,9 +2563,26 @@ static bool patch_nanokernel(void)
 		*lp++ = htonl(0x7d4000a6);				// mfmsr	r10
 		*lp++ = htonl(0x516a0420);				// rlwimi	r10,r11,0,16,16 (insert MSR[EE]=0x8000 from r11)
 		*lp++ = htonl(0x7d400124);				// mtmsr	r10
+		g_exc_riser_window.armed = 1;			// M8 Task A: riser-armed, recorded at the gate's ONE eval site
 		fprintf(stderr, "[ROMPATCH] trap_return EE riser ARMED (newworld default; opt-out SS_NW_EE_RISER=0): stub 0x318000 = 7 words, EE-only compose from r11\n");
 	}
 	*lp = htonl(0x48000000 + ((npc - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		reload region (npc)
+	// M8 slot-4 consumption Task A: export the riser/tail windows for the
+	// deferred-EE-edge rfi-atomicity emulation (single source per the
+	// coordinator ACK: derived from the values emitted RIGHT HERE — the stub
+	// extent [riser_stub_off, end-of-emission), the reload region [npc,
+	// base+12) whose exclusive end is one word PAST the bctr that replaced
+	// the rfi at base+8). Guest addresses. Primary copy only — the staged
+	// +0x100000 NK copy has zero visits (EE-CHAIN-RECON.md D-1), no staged
+	// window; revisit only if a staged-tail visit is ever observed.
+	g_exc_riser_window.stub_base    = ROMBase + riser_stub_off;
+	g_exc_riser_window.stub_end     = ROMBase + (uint32)((uintptr)(lp + 1) - (uintptr)ROMBaseHost);
+	g_exc_riser_window.reload_start = ROMBase + npc;
+	g_exc_riser_window.reload_end   = ROMBase + base + 12;
+	if (g_exc_riser_window.armed)
+		fprintf(stderr, "[ROMPATCH] riser windows (deferred-EE-edge source of truth): stub %08x-%08x reload %08x-%08x\n",
+		        g_exc_riser_window.stub_base, g_exc_riser_window.stub_end,
+		        g_exc_riser_window.reload_start, g_exc_riser_window.reload_end);
 	} else fprintf(stderr, "[ROMPATCH] SKIP trap_return (absent in parcels)\n");
 
 	// Patch FEOA opcode, selector 0x0A (virtual->physical page index)

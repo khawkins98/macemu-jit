@@ -81,6 +81,26 @@ int ExcEdgeReRaise(uint32_t old_msr, uint32_t new_msr, int pending)
 	return !(old_msr & 0x8000u) && (new_msr & 0x8000u) && pending;
 }
 
+/* M8 slot-4 consumption Task A: the deferred-EE-edge window predicates
+ * (rfi-atomicity emulation — see exc_core.h block comment). Pure; the windows
+ * are passed in (single source: rom_patches.cpp's patch-time fill of
+ * g_exc_riser_window). All windows are half-open [base, end); an empty window
+ * (base == end == 0, riser not armed) can never latch and always fires. */
+int ExcDeferredEdgeLatch(uint32_t pc, uint32_t stub_base, uint32_t stub_end)
+{
+	return pc >= stub_base && pc < stub_end;
+}
+
+int ExcDeferredEdgeFire(uint32_t entry_pc, uint32_t stub_base, uint32_t stub_end,
+                        uint32_t reload_start, uint32_t reload_end)
+{
+	if (entry_pc >= stub_base && entry_pc < stub_end)
+		return 0;   /* still inside the riser stub */
+	if (entry_pc >= reload_start && entry_pc < reload_end)
+		return 0;   /* still inside the ctx reload region (bctr not yet taken) */
+	return 1;       /* past the bctr — the resume PC is real, fire now */
+}
+
 void ExcRfi(uint32_t srr0, uint32_t srr1, uint32_t cur_msr,
             uint32_t *out_pc, uint32_t *out_msr)
 {

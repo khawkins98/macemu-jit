@@ -26,6 +26,7 @@
 #include "cpu/ppc/ppc-cpu.hpp"
 #ifdef SHEEPSHAVER
 #include "machine_profile.h"   /* M3a Task 4: newworld gate in check_spcflags */
+#include "exc_core.h"          /* M8 Task A: deferred-EE-edge latch (rfi-atomicity emulation) */
 #include "mmio_bus.h"          /* M6a Wave 1: MMIO region counters on the heartbeat */
 #include "dev_via6522.h"       /* M6a Wave 2 #4: top-2 VIA read registers on the heartbeat */
 #include "dev_openpic.h"       /* Wave-2 W2-3: pic= brief on the heartbeat (registered instance) */
@@ -1902,6 +1903,37 @@ void powerpc_registers::interrupt_copy(powerpc_registers &oregs, powerpc_registe
 	}
 }
 
+#ifdef SHEEPSHAVER
+/* M8 slot-4 consumption Task A — the deferred-EE-edge latch + telemetry
+ * (rfi-atomicity emulation; design + windows: exc_core.h block comment,
+ * single-source fill in rom_patches.cpp). Set ONLY by execute_mtmsr's EE
+ * 0->1 edge inside the riser stub window, gate- and riser-conditional there;
+ * consumed below in check_spcflags' newworld HANDLE arm. Single-threaded
+ * CPU — plain globals, declared in exc_core.h (the g_exc_entry_table
+ * pattern). */
+uint32_t g_exc_deferred_ee_edge = 0;
+ExcConsumeStats g_exc_consume_stats = { 0, 0, 0 };
+
+static void exc_consume_atexit_dump(void)
+{
+	fprintf(stderr, "[IRQ-CONSUME] deferred=%u held=%u fired=%u latch=%u\n",
+	        g_exc_consume_stats.deferred, g_exc_consume_stats.held,
+	        g_exc_consume_stats.fired, g_exc_deferred_ee_edge);
+}
+
+int ExcIrqConsumeEnabled(void)
+{
+	static int v = -1;
+	if (v < 0) {
+		const char *e = getenv("SS_NW_IRQ_CONSUME");
+		v = (e && e[0] && e[0] != '0') ? 1 : 0;   /* default OFF (SS_NW_PIC polarity; flip-last at Task C) */
+		if (v)
+			atexit(exc_consume_atexit_dump);
+	}
+	return v;
+}
+#endif
+
 bool powerpc_cpu::check_spcflags()
 {
 	if (spcflags().test(SPCFLAG_CPU_EXEC_RETURN)) {
@@ -1922,6 +1954,34 @@ bool powerpc_cpu::check_spcflags()
 		 * and we fall through to the legacy path exactly as before. The HANDLE
 		 * flag is cleared exactly once above, common to both paths. */
 		if (MachineProfileIsNewWorld()) {
+			/* M8 slot-4 consumption Task A: the deferred-EE-edge HOLD/FIRE
+			 * (rfi-atomicity emulation, SS_NW_IRQ_CONSUME). The latch is set
+			 * only by execute_mtmsr's edge inside the riser stub window (gate
+			 * + riser-conditional THERE — when off this latch is 0 forever and
+			 * this block is dead). While the entry PC is still inside the
+			 * stub/reload windows (mid world-restore: the resume PC sits in
+			 * CTR, not yet real — Task-0 Q-C1), HOLD delivery and re-arm the
+			 * poll (the DEFER_NATIVE re-arm idiom below: HANDLE was cleared
+			 * above, re-set it so the next block boundary re-polls; skip the
+			 * legacy fall-through). At the first boundary past the bctr,
+			 * consume the latch and fall through to deliver with a REAL
+			 * restart PC — the torn-ctx save (r10/r11 images = 0x9040 scratch,
+			 * the 0x3244e4<->0x3244e8 self-loop) becomes impossible. */
+			if (g_exc_deferred_ee_edge) {
+				if (!ExcDeferredEdgeFire(pc(),
+				                         g_exc_riser_window.stub_base,
+				                         g_exc_riser_window.stub_end,
+				                         g_exc_riser_window.reload_start,
+				                         g_exc_riser_window.reload_end)) {
+					g_exc_consume_stats.held++;
+					spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
+					return true;
+				}
+				g_exc_deferred_ee_edge = 0;
+				if (g_exc_consume_stats.fired++ < 4)
+					fprintf(stderr, "[IRQ-CONSUME] deferred edge fired at pc=%08x (held=%u)\n",
+					        (uint32)pc(), g_exc_consume_stats.held);
+			}
 			if (SheepExcDeliverPending())
 				return true;
 			/* M7 item 2 / W2-4 item 1b (INTERRUPT-INJECTION-RECON.md Q4): on

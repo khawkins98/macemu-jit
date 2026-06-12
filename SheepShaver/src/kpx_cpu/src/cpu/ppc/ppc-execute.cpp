@@ -1432,8 +1432,34 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 	if (MachineProfileIsNewWorld() && ss_vclk_active() &&
 	    ExcEdgeReRaise(old_msr, val,   /* W2-3: + the level-held EXT source */
 	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
-	                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
+	                    || SheepExcHostIrqPending()) ? 1 : 0)) {   /* M7: + host latch */
+		/* M8 slot-4 consumption Task A (SS_NW_IRQ_CONSUME, default OFF):
+		 * rfi-atomicity emulation. The riser stub's mtmsr raises EE BEFORE the
+		 * ctx reloads + bctr complete; firing this edge here delivers at a
+		 * block boundary INSIDE the reload region and saves a torn ctx (the
+		 * 0x9040-image self-loop — Task-0 recon Q-C1 [PROBE✓], observed
+		 * directly as `EXT delivered #1: restart=50318018`). Oracle: the raw
+		 * NK tail is `mtspr SRR0,r10; mtspr SRR1,r11; ...; rfi`
+		 * (rom901_inventory.bin 0x3244d8-0x324524) — MSR.EE and the resume PC
+		 * rise ATOMICALLY. Emulate that: when the edge fires with pc() inside
+		 * the riser stub window, LATCH it; check_spcflags' HANDLE arm holds
+		 * delivery until the first block boundary outside the stub+reload
+		 * windows (past the bctr). Windows are patch-time-filled by
+		 * rom_patches.cpp (single source, ACK note 1); riser-conditional by
+		 * construction (rev-2 A7): riser opted out => armed=0 + empty window
+		 * => this latch is dead and behavior is byte-identical.
+		 * trigger_interrupt() still runs on the latch path — the spcflags
+		 * poll must stay alive for the held edge to ever be consumed. */
+		if (ExcIrqConsumeEnabled() && g_exc_riser_window.armed &&
+		    ExcDeferredEdgeLatch(pc(), g_exc_riser_window.stub_base,
+		                         g_exc_riser_window.stub_end)) {
+			g_exc_deferred_ee_edge = 1;
+			if (g_exc_consume_stats.deferred++ < 4)
+				fprintf(stderr, "[IRQ-CONSUME] EE edge deferred at pc=%08x (stub %08x-%08x)\n",
+				        pc(), g_exc_riser_window.stub_base, g_exc_riser_window.stub_end);
+		}
 		trigger_interrupt();
+	}
 #endif
 	increment_pc(4);
 }

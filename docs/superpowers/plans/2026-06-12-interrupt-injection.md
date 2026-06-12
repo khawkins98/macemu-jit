@@ -945,3 +945,76 @@ class as [KDP+0x1074/0x1078] and [KDP+0xf2c].
    R-II9 caveat: do NOT use SS_PROBE_LINEAR under env-on; hold instrument sets constant.
 5. One-iteration rule; ≤5 boots; stop-rule 2 unchanged (a second break link past the
    level test → frontier-record it, ship-gated-off-green remains the fallback).
+
+## Task B-2 results (2026-06-12, label m7-taskB2) — the level-source staging landed per sign-off shape (i): THE LEVEL TEST PASSES; first guest IACK of the live PIC model; the break moves ONE LINK PAST the level test (frontier-record per stop-rule 2)
+
+Boots: **4 of ≤5** (slot0 `20260612-033407.20410` env-on chain walk, `-033746.20813`
+env-on OP_IRQ discriminator, `-033954.20998` env-on ring discriminator,
+`-034428.21398` gated-off A/B). Env-on cluster = riser+published+host-irq+**SS_NW_PIC=1**
+(joins the TEST cluster only; default flip stays HELD). Gates: task tier 5/5 PASS +
+exc lane 14/14 (no H-vector extension — latch semantics untouched; the PIC rail is
+boot-bring-up wiring). No SS_PROBE_LINEAR (R-II9 honored); instrument set held constant
+across the two chain-walk boots.
+
+**THE TICKS VERDICT (honest, with a correction of record): Ticks MOVED — but the writer
+is the HOST `HandleInterrupt` newworld keep-set (sheepshaver_glue.cpp:3399, "Always tick
+Ticks on every VBL"), NOT `addq.l #1,$16a`.** Ring-pinned: the +1s land inside pure-NK
+record windows (no 68k dispatch; via_int/OP_IRQ probes 0 matches ×2 boots). CORRECTION:
+the rider's watch word 0x168 covers Ticks' HIGH half only (Ticks long = 0x16a..0x16d;
+LSB lives in word 0x16c) — Task B's "Ticks did not move" was watch-word-blind; Ticks has
+been ticking via the host keep-set whenever HandleInterrupt runs MODE_68K. The headline
+(guest addq) did NOT happen; the rider's premise is retired with the right watch word
+recorded for the next attempt (watch 0x16c, expect +1 with NO HandleInterrupt
+attribution — i.e. inside a DR-dispatch record window).
+
+**The staged-word table (each = what the real init writes):**
+| Word | Value | Justification |
+|---|---|---|
+| IVPR[0x3F] (model) | prio 8 \| vec 0x3F, unmasked, EDGE | per-source unmask/vector/priority = the MPIC init's job (QEMU write_IRQreg_ivpr openpic.c:503 @ de5d8bfd…); EDGE vs the [DIAG-FORCED] level: composes with the Task-A once-per-edge latch, retirement = guest IACK (openpic_iack :1056), zero host writes per event; vec=input identity (bring-up convention; last in-range vector for the fallback's `<0x40` IACK leg, [STATIC] 0x50326070) |
+| IDR[0x3F] (model) | 1 | route to CPU0, the only CPU (write_IRQreg_idr :445, masked to bit 0) |
+| CTPR (model) | 0 | lowered from reset-15 (openpic_reset :1254; nothing deliverable until the init lowers it) |
+| `[[KDP-0x20]+0xf18]` = 0x68FF4F18 | 0xF3040000 | the NK-held PIC base the fallback reads at 0x50325f48 (`lwz r22,0xf18(r20)` [STATIC] rom901.bin d1a267a9); IACK lwbrx = r22+0x200a0, EOI = r22+0x200b0 = the model's CPU0 bank; value = OPENPIC_CORE99_BASE (MacIO BAR+0x40000, donor Q6) — guest addressing is physical here; occupancy map extended (M6A-ONGOING-ENTRY-DESIGN.md) |
+| `[0x3f3f]` (lowmem byte) | 1 | the vector→level table byte the fallback's `lbz r28,0x3f00(r26)` reads (0x503260a4); level 1 = the 68k level-1 autovector chain (Q-I3 via_int); must be ≠0 (the Task-B break) and ≠7 (deferred-slot leg 0x503260a8); one-shot host re-assert at edge #1 guards the lowmem wipe — live: **"survived to edge #1 (trampoline staging intact)"** |
+
+PIC input choice: **0x3F (`OPENPIC_IRQ_HOST`, dev_openpic.h)** — the real platform has NO
+PIC input for the decrementer/timer (DEC is CPU-internal; KeyLargo MPIC has zero timer
+sources, KEYLARGO_MAX_TMR=0 "Timers don't exist…", QEMU openpic.h:41), so a documented
+RESERVED choice: top of the 64-source bank, unassigned in the Q8 device map and QEMU's
+NewWorld macio assignments at the pinned SHA. Constant only — zero model-behavior change
+(dev_openpic.cpp untouched; 206 oracle checks unchanged).
+
+**Chain-walk table (re-run, env-on):**
+| Link | State | Evidence |
+|---|---|---|
+| host edge → EXT delivery | LIVE | `edges=1 consumed=1 deasserts=0 pending=0`, ×3 boots |
+| delivery → fallback 0x325f00 | LIVE | ring #3733960-61: 50314880 → 50325f00, delivery-adjacent |
+| fallback IACK lwbrx → live PIC model | **LIVE — FIRST GUEST IACK EVER** | `[PIC] first-iacks: src=0x3f vec=0x3f`, iacks i:1, out_raises=1/out_lowers=1 (the IACK lowers the line — guest-traversed retirement; the A1 livelock shape did not recur); first live lwbrx-over-MMIO (openpic jit_faults=11) |
+| vector → staged level table | LIVE | probe `[0x3f3c]=0x00000001`; byte survived to edge #1 (no wipe) |
+| **post level test r28** | **PASSES — r28=1 → sth 0x8001 + CR bits SET** | `[WATCH] pc=5032394c addr=68fff070 value=80010000 (was 00000000)` — the formerly-blind watch TRIPS; ring #3734010-12 runs 0x325518→0x325520 (sth+`or r13,r31` same straight line, [STATIC]); `bgt cr7` taken — the and-clear leg skipped |
+| pending halfword / CR arm → DR dispatch poll | **THE NEW BREAK (one link PAST the level test)** | the env-on frontier parks in the NK spin/`sc 0x2e` regime; comp frozen, jDR static, the post-delivery ring window is pure NK flow — the DR/68k world never runs again to poll the armed 0x8001 |
+| via_int 0xef2c → OP_IRQ fe6b → Ticks(addq) | NOT-REACHED (upstream break) | `SS_PROBE_68K` 0x5000ec52:8 / 0x5000bbca:8 — 0 matches, 59 s each |
+
+**Invariants:** zero TRIPWIRE ×3 env-on boots; exactly-once re-proven; DEC regime healthy
+(mtspr_dec=10297 / expiries=5146 ≈ 2.0/delivery, the NK 7fffffff/32e10 park+re-arm pair,
+no zero/tiny storm); sc census = the named env-on frontier class (no park; 0xffffffff
+x204). A second bounded fallback traversal IACKed empty → SPVE 0xff → OOB leg → guest
+EOI (`spurious=1 eoi_empty=1`) — bounded, no storm. **Gated-off A/B: byte-identical to
+the E4 class** — blocks=7354 EXACT, PROGRAM#5 srr0=50324fec word=0fff0005 slot=5, sc
+census x233/x17 identical, ZERO PIC/host-irq output. e2e risk tier: structural-inertness
+substitution (every new line gated under newworld && SS_NW_HOST_IRQ && SS_NW_PIC; stated
+in the commit) + the A/B boot.
+
+**Falsification handled per stop-rule 2 (not a milestone failure):** constraint 4's
+"via_int/OP_IRQ probes FIRE" expectation did not survive contact — the chain's null is
+now established one link DOWNSTREAM of the level test (the parked-regime DR-poll gap),
+which is exactly the "break PAST the level test → frontier-record" branch.
+Ship-gated-off-green holds: default-off, all gates green, A/B byte-identical. The next
+frontier owns "make the DR/68k world run (or schedule) after an EXT post in the parked
+regime" — that is a scheduler/park question (R-II3's `sc 0x2e` wait loop), not a
+level-source question. Instrument facts for the next attempt: watch 0x16c (not 0x168)
+for Ticks; SS_JIT_WATCH_DUMPS default 3 exhausts on early lowmem-init hits — use
+SS_JIT_WATCH_DUMPS=8 + a narrowed watch set for ring capture around late events.
+
+**Task C readiness:** delivery + IACK + level + post are all green and guest-traversed;
+the staging rides the env-on test cluster (SS_NW_PIC default flip stays HELD). The
+flip-cluster decision is unchanged by B-2; the pre-flip checklist carries forward.

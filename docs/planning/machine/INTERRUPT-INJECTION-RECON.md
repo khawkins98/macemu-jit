@@ -351,3 +351,58 @@ decision is now live. Proposal, for sign-off only:
   delivery+post green pre-WLSC, consumption NOT-REACHED named as the next frontier
   (the level inputs are then simply part of "guest interrupt init", owned by whatever
   milestone first runs Mac OS's native interrupt init).
+
+## M7 Task B-2 — the level-source staging (2026-06-12, label m7-taskB2; sign-off shape (i) implemented)
+
+Per-gate verdicts + the staged-word table: the plan's "Task B-2 results". Summary: the
+host source joined the PIC rail (reserved input 0x3F = `OPENPIC_IRQ_HOST`, edge-sensed,
+vec=input, prio 8, IDR=CPU0, CTPR staged 0) + the two guest words staged
+(`[[KDP-0x20]+0xf18]`=0xF3040000, `[0x3f3f]`=1). **R-II7 is RETIRED on the env-on
+cluster: the level test passes** — first guest IACK of the OpenPIC model ever
+(`src=0x3f vec=0x3f`), post writes 0x8001 to 0x68fff070 (the watch trips), CR bits SET.
+
+### Evidence highlights (boots slot0 20260612-033407/-033746/-033954/-034428)
+
+- **IACK leg traversal, ring-pinned** [PROBE✓, run -033954 ring #3733960..#3734012]:
+  50314880 → 50325f00 (lock/save/counter) → segment dance → IACK block 0x50326050
+  (`lhz [IRP+0xf88]`, mtmsr DR, **lwbrx @+0x200a0 → MMIO fault → do_iack**) → vector
+  0x3f → ≠[IRP+0xf88](=0) skips immediate-EOI → `lbz [0x3f00+0x3f]`=1 → queue push +
+  bitmap → post 0x3254e0: r28=1 → `ori 0x8000` → `sth 0x8001,(0x68fff070)` +
+  `or r13,[KDP+0x674]` → `bgt cr7` skips the and-clear. The value-invisible-watch
+  problem from Task B is gone (0→0x8001 is a change).
+- **The byte-lane chain holds end-to-end**: lwbrx(guest BE) over the LE value-swap bus
+  returns the NATURAL vector (0x3f, not a swap artifact) — F16's composition validated
+  on the first live PIC read path.
+- **Second traversal bounded**: a later not-from-emulator fallback pass IACKed empty →
+  SPVE 0xff → OOB leg → guest EOI (`iacks=1/2 spurious=1 eoi_empty=1`) — bounded, no
+  storm; the IACK's unconditional out-lower keeps the level-held EXT word retired
+  (the A1 shape cannot recur on this path).
+- **R-II10 (new, the moved break link): the parked-regime DR-poll gap.** The post's
+  armed pending halfword (0x8001 at ECB+0x70) and CR arm are never consumed because the
+  env-on frontier parks in the NK spin/`sc 0x2e` regime (R-II3's wait loop) and the
+  DR/68k world never runs again post-delivery (comp frozen, jDR static, pure-NK ring
+  windows around every increment/delivery). via_int (0x5000ec52+2) and OP_IRQ
+  (0x5000bbca) probes: 0 matches, 59 s each, ×2 boots. The next frontier is scheduling
+  (wake the 68k world on an EXT post), not interrupt plumbing.
+- **Ticks correction of record**: Ticks (0x16a..0x16d) HAS been moving — host
+  `HandleInterrupt` MODE_68K keep-set (glue:3399) +1 per invocation (0→11→12 across a
+  boot), ring-attributed to NK-only windows (not addq). Task B's "Ticks did not move"
+  read watch word 0x168 = Ticks' HIGH half (blind below 65536 ticks). Watch 0x16c for
+  the LSB. The "first guest addq.l #1,$16a" headline remains unclaimed.
+- **Lowmem wipe non-event**: the trampoline-staged `[0x3f3f]`=1 SURVIVED to edge #1
+  (the one-shot re-assert found it intact) — the W2 68k-vector wipe does not reach
+  0x3f00 on this boot class.
+- **A/B**: gated-off boot byte-identical to the E4 baseline class (blocks=7354 exact,
+  PROGRAM#5 srr0=50324fec slot=5, sc census x233/x17, zero PIC/host-irq output).
+
+### Residue updates
+
+- **R-II7 RETIRED** (env-on cluster): the level inputs are staged init-time platform
+  constants (sanctioned class), every event guest-traversed (PIC-IACK → vector table →
+  level test → post). Gated-off boots retain the Task-B zero-level behavior by design.
+- **R-II8 still stands** (the junk queue depth) — and note it is load-bearing for leg
+  selection: a CLEAN zero `[KDP+0x910]` would take the queue-empty leg 0x5032613c,
+  which never IACKs (r28=-1 post-skip). If the queue area is ever initialized, re-check
+  the IACK-leg reachability.
+- **R-II10 named above** (parked-regime DR-poll gap) — the milestone's consumption
+  remainder lives there.

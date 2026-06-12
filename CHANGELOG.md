@@ -11,6 +11,32 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] M7 Task B-2 — the host source joins the PIC rail (sign-off shape (i)): THE LEVEL TEST PASSES — first guest IACK of the OpenPIC model, post writes level|0x8000, CR bits SET
+
+Interrupt-injection milestone Task B-2 (plan "Task B-2 results" + recon "M7 Task B-2").
+The signed-off level-source staging: the Task-A host latch now also wiggles a RESERVED
+PIC input (`OPENPIC_IRQ_HOST` 0x3F — no real DEC/timer PIC input exists,
+KEYLARGO_MAX_TMR=0, QEMU openpic.h:41 @ de5d8bfd…) on exactly the assert edges, and the
+init-time platform constants Mac OS's native MPIC init would write are staged:
+IVPR[0x3F]=edge|prio8|vec0x3F + IDR=CPU0 + CTPR=0 (model, bring-up single-threaded) and
+`[[KDP-0x20]+0xf18]`=0xF3040000 (NK-held PIC base, fallback read 0x50325f48) +
+`[0x3f3f]`=1 (vector→level byte, 68k level-1) in the NW trampoline. Every per-interrupt
+EVENT stays guest-traversed (assert → EXT delivery → fallback IACK lwbrx-over-MMIO →
+vector → level → post; retirement = the guest's own IACK consuming the edge source —
+zero host writes to pending/CR/per-delivery state). **LIVE (env-on test cluster
++SS_NW_PIC=1; default flip HELD):** `first-iacks: src=0x3f vec=0x3f` (the model's first
+guest consumer, F16 byte-lane validated end-to-end), `[WATCH] addr=68fff070
+value=80010000` (Task B's break link RETIRED — R-II7 closed env-on), exactly-once
+re-proven, zero tripwires, gated-off A/B byte-identical (blocks=7354 exact). **The break
+moved one link PAST the level test (R-II10, frontier-record per stop-rule 2):** the
+parked NK spin regime never runs the DR/68k world again post-delivery, so the armed
+0x8001 is never polled — via_int/OP_IRQ probes 0 matches. **Ticks correction of record:**
+Ticks HAS been moving via the host HandleInterrupt MODE_68K keep-set (glue:3399); Task
+B's "Ticks did not move" watched 0x168 = Ticks' HIGH half (LSB is in word 0x16c). The
+"first guest addq.l #1,$16a" headline remains unclaimed. dev_openpic.cpp untouched
+(header constant only; 206 oracle checks unchanged). Gates: task tier 5/5 + exc lane
+14/14; 4 of ≤5 boots.
+
 ### [SheepShaver][docs] M7 Task B — consumption round trip verified to its break link: the NK post fires on host-sourced EXT deliveries, the round trip dies at the post's zero-level test; Ticks unmoved (verify-don't-build, zero source changes)
 
 Interrupt-injection milestone Task B (plan "Task B results" + the recon's "M7 Task B"

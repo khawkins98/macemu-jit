@@ -680,7 +680,7 @@ shmem boundary 0x68FFC000). Every known occupant, ascending:
 | `0x68FF4120..0x68FF4DF0` | — | free (reserve for NKSystemInfo growth) | — |
 | `0x68FF4DF0..0x68FF4EBC` | 0xCC | IRP bank table (banks 0–25; irp_base=0x68FF4000, +0xDF0) | glue seeds bank 0; NK reads |
 | `0x68FF4EBC..0x68FF4F00` | — | free | — |
-| `0x68FF4F00..0x68FF4F80` | ~0x80 | 'Hnfo' hardware-info record (`[KDP+0xfd0]` target; fields to +0x76) | glue seeds; ROM machine detect reads |
+| `0x68FF4F00..0x68FF4F80` | ~0x80 | 'Hnfo' hardware-info record (`[KDP+0xfd0]` target; fields to +0x76). **+0x18 (=0x68FF4F18 = `[[KDP-0x20]+0xf18]`) = NK-held PIC base, staged 0xF3040000** (M7 Task B-2, env-gated SS_NW_HOST_IRQ+SS_NW_PIC). NB this page doubles as the NK's live interrupt state: `[IRP+0xf28..0xf30]` pending bitmap, `[IRP+0xf88]` immediate-EOI vector halfword, `[IRP+0xf8c..0xf93]` level bytes — the EXT fallback writes these per traversal | glue seeds; NK EXT fallback reads +0xf18 (0x50325f48) and writes the interrupt-state fields |
 | `0x68FF5000..0x68FF5800` | 0x800 (reserve) | 'Hnfo' writable scratch record (`[hnfo_rec+0x08]`); observed writes +0x10..+0x17 (ROM+0xAC20 copy-out) | ROM machine detect writes each cold cycle |
 | `0x68FF5800..0x68FF6080` | 0x880 | **MM save-record pool, 4 × 0x220** (`[ECB+0xE0/E4]`; existence bitmap 0xF0000000) — Task T relocation (was 0x68FF5000, rev 2 C1 collision with the scratch) | trampoline re-seeds per entry; DR allocator 0x5046e304 + NK context save |
 | `0x68FF6080..0x68FF6084` | 4 | **RESERVED: Task-X R2 cold/ongoing discriminator scratch word** | Task X (data-only; not the ROM zero run) |

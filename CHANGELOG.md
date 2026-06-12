@@ -11,6 +11,43 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver][docs] M7 INTERRUPT-INJECTION MILESTONE COMPLETE — first host→guest interrupt through the guest's own chain; first guest IACK of the OpenPIC model; riser/published/host-irq cluster newworld DEFAULT
+
+Milestone summary (per-task detail in the entries below + the plan
+`docs/superpowers/plans/2026-06-12-interrupt-injection.md`; evidence
+`docs/planning/machine/INTERRUPT-INJECTION-RECON.md`). Commit arc: `153c088b`
+(plan) / `c57d87f9` (rev 2, two red-team rounds folded) / `533a3c43`
+(entry-gate actuals) / `2668ead9` (Task 0 recon — EXT route verdict, first
+forced EXT deliveries ever, the A1 level-source livelock proven in vivo
+68.6M deliveries/40 s) / `b124556f` + `de659b6c` (Task A — `SS_NW_HOST_IRQ`
+once-per-assert-edge latch, Q-I6 fence narrowing, FIRST live host-sourced EXT
+delivery) / `eee33f16` + `77d8ac6d` (Task B verify-don't-build — break pinned
+to the NK post's zero-level test; level-source staging signed off, shape (i)) /
+`68c8fc3e` + `3de826b2` (Task B-2 — PIC-rail level staging, FIRST guest IACK,
+the level test PASSES) / `b3e51b8d` (slot5-recon — the park is the NK idle nap
+loop; new frontier = the slot-4 consumption livelock, three shapes pinned) /
+`2a452166` (pre-flip checklist 4/4 incl. the ClearInterruptFlag lost-edge race
+fix) / `81d60cc1` (THE CLUSTER FLIP). **Acceptance numbers:** exactly-once per
+assert edge (`edges=1 consumed=1 deasserts=0 pending=0`; zero TRIPWIRE lines
+across every boot); env-on watch 68fff070 trips `value=80010000` (the level
+test passing); `first-iacks: src=0x3f vec=0x3f` (guest-traversed retirement —
+the IACK lowers the line); deferred_native 97→0 under the narrowed fence; DEC
+regime healthy at ~2.0 mtspr/delivery; full gates 6/6 PASS pre- AND post-flip;
+all-OFF opt-out byte-identical to the E4 baseline class (blocks=7354 exact).
+**The flip:** `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` + `SS_NW_HOST_IRQ` are
+the newworld DEFAULT (explicit-"0" opt-out each); post-flip default boots
+deliver DEC #1–4 (2-SPR) + the first host-sourced EXT delivery with NO env
+vars and still reach the PROGRAM#5 park; `SS_NW_PIC` stays default-OFF/HELD
+(env-on test cluster only — it carries the B-2 level staging, so default-boot
+EXT deliveries carry level 0, the real chain's correct pre-init behavior).
+**Honest remainder, named:** consumption — the armed 68k post is never
+consumed/retired by the DR/68k world (the slot-4 round trip = the named next
+task); Ticks has never been guest-claimed (the host keep-set ticks it; the
+guest `addq.l #1,$16a` has never run). Docs close-out (this entry's commit
+group): DIAGNOSTICS M7 section, MACHINE-LAYER-PLAN re-score #3 (draft for
+coordinator confirmation), wave2 plan CLOSED/SUPERSEDED with the final W2-4
+disposition table, LEARNINGS, AGENT-CONTEXT frontier refresh.
+
 ### [SheepShaver] M7 Task C — THE CLUSTER FLIP: SS_NW_EE_RISER + SS_NW_DEC_PUBLISHED + SS_NW_HOST_IRQ are the newworld DEFAULT — the first host→guest interrupt delivered through the guest's own chain on a default boot
 
 Interrupt-injection milestone Task C (`2a452166` checklist + `81d60cc1` flip; plan "Task

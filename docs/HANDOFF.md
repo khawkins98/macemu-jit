@@ -1,209 +1,66 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-12** (updated mid-session — M9 VIA-IFR implementation in progress,
-> boot stall unresolved). This document is the single entry point for picking the work back up.
-> Hand the resume prompt below to a fresh agent session verbatim, or read on for the state
-> summary and pointers.
->
-> (Not to be confused with `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`,
-> which is the preserved Path-A reference from an earlier, superseded approach.)
+> **Status: PAUSED 2026-06-12** · Resume: read this doc, then `docs/AGENT-CONTEXT.md`.
+> For historical session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md`.
 
-## The resume prompt
+## Resume prompt
 
-Paste this to start the next session:
+> Read `docs/HANDOFF.md` then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
+> Where we are: M8 slot-4 consumption shipped gated-off-green (`SS_NW_IRQ_CONSUME`).
+> Active: **M9 VIA-IFR** — the via_nw901_int patch (OP_IRQ+rte @0x5000ed08) stalls the
+> 68k boot. Start with Probe 1 below. Process: `docs/MILESTONE-WORKFLOW.md`. Never push
+> without being asked.
 
-> Read `docs/HANDOFF.md` in full — including the "Recommended resumption order" and
-> the queued ideas — then `docs/AGENT-CONTEXT.md` (the standing context pack — its
-> "Current frontier" block is authoritative), then **`docs/planning/machine/VIA-IFR-RECON.md`
-> §7 in full** (the session-3 implementation state, boot stall symptom, and the two-boot
-> recon recipe — this is the immediate entry point). The development process is BINDING:
-> `docs/MILESTONE-WORKFLOW.md` (plan → red-team → rev-2 fold → binding Task-0 recon →
-> env-gated implementation → flip-last acceptance → docs close-out), with the
-> parallel-workstream layer (file-ownership claims, slot-protocol boots, always-green
-> fusion). **Where we are:** SS_NW_VIA_IFR gate is implemented (build passes, harness
-> 353/353), but a boot stall has the 68k handler at 0x5000ed08 unreachable
-> (SS_PROBE_68K never fires). Start with the two-boot recon in VIA-IFR-RECON.md §7d.
-> Never push without being asked.
+## Active frontier: M9 VIA-IFR boot stall
 
-## Recommended resumption order (coordinator + Ken, decided at pause time)
+**State (session 4):** `SS_NW_VIA_IFR=1` reduces dec_expiries from 2393 to 6. The ROM
+patch is the sole cause. `SS_PROBE_68K=0x5000ed08` never fires with the patch on.
 
-1. ~~**The QEMU differential rig FIRST (≤ half a day).**~~ **DONE (2026-06-12).**
-   Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`. See full findings:
-   `docs/planning/machine/VIA-IFR-RECON.md`.
-2. ~~**VIA-IFR Task A**~~ **DONE (2026-06-12 session 2).** Fix target identified:
-   ROM offset 0xed08. See `docs/planning/machine/VIA-IFR-RECON.md` §5.
-3. **VIA-IFR boot stall (first task on resumption).** Baseline regression fixed
-   (session 4 — tp[25-26] gated on SS_NW_VIA_IFR; shadow address corrected to 0x68ff6084).
-   Remaining: the via_nw901_int ROM patch (OP_IRQ+rte @0x5000ed08) reduces dec_expiries
-   to 6 (vs 2393 baseline). Probable cause: 0x5000ed08 is entered via JSR during early 68k
-   init and `rte` corrupts the return. **Start with Probe 1 from VIA-IFR-RECON.md §8c:**
-   probe the UNPATCHED 0x5000ed08 with SS_PROBE_68K (no VIA_IFR gate) to confirm the
-   interrupt path fires at all, then A/B the patch. Fix: replace `rte` with frame-aware
-   return (detect interrupt vs JSR frame from SR format word on stack).
-4. **Once VIA-IFR fires:** confirm `fired > 0` and `ticks_keepset` advancing before
-   claiming the gate. Retire the six pre-M7 default-ON gates (item 5 below) as a
-   first-milestone task.
-5. **Defer doc restructuring** (item 4's residual) to the next doc-sweep trigger.
+**Probable cause:** 0x5000ed08 is entered via JSR during early 68k init, not only via
+interrupt. Our `rte` after `OP_IRQ` corrupts the caller's stack (pops an interrupt frame
+where a normal return was expected).
 
-## Where the project stands (2026-06-12)
+**Fix candidate:** replace `rte` with frame-aware return — detect interrupt vs JSR from
+the SR format word on the stack.
 
-One-line: **SheepShaver boots Mac OS 8.6 to Finder with the full native JIT
-(paravirtual profile, shipped, stable). The Machine Layer work toward Mac OS 9.2.x
-on the NewWorld fidelity profile has a complete, default-on interrupt-delivery
-architecture; consumption is green to within one device surface of the first
-guest-claimed tick.**
+## Next-step probes (start here — 2 minutes total)
 
-Shipped in the final two days before the pause (details: `CHANGELOG.md` 2026-06-11/12):
+**Probe 1 — confirm the unpatched handler fires at all:**
+```bash
+SheepShaver/tools/ss-slot-boot.sh --label via-no-patch-probe \
+  --env 'SS_NW_IRQ_CONSUME=1' --env 'SS_NW_PIC=1' \
+  --env 'SS_PROBE_68K=0x5000ed08:5' --timeout 25
+```
+Expected: `[PROBE68K] MATCH` lines with d3=1 (interrupt path).
+If probe NEVER fires without the patch → wrong vector at 0x64 or EMUL_OP_IRQ dispatch broken.
 
-- The tm_task misalignment guard (slide wall), the HLE Time Manager trap population
-  (SysError-12 wall), the EE riser + the DEC-cadence fix (first DEC deliveries ever).
-- **M7 interrupt injection** (plan: `docs/superpowers/plans/2026-06-12-interrupt-injection.md`):
-  host edge → EXC_EXTERNAL → NK-published handler → first guest PIC IACK → vector/level
-  table → NK post — all guest-traversed, cluster default-ON (`81d60cc1`).
-- **M8 slot-4 consumption** (plan: `docs/superpowers/plans/2026-06-12-slot4-consumption.md`):
-  the torn-context livelock root-caused (our riser's non-atomic rfi emulation — found
-  statically by the red-team) and fixed; **PROGRAM#4/slot-4 fired for the first time**;
-  the 68k level-1 interrupt handler runs at 60 Hz. Shipped **gated-off-green**
-  (`SS_NW_IRQ_CONSUME` default OFF; the flip prerequisites are recorded in the plan's
-  Task-C results).
-- Instrument hardening: watch spans + `[WATCH-SAMPLE]`, SS_PROBE_LINEAR cleared,
-  r24-ring SIGSEGV flush.
+**Probe 2 — if probe 1 fires, identify JSR vs interrupt callers:**
+```bash
+SheepShaver/tools/ss-slot-boot.sh --label via-no-patch-callers \
+  --env 'SS_NW_IRQ_CONSUME=1' --env 'SS_NW_PIC=1' \
+  --env 'SS_PROBE_68K=0x5000ed08:10' --timeout 25
+```
+If early matches have SP pointing to a normal return frame → JSR caller confirmed.
 
-The honest red: **Ticks is still host-attributed.** M9 (VIA-IFR surface) is mid-flight:
-`SS_NW_VIA_IFR` gate exists, builds clean (harness 353/353), baseline regression fixed
-(session 4). Remaining: the via_nw901_int patch (OP_IRQ+rte @0x5000ed08) stalls the 68k
-boot (dec_expiries=6 vs 2393) — probable JSR-caller rte corruption. See VIA-IFR-RECON.md §8.
+## Open questions
 
-## Reading order for a fresh session
+| # | Question | Status |
+|---|----------|--------|
+| 1 | What sets `$0d94` at tick time? | OPEN |
+| 2 | What handler is at 0x64 in our boot? (probe says 0x5000ed08 — differs from QEMU's 0x5000ec50) | OPEN |
+| 3 | What does the `$6e4` vector chain expect on dismissal? | OPEN |
+| 4 | SC#1 r0=0x0d (M8 residue) — explained or fixed before `SS_NW_IRQ_CONSUME` flip | OPEN |
 
-| Read | Why |
-|---|---|
-| `docs/AGENT-CONTEXT.md` | The standing facts pack — current frontier, constants, instrument caveats, gate states, boot recipes. One read replaces four docs. |
-| `docs/planning/ROADMAP.md` (header) | What's next, arranged. |
-| `docs/MILESTONE-WORKFLOW.md` | THE binding process. |
-| `CHANGELOG.md` (top) | What just happened, by commit. |
-| `docs/superpowers/plans/2026-06-12-slot4-consumption.md` | The last milestone — its Task-C flip criteria and residues seed the next one. |
-| `docs/planning/machine/INTERRUPT-INJECTION-RECON.md` | The evidence base + the consolidated residue table (R-II7..R-II10, SC#1=0x0d). |
-| `docs/planning/machine/VIA-IFR-RECON.md` | **Task-0 complete** — corrected ROM dispatch description, QEMU rig findings, Task A questions (what sets `$0d94`; what handler is at 0x64; the `$6e4` chain). The VIA-IFR milestone's entry document. |
-| `LEARNINGS.md` | Non-obvious lessons; read before theorizing. QEMU rig pitfalls added 2026-06-12. |
+## Verification criteria
 
-## Ideas queued at the pause (2026-06-12 discussion — candidates, not commitments)
+- `SS_PROBE_68K=0x5000ed08:5` fires with d3=1
+- With `SS_NW_VIA_IFR=1`: dec_expiries recovers to ~2393 (matching baseline)
+- Boot advances past PROGRAM#5 park
+- Harness 353/353 throughout
 
-Three directions discussed with Ken at pause time, recorded here so resumption can
-weigh them against the default next milestone (VIA-IFR):
+## Operational
 
-1. **A two-gear sprint toward pixels.** The seeds-not-services pattern held ~7
-   consecutive times — most walls are one staged word found in 2–4 boots, and the
-   per-wall ceremony (plan/red-team/dual-review) now costs more than the walls.
-   Proposal: a timeboxed sprint whose goal is *the ?-disk icon on screen*, running
-   seed-class walls in a LIGHT gear (evidence-tagged root cause → gated fix → inner
-   gates → one-line log; no plan/red-team per wall) while keeping the full machine
-   ONLY for delivery/world-switch semantics or paravirtual-reachable changes.
-   Non-negotiables even in sprint gear: slot protocol, falsifiable evidence before
-   fixes, env gates. One consolidated review + docs pass at sprint end (the sprint
-   accumulates review debt deliberately — schedule the hardening pass). Suggested
-   day-one items: the M5 framebuffer (recon complete — a visible screen is itself
-   an instrument) and the QEMU differential rig below.
-2. ~~**QEMU mac99 as a differential boot oracle.**~~ **DELIVERED (2026-06-12).**
-   Tools: `SheepShaver/tools/qemu-rig.sh` (self-contained boot + probe runner, auto-
-   rebuilds the test ISO) and `qemu-mon.py` (ANSI-stripping monitor client with
-   `--disasm`). VIA-IFR Task-0 was the first customer — see resumption order item 1
-   above and `docs/planning/machine/VIA-IFR-RECON.md` for findings.
-   Remaining customers from the original list: SC#1=0x0d divergence, the 0x500eXXXX
-   crash class, the QEMU wall census (item 7 — now unblocked).
-3. **DingusPPC as the fidelity second-opinion.** For NewWorld/Core99 behaviors it
-   is the most faithful modern reference (real Apple-OF-path focus). Use when QEMU
-   and our RE disagree (Cuda/KeyLargo/VIA). Standing rules apply: import GPL code
-   with citation per backport hygiene; never contribute upstream to them. Existing
-   notes: `docs/planning/COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md`.
-
-Four more from an external review of the plan (2026-06-12, accepted at pause time —
-the first item was acted on immediately, the rest are queued):
-
-4. **Header discipline — DONE at the pause**: ROADMAP/MACHINE-LAYER-PLAN headers
-   trimmed to a 5-line current-state budget; the old narratives relocated verbatim to
-   "Archived status narratives" sections in each doc; the budget is now an enforced
-   rule in CONTRIBUTING's sweep checklist (Task Zs update in place, never append).
-   Residual candidate for a future doc-sweep: split other long trackers into
-   status-front + dated-annex on the same pattern (relocate, never delete).
-5. **Gate retirement needs a trigger, not a vibe.** 17 SS_NW_* gates in-tree, 6
-   named retirement candidates, but "after a quiet release cycle" is not a schedule.
-   Proposed trigger: the FIRST milestone after resumption includes a gate-retirement
-   task (hard-wire the six pre-M7 default-ON surfaces), and the all-ON/all-OFF-only
-   support claim becomes an enforced contract (a gates.sh check or a documented
-   refusal), not a doc sentence.
-6. **The consumption path needs M9+ milestone framing.** The plan structurally ends
-   at M8 + "VIA-IFR next". The remaining path to 9.2.x-to-Finder is ~3-4 milestone-class
-   efforts: M9 consumption (VIA-IFR → retirement → Ticks guest-claimed), M10 visible
-   framebuffer (M5 work, recon done), M11+ CFM / Process Manager / drivers (unscoped).
-   First planning act on resumption: write the milestone map, even rough.
-7. **Measure the wall count instead of re-flagging it.** Every re-score names the
-   CFM/Process-Mgr "unmeasured wall tail" as the residual drag; nobody has measured
-   it. The QEMU rig (idea 2) pointed FORWARD — a traced reference boot enumerating
-   the syscall/trap/device surfaces between the current frontier and Finder — turns
-   the unknown into a checklist. Honest caveat from the review: seeds-not-services
-   has held because NK state is inspectable; it may NOT hold in Process Manager
-   territory. A short M5/framebuffer scoping spike (the historical home of M3-class
-   surprises in other emulators) de-risks the same estimate from the other side.
-
-8. **The ROM-architecture reference doc (curation, not new RE).** A real fraction of
-   this project's reverse engineering is genuinely novel public documentation — the
-   firmware→ROM handoff contract (everything the trampoline stages: KDP fields,
-   timebase global, Execute68k pair, trap-table images, the level table), the
-   nanokernel's internals (published per-regime vector tables, syscall/FE1F selector
-   surfaces, scheduler/timeslice machinery, the idle-nap loop), and the 68k-emulator/NK
-   interface (DR dispatch tables, Mixed Mode protocol, entry-vector slots, the
-   interrupt chain). The full-hardware emulators (QEMU/PearPC/DingusPPC) never needed
-   the ROM's internals — nobody else has this written down. Editorial task, a few
-   sessions, zero new RE: extract the ROM FACTS from our recon docs into a standalone
-   "NewWorld ROM boot architecture notes," stripping machine-layer specifics (the
-   evidence tags [RAW-ROM]/[PATCH]/[PROBE✓] make the separation mechanical).
-   **Version-scoping is mandatory and the findings are version-tied** — pin every
-   claim to the exact ROM. Source-ROM provenance (community archive — possibly The
-   Macintosh Repository; not Macintosh Garden — exact origin unrecorded):
-   `2001-12-19 - Mac OS ROM 9.0.1.rom` md5 `66210b4f71df8a580eb175f52b9d0f88` (2,763,530 B;
-   decompressed image md5 7b1378be… per the dumps MANIFEST) ·
-   `1998-07-21 - Mac OS ROM 1.1.rom` md5 `e0fc03faa589ee066c411b4603e0ac89` (1,900,274 B) ·
-   `MacOS-ROM-9.0.4-G4-extracted.rom` md5 `97fae52ee255e1dc98d50ed77042804c` (2,430,604 B).
-   Two riders, discussed and endorsed at pause time:
-   (i) **The deliberate NK-completion pass** — the nanokernel is small enough
-   (~tens of KB reachable) that finishing its RE systematically is bounded, and
-   everything routes through it; we're ~70% there by accretion. Highest-value
-   single RE investment.
-   (ii) **The annotated-disassembly consolidation** — pour the hundreds of pinned,
-   evidence-tagged addresses from the recon docs into Ghidra databases over the
-   decompressed images (ONE DB PER ROM VERSION — three images on hand, md5s above)
-   so future RE compounds instead of re-deriving. A few sessions of setup+scripting;
-   pairs naturally with the QEMU rig (ground truth to annotate against).
-   Cross-version expectation (informs the doc's structure): the NK's ARCHITECTURE
-   transfers across NewWorld ROM versions (the KDP block, vector publication, the
-   world-switch protocol, the 68k-emulator/MixedMode contract are compatibility-
-   constrained — confirmed across our 1.1 vs 9.0.1 spread, which spans NK v1 to v2);
-   the ADDRESSES do not transfer (offsets/anchors drift per version — the tm_task
-   lesson). Write one version-agnostic architecture document with per-version
-   address appendices.
-9. **ROM portability strategy (discussed at pause; shapes item 8's payoff).** Today a
-   different NewWorld ROM would boot some distance, GUARDED-SKIP loudly, and stall —
-   fail-safe but not portable. Three robustness tiers already exist: (i) runtime
-   self-description (the NK publishes its vector table; we read it live — lean harder
-   on this), (ii) content-based pattern searches with verify-EXPECTED-first guards
-   (degrade loudly), (iii) blind absolute pins (trampoline staging offsets, patch-space
-   addresses — the real exposure; KDP field layout is NK-version-defined). The mature
-   shape is NOT general runtime detection but a cheap ladder: checksum-keyed
-   per-version offset profiles (generated mostly mechanically from item 8's Ghidra
-   DBs — that is the consolidation's concrete payoff), then signature-search for the
-   few staging constants that drift, and only-if-needed true dynamic discovery.
-   Scope reality: the M7 goal needs ~3 supported ROM versions (9.0.1 now, the
-   9.2.x-era ROM, maybe one more), not the full 1.1-to-10.2.1 family — three curated
-   profiles beat a general mechanism.
-
-## Operational notes
-
-- Branch `macos-arm64`; the user pushes — **never push unprompted**.
-- Parallel boots ONLY via `SheepShaver/tools/ss-slot-boot.sh` (never global pkill);
-  cleanup with `ss-reap.sh`. File claims via `docs/superpowers/.claims/` + the
-  pre-commit guard.
-- Gate tiers via `tools/gates.sh <inner|task|full>`; harness score must stay 353/353.
-- Assets in `/Users/Shared/macemu/`; canonical ROM dumps + manifest in
-  `/Users/Shared/macemu/dumps/` (verify with `tools/dump-manifest.sh --check` before
-  tagging evidence).
+- Branch `macos-arm64`; never push unprompted.
+- Parallel boots via `SheepShaver/tools/ss-slot-boot.sh` only (never global pkill).
+- Cleanup: `SheepShaver/tools/ss-reap.sh`.
+- Queued ideas and future backlog: `docs/planning/BACKLOG.md`.

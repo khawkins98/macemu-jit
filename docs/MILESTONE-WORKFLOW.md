@@ -222,3 +222,46 @@ survived two adversarial passes and the gates were written before the code. The
 expensive-looking overhead (red-teams, Task 0s, review loops) is where the speed
 comes from: walls that Path A priced as reimplementation keep resolving as seeds,
 and the one time a fix would have broken working code, a reviewer caught it on paper.
+
+---
+
+## 8. Solo mode / Light-gear sprint rules (added 2026-06-12)
+
+Use for seed-class walls where the ceremony costs more than the wall. The full machine
+(§§1–7) is still required for delivery/world-switch semantics or paravirtual-reachable
+changes.
+
+**Rule 0: No new recon docs committed.** Session notes live in `/tmp/session-YYYY-MM-DD.md`
+(never committed). At end of session: one finding moves into an active doc; the rest is
+deleted.
+
+**Rule 1: Milestones are 3 bullets max.**
+```
+## MN: short name
+- [ ] Fix: evidence-tagged root cause → gated fix
+- [ ] Verify: falsifiable gate (command + expected output)
+- [ ] Ship: one-line CHANGELOG entry
+```
+
+**Rule 2: 5-line fix discipline.** Before any investigation:
+1. Can this be solved with a ≤5-line code change? → do it.
+2. Can this be bracketed with a ≤5-line probe/gate? → do it.
+3. Only if both "no" → deeper investigation, max 30 minutes before booting a VM.
+
+**Rule 3: When in doubt, boot it.** Cost of a boot: ~30 seconds. Cost of a wrong
+assumption: ~3 hours. If you've spent 30 minutes on a problem without new data, launch
+a VM. The QEMU rig is your first tool, not your last resort.
+
+Quick tooling:
+```bash
+ss-slot-boot.sh --label test1 --timeout 30        # headless test
+SS_PROBE_68K=0x5000xxxx:N ss-slot-boot.sh ...     # 68k probe
+SheepShaver/tools/qemu-rig.sh --timeout 50        # behavioral oracle
+SheepShaver/tools/ss-reap.sh                      # cleanup
+```
+
+**Rule 4: Commit attribution.** Normal commits: no attribution lines. Do not add
+`Co-Authored-By` for AI tools.
+
+One consolidated review + docs pass at sprint end (the sprint accumulates review debt
+deliberately — schedule the hardening pass).

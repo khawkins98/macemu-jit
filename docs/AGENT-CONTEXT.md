@@ -242,16 +242,10 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-Plans: `docs/superpowers/plans/` (canonical exemplar: 2026-06-11-nk-syscall-surface.md;
-2026-06-12-interrupt-injection.md and 2026-06-12-slot4-consumption.md are COMPLETE —
-**next named task: the VIA-IFR surface** [device-model M-class; Task-0 questions: what
-sets `$0d94` at tick time + what handler is at 0x64 in our early-boot guest + the `$6e4`
-vector chain + the SC#1=0x0d residue; see VIA-IFR-RECON.md for full corrected picture],
-frontier evidence in INTERRUPT-INJECTION-RECON.md "Slot-4 consumption Task B" leg 8
-+ "Task C"). Evidence/addenda: `docs/planning/machine/`
-(M6A-ONGOING-ENTRY-DESIGN.md, M6A-WAVE2-SHIM-RECON.md, M3A-ENTRY-TABLE.md,
-EE-CHAIN-RECON.md, TRAP-TABLE-RECON.md [the InsTime/SysError-12 wall + fix record],
-INTERRUPT-INJECTION-RECON.md [P-M5 anatomy, the paravirtual donor chain, the
-exception-path architecture answer], SLIDE-WALL-RECON.md, DSAT-WALL-RECON.md,
-DISK-PATH-RECON.md).
+**Next task: M9 VIA-IFR surface.** Probe recipe and open questions: `docs/HANDOFF.md`.
+Active planning: `docs/archive/2026-06/machine/VIA-IFR-RECON.md` (boot stall detail, §7–§8; archived — probe recipe is in HANDOFF.md).
+Keep-active machine docs: `CORE99-MACHINE-DESCRIPTION.md`, `M1-DEVICE-CONFORMANCE.md`,
+`ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md` (HOLD).
+Archived milestone recon: `docs/archive/2026-06/machine/`.
+Archived plans: `docs/archive/2026-06/superpowers/plans/`.
 Knob reference: `SheepShaver/docs/DIAGNOSTICS.md`. Process: `docs/MILESTONE-WORKFLOW.md`.

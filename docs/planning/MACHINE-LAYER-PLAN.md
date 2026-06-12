@@ -632,11 +632,15 @@ Qualitative shifts:
   (dispositions recorded in their rows) — correct sequencing, but they are real remaining
   work inside the M7 estimate, not free.
 
-### Re-score #3 — post-M7-interrupt-injection (2026-06-12) — **DRAFT, for coordinator confirmation**
+### Re-score #3 — post-M7-interrupt-injection (2026-06-12) — **CONFIRMED**
 
 > Drafted by the M7 Task-Z close-out per the §9 convention (re-score was due at this
-> checkpoint, flagged since the desync sweep). Percentages are the drafter's proposal;
-> the coordinator confirms or adjusts.
+> checkpoint, flagged since the desync sweep). **Coordinator confirmed 2026-06-12 as
+> drafted** — platform ~96%, capability ~82%, the slot-4 restore-tail livelock named
+> as the next likeliest M3-class surprise. One coordinator addition: the gate-retirement
+> candidate list (the six pre-M7 default-ON surfaces) is endorsed but explicitly
+> deferred until after the slot-4 task — no retirement churn while the consumption
+> half is in flight.
 
 **The named surprise fired AND was resolved this cycle.** Re-score #2 named the
 EE/interrupt-delivery chain as "the likeliest place for the next M3-class surprise."

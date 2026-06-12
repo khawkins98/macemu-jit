@@ -527,6 +527,16 @@ set spanning the delivery chain (DEC entry 0x50313200, EXT entry 0x50314880, pos
   suppress exactly the highest-value fires (probing delivery entry/restart blocks IS
   the instrument's main use under this regime), and the crash it would insure against
   no longer reproduces.
+- **Cross-reference (2026-06-12, post-slot-4 Task A)**: the crash CLASS recurred
+  WITHOUT SS_PROBE_LINEAR — slot-4 Task A saw 3/7 env-on boots crash pre-engagement
+  with the same signature family (DEC#1 delivered into 0x500eXXXX early-ROM code,
+  5 same-block restarts then a register marching out of RAM; Task A's
+  restart=0x500e7310 ×5 matches this note's original pc=0x500e708c "after 5
+  same-block DEC restarts"). This TENSIONS the lost-edge-race attribution above:
+  the class is delivery-into-early-ROM-code, not LINEAR-specific — LINEAR likely
+  only perturbed timing into it. The open class is named in the slot-4 plan's
+  Task-A residue + Task-C flip criteria; root-causing it belongs to that milestone's
+  acceptance, not to instrument work.
 
 ## Slot-4 consumption recon (M8 Task 0, 2026-06-12, label s4t0) — fork-(iii) CONFIRMED LIVE: the riser's mtmsr re-raise fires mid-tail (EXT restart=0x50318018 observed) and the saved ctx carries the torn r10/r11=0x9040 images; the SRR0-image slot is ctx+0xfc (NOT +0xa4) and the resume-PC tear travels the register/CTR path, not the ctx slot
 

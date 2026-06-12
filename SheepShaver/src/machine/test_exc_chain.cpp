@@ -245,21 +245,25 @@ int main()
 	/* --- U14 (M8 slot-4 consumption Task A): the deferred-EE-edge window
 	 *    predicates (rfi-atomicity emulation). Boot-real window values
 	 *    (9.0.1 primary copy, Task-0 recon Q-C1 [STATIC]+[PROBE✓]):
-	 *    stub [0x50318000, 0x50318020) — the 7-word riser stub + final b;
+	 *    LIVE stub = [0x50318000, 0x5031801c) — 7 words TOTAL (3 nest + 3
+	 *    riser + final b; boot-real: "riser windows ... stub 50318000-5031801c");
 	 *    reload [0x503244e4, 0x50324528) — exclusive end one word PAST the
 	 *    bctr at 0x324524 (the replaced rfi). The live windows are filled at
 	 *    patch time by rom_patches.cpp (single source); these literals pin
-	 *    the PREDICATE SEMANTICS, not the addresses. --- */
+	 *    the PREDICATE SEMANTICS, not the addresses — se below is a LOOSE
+	 *    8-word test literal (0x...20), deliberately wider than the live end
+	 *    (Task-C P2 relabel; the predicates are pure in [sb,se)). --- */
 	{
-		const uint32_t sb = 0x50318000u, se = 0x50318020u;
+		const uint32_t sb = 0x50318000u, se = 0x50318020u; /* se = loose test bound (live end 0x...1c) */
 		const uint32_t rs = 0x503244e4u, re = 0x50324528u;
 
 		/* latch: fires only inside the stub window */
 		CHECK( ExcDeferredEdgeLatch(0x50318014u, sb, se));  /* the riser's mtmsr itself */
 		CHECK( ExcDeferredEdgeLatch(0x50318018u, sb, se));  /* the post-mtmsr boundary (b4's torn restart) */
 		CHECK( ExcDeferredEdgeLatch(0x50318000u, sb, se));  /* base inclusive */
-		CHECK( ExcDeferredEdgeLatch(0x5031801cu, sb, se));  /* last stub word */
-		CHECK(!ExcDeferredEdgeLatch(0x50318020u, sb, se));  /* end exclusive */
+		CHECK( ExcDeferredEdgeLatch(0x5031801cu, sb, se));  /* last word INSIDE the loose test bound
+		                                                     * (one past the LIVE 7-word stub end) */
+		CHECK(!ExcDeferredEdgeLatch(0x50318020u, sb, se));  /* end exclusive (of the loose bound) */
 		CHECK(!ExcDeferredEdgeLatch(0x50317ffcu, sb, se));  /* below the window */
 		CHECK(!ExcDeferredEdgeLatch(0x503244e8u, sb, se));  /* reload region is NOT a latch site */
 		CHECK(!ExcDeferredEdgeLatch(0x50318014u, 0u, 0u));  /* riser not armed: empty window never latches */

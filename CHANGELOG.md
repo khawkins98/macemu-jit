@@ -20,8 +20,10 @@ Commits `02a0b74e` / `17e0d071` / `377edbf6` / `e6824327`, all gated
   (0x325520) ORed the CR arm into the volatile working r13 only — any ctx-reloading
   exit discarded it (Task-0 Q-C3; shape B's lost arm). The leg now detours through a
   12-word patch-space stub (0x2fd280) that also stages the NK's own deferred-post pair
-  (`[KDP-0x440]`/`[KDP-0x43c]`) + task-flag 0x10, mirroring the NK's deferred leg
-  (donor 0x325668–0x32568c) word-for-word. Verify-EXPECTED-first (exact 6-word match,
+  (`[KDP-0x440]`/`[KDP-0x43c]`) + task-flag 0x10, closely mirroring the NK's deferred
+  leg (donor 0x325668–0x32568c; NOT word-for-word — scratch retargeted to r8 and a
+  defensive null-task guard added, and the staging is UNCONDITIONAL where the inline
+  leg level-tests; see the Task-C flip record). Verify-EXPECTED-first (exact 6-word match,
   GUARDED-SKIP banners). Live-proven: staging → scheduler-restore drain (0x324720) →
   **the slot-4 twi fires** (`PROGRAM srr0=5046e8d0 word=0fff0004 slot=4` — the
   re-graded PROGRAM#4 gate) → the 68k level-1 handler executes at 60 Hz.

@@ -1916,6 +1916,11 @@ ExcConsumeStats g_exc_consume_stats = { 0, 0, 0, 0 };
 
 static void exc_consume_atexit_dump(void)
 {
+	/* Telemetry note (Task-C P2): `fired` can legitimately EXCEED `deferred` —
+	 * a suppressed in-window poll sets the latch via the held++ path WITHOUT
+	 * a deferred++ (execute_mtmsr's edge is not the only latch setter), and
+	 * each such latch episode still ends in one fire. Harmless; do not treat
+	 * fired>deferred as an accounting bug. */
 	fprintf(stderr, "[IRQ-CONSUME] deferred=%u held=%u fired=%u latch=%u ticks_keepset=%u\n",
 	        g_exc_consume_stats.deferred, g_exc_consume_stats.held,
 	        g_exc_consume_stats.fired, g_exc_deferred_ee_edge,

@@ -240,7 +240,9 @@ extern int ExcEdgeReRaise(uint32_t old_msr, uint32_t new_msr, int pending);
 
 struct ExcRiserWindow {
 	uint32_t stub_base;     /* guest addr of the trap_return riser stub (ROMBase+0x318000) */
-	uint32_t stub_end;      /* exclusive end = the emission extent (8 words riser-on -> +0x20) */
+	uint32_t stub_end;      /* exclusive end = the emission extent (7 words riser-on -> +0x1c:
+	                         * 3 nest words + 3 riser words + the final b — boot-derived
+	                         * 50318000-5031801c; the earlier 8-word/+0x20 note was stale) */
 	uint32_t reload_start;  /* guest addr of the ctx reload region (the stub's branch-back target) */
 	uint32_t reload_end;    /* exclusive end one word PAST the bctr (the replaced rfi word + 4) */
 	uint32_t armed;         /* 1 iff the riser words were actually emitted (newworld +

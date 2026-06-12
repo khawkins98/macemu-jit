@@ -66,10 +66,14 @@ live-fired" as current claims — they are historical.
   logarithmic record counts (1,10,100,…) prove frozen-vs-moving without a change edge.
   Slot cap is 8 words (spans consume one slot per word). `SS_JIT_WATCH_DUMPS` default 3
   exhausts on early lowmem-init hits — use =8 + a narrowed set for late events.
-- **R-II9: `SS_PROBE_LINEAR=1` is SUSPECT under the delivery regime** (env-on/default
-  post-flip boots): 2/2 crashes vs 0/2 without it. Don't combine; hold instrument sets
-  constant across A/B boots (the frontier class is timing-sensitive — ring-slowed boots
-  park, no-ring boots spin in the NK).
+- **R-II9 DOWNGRADED (2026-06-12, instr-hardening re-test): `SS_PROBE_LINEAR=1` no
+  longer crashes under the delivery regime** — 0/2 at HEAD (full env-on + 8 probes +
+  ring + r24 ring) vs the original 2/2 on pre-`2a452166` code (the ClearInterruptFlag
+  lost-edge race fix is the plausible retirer; the probe path is read-only, so LINEAR
+  could only perturb timing). OK to combine again. Standing rule unchanged: hold
+  instrument sets constant across A/B boots (the frontier class is timing-sensitive —
+  ring-slowed boots park, no-ring boots spin in the NK); if a LINEAR-correlated crash
+  recurs, re-raise R-II9 with the new tuple (note in INTERRUPT-INJECTION-RECON.md).
 - `SS_SEED_MEM`, `SS_EXC_ENTRY=0xINT[,0xSC]` (no-comma form preserves the syscall
   default), `SS_CUDA_TRACE=1`, `SS_INTERP_RING` — see DIAGNOSTICS.md.
 - **`deferred_native` is a RE-POLL count post-`3cb3b16e`** (wake-up re-arm: one deferral

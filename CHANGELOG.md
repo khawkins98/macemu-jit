@@ -11,6 +11,18 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [docs] R-II9 re-test: SS_PROBE_LINEAR no longer crashes under the delivery regime (0/2 at HEAD) — suspicion downgraded
+
+Bounded re-test (2 boots, slot0 20260612-051031/-051246): full env-on cluster +
+the 8-probe delivery-chain set + `SS_PROBE_LINEAR=1` + trace ring + r24 ring —
+0/2 crashes (vs the original 2/2), both boots reaching the known shape-A
+consumption livelock like no-LINEAR boots. The probe path is read-only (stderr
+prints only), so LINEAR could only perturb timing; the original crashes ran
+pre-`2a452166` (ClearInterruptFlag lost-edge race fix) code — the plausible
+retirer. No guard landed (it would suppress exactly the highest-value fires:
+delivery entry/restart probes). Status + standing discipline updated in
+INTERRUPT-INJECTION-RECON.md (dated note) and AGENT-CONTEXT.md.
+
 ### [SheepShaver] instrument: SS_DR_R24_RING crash-dump gap fixed (early direct flush; mid-run dumps no longer eat the once-shot)
 
 The r24 ring's SIGSEGV flush rode `ppc_jit_dump_trace_ring()`, which had two

@@ -492,3 +492,38 @@ executes and RETIRES).
 - No pinned contract of the interrupt-injection plan falsified; B-2's chain-walk rows
   stand. The entry-vector slot-4 path was predicted "deliberately dead in the
   paravirtual design" (M6A §1.2) — on newworld env-on it is LIVE and load-bearing.
+
+## R-II9 instrument-fix note (2026-06-12, label instr-hardening) — SS_PROBE_LINEAR no longer crashes: 0/2 at HEAD, suspicion DOWNGRADED (not fully cleared)
+
+Bounded re-test of Anomaly R-II9 (2 of ≤2 boots, slot0 runs `20260612-051031.53249`
+and `-051246.53544`): full env-on cluster (`SS_NW_PIC=1` on the post-flip defaults) +
+`SS_JIT_TRACE_RING=1 SS_PROBE_LINEAR=1 SS_PROBE_CAP=32 SS_DR_R24_RING=1` + an 8-probe
+set spanning the delivery chain (DEC entry 0x50313200, EXT entry 0x50314880, post
+0x503254e0, fallback 0x50325f00, idle 0x50324f04, 0x2e body 0x5031bdfc, PROGRAM
+0x50314700, livelock tail 0x503244e8) + `SS_JIT_WATCH_ADDR=68fff070,168:8`.
+
+- **Result: 0/2 crashes** (vs the original 2/2). Both boots ran the full 60 s,
+  74–132 linear-probe fires, healthy DEC regime (~88/s), EXT edge #1 delivered, and
+  parked in the KNOWN shape-A consumption livelock (`pc=0x503244e8`, comp frozen) —
+  the same terminal state as no-LINEAR boots of this class. The crash signatures
+  (SIGTRAP@0x50460c00, SIGSEGV ea=0x55590000 after 5 same-block DEC restarts) did not
+  recur.
+- **Root-cause assessment (code-static + chronology)**: the linear-probe path is
+  READ-ONLY — `probe_should_log()` + stderr prints; no guest-memory or register
+  writes (MMIO reads refused) — so SS_PROBE_LINEAR could only ever perturb *timing*
+  (print latency at block entry). The original 2/2 crashes ran the m7-taskB code
+  (~03:00), which PREDATES both the B-2 level staging (`68c8fc3e`) and the pre-flip
+  **ClearInterruptFlag lost-edge race fix (`2a452166`)**. The most plausible reading:
+  the crashes were the timing-sensitive frontier class (probe latency at
+  delivery-restart blocks widening a race window), and the race fix retired the
+  window. Not definitively pinned — the original tuples cannot be re-run on the old
+  code within budget.
+- **Status: DOWNGRADED from "suspect — do not combine" to "not reproduced at HEAD
+  (0/2)".** SS_PROBE_LINEAR may be used under the delivery regime again. The standing
+  discipline is unchanged: hold instrument sets constant across A/B boots (this
+  frontier class remains timing-sensitive), and if a LINEAR-correlated crash recurs,
+  re-raise R-II9 with the new tuple rather than burning re-pin boots.
+- No guard was landed: the prescribed suppress-while-delivery-in-flight guard would
+  suppress exactly the highest-value fires (probing delivery entry/restart blocks IS
+  the instrument's main use under this regime), and the crash it would insure against
+  no longer reproduces.

@@ -716,9 +716,10 @@ says so); if the whole range is gone, the full retained window is dumped instead
 announced). The dump file now begins with a `#`-prefixed header line —
 `# records #A..#B (of TOTAL total; ring SIZE records, oldest retained #O)` — so line
 `K` of the body = record `#(A+K−1)`; `jit-analyze.py ring` ignores it. The stderr
-summary line format gained the same `#A..#B` range. The SIGSEGV crash dump also now
-flushes the r24 ring (once per process — a watch-triggered mid-run trace dump consumes
-the one shot; the normal atexit r24 dump still fires separately on clean/SIGTERM exits).
+summary line format gained the same `#A..#B` range. The SIGSEGV handler also flushes the
+r24 ring (directly and early, once per process — since the 2026-06-12 rewiring, mid-run
+watch/stall/trigger trace dumps no longer consume the crash once-shot; the normal atexit
+r24 dump still fires separately on clean/SIGTERM exits).
 
 ### `SS_PROBE_68K=0x68KPC[:N]` — 68k register-file probe at the DR dispatch hook
 

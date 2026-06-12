@@ -1068,9 +1068,10 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 	 * was raised 4 -> 8 because the per-record cost is one vm_is_mmio + one
 	 * vm_read_memory_4 + compare per slot — trivial next to the ~30-field ring
 	 * record this rides on, and the recorder only runs under SS_JIT_TRACE_RING=1.
-	 * Periodic sampling (same item): each watched word also emits a
-	 * [WATCH-SAMPLE] line at logarithmic record-observation counts (1, 10,
-	 * 100, ...), independent of change edges, so "frozen vs moving" is provable
+	 * Periodic sampling (same item): ONE shared record-observation counter
+	 * drives logarithmic sample points (1, 10, 100, ...); at each sample
+	 * point a [WATCH-SAMPLE] line is emitted for every watched word,
+	 * independent of change edges, so "frozen vs moving" is provable
 	 * even in a value-identical-store (e.g. zero-over-zero) regime where the
 	 * change detector below is structurally blind.
 	 * SS_JIT_WATCH_DUMPS=<n> (default 3): how many of the first changes also
@@ -1106,6 +1107,7 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 						}
 						len = (len + 3) & ~3u;
 					}
+					uint32 added = 0;
 					for (uint32 off = 0; off < len; off += 4) {
 						if (awatch_state >= AWATCH_MAX) {
 							fprintf(stderr, "[WATCH] slot cap (%d words) reached — %08x.. dropped\n",
@@ -1113,10 +1115,11 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 							break;
 						}
 						awatch_addr[awatch_state++] = addr + off;
+						added++;
 					}
 					if (colon && len > 4)
 						fprintf(stderr, "[WATCH] span %08x:%x -> %u word slot(s)\n",
-						        addr, len, len / 4);
+						        addr, len, added);
 				}
 			}
 			const char *d = getenv("SS_JIT_WATCH_DUMPS");

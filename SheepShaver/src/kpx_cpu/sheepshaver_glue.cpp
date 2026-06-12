@@ -469,6 +469,10 @@ extern "C" void named_check_load_invoc(uint32 type, uint32 name, uint32 h);
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 // From ppc-cpu.cpp: dump the SS_JIT_TRACE_RING execution history (crash diagnosis)
 extern "C" void ppc_jit_dump_trace_ring(void);
+// From ppc-cpu.cpp: once-guarded crash flush of the SS_DR_R24_RING 68k-PC ring.
+// Called EARLY in the SIGSEGV handler (before the re-fault-prone register/disasm
+// dumps) so the ring survives a re-fault; no-op unless SS_DR_R24_RING=1.
+extern "C" void ppc_jit_r24ring_crash_flush(void);
 // From ppc-cpu.cpp: record an EMUL_OP entry ('E') / return ('R') into the trace ring.
 // a_regs points at gpr[16] (8 consecutive uint32s = 68k A0-A7).
 extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
@@ -1977,6 +1981,13 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 		if (SheepExcHostIrqFormatStats(hirq_stats, sizeof(hirq_stats)))
 			fprintf(stderr, "[EXC] host-irq: %s\n", hirq_stats);
 	}
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	/* SS_DR_R24_RING crash flush — EARLY, right after the counters-only
+	 * telemetry and BEFORE dump_registers()/dump_disassembly(), which can
+	 * themselves re-fault and kill the process (instr-hardening item 3).
+	 * Once-guarded in ppc-cpu.cpp; no-op unless the ring is enabled. */
+	ppc_jit_r24ring_crash_flush();
+#endif
 	dump_registers();
 	dump_log();
 	dump_disassembly(pc, 8, 8);

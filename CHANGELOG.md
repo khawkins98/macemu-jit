@@ -11,6 +11,29 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] fix: r24-ring crash flush actually wired into the SIGSEGV handler (P0 from review of f1aca585)
+
+`f1aca585` defined `ppc_jit_r24ring_crash_flush()` but never called it — git
+grep showed zero callers, so at that HEAD the r24 ring was NEVER flushed on
+SIGSEGV (only on clean/SIGTERM exits via atexit): a net regression vs the
+pre-f1aca585 ride-along, while three docs asserted the "directly and EARLY"
+guarantee. Wired now: the SIGSEGV handler (sheepshaver_glue.cpp) calls the
+flush right after the counters-only telemetry, BEFORE the re-fault-prone
+`dump_registers()`/`dump_disassembly()`. Verified LIVE: a slot boot with a
+deliberate crash trigger (`SS_SEED_MEM=0x68fff074=0x0;0x68fff078=0x0`
+re-zeroes the Execute68k emulator pair at trampoline-end, recreating the Q1
+wild-jump SIGSEGV) + `SS_DR_R24_RING=1` produced the `[R24RING]` dump
+(1,015,149 transitions) positioned after `[EXC]` and before the register
+dump. Once-guard composition re-verified: mid-run watch/stall/trigger dumps
+call only `ppc_jit_dump_trace_ring()`, which no longer touches the r24 ring.
+Two review P2s fixed in the same files: the span announce now prints the
+slots actually added (not `len/4`) when the 8-slot cap drops words, and the
+[WATCH-SAMPLE] comment now states the observation counter is one shared
+record counter (not per-word). Stale pre-f1aca585 wording in DIAGNOSTICS.md
+(`SS_RING_DUMP_FROM` section) corrected. Inert unless `SS_DR_R24_RING=1` /
+`SS_JIT_WATCH_ADDR` set; crash-handler-path + instrument-init only, no
+delivery/exception/codegen logic touched.
+
 ### [docs] R-II9 re-test: SS_PROBE_LINEAR no longer crashes under the delivery regime (0/2 at HEAD) — suspicion downgraded
 
 Bounded re-test (2 boots, slot0 20260612-051031/-051246): full env-on cluster +

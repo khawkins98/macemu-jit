@@ -4,16 +4,22 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-12)
+## Current frontier (2026-06-12, post-M7-flip)
 
-Default newworld diagnostic boot runs **44.4 s to the PROGRAM#5 srr0=0x50324fec park** —
-SysError-12 is CLEARED (SS_NW_TM_TRAPS default-ON, f808a7fb/adea99bc) and the P-M5
-Execute68k SIGSEGV is CLEARED ([KDP+0x1074/0x1078] staged, 34d3d441). On a riser-on boot
-the published DEC route delivers live (`delivered_dec=3` — the first live published-route
-deliveries). Active milestone: **interrupt injection**
-(`docs/superpowers/plans/2026-06-12-interrupt-injection.md`, rev 2; W2-4's remainder is
-superseded into it). Do not treat "EE has never risen" / "delivered_dec=0" /
-"SysError 12" as current claims — they are historical.
+**The M7 interrupt-injection milestone SHIPPED and its cluster is the newworld DEFAULT**
+(`81d60cc1`): a default newworld diagnostic boot now runs the **park signature + live
+delivery chronology** — SC/PROGRAM#1–4 → **DEC #1–4 delivered via the published
+0x50313200 `(2-SPR)` route** → **EXT #1, the first host-sourced external interrupt on a
+default boot** (entry=50314880) → the PROGRAM#5 srr0=0x50324fec park (the NK idle task's
+power-saving NAP LOOP, slot5-recon `b3e51b8d` — not a missing service). The exc= tuple is
+7-wide on default boots. EXT deliveries carry **level 0 on default boots** (correct
+pre-init behavior, R-II7) — the B-2 level staging rides the env-on test cluster
+(`SS_NW_PIC=1`). The honest remainder / **named next task: the slot-4 consumption round
+trip** (M-sized; recon "R-II10 / slot-5 park recon" — three post-delivery livelock
+shapes; the armed 68k post 0x8001@0x68fff070 is never consumed; Ticks never
+guest-claimed). Do not treat "EE has never risen" / "delivered_dec=0" / "delivered_ext
+stays 0 on live boots" / "no EE riser on the boot path" / "SysError 12" / "EXT never
+live-fired" as current claims — they are historical.
 
 ## Boot recipes
 
@@ -51,6 +57,15 @@ superseded into it). Do not treat "EE has never risen" / "delivered_dec=0" /
   `--find-pc 0xPC`, `--regs-at REC`. It follows the log's "dumped to" pointer and
   warns when /tmp/ss_jit_ring.txt is stale (shared across runs); `--ring` overrides.
 - `SS_JIT_WATCH_ADDR=<HEX,no-0x>` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
+  **It is a CHANGE detector — blind to value-identical writes** (a zero-over-zero store
+  never trips; use a counter/adjacent discriminator), and **check which word of a
+  multi-word lowmem long actually moves**: Ticks' LSB lives in word **0x16c**, not 0x168
+  (Task B's "Ticks did not move" was watch-word-blind). `SS_JIT_WATCH_DUMPS` default 3
+  exhausts on early lowmem-init hits — use =8 + a narrowed set for late events.
+- **R-II9: `SS_PROBE_LINEAR=1` is SUSPECT under the delivery regime** (env-on/default
+  post-flip boots): 2/2 crashes vs 0/2 without it. Don't combine; hold instrument sets
+  constant across A/B boots (the frontier class is timing-sensitive — ring-slowed boots
+  park, no-ring boots spin in the NK).
 - `SS_SEED_MEM`, `SS_EXC_ENTRY=0xINT[,0xSC]` (no-comma form preserves the syscall
   default), `SS_CUDA_TRACE=1`, `SS_INTERP_RING` — see DIAGNOSTICS.md.
 - **`deferred_native` is a RE-POLL count post-`3cb3b16e`** (wake-up re-arm: one deferral
@@ -92,16 +107,20 @@ TimebaseSpeed (tb-freq; the DEC-cadence fix, `f31d475e`) · `[KDP+0x1074]`=0x504
 
 ## Env-gate state (SS_NW_*, the ones that bite)
 
-15 `SS_NW_*` gates live in-tree (census 2026-06-12; flagged for re-score #3 disposition).
-The ones whose default you must know:
+16 `SS_NW_*` gates live in-tree (census 2026-06-12 post-M7; full disposition in
+MACHINE-LAYER-PLAN re-score #3). The ones whose default you must know:
 
 - **Default-ON (newworld)**: `SS_NW_TM_TRAPS` (HLE TM trap population — flipping it OFF
   re-introduces SysError-12), `SS_NW_MM_SWITCH`/`SS_NW_MM_POOL`, `SS_NW_SC_SURFACE`,
-  `SS_NW_FE1F_SURFACE`, `SS_NW_DR_R0_INVARIANT`.
-- **Default-OFF, flip RESERVED** for the interrupt-injection milestone acceptance:
-  `SS_NW_DEC_PUBLISHED` (DEC → NK-published 0x50313200 + 2-SPR shim, `181efc02`) and
-  `SS_NW_EE_RISER` (the 0x318000-stub EE riser, `10b1b3e8`). Riser-on boots deliver
-  (storm-scale 12.4M proven; `delivered_dec=3` live on the published route).
+  `SS_NW_FE1F_SURFACE`, `SS_NW_DR_R0_INVARIANT`, **and the M7 cluster (`81d60cc1`):
+  `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` + `SS_NW_HOST_IRQ`** (the host
+  once-per-assert-edge EXT latch). All explicit-"0" opt-out. **Supported configs are
+  all-ON (default) and all-OFF; partial cluster opt-outs are diagnostic-only and
+  unvalidated** (riser-off-alone / published-off-alone are known-broken intermediates).
+- **Default-OFF/HELD**: `SS_NW_PIC` — joins the **env-on test cluster** (`SS_NW_PIC=1`
+  adds the B-2 level staging: IACK/vector/level, so the NK post writes level|0x8000).
+  Its default flip awaits real guest MPIC init + the tripwire per-source split
+  (criteria in DIAGNOSTICS M7 section / ROADMAP follow-on row).
 
 ## Gate tiers (see MILESTONE-WORKFLOW.md §6/§6b for the policy)
 
@@ -135,7 +154,8 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 ## Where things are
 
 Plans: `docs/superpowers/plans/` (canonical exemplar: 2026-06-11-nk-syscall-surface.md;
-ACTIVE: 2026-06-12-interrupt-injection.md). Evidence/addenda: `docs/planning/machine/`
+2026-06-12-interrupt-injection.md is COMPLETE — next named task: the slot-4 consumption
+round trip, card in INTERRUPT-INJECTION-RECON.md "Recommended next-task card (Q-S5e)"). Evidence/addenda: `docs/planning/machine/`
 (M6A-ONGOING-ENTRY-DESIGN.md, M6A-WAVE2-SHIM-RECON.md, M3A-ENTRY-TABLE.md,
 EE-CHAIN-RECON.md, TRAP-TABLE-RECON.md [the InsTime/SysError-12 wall + fix record],
 INTERRUPT-INJECTION-RECON.md [P-M5 anatomy, the paravirtual donor chain, the

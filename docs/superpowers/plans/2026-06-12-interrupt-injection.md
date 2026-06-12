@@ -1,5 +1,18 @@
 # M7 host→guest interrupt routing — real delivery through the PIC/EXC_EXTERNAL path: host posts enter the guest's own level-1 chain and Ticks moves
 
+> **STATUS: MILESTONE COMPLETE (2026-06-12).** Tasks 0/A/B/B-2/C/Z all done; arc
+> `153c088b`…`81d60cc1` + the Task-Z docs commits. Shipped: the first host→guest
+> interrupt through the guest's own exception path, the first guest IACK of the OpenPIC
+> model, the NK post's level test passing env-on, and **the cluster flip** —
+> `SS_NW_EE_RISER`+`SS_NW_DEC_PUBLISHED`+`SS_NW_HOST_IRQ` newworld DEFAULT (`81d60cc1`;
+> `SS_NW_PIC` HELD, env-on test cluster). **The honest remainder, named:** consumption —
+> the armed 68k post is never consumed/retired by the DR/68k world (**the slot-4 round
+> trip**, slot5-recon `b3e51b8d`, is the named next task), and **Ticks is unclaimed by
+> the guest** (the host keep-set ticks it; `addq.l #1,$16a` has never run — the goal
+> line's "Ticks moves" was achieved only in the host-attribution sense, retired with the
+> 0x16c watch-word correction). Zero falsified pinned contracts across the milestone;
+> one stop-rule-2 frontier-record (B-2's break one link past the level test).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps
 > use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — Tasks A/B/C
@@ -479,10 +492,10 @@ frontier (stop-rule 2's shape).
 
 ### Task Z: docs close-out — size S
 
-- [ ] `SheepShaver/docs/DIAGNOSTICS.md`: `SS_NW_HOST_IRQ` (+ the cluster flip state,
+- [x] `SheepShaver/docs/DIAGNOSTICS.md`: `SS_NW_HOST_IRQ` (+ the cluster flip state,
   opt-outs, interaction with SS_TEST_EXT_PENDING/SS_EXC_ENTRY third field; the host
   source's once-per-edge semantics named next to C1's level-held).
-- [ ] **(Rev 2 B6) Gated-off-ship disposition (REQUIRED if Task C reverted the cluster
+- [x] **(Rev 2 B6) Gated-off-ship disposition (REQUIRED if Task C reverted the cluster
   or never flipped):** for EACH cluster member (`SS_NW_HOST_IRQ`, `SS_NW_EE_RISER`,
   `SS_NW_DEC_PUBLISHED`) record in DIAGNOSTICS: current state, opt-out, and the
   retire-or-retain criterion (what evidence flips it / what evidence deletes it) + ONE
@@ -491,7 +504,7 @@ frontier (stop-rule 2's shape).
   FE1F_SURFACE, MM_POOL, MM_SWITCH, MODEL, NO_SCC, PIC, PIC_FORCE, SC_SURFACE,
   SYNTH_ENTRY, TM_TASK_FORCE, TM_TRAPS, TRAMPOLINE) — flag the census to the coordinator
   as a re-score #3 input (gate-debt is now a strategy-level cost).
-- [ ] **(Rev 2 B1) The W2-4 supersession table** (lands in the wave2 plan's W2-4 DONE
+- [x] **(Rev 2 B1) The W2-4 supersession table** (lands in the wave2 plan's W2-4 DONE
   note AND is mirrored in this plan's close-out commit message): one row per unticked
   W2-4 checkbox → absorbed-here (section ref) or named-deferred (ROADMAP row):
   | W2-4 item | Disposition |
@@ -502,21 +515,38 @@ frontier (stop-rule 2's shape).
   | polled-trampoline + SDL_PumpEvents decisions | **NAMED-DEFERRED** — ROADMAP row (not touched by this plan's chain; record the default: leave / keep+decouple) |
   | Ticks acceptance (the W2-4 headline) | **ABSORBED here** — Task B's item-4 rider (diagnostic, regime-split per rev 2 A2) |
   | the reserved riser/published flip | **ABSORBED here** — Task C's cluster flip |
-- [ ] **(Rev 2 B1) M3A-ENTRY-TABLE cleanup:** the dual-mode `interrupt_entry` row + the
+- [x] **(Rev 2 B1) M3A-ENTRY-TABLE cleanup:** the dual-mode `interrupt_entry` row + the
   legacy-KDP-shim-retirement residue (M3A-ENTRY-TABLE.md "Residue") get their post-flip
   state recorded (flipped ⇒ the legacy row is historical, schedule the retirement
   follow-on; not flipped ⇒ row unchanged, pointer here).
-- [ ] `CHANGELOG.md`: the first host→guest interrupt delivered through the guest's own
+- [x] `CHANGELOG.md`: the first host→guest interrupt delivered through the guest's own
   chain — acceptance numbers, flip state.
-- [ ] `docs/planning/MACHINE-LAYER-PLAN.md`: header + the M3b/W2-4 row (the reserved
+- [x] `docs/planning/MACHINE-LAYER-PLAN.md`: header + the M3b/W2-4 row (the reserved
   riser flip's disposition; link-7 status); **flag re-score #3 due** (§9 convention) to
   the coordinator.
-- [ ] `docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md`: W2-4 checkbox state
+- [x] `docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md`: W2-4 checkbox state
   + a pointer here; `docs/planning/machine/EE-CHAIN-RECON.md` + `INTERRUPT-INJECTION-RECON.md`:
   closure notes on items 1b/3/4 + the dispositions. `LEARNINGS.md` per its bar.
-- [ ] Cross-tracker grep for stale claims ("never live-fired", "link 7 open",
+- [x] Cross-tracker grep for stale claims ("never live-fired", "link 7 open",
   "Ticks never moves") — historical sections stay per the rule. ROADMAP cross-check.
   Doc-only commits, no gates.
+
+**Task Z results (2026-06-12, label inj-task-z):** DIAGNOSTICS M7 section + stale
+delivered_ext/EE-riser claims corrected (`ebe60ebd`; incl. the Task-C-review P3
+record-items: the partial-opt-out caveat + the stale SetInterruptFlag caller-inventory
+comment carried to the SS_NW_PIC flip); ROADMAP + MACHINE-LAYER-PLAN shipped-state +
+**re-score #3 DRAFTED** for coordinator confirmation (`37086aab`: Platform ~96%,
+Capability ~82%; gate census 16 in-tree / 9 newworld default-ON, docs-only names
+reconciled as aliases; next likeliest M3-class surprise NAMED = the slot-4 restore-tail
+livelock root cause); wave2 plan CLOSED/SUPERSEDED + the W2-4 final disposition table +
+EE-CHAIN-RECON remaining-body closure note (`91096b8a`); LEARNINGS (`eab7cad4`);
+CHANGELOG milestone entry (`b4ca6a0e`); AGENT-CONTEXT frontier/gates/instrument refresh
+(`8b159ea9`). The B6 gated-off-ship disposition was not required (the cluster flipped)
+but per-member retire-or-retain criteria are recorded in DIAGNOSTICS anyway;
+M3A-ENTRY-TABLE cleanup landed with Task C's `81d60cc1`. Cross-tracker grep: 3
+current-state claim sites corrected (DIAGNOSTICS x2, EE-CHAIN-RECON remaining-body
+list); all other hits sit in dated results/evidence sections — left historical per the
+rule.
 
 ## Stop-rule (triggers per MACHINE-LAYER-PLAN §9)
 

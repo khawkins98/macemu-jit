@@ -1954,33 +1954,40 @@ bool powerpc_cpu::check_spcflags()
 		 * and we fall through to the legacy path exactly as before. The HANDLE
 		 * flag is cleared exactly once above, common to both paths. */
 		if (MachineProfileIsNewWorld()) {
-			/* M8 slot-4 consumption Task A: the deferred-EE-edge HOLD/FIRE
-			 * (rfi-atomicity emulation, SS_NW_IRQ_CONSUME). The latch is set
-			 * only by execute_mtmsr's edge inside the riser stub window (gate
-			 * + riser-conditional THERE — when off this latch is 0 forever and
-			 * this block is dead). While the entry PC is still inside the
+			/* M8 slot-4 consumption Task A (re-pin 2026-06-12, one-iteration
+			 * rule — plan addendum): the deferred-EE-edge SUPPRESS/FIRE
+			 * (rfi-atomicity emulation, SS_NW_IRQ_CONSUME). Gate-on, NO
+			 * delivery may happen at a block boundary inside the riser
 			 * stub/reload windows (mid world-restore: the resume PC sits in
-			 * CTR, not yet real — Task-0 Q-C1), HOLD delivery and re-arm the
-			 * poll (the DEFER_NATIVE re-arm idiom below: HANDLE was cleared
-			 * above, re-set it so the next block boundary re-polls; skip the
-			 * legacy fall-through). At the first boundary past the bctr,
-			 * consume the latch and fall through to deliver with a REAL
-			 * restart PC — the torn-ctx save (r10/r11 images = 0x9040 scratch,
-			 * the 0x3244e4<->0x3244e8 self-loop) becomes impossible. */
-			if (g_exc_deferred_ee_edge) {
+			 * CTR, not yet real — Task-0 Q-C1; a delivery here saves the torn
+			 * ctx, r10/r11 images = 0x9040 scratch, the 0x3244e4<->0x3244e8
+			 * self-loop). In-window poll => suppress this delivery attempt,
+			 * latch it, and return with NO flags re-armed so the guest RUNS
+			 * (the original HANDLE re-arm hold starved the guest: the JIT
+			 * exits on non-empty spcflags before executing the block — boot
+			 * s4ta-b1r froze at 0x318018, held=1.12e9 fired=0). The latched
+			 * edge fires at the next natural kick's poll (DEC cadence / host
+			 * edge) once the entry PC is outside the windows — delivery then
+			 * proceeds below with a REAL restart PC. Pending sources are
+			 * level-held (EXT) or latched (DEC), so a suppressed kick loses
+			 * nothing but latency (bounded by the DEC metronome). */
+			if (ExcIrqConsumeEnabled() && g_exc_riser_window.armed) {
 				if (!ExcDeferredEdgeFire(pc(),
 				                         g_exc_riser_window.stub_base,
 				                         g_exc_riser_window.stub_end,
 				                         g_exc_riser_window.reload_start,
 				                         g_exc_riser_window.reload_end)) {
+					/* in-window boundary: suppress; do NOT re-arm */
+					g_exc_deferred_ee_edge = 1;
 					g_exc_consume_stats.held++;
-					spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
 					return true;
 				}
-				g_exc_deferred_ee_edge = 0;
-				if (g_exc_consume_stats.fired++ < 4)
-					fprintf(stderr, "[IRQ-CONSUME] deferred edge fired at pc=%08x (held=%u)\n",
-					        (uint32)pc(), g_exc_consume_stats.held);
+				if (g_exc_deferred_ee_edge) {
+					g_exc_deferred_ee_edge = 0;
+					if (g_exc_consume_stats.fired++ < 4)
+						fprintf(stderr, "[IRQ-CONSUME] deferred edge fired at pc=%08x (held=%u)\n",
+						        (uint32)pc(), g_exc_consume_stats.held);
+				}
 			}
 			if (SheepExcDeliverPending())
 				return true;

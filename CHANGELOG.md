@@ -11,6 +11,33 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] feat: M8 slot-4 consumption Task A — rfi-atomicity emulation (deferred EE-edge latch, `SS_NW_IRQ_CONSUME`, default OFF)
+
+The shape-A restore-tail livelock (slot5-recon R-II10; Task-0 fork-(iii)) is patch-created
+non-atomicity in OUR riser stub: the trap_return tail raises MSR.EE via mtmsr BEFORE the
+ctx reloads + bctr complete, and `execute_mtmsr`'s EE 0→1 re-raise then delivers MID-TAIL
+(observed `EXT delivered #1: restart=50318018`), saving a torn ctx (r10/r11 images =
+0x9040 riser scratch) whose restore self-loops at 10⁹ visits/s. The raw NK `rfi` raises
+MSR and resume PC atomically — this emulates that: the in-stub edge is LATCHED (no
+trigger), the guest runs the reload+bctr unmolested, and the latch fires at the next
+natural kick's poll (DEC cadence / host edge) at an out-of-window boundary; gate-on, any
+in-window delivery poll is suppressed the same way (no boundary inside the windows can
+deliver). Windows are SINGLE-SOURCE: `g_exc_riser_window` is filled at the rom_patches
+trap_return patch site from the values it emits (stub [0x50318000,0x5031801c), reload
+[0x503244e4,0x50324528) on 9.0.1); predicates are pure (`exc_core` +
+test_exc_chain U14). Riser-conditional (rev-2 A7): riser opt-out ⇒ empty windows ⇒ latch
+dead. **First-iteration falsification recorded in the plan addendum**: the initial
+DEFER_NATIVE-idiom HANDLE re-arm hold starved the guest (the JIT exits on non-empty
+spcflags before executing — held=1.12e9, guest frozen at 0x318018); re-pinned to the
+passive latch per the one-iteration rule. Acceptance (env-on `SS_NW_PIC=1
+SS_NW_IRQ_CONSUME=1`): EXT delivered at a REAL restart PC, deasserted (edge #2 unlocked,
+edges=1 consumed=1), no livelock (livelock-block probe visit=1 vs 10⁹), boot reaches the
+healthy nap-park regime; `[IRQ-CONSUME] deferred=1 held=1 fired=2 latch=0`. PROGRAM#4
+slot-4 consumption itself moves to Task B by chronology (the post lands while the DR is
+parked — Q-C3's image-selection fix). Gated-off A/B clean (zero new behavior lines).
+Files: ppc-execute.cpp, ppc-cpu.cpp, exc_core.{h,cpp}, test_exc_chain.cpp,
+rom_patches.cpp (window export only). Plan: `docs/superpowers/plans/2026-06-12-slot4-consumption.md`.
+
 ### [SheepShaver] fix: r24-ring crash flush actually wired into the SIGSEGV handler (P0 from review of f1aca585)
 
 `f1aca585` defined `ppc_jit_r24ring_crash_flush()` but never called it — git

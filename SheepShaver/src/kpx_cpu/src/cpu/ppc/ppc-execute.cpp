@@ -1448,8 +1448,19 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 		 * rom_patches.cpp (single source, ACK note 1); riser-conditional by
 		 * construction (rev-2 A7): riser opted out => armed=0 + empty window
 		 * => this latch is dead and behavior is byte-identical.
-		 * trigger_interrupt() still runs on the latch path — the spcflags
-		 * poll must stay alive for the held edge to ever be consumed. */
+		 *
+		 * Re-pin 2026-06-12 (one-iteration rule, plan addendum): the latch
+		 * path does NOT trigger_interrupt() — the original shape (latch +
+		 * trigger + HANDLE re-arm hold) STARVED the guest: the JIT exits on
+		 * non-empty spcflags at block entry before executing, so a re-armed
+		 * HANDLE is a pure dispatcher spin (boot s4ta-b1r: held=1.12e9,
+		 * fired=0, guest frozen at 0x318018 with the defer-pass register
+		 * values). Passive form instead: latch silently, let the guest run
+		 * the reload+bctr unmolested, and let the NEXT natural kick (DEC
+		 * cadence / host edge re-check) poll delivery at an out-of-window
+		 * boundary where check_spcflags' fire check releases the latch.
+		 * Deferred-edge delivery latency is bounded by the next natural
+		 * kick — the diagnostic boot's DEC metronome. */
 		if (ExcIrqConsumeEnabled() && g_exc_riser_window.armed &&
 		    ExcDeferredEdgeLatch(pc(), g_exc_riser_window.stub_base,
 		                         g_exc_riser_window.stub_end)) {
@@ -1457,8 +1468,8 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 			if (g_exc_consume_stats.deferred++ < 4)
 				fprintf(stderr, "[IRQ-CONSUME] EE edge deferred at pc=%08x (stub %08x-%08x)\n",
 				        pc(), g_exc_riser_window.stub_base, g_exc_riser_window.stub_end);
-		}
-		trigger_interrupt();
+		} else
+			trigger_interrupt();
 	}
 #endif
 	increment_pc(4);

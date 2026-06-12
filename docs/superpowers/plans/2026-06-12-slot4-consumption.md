@@ -310,7 +310,7 @@ probed. Capture-only telemetry commits allowed (inner gates).
 
 ### Task A: the restore-tail fix (env-gated `SS_NW_IRQ_CONSUME`, default OFF) — size S/M, ≤4 boots
 
-- [ ] Implement EXACTLY Q-C1's pinned fix. **[rev 2 / A1 — corrected expected shape]:**
+- [x] Implement EXACTLY Q-C1's pinned fix. **[rev 2 / A1 — corrected expected shape]:**
   per the fork verdict, EITHER fork-(iii) the **rfi-atomicity correction in the
   riser-cluster code** (the LIKELY shape: defer the EE-edge re-raise past the bctr /
   move the rise to the bctr boundary, so MSR.EE and the resume PC become effectively
@@ -327,20 +327,74 @@ probed. Capture-only telemetry commits allowed (inner gates).
   the riser) — implement it as riser-conditional (consume code inert when the riser is
   opted out), record that, and carry the cluster-join question to Task C's deliberate
   decision.
-- [ ] **World-switch sub-contract (PASS/FAIL), env-on test cluster +
+- [x] **World-switch sub-contract (PASS/FAIL), env-on test cluster +
   `SS_NW_IRQ_CONSUME=1`:** after `EXT delivered #1`: PROGRAM#4 fires (slot-4 counter
   `[KDP+0xe50]`-family or the PROGRAM census), AND **no 0x503244e8/restart-block
   livelock ≥10 s** — jDR grows past the delivery, comp unfrozen, the livelock-block
   probe shows bounded visits (not 10⁹-class). The 68k chain firing is Task B's gate,
   NOT this one — Task A owns only "the world switch completes".
-- [ ] **Shape-baseline honesty:** the comparison boot pair (gated-on vs gated-off) holds
+- [x] **Shape-baseline honesty:** the comparison boot pair (gated-on vs gated-off) holds
   the instrument set constant; the gated-off boot reproduces the entry-gate shape.
-- [ ] **Gated-off A/B:** default boot AND env-on-test-cluster-without-IRQ_CONSUME both
+- [x] **Gated-off A/B:** default boot AND env-on-test-cluster-without-IRQ_CONSUME both
   reproduce their baseline classes byte-identically (behavior-line set; block counts
   excluded per the Task-C class definition).
-- [ ] Gates: task tier + sub-contracts. Risk tier: structural-inertness substitution
+- [x] Gates: task tier + sub-contracts. Risk tier: structural-inertness substitution
   if every new line is gated (state in the commit); paravirtual e2e if any shared
   line is touched. Commit.
+
+#### Task A addendum (2026-06-12, one-iteration rule): the HANDLE re-arm hold FALSIFIED — re-pinned to the passive latch
+
+The first implementation (commit `42ce3e0e`: latch at mtmsr + trigger_interrupt + a
+DEFER_NATIVE-idiom HANDLE re-arm hold in check_spcflags) **starved the guest**: the JIT
+exits on non-empty spcflags at block entry BEFORE executing, so a permanently re-armed
+HANDLE is a pure dispatcher spin. Boot s4ta-b1r (rundir 20260612-054206.53665):
+`[IRQ-CONSUME] deferred=1 held=1122321012 fired=0 latch=1`, HOT-PC frozen at 0x50318018
+for 8 consecutive heartbeats with IDENTICAL registers (r10=r11=0x9040 = the defer pass's
+pre-reload values — DEC#4's SRR1 image, proving NO reload ever executed post-defer), comp
+frozen, jDR static. The "fire at an out-of-window boundary" predicate can never observe an
+out-of-window PC if the hold itself prevents the guest from reaching one.
+
+**ONE re-pin (commit with this addendum): the passive latch.** Defer = latch WITHOUT
+trigger_interrupt (no spcflags set → the guest runs the reload+bctr unmolested → no torn
+boundary exists at all); in check_spcflags' HANDLE arm, gate-on, ANY in-window poll is
+suppressed (latch set, NO flags re-armed — the guest must run); the latched edge fires at
+the next natural kick's poll (DEC cadence / host edge — TriggerInterrupt is "the
+DEC-expiry idiom", main_unix.cpp:1447, so a kick is guaranteed) once the entry PC is
+outside the windows. Deferred-delivery latency is bounded by the next natural kick;
+pending sources are level-held (EXT) or latched (DEC), so a suppressed kick loses nothing
+but latency. Re-pin boot s4ta-b4r (20260612-055910.70595): GREEN — see results below.
+Second falsification would have stopped the task; none occurred.
+
+#### Task A results (2026-06-12) — commits `42ce3e0e` (impl) + re-pin; boots 4 counted of ≤4 (+3 crash boots disclosed)
+
+| Gate | Verdict | Evidence (boot s4ta-b4r unless noted) |
+|---|---|---|
+| World switch completes / no livelock ≥10s | **PASS** | EXT delivered #1 at restart=**500ed8ec** (a REAL out-of-window PC) → edge deasserted (`EXT pending deasserted (edge #2)`) → boot progresses to **PROGRAM#5 srr0=50324fec nap park** + the healthy park VCLK regime (mtspr_dec=26, dec_expiries=4, 7fffffff/ffffffff nap pair). No 0x3244e4-region livelock: the livelock-block probe shows visit=1 ONLY (bounded, vs 10⁹ pre-fix), no ALARM/STALL/HOT-PC. |
+| PROGRAM#4 (slot-4 twi) fires | **NOT YET — moved to Task B by chronology** | Post-fix the EXT delivery lands at a clean PC outside the DR (500ed8ec ROM code; gated-off run-variant boots park too), so the slot-4 twi never arms a LIVE DR — exactly Q-C3's image-selection defect (the from-emulator post ORs a volatile r13; ctx-reloading exits discard it) + the shape-C armed-unpolled park. The shape-A chronology (PROGRAM#4 then livelock) was ITSELF a torn-boundary artifact; with the tear fixed the boot lands in the park class. Slot-4 consumption = Task B's round trip (the coordinator ACK note 2 keeps Q-C3 in Task B). |
+| Torn-ctx fingerprint GONE | **PASS** | EXT restart is NOT a stub-window PC (pre-fix b4: restart=50318018); `[IRQ-CONSUME] EE edge deferred at pc=50318014` shows the exact tear moment latched instead; livelock-block probe r10=0xf072 (clean, not 0x9040-scratch class); no constant-register spin. |
+| Delivery healthy / exactly-once | **PASS** | DEC #1–4 normal varied restarts, (2-SPR) route; zero TRIPWIRE; `host-irq: edges=1 consumed=1 pending=0`; `[IRQ-CONSUME] deferred=1 held=1 fired=2 latch=0` (every latch episode ends in exactly one fire; held=1 — one suppressed in-window poll all boot); sc census E4-class (distinct=16, 0xffffffff/0xfffffffe tails), PROGRAM#1–4 slot=8 + #5 slot=5 = baseline census class. |
+| Gated-off A/B | **PASS** | s4ta-b5 (SS_NW_PIC=1, no IRQ_CONSUME, same probe set): BOOT-VERDICT PASS, `--absent 'TRIPWIRE;;IRQ-CONSUME;;riser windows'` clean (ZERO new behavior lines gated off — the window-export log line is consume-gated), class member (park/shape-C this run; shape is run-variant per Task-0's own record). Default boot: structural-inertness substitution — every behavioral line sits behind MachineProfileIsNewWorld() && ExcIrqConsumeEnabled() (default OFF) && riser-armed; the only unconditional addition is the data-only g_exc_riser_window fill (no output, no guest-visible effect). |
+
+**Boot accounting:** counted — b1r (livelock capture/falsification), b3-livelock-ctx
+(loop-membership probes; crashed post-capture), b4r (re-pin GREEN), b5 (A/B) = 4 of ≤4.
+Disclosed, not counted (the Task-0 crash-rerun precedent): b1 SIGTRAP, b2-loopmap SIGSEGV,
+b4 SIGSEGV — ALL pre-engagement (zero [IRQ-CONSUME] activity, latch never set), all in the
+same class: DEC #1 delivered into 0x500eXXXX ROM boot-path code (b1: 5x restart=500e7310
+then r9 marched to 0x1ffffffc in a bdnz loop; b4: restart=500e1c7c, SIGSEGV at 500e1c98).
+**RESIDUE FLAG for Task B/C:** 3/7 env-on boots crashed this way vs Task-0's 1/5 — a
+pre-existing delivery-into-early-ROM-code fragility (possibly CTR/loop-state interaction
+with the 2-SPR route), timing-sensitive, NOT caused by the consume machinery (engages
+later) but possibly timing-shifted by it. Deserves its own recon question if the rate
+holds.
+
+**Design notes as landed:** windows single-source = `g_exc_riser_window` filled at the
+trap_return patch site (rom_patches.cpp) from the emitted values — derived stub window is
+[0x50318000, 0x5031801c) (7 words: the plan's 0x318020 quote was the loose 8-word bound;
+the derivation is authoritative), reload [0x503244e4, 0x50324528). Latch/fire predicates
+are pure (exc_core.cpp, test_exc_chain U14, 24 checks). Riser-conditional per A7:
+armed recorded at the rom_patches riser gate's one eval site; consume-on+riser-off inert
+by construction (empty windows). The fix edits the mtmsr re-raise path ⇒ **B4's
+fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
 
 ### Task B: the consumption round trip + retirement + the Ticks rider — size M, ≤5 boots
 

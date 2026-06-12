@@ -2579,7 +2579,9 @@ static bool patch_nanokernel(void)
 	g_exc_riser_window.stub_end     = ROMBase + (uint32)((uintptr)(lp + 1) - (uintptr)ROMBaseHost);
 	g_exc_riser_window.reload_start = ROMBase + npc;
 	g_exc_riser_window.reload_end   = ROMBase + base + 12;
-	if (g_exc_riser_window.armed)
+	// Log only when the consumer is enabled — gated-off boots keep a
+	// byte-identical behavior-line set vs the Task-0 entry baseline.
+	if (g_exc_riser_window.armed && ExcIrqConsumeEnabled())
 		fprintf(stderr, "[ROMPATCH] riser windows (deferred-EE-edge source of truth): stub %08x-%08x reload %08x-%08x\n",
 		        g_exc_riser_window.stub_base, g_exc_riser_window.stub_end,
 		        g_exc_riser_window.reload_start, g_exc_riser_window.reload_end);

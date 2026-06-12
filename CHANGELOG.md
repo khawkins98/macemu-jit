@@ -11,6 +11,21 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] instrument: SS_DR_R24_RING crash-dump gap fixed (early direct flush; mid-run dumps no longer eat the once-shot)
+
+The r24 ring's SIGSEGV flush rode `ppc_jit_dump_trace_ring()`, which had two
+recorded dump gaps: (a) mid-run trace dumps (watch change dumps, the stall
+dump, the ring-dump trigger) consumed the once-guarded crash shot, so a later
+real crash printed nothing; (b) the SIGSEGV handler reached that dump only
+AFTER `dump_registers()`/`dump_disassembly()`, which can themselves re-fault
+and kill the process first. Fixed: the handler now calls the new
+`ppc_jit_r24ring_crash_flush()` directly, EARLY (right after the
+counters-only dumps), and `ppc_jit_dump_trace_ring()` no longer touches the
+r24 ring. Honest trigger conditions documented (DIAGNOSTICS.md): only
+SIGSEGV/SIGBUS-routed crashes and clean/SIGTERM exits (atexit) flush the
+ring — SIGTRAP deaths still produce no dump. Inert unless `SS_DR_R24_RING=1`
+(the flush is a no-op otherwise); no delivery/exception/codegen logic touched.
+
 ### [SheepShaver] instrument: SS_JIT_WATCH_ADDR span form + [WATCH-SAMPLE] periodic sampling (watch blindness fixes)
 
 Two watch blindness classes cost ~3 boots in the M7 cycle: (a) value-identical

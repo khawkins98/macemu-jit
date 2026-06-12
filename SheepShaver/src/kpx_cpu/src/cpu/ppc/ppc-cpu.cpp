@@ -180,18 +180,32 @@ static void r24ring_dump_atexit(void) {
 	free(buf);
 }
 
-// Crash-path bridge (instrument-batch item 1): atexit never runs on SIGSEGV, so
-// the r24 ring was lost on exactly the boots that need it most. The SIGSEGV
-// handler (sheepshaver_glue.cpp) already calls ppc_jit_dump_trace_ring(); that
-// dump now also flushes the r24 ring through this once-guarded hook. The guard
-// means a watch-triggered mid-run trace dump consumes the one shot (the normal
-// atexit dump still fires separately on clean/SIGTERM exits, so a double print
-// is possible on non-crash runs — harmless, both are labeled).
+// Crash-path bridge (instrument-batch item 1; rewired instr-hardening item 3):
+// atexit never runs on SIGSEGV, so the r24 ring was lost on exactly the boots
+// that need it most. Originally this hook rode ppc_jit_dump_trace_ring(), which
+// had TWO dump gaps (the recorded "no r24 dump on SIGSEGV" residue):
+//   (a) mid-run trace dumps (SS_JIT_WATCH_ADDR change dumps, the stall dump,
+//       SS_JIT_RING_DUMP_TRIGGER) consumed the once-shot, so a later real crash
+//       printed nothing;
+//   (b) the SIGSEGV handler called ppc_jit_dump_trace_ring() only AFTER
+//       dump_registers()/dump_disassembly(), which can themselves re-fault —
+//       a re-fault killed the process before the r24 flush was reached.
+// Now: the SIGSEGV handler calls ppc_jit_r24ring_crash_flush() directly and
+// EARLY (before the re-fault-prone dumps), and mid-run trace dumps no longer
+// touch the r24 ring. Remaining honest gap: SIGTRAP (and any signal the
+// sigsegv library does not route) still produces no dump — only
+// SIGSEGV/SIGBUS-routed crashes and clean/SIGTERM exits (atexit) flush the
+// ring. The once-guard means the atexit dump can still double-print after a
+// handled crash that reaches exit — harmless, both are labeled.
 static void r24ring_dump_on_crash(void) {
 	static bool done = false;
 	if (done || s_r24ring_enabled != 1) return;
 	done = true;
 	r24ring_dump_atexit();
+}
+
+extern "C" void ppc_jit_r24ring_crash_flush(void) {
+	r24ring_dump_on_crash();
 }
 
 static inline void r24ring_record(uint32_t r24) {
@@ -1340,9 +1354,10 @@ extern "C" void ppc_jit_ring_record_emulop(char type, uint32 pc68k, uint32 op,
 }
 
 extern "C" void ppc_jit_dump_trace_ring(void) {
-	// Crash-path bridge: the SIGSEGV handler reaches this dump but not atexit —
-	// flush the r24 ring too (once-guarded; no-op unless SS_DR_R24_RING=1).
-	r24ring_dump_on_crash();
+	// NOTE (instr-hardening item 3): this dump no longer flushes the r24 ring —
+	// mid-run trace dumps (watch/stall/trigger) were consuming the crash
+	// once-shot. The SIGSEGV handler now calls ppc_jit_r24ring_crash_flush()
+	// directly (early, before the re-fault-prone register/disasm dumps).
 	if (!jit_ring || jit_ring_idx == 0) return;
 	uint32 n = jit_ring_idx < jit_ring_size ? jit_ring_idx : jit_ring_size;
 	uint32 start = jit_ring_idx - n;          /* oldest retained record # */

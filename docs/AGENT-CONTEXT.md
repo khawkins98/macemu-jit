@@ -41,8 +41,9 @@ live-fired" as current claims — they are historical.
   probe-blind for SS_PROBE_PC** — use `SS_PROBE_68K=0x68KPC[:N]` (68k regfile + PPC
   context at the DR dispatch hook, first N matches linear, edge-triggered; r24 word+2:
   to catch word X probe X+2) or `SS_DR_R24_RING=1` (ring is 2M entries, last-4 dedup —
-  dedup now COUNTS: dump prints `PC*N` for suppressed repeats; also flushed on SIGSEGV
-  via the trace-ring crash dump).
+  dedup now COUNTS: dump prints `PC*N` for suppressed repeats; flushed on SIGSEGV
+  directly+early in the crash handler since 2026-06-12 — mid-run watch/stall trace dumps
+  no longer eat the crash once-shot; SIGTRAP deaths still produce NO dump).
   **Probes cannot count** — land a counter (the `exc=` tuple idiom) for counts; or
   `SS_PROBE_LINEAR=1` (+`SS_PROBE_CAP=N`, default 32) fires probes on EVERY visit up
   to the cap so short sequences become readable.

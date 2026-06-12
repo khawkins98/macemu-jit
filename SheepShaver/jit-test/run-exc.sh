@@ -249,6 +249,25 @@ else
     report H8_tag_control 0 "(H1 delivery line missing or wrongly tagged 2-SPR)"
 fi
 
+# ---- H9 (M7 Task A): the HOST once-per-assert-edge latch ---------------------
+# SS_TEST_HOST_IRQ=1 arms the dedicated host-irq latch (ONE assert edge), with
+# NO PIC level and NO DEC pending — H6's geometry, the latch as the sole
+# source. Entry discrimination as in H6 (interrupt_entry=0: a wrongly-routed
+# delivery FATALs unresolved => no REGDUMP => FAIL). The latch-specific
+# observable is the EXCSTAT host_irq[...] block: edges=1 consumed=1 pending=0
+# — the delivery CONSUMED the latch (deliver-once-per-edge), unlike the
+# level-held PIC seam (H6) which stays asserted after delivery.
+EXC_ENV=(SS_TEST_HOST_IRQ=1 SS_TEST_MSR=0x00007072
+         SS_EXC_ENTRY=0,0,0x1000C000 SS_TEST_EXC_STUB=1 SS_TEST_EXC_STATS=1)
+check_vector H9_host_irq_latch "3C600000 6063F072 7C600124 48000000" \
+    GPR20=00001040 GPR21=1000400c GPR22=0000f072 LR=10008000
+if grep -q "^EXCSTAT: delivered_dec=0 .* delivered_ext=1 host_irq\[edges=1 consumed=1 deasserts=0 pending=0\]$" \
+        "$RUN_DIR/H9_host_irq_latch.interp.log" 2>/dev/null; then
+    report H9_host_irq_stats 1 "(delivered_ext=1; latch edges=1 consumed=1 pending=0 — once-per-edge consume)"
+else
+    report H9_host_irq_stats 0 "(EXCSTAT host_irq edges=1/consumed=1/pending=0 not observed)"
+fi
+
 # ---- H5: sc-class regression (rev 2 F12: process-isolated) -------------------
 # H5r resolved-to-stub: sc delivers; SRR0 ownership = sc+4 (r21=0x10004004).
 EXC_ENV=(SS_EXC_ENTRY=0x1000C000,0x1000C000 SS_TEST_EXC_STUB=1)

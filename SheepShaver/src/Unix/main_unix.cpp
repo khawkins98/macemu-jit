@@ -1375,6 +1375,15 @@ static bool nw_pic_force = false;     // [DIAG-FORCED] knob (SS_NW_PIC_FORCE=1)
 // established TriggerInterrupt/main.h pattern, not function-scope ones).
 extern "C" void SheepExcExtSetPending(int asserted);
 extern "C" void SheepExcExtConfigure(void);
+// M7 Task A: the host once-per-assert-edge latch (SS_NW_HOST_IRQ; glue owns it).
+extern "C" int SheepExcHostIrqAssert(void);
+extern "C" void SheepExcHostIrqDeassert(void);
+extern "C" void SheepExcHostIrqConfigure(void);
+extern "C" int SheepExcHostIrqFormatStats(char *buf, int len);
+// Resolved once at the newworld bring-up (default OFF; flip is Task C's LAST
+// step). volatile-free plain bool: written once single-threaded before the
+// timer/tick threads start, read-only afterwards.
+static bool nw_host_irq_on = false;
 
 // Byte-lane trampolines — the F16 DECISION ([STATIC-oracle]: LE VALUE-SWAP).
 // QEMU maps KeyLargo's MPIC with the little-endian ops table; the model speaks
@@ -1526,6 +1535,14 @@ static void mmio_dump_stats_atexit(void)
 			fprintf(stderr, "[PIC] %s\n", pic_stats);
 		if (OpenPICFormatFirstIACKs(&openpic, pic_stats, sizeof(pic_stats)))
 			fprintf(stderr, "[PIC] first-iacks: %s\n", pic_stats);
+	}
+	// M7 Task A: host-irq latch telemetry (edges vs consumed = the
+	// exactly-once-per-assert-edge acceptance evidence). Formatter returns 0
+	// unless SS_NW_HOST_IRQ armed the source — gated-off boots byte-identical.
+	{
+		char hirq_stats[160];
+		if (SheepExcHostIrqFormatStats(hirq_stats, sizeof(hirq_stats)))
+			fprintf(stderr, "[EXC] host-irq: %s\n", hirq_stats);
 	}
 }
 
@@ -2167,6 +2184,26 @@ int main(int argc, char **argv)
 		}
 	}
 
+	// M7 Task A (interrupt-injection plan, Task 0 Q-I4): SS_NW_HOST_IRQ gate
+	// (default OFF; the flip to the newworld default is Task C's LAST step,
+	// revert-on-red). When on: host interrupt posts (SetInterruptFlag — the
+	// InterruptFlags!=0 level, Q-I4(a)) are forwarded through the dedicated
+	// deliver-once-per-assert-edge latch in sheepshaver_glue (NOT the PIC's
+	// level-held seam — A5: the sources OR-compose at the poll site) +
+	// TriggerInterrupt kick on each 0->1 edge (F5: store-release then kick).
+	// Newworld-profile-gated explicitly: MachineUsesMMIOBus() also admits the
+	// named third config (SS_MMIO_BUS=1 on paravirtual), which must NOT arm it.
+	if (MachineProfileIsNewWorld()) {
+		const char *hirq_env = getenv("SS_NW_HOST_IRQ");
+		nw_host_irq_on = hirq_env && hirq_env[0] && hirq_env[0] != '0';
+		if (nw_host_irq_on) {
+			SheepExcHostIrqConfigure();   // + the EXT seam: exc= tuple's 7th field
+			fprintf(stderr, "[EXC] host-irq source armed (SS_NW_HOST_IRQ): "
+			        "InterruptFlags!=0 -> once-per-assert-edge EXT latch "
+			        "(deliver-once-per-edge; PIC level-held semantics untouched)\n");
+		}
+	}
+
 	if (RAMBase > ROMBase) {
 		ErrorAlert(GetString(STR_RAM_HIGHER_THAN_ROM_ERR));
 		goto quit;
@@ -2792,11 +2829,26 @@ volatile uint32 InterruptFlags = 0;
 void SetInterruptFlag(uint32 flag)
 {
 	atomic_or((int *)&InterruptFlags, flag);
+	// M7 Task A (SS_NW_HOST_IRQ): forward the level's assert edge through the
+	// once-per-edge latch; kick the CPU thread on exactly the 0->1 edges (F5:
+	// store-release inside Assert, then kick — spurious-safe, missed-unsafe).
+	// Paravirtual is structurally inert here: nw_host_irq_on is set only
+	// inside the MachineProfileIsNewWorld() bring-up block.
+	if (nw_host_irq_on && SheepExcHostIrqAssert())
+		TriggerInterrupt();
 }
 
 void ClearInterruptFlag(uint32 flag)
 {
 	atomic_and((int *)&InterruptFlags, ~flag);
+	// M7 Task A: deassert edge — the Q-I4(a) level predicate (InterruptFlags
+	// != 0) went false; retire an un-delivered latch with it. Racy-benign vs a
+	// concurrent SetInterruptFlag: its atomic_or precedes its Assert, so a
+	// stale-zero read here is always followed by the asserting thread
+	// re-arming the latch. (Pre-warm-start this path never runs — OP_IRQ's
+	// flag-consuming block is HasMacStarted()-gated, Task 0 Q-I4(a).)
+	if (nw_host_irq_on && InterruptFlags == 0)
+		SheepExcHostIrqDeassert();
 }
 
 

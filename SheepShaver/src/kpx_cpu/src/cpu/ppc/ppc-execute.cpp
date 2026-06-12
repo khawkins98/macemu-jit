@@ -1431,7 +1431,8 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 	 * old EE=0 ∧ new EE=1 ∧ pending; behavior-identical composition). */
 	if (MachineProfileIsNewWorld() && ss_vclk_active() &&
 	    ExcEdgeReRaise(old_msr, val,   /* W2-3: + the level-held EXT source */
-	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+	                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
 		trigger_interrupt();
 #endif
 	increment_pc(4);
@@ -1730,7 +1731,8 @@ void powerpc_cpu::execute_rfi(uint32 opcode)
 		 * behavior-identical to the inline old/new EE-bit composition. */
 		if (ss_vclk_active() &&
 		    ExcEdgeReRaise(old_msr, new_msr,   /* W2-3: + the level-held EXT source */
-		                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
+		                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+		                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
 			trigger_interrupt();
 		return;
 	}

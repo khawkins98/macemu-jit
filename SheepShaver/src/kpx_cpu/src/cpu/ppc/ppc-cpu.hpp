@@ -569,6 +569,20 @@ extern "C" int SheepExcExtPending(void);
 extern "C" int SheepExcExtConfigured(void);
 extern "C" void SheepExcExtSetPending(int asserted);
 extern "C" void SheepExcExtConfigure(void);
+/* M7 Task A (interrupt-injection): the HOST interrupt source — a dedicated
+ * deliver-once-per-assert-edge latch beside the PIC level (THIRD semantics;
+ * C1 level-held stays PIC-only). sheepshaver_glue.cpp owns the word;
+ * main_unix's SetInterruptFlag newworld arm asserts it (Assert returns 1 on a
+ * true 0->1 edge — the caller kicks on exactly those), ClearInterruptFlag
+ * retires it when InterruptFlags reaches 0, and the delivery hook consumes it
+ * at EXT delivery. Configure() also configures the EXT seam (7th exc= field).
+ * FormatStats returns 0 unless enabled — gated-off output byte-identical. */
+extern "C" int SheepExcHostIrqPending(void);
+extern "C" int SheepExcHostIrqEnabled(void);
+extern "C" int SheepExcHostIrqAssert(void);
+extern "C" void SheepExcHostIrqDeassert(void);
+extern "C" void SheepExcHostIrqConfigure(void);
+extern "C" int SheepExcHostIrqFormatStats(char *buf, int len);
 /* NK-syscall-surface Task A: the sc-side vector-stub shim (sheepshaver_glue.cpp).
  * Called from execute_syscall's newworld arm when the syscall entry is RESOLVED,
  * before the architectural transition is applied (the DEC-shim seam precedent —

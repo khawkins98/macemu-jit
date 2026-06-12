@@ -278,6 +278,115 @@ extern "C" void SheepExcExtSetPending(int asserted)
 		        (unsigned long long)edge_count);
 }
 
+/* --- M7 Task A (interrupt-injection plan rev 2 A1 + Task 0 Q-I4(c)): the HOST
+ * interrupt source — a DEDICATED deliver-once-per-assert-edge latch.
+ *
+ * THIRD semantics, deliberately beside the two existing ones:
+ *   - DEC latch:        one-shot, cleared by the hook on delivery.
+ *   - PIC EXT level:    LEVEL-HELD (rev 2 C1, BINDING) — the hook never clears
+ *                       exc_ext_pending_flag; only the PIC deassert edge does.
+ *                       C1 is UNTOUCHED by this latch: real PIC sources keep
+ *                       level-held semantics on their own word.
+ *   - HOST irq latch:   deliver-ONCE-per-assert-edge (this word). Armed by a
+ *                       0->1 assert edge (SetInterruptFlag's newworld arm),
+ *                       CONSUMED at EXT delivery (atomic exchange-0 on the CPU
+ *                       thread), re-armed only by the next assert edge.
+ *
+ * Why not a level: a bare level-held host source is a CLOSED LIVELOCK at this
+ * frontier — restart PC = block start (no progress across a delivery), all six
+ * EE re-raise compose sites re-deliver on every rfi/mtmsr EE rise, and the
+ * retirement site (OP_IRQ's ClearInterruptFlag, emul_op.cpp:841) is
+ * HasMacStarted()-gated and unreachable pre-warm-start. Proven in vivo by
+ * Task 0: 68,657,433 deliveries/40 s, runaway tripwire, guest frozen
+ * (INTERRUPT-INJECTION-RECON.md "A1 livelock proven in vivo").
+ *
+ * A5 source composition: OR at the POLL site (deliver_pending_dec_exception +
+ * the six EE re-raise compose sites) — this latch NEVER writes
+ * exc_ext_pending_flag and the PIC path never writes this word, so the two
+ * sources cannot clobber each other's edges.
+ *
+ * F5 atomicity: single-copy-atomic uint32; release store on the asserting
+ * thread (host timer / tick threads via SetInterruptFlag), acquire load at the
+ * CPU-thread poll, exchange for the edge/consume transitions. The
+ * TriggerInterrupt kick on the assert edge lives with the caller (main_unix) —
+ * a spurious kick is safe, a missed kick is not (no 60 Hz net on newworld).
+ *
+ * Counters are racy-benign telemetry (edges on asserting threads, consumed on
+ * the CPU thread); exactly-once-per-edge acceptance compares edges vs consumed.
+ * exc_host_irq_enabled gates ALL new output (the exc-tuple 7th-field idiom) so
+ * gated-off boots stay byte-identical to the E4 baseline class. */
+static volatile uint32 exc_host_irq_latch = 0;
+static volatile uint32 exc_host_irq_enabled = 0;
+static uint64_t exc_host_irq_edges = 0;      /* 0->1 assert edges */
+static uint64_t exc_host_irq_consumed = 0;   /* latch consumptions at EXT delivery */
+static uint64_t exc_host_irq_deasserts = 0;  /* level retired with latch still armed */
+
+extern "C" int SheepExcHostIrqPending(void)
+{
+	return __atomic_load_n(&exc_host_irq_latch, __ATOMIC_ACQUIRE) != 0;
+}
+
+extern "C" int SheepExcHostIrqEnabled(void)
+{
+	return __atomic_load_n(&exc_host_irq_enabled, __ATOMIC_ACQUIRE) != 0;
+}
+
+extern "C" void SheepExcHostIrqConfigure(void)
+{
+	__atomic_store_n(&exc_host_irq_enabled, 1u, __ATOMIC_RELEASE);
+	SheepExcExtConfigure();		/* exc= tuple gains the 7th field */
+}
+
+/* Assert edge. Returns 1 iff this call armed the latch (a true 0->1 edge —
+ * the caller kicks the CPU thread on exactly those); an already-armed latch
+ * is NOT a new edge (the pending delivery will service it). */
+extern "C" int SheepExcHostIrqAssert(void)
+{
+	if (__atomic_exchange_n(&exc_host_irq_latch, 1u, __ATOMIC_ACQ_REL) != 0)
+		return 0;
+	exc_host_irq_edges++;
+	/* Tripwire edge bookkeeping — same idiom as SheepExcExtSetPending
+	 * (telemetry-only, racy-benign). */
+	exc_ext_delivs_this_assert = 0;
+	exc_dec_delivs_while_ext = 0;
+	static uint64_t hedge_count = 0;
+	if (++hedge_count <= 6)
+		fprintf(stderr, "[EXC] EXT pending ASSERTED (host-irq latch, edge #%llu)\n",
+		        (unsigned long long)hedge_count);
+	return 1;
+}
+
+/* Deassert edge: the level predicate (InterruptFlags != 0, Q-I4(a)) went
+ * false with the latch still armed — retire it un-delivered. Pre-warm-start
+ * this never fires (no route clears InterruptFlags before [0xcfc]=='WLSC'). */
+extern "C" void SheepExcHostIrqDeassert(void)
+{
+	if (__atomic_exchange_n(&exc_host_irq_latch, 0u, __ATOMIC_ACQ_REL) != 0)
+		exc_host_irq_deasserts++;
+}
+
+/* CPU-thread consume at EXT delivery (deliver-once-per-edge). */
+static void exc_host_irq_consume(void)
+{
+	if (__atomic_exchange_n(&exc_host_irq_latch, 0u, __ATOMIC_ACQ_REL) != 0)
+		exc_host_irq_consumed++;
+}
+
+/* Telemetry formatter for the term-dump/crash paths. Returns 0 (no output)
+ * unless the SS_NW_HOST_IRQ bring-up (or the harness knob) enabled the
+ * source — gated-off boots stay byte-identical. */
+extern "C" int SheepExcHostIrqFormatStats(char *buf, int len)
+{
+	if (!SheepExcHostIrqEnabled())
+		return 0;
+	snprintf(buf, len, "edges=%llu consumed=%llu deasserts=%llu pending=%u",
+	         (unsigned long long)exc_host_irq_edges,
+	         (unsigned long long)exc_host_irq_consumed,
+	         (unsigned long long)exc_host_irq_deasserts,
+	         (unsigned)__atomic_load_n(&exc_host_irq_latch, __ATOMIC_ACQUIRE));
+	return 1;
+}
+
 /* FE1F-service-surface Task C (the authorized fix-budget item, Task B record):
  * the SC delivered-print caps at 5 (live-triage idiom), which left selectors
  * #6+ unenumerated once the FE1F surface pushed delivered_sc past 5 (13 on the
@@ -949,7 +1058,8 @@ void sheepshaver_cpu::interrupt(uint32 entry)
 	// if-pending recheck. See ExcEdgeReRaise's header comment.
 	if (MachineProfileIsNewWorld() &&
 	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
-	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+	                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1017,12 +1127,36 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	// deferral counts keep their pre-W2-3 tuple semantics; with the PIC gated
 	// off ext_pending is constant 0 and this is byte-identical to the DEC-only
 	// hook). Source selection happens after DELIVER.
+	// M7 Task A (Q-I4(c)/A5): the host once-per-edge latch OR-composes with the
+	// PIC level AT THE POLL — neither source writes the other's word.
 	const int dec_pending = VirtClockDECPending(&g_virt_clock) ? 1 : 0;
-	const int ext_pending = SheepExcExtPending();
+	const int ext_pending = SheepExcExtPending() | SheepExcHostIrqPending();
 	const int pending = dec_pending | ext_pending;
+	// M7 Task A (Task 0 Q-I6 verdict (ii)): the DEFER_NATIVE fence is NARROWED
+	// route-aware — the run_mode defer is SKIPPED when the delivery would route
+	// to a PUBLISHED handler, KEPT for the legacy KDP-shim DEC route.
+	//   - The fence's original rationale (exc_core.cpp:70-73) is the legacy KDP
+	//     register-save shim: it writes guest memory (the ECB save slots below)
+	//     that a mid-native-excursion NK switch-back is about to rewrite. The
+	//     published routes use the 2-SPR shim ONLY (SPRG1:=r1, SPRG2:=LR — two
+	//     SPR writes, no guest memory), and the NK bodies do their own complete
+	//     save/restore (shared prologue 0x313d40 r0,r7-r13; the EXT fallback's
+	//     bl 0x3238d4/0x323944 pair is offset-matched to its r20-r31 clobber
+	//     set — re-verified [STATIC], Task 0 Q-I6 row). restart PC = JIT block
+	//     start is a clean boundary either way.
+	//   - Kept fence + the parked frontier ([0x2810]=1 indefinitely) would make
+	//     every published-route delivery undeliverable by design (kicks re-poll
+	//     but never deliver) — Task A's acceptance would be unfalsifiable.
+	// Route resolution mirrors the source selection below: DEC-before-EXT, so
+	// dec_pending decides the route. Gated-off boots are decision-identical:
+	// ext_pending==0 without a configured EXT source, and the DEC route is
+	// published only under SS_NW_DEC_PUBLISHED (default OFF).
+	const bool route_published = dec_pending
+	                ? exc_dec_published_enabled()
+	                : (g_exc_entry_table.external_entry != 0);
 	ExcDecision decision = ExcDeliveryDecision(pending, current_execute_depth(),
 	                                           msr_reg(), 0);
-	if (decision == EXC_DECIDE_DELIVER)
+	if (decision == EXC_DECIDE_DELIVER && !route_published)
 		decision = ExcDeliveryDecision(pending, current_execute_depth(),
 		                               msr_reg(), ReadMacInt32(XLM_RUN_MODE));
 	switch (decision) {
@@ -1124,6 +1258,12 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		msr_reg()  = te.msr;
 		pc()       = te.pc;
 		exc_stat_delivered_ext++;
+		// M7 Task A: CONSUME the host once-per-edge latch — this delivery
+		// services its assert edge; re-armed only by the next edge. The PIC
+		// level (C1, level-held) is deliberately NOT cleared here. If both
+		// sources were pending, this one delivery services the latch's edge
+		// and the still-held PIC level re-delivers on its own.
+		exc_host_irq_consume();
 		// Re-delivery runaway guard (rev 2 C1): EXT is level-held, so each
 		// handler round-trip that fails to retire the line re-delivers on the
 		// next EE rise. N deliveries with no intervening deassert edge = the
@@ -1370,7 +1510,8 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 	// behavior-identical — see the predicate's header comment).
 	if (MachineProfileIsNewWorld() &&
 	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
-	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+	                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1429,7 +1570,8 @@ uint32 sheepshaver_cpu::execute_macos_code(uint32 tvect, int nargs, uint32 const
 	// behavior-identical — see the predicate's header comment).
 	if (MachineProfileIsNewWorld() &&
 	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
-	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+	                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
 		trigger_interrupt();
 
 #if EMUL_TIME_STATS
@@ -1459,7 +1601,8 @@ inline void sheepshaver_cpu::execute_ppc(uint32 entry)
 	// behavior-identical — see the predicate's header comment).
 	if (MachineProfileIsNewWorld() &&
 	    ExcEdgeReRaise(0u, 0x8000u,   /* W2-3: + the level-held EXT source */
-	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()) ? 1 : 0))
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+	                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
 		trigger_interrupt();
 }
 
@@ -1810,6 +1953,11 @@ sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip)
 		/* Task C: the atexit selector dump does not fire on the signal-death
 		 * path (same reasoning as the counters above) — dump explicitly. */
 		exc_dump_sc_selectors();
+		/* M7 Task A: host-irq latch counters on the crash path too (atexit
+		 * never runs here). Silent unless SS_NW_HOST_IRQ armed the source. */
+		char hirq_stats[160];
+		if (SheepExcHostIrqFormatStats(hirq_stats, sizeof(hirq_stats)))
+			fprintf(stderr, "[EXC] host-irq: %s\n", hirq_stats);
 	}
 	dump_registers();
 	dump_log();
@@ -1907,6 +2055,14 @@ static const size_t       SS_TEST_RAM_SIZE     = 16 * 1024 * 1024;
  *                         hook never clears a level-held source). Also maps
  *                         the F2 lowmem page and configures the EXCSTAT
  *                         7th field (delivered_ext).
+ *  SS_TEST_HOST_IRQ=1     (M7 Task A) arm the HOST once-per-assert-edge latch
+ *                         before EACH vector (one assert edge per vector) —
+ *                         the latch analogue of SS_TEST_EXT_PENDING. The hook
+ *                         CONSUMES this source at delivery (unlike the
+ *                         level-held PIC seam), so the EXCSTAT host-irq
+ *                         counters pin the once-per-edge contract
+ *                         (edges=1 consumed=1 pending=0 after one delivery).
+ *                         Also maps the F2 lowmem page + the EXCSTAT fields.
  *  SS_TEST_MSR=0xHEX      initial MSR for the vector. Default (unset) is the
  *                         reset_supervisor_for_test value 0xf072 — byte-
  *                         compatible with all legacy vectors; the EE-edge
@@ -1958,6 +2114,7 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 	static int parsed = 0;
 	static int knob_dec_pending = 0;
 	static int knob_ext_pending = 0;
+	static int knob_host_irq = 0;	/* M7 Task A: the once-per-edge latch knob */
 	static int knob_msr_set = 0;
 	static uint32 knob_msr = 0;
 	static int knob_stub = 0;
@@ -1974,6 +2131,10 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		 * tests the DEC branch. Needs the same F2 lowmem page. */
 		e = getenv("SS_TEST_EXT_PENDING");
 		knob_ext_pending = (e && e[0] && e[0] != '0') ? 1 : 0;
+		/* M7 Task A: SS_TEST_HOST_IRQ=1 — the host-latch analogue (one assert
+		 * edge per vector; the hook consumes it at delivery). */
+		e = getenv("SS_TEST_HOST_IRQ");
+		knob_host_irq = (e && e[0] && e[0] != '0') ? 1 : 0;
 		e = getenv("SS_TEST_MSR");
 		if (e && e[0]) {
 			knob_msr = (uint32)strtoul(e, NULL, 0);
@@ -1990,13 +2151,14 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		e = getenv("SS_MACHINE");
 		if (e && e[0])
 			MachineProfileInit();
-		if (knob_dec_pending || knob_ext_pending) {
+		if (knob_dec_pending || knob_ext_pending || knob_host_irq) {
 #if REAL_ADDRESSING
 			fprintf(stderr, "SS_TEST_DEC_PENDING/SS_TEST_EXT_PENDING: unsupported "
 			        "under REAL_ADDRESSING (guest lowmem page 0 is the host NULL "
 			        "page) — knobs ignored\n");
 			knob_dec_pending = 0;
 			knob_ext_pending = 0;
+			knob_host_irq = 0;
 #else
 			uint8 *lm_host = Mac2HostAddr(0);
 			void *lm = mmap((void *)lm_host, 0x4000, PROT_READ | PROT_WRITE,
@@ -2007,9 +2169,12 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 				exit(1);
 			}
 			fprintf(stderr, "[EXC-TEST] guest lowmem [0x0,0x4000) mapped zero (F2); "
-			        "%s armed per vector%s%s\n",
+			        "%s armed per vector%s%s%s\n",
 			        knob_dec_pending && knob_ext_pending ? "DEC latch + EXT level"
-			        : knob_ext_pending ? "EXT level" : "DEC latch",
+			        : knob_ext_pending ? "EXT level"
+			        : knob_dec_pending ? "DEC latch" : "host-irq latch",
+			        knob_host_irq && (knob_dec_pending || knob_ext_pending)
+			            ? " + host-irq latch" : "",
 			        knob_msr_set ? "; SS_TEST_MSR set" : "",
 			        knob_stub ? "; capture stub at 0x1000C000" : "");
 #endif
@@ -2027,6 +2192,13 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		 * EXCSTAT line carries the 7th field. */
 		SheepExcExtConfigure();
 		SheepExcExtSetPending(1);
+	}
+	if (knob_host_irq) {
+		/* M7 Task A: one assert edge per vector. The hook CONSUMES this latch
+		 * at delivery (once-per-edge) — the EXCSTAT host-irq counters are the
+		 * observable (edges=1 consumed=1 pending=0 after one delivery). */
+		SheepExcHostIrqConfigure();
+		SheepExcHostIrqAssert();
 	}
 	if (knob_msr_set)
 		cpu->set_msr_for_test(knob_msr);
@@ -2393,12 +2565,22 @@ regdump:
 		if (SheepExcExtConfigured())
 			snprintf(extbuf, sizeof extbuf, " delivered_ext=%llu",
 			         (unsigned long long)exc[6]);
+		/* M7 Task A: host-irq latch counters append only under the
+		 * SS_TEST_HOST_IRQ knob (the 7th-field byte-identical idiom). */
+		char hirqbuf[176];
+		hirqbuf[0] = 0;
+		if (SheepExcHostIrqEnabled()) {
+			char inner[160];
+			SheepExcHostIrqFormatStats(inner, sizeof inner);
+			snprintf(hirqbuf, sizeof hirqbuf, " host_irq[%s]", inner);
+		}
 		fprintf(stderr, "EXCSTAT: delivered_dec=%llu deferred_ee=%llu "
 		        "deferred_depth=%llu deferred_native=%llu delivered_sc=%llu "
-		        "delivered_program=%llu%s\n",
+		        "delivered_program=%llu%s%s\n",
 		        (unsigned long long)exc[0], (unsigned long long)exc[1],
 		        (unsigned long long)exc[2], (unsigned long long)exc[3],
-		        (unsigned long long)exc[4], (unsigned long long)exc[5], extbuf);
+		        (unsigned long long)exc[4], (unsigned long long)exc[5], extbuf,
+		        hirqbuf);
 	}
 
 	/* Batch keeps the CPU + RAM alive for the next vector (torn down once by

@@ -13,6 +13,14 @@
 - GATE3 double-execution bug fixed (commit 7cc741da)
 - arm64 Mach exception fault PC reporting fixed (sigsegv.h)
 
+**Machine Layer (newworld fidelity profile):** 🟡 active (2026-06-12) — MMIO bus, device
+models (SCC/VIA/Cuda-ADB/OpenPIC), virtual clock, real PPC exception core, 68k↔PPC Mixed
+Mode switch, and NK syscall/FE1F/PROGRAM delivery surfaces all shipped; the first DEC
+interrupt deliveries through the NK's own published handlers have landed (riser boots;
+`delivered_dec=3` live). Current default diagnostic boot (9.0.1 NewWorld ROM) runs 44.4 s
+to the PROGRAM#5 srr0=0x50324fec park. The paravirtual profile (the Mac OS 8.6 boot
+above) is frozen and byte-identical throughout. Tracker: `docs/planning/MACHINE-LAYER-PLAN.md`.
+
 ## SheepShaver PPC JIT (2026-05-17, upstream Linux ARM64)
 
 **Build:** ✅

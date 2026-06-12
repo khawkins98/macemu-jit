@@ -65,9 +65,11 @@ the previous: **get it running → make it drivable/testable → make it measura
    VIA 6522 timer, AArch64 fault-based MMIO dispatch) enabling the 9.0.1 NewWorld ROM to boot natively.
    M0–M3 are complete (machine profiles, device models incl. a Cuda/ADB protocol stack, a virtual
    clock, and a real PPC exception model delivering live interrupts and syscalls into the NewWorld
-   nanokernel's own handlers), along with the 68k↔PPC Mixed Mode switch — the boot now runs deep
-   into the 9.0.1 ROM's parcel/CFM init on the fidelity profile, with each remaining boot wall
-   mapped and worked milestone-by-milestone. See
+   nanokernel's own handlers — including the first timer-interrupt deliveries through the
+   nanokernel's published vectors), along with the 68k↔PPC Mixed Mode switch and an HLE Time
+   Manager surface — the boot now runs tens of seconds deep into the 9.0.1 ROM's parcel/CFM init
+   on the fidelity profile, with host→guest interrupt routing as the active milestone and each
+   remaining boot wall mapped and worked milestone-by-milestone. See
    [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md).
 5. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, a vector register
    allocator, HLE), with the stage-3 benchmarks gating every change against regressions.

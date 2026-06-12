@@ -2523,9 +2523,14 @@ static bool patch_nanokernel(void)
 	*lp++ = htonl(0x81400000 + XLM_IRQ_NEST);	// lwz	r10,XLM_IRQ_NEST
 	*lp++ = htonl(0x394affff);					// subi	r10,r10,1
 	*lp++ = htonl(0x91400000 + XLM_IRQ_NEST);	// stw	r10,XLM_IRQ_NEST
-	if (MachineProfileIsNewWorld() && MachineEnvFlag("SS_NW_EE_RISER")) {
-		// W2-4 step 1 (SS_NW_EE_RISER=1, default OFF — the flip is W2-4 final
-		// acceptance): the EE riser. EE-only MSR compose consuming r11, the SRR1
+	const char *riser_env = getenv("SS_NW_EE_RISER");
+	if (MachineProfileIsNewWorld() && !(riser_env && strcmp(riser_env, "0") == 0)) {
+		// W2-4 step 1: the EE riser — NEWWORLD DEFAULT since the M7 Task C
+		// cluster flip (with SS_NW_DEC_PUBLISHED + SS_NW_HOST_IRQ; this is
+		// the flip W2-4 reserved as its final acceptance). Opt-out with
+		// SS_NW_EE_RISER=0 (explicit-"0"-only, the SS_NW_SC_SURFACE polarity
+		// — NOT MachineEnvFlag, which reads unset as off).
+		// EE-only MSR compose consuming r11, the SRR1
 		// image the raw tail would have latched via mtspr SRR1,r11 (EE-CHAIN-RECON
 		// "W2-4 entry decision" D-1, [PROBE check] r11=0xd032 survives to this stub).
 		// MSR := (MSR & ~0x8000) | (r11 & 0x8000) — per coordinator sign-off item 3
@@ -2545,7 +2550,7 @@ static bool patch_nanokernel(void)
 		*lp++ = htonl(0x7d4000a6);				// mfmsr	r10
 		*lp++ = htonl(0x516a0420);				// rlwimi	r10,r11,0,16,16 (insert MSR[EE]=0x8000 from r11)
 		*lp++ = htonl(0x7d400124);				// mtmsr	r10
-		fprintf(stderr, "[ROMPATCH] trap_return EE riser ARMED (SS_NW_EE_RISER=1): stub 0x318000 = 7 words, EE-only compose from r11\n");
+		fprintf(stderr, "[ROMPATCH] trap_return EE riser ARMED (newworld default; opt-out SS_NW_EE_RISER=0): stub 0x318000 = 7 words, EE-only compose from r11\n");
 	}
 	*lp = htonl(0x48000000 + ((npc - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b		reload region (npc)
 	} else fprintf(stderr, "[ROMPATCH] SKIP trap_return (absent in parcels)\n");

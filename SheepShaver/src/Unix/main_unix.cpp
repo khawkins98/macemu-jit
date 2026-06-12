@@ -2191,8 +2191,10 @@ int main(int argc, char **argv)
 	}
 
 	// M7 Task A (interrupt-injection plan, Task 0 Q-I4): SS_NW_HOST_IRQ gate
-	// (default OFF; the flip to the newworld default is Task C's LAST step,
-	// revert-on-red). When on: host interrupt posts (SetInterruptFlag — the
+	// — NEWWORLD DEFAULT since the M7 Task C cluster flip (with SS_NW_EE_RISER
+	// + SS_NW_DEC_PUBLISHED; battery green pre/post-flip); opt-out with
+	// SS_NW_HOST_IRQ=0 (explicit-"0"-only, the SS_NW_SC_SURFACE polarity).
+	// When on: host interrupt posts (SetInterruptFlag — the
 	// InterruptFlags!=0 level, Q-I4(a)) are forwarded through the dedicated
 	// deliver-once-per-assert-edge latch in sheepshaver_glue (NOT the PIC's
 	// level-held seam — A5: the sources OR-compose at the poll site) +
@@ -2201,7 +2203,7 @@ int main(int argc, char **argv)
 	// named third config (SS_MMIO_BUS=1 on paravirtual), which must NOT arm it.
 	if (MachineProfileIsNewWorld()) {
 		const char *hirq_env = getenv("SS_NW_HOST_IRQ");
-		nw_host_irq_on = hirq_env && hirq_env[0] && hirq_env[0] != '0';
+		nw_host_irq_on = !(hirq_env && strcmp(hirq_env, "0") == 0);
 		if (nw_host_irq_on) {
 			SheepExcHostIrqConfigure();   // + the EXT seam: exc= tuple's 7th field
 			fprintf(stderr, "[EXC] host-irq source armed (SS_NW_HOST_IRQ): "

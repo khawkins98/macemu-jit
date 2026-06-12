@@ -9,7 +9,7 @@
 
 | Field | Value | Mode | Evidence |
 |---|---|---|---|
-| `interrupt_entry` | **`0x50412b1c`** (legacy default) — **gate-selectable to `0x50313200` since W2-4 step 0 (2026-06-11, `SS_NW_DEC_PUBLISHED=1`, default OFF; flip = W2-4 final acceptance)** | legacy: **KDP-SHIM** (see below) · published route: **2-SPR shim** (SPRG1:=caller r1, SPRG2:=caller LR — the sc/program/EXT shape; KDP shim retired on that route) | legacy: 16 live words at 0x50412b0c–0x50412b48 byte-identical to static 0x312b0c–0x312b48 (`409b001c 92260024 …`) · published: NK-published `[KDP+0x384]` = 0x50313200 [PROBE✓ ×2: Q-S1 boot 1 + W2-4 step-0 boot 1], primary copy; see "W2-4 step 0" below |
+| `interrupt_entry` | **`0x50313200` — newworld DEFAULT since the M7 Task C cluster flip (2026-06-12, `SS_NW_DEC_PUBLISHED` default ON with `SS_NW_EE_RISER`/`SS_NW_HOST_IRQ`; opt-out `=0` restores the legacy `0x50412b1c`)** | published route (DEFAULT): **2-SPR shim** (SPRG1:=caller r1, SPRG2:=caller LR — the sc/program/EXT shape; KDP shim retired on that route) · legacy opt-out: **KDP-SHIM** (see below — now HISTORICAL on default boots; retirement is a named follow-on, see "Residue") | published: NK-published `[KDP+0x384]` = 0x50313200 [PROBE✓ ×2: Q-S1 boot 1 + W2-4 step-0 boot 1], primary copy; live DEC deliveries through it on the post-flip default boot (M7 Task C boot 3: `DEC delivered #1..4 → entry=50313200 (2-SPR)`) · legacy: 16 live words at 0x50412b0c–0x50412b48 byte-identical to static 0x312b0c–0x312b48 (`409b001c 92260024 …`); see "W2-4 step 0" below |
 | `syscall_entry` | **`0x50314ac0` — RESOLVED (2026-06-11, NK-syscall-surface Tasks 0/A/B/C; newworld DEFAULT since Task C, opt-out `SS_NW_SC_SURFACE=0`)** | bare ExcEnter + 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR) | Primary copy, NK-published `[KDP+0x390]` [PROBE✓]; see "Syscall entry resolution" + "Task C results" below — the M3a descope is formally CLOSED |
 | `program_entry` | **`0x50314700` — RESOLVED (2026-06-11, FE1F-service-surface Tasks 0/A/B/C; newworld DEFAULT since FE1F Task C `be0e02cb`, opt-out `SS_NW_FE1F_SURFACE=0`)** | bare ExcEnter(EXC_PROGRAM) + the SAME 2-SPR shim (the 0x700 handler opens with the same save helper `bl 0x50313d40` the sc family uses); SRR0 = the trap instruction verbatim, SRR1 trap bit `0x00020000` (PEM, test-pinned) | Primary copy, NK-published `[KDP+0x37c]` [PROBE✓]; evidence: `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C results. Consumers: the raw entry-vector `twi 31,r31,N` trap-placeholders (restored over rung-2's parked stops) — the DR FE1F native-callout route |
 
@@ -584,3 +584,13 @@ gate boots (outside the diagnostic budget per P-C3).
 **Residue:** retiring the legacy KDP-shim path entirely (and this table's dual-mode row)
 is the W2-4 final-acceptance flip's cleanup, after the riser proves deliveries through
 0x50313200 live.
+
+> **Post-flip state (2026-06-12, M7 Task C):** the cluster flip LANDED —
+> `SS_NW_DEC_PUBLISHED` (with `SS_NW_EE_RISER` + `SS_NW_HOST_IRQ`) is the newworld
+> default; deliveries through 0x50313200 are live on the default boot (boot 3:
+> DEC #1–4 `(2-SPR)`, plus the first host-sourced EXT delivery). The legacy KDP-shim
+> route is now the OPT-OUT path (`SS_NW_DEC_PUBLISHED=0`), verified byte-identical to
+> the pre-flip default (boot 4 vs boot 2 diff: only ASLR/block-counter lines). The
+> KDP-shim RETIREMENT remains a named follow-on (it is still the opt-out path's shim
+> and the `SS_EXC_ENTRY`-override-to-0x50412b1c shape) — owned by the gated-off-ship
+> disposition row in the M7 plan Task Z, not silently dropped here.

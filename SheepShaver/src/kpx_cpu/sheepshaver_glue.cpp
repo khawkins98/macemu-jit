@@ -112,8 +112,8 @@ extern "C" {
  * re-confirmed in the same probe]. PRIMARY copy per the publication precedent
  * (the sc/program/EXT rule: the live value follows what the NK publishes; the
  * old default's staged-copy asymmetry is retired on this path). Gated by
- * SS_NW_DEC_PUBLISHED=1 (default OFF — flip is W2-4's final acceptance, NOT
- * step 0): gate ON re-points interrupt_entry here AND switches the DEC shim
+ * SS_NW_DEC_PUBLISHED — NEWWORLD DEFAULT since the M7 Task C cluster flip
+ * (opt-out =0): gate ON re-points interrupt_entry here AND switches the DEC shim
  * to the 2-SPR shape (see the delivery hook) — 0x50313200 opens with the
  * SHARED save prologue 0x313d40 like sc/program/EXT (W2S-2 verdict: same
  * prologue, same EE-punch-through guard, same bounce exit; self-contained,
@@ -178,20 +178,26 @@ static bool exc_entry_table_apply_env_override(void)
 	return true;
 }
 
-/* W2-4 step 0: the SS_NW_DEC_PUBLISHED gate, resolved once (default OFF; any
- * non-"0" value arms it). Shared between the boot finalization (entry-table
+/* W2-4 step 0: the SS_NW_DEC_PUBLISHED gate, resolved once. DEFAULT ON since
+ * the M7 Task C cluster flip (with SS_NW_EE_RISER + SS_NW_HOST_IRQ; battery
+ * green pre/post-flip); opt-out with SS_NW_DEC_PUBLISHED=0 (explicit-"0"-only,
+ * the SS_NW_SC_SURFACE polarity — restores the legacy KDP-shim route and the
+ * 0x50412b1c entry default). Shared between the boot finalization (entry-table
  * default) and the delivery hook (shim shape) — the hook is also reachable on
  * the SS_TEST harness path, which never runs init_emul_ppc, so the gate must
- * not live only in the boot parse. CONTRACT: the gate selects the SHIM SHAPE
- * as well as the entry default; SS_EXC_ENTRY overrides the ENTRY VALUE only
- * (precedence unchanged). An override pointing back at the save-and-switch
- * body 0x50412b1c therefore needs the gate OFF to get its KDP shim. */
+ * not live only in the boot parse; run-exc.sh PINS the gate per lane
+ * (BASE_ENV=0, H8=1) so lane contracts do not float with this default, and
+ * ss_test_exc_knobs_apply warns on gate-on-without-override (pre-flip item 1).
+ * CONTRACT: the gate selects the SHIM SHAPE as well as the entry default;
+ * SS_EXC_ENTRY overrides the ENTRY VALUE only (precedence unchanged). An
+ * override pointing back at the save-and-switch body 0x50412b1c therefore
+ * needs the gate OFF to get its KDP shim. */
 static bool exc_dec_published_enabled(void)
 {
 	static int cached = -1;
 	if (cached < 0) {
 		const char *e = getenv("SS_NW_DEC_PUBLISHED");
-		cached = (e && e[0] && e[0] != '0') ? 1 : 0;
+		cached = (e && strcmp(e, "0") == 0) ? 0 : 1;
 	}
 	return cached != 0;
 }
@@ -1160,7 +1166,8 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	// Route resolution mirrors the source selection below: DEC-before-EXT, so
 	// dec_pending decides the route. Gated-off boots are decision-identical:
 	// ext_pending==0 without a configured EXT source, and the DEC route is
-	// published only under SS_NW_DEC_PUBLISHED (default OFF).
+	// published only under SS_NW_DEC_PUBLISHED (newworld default ON since the
+	// M7 Task C cluster flip; opt-out =0 restores the legacy KDP route).
 	const bool route_published = dec_pending
 	                ? exc_dec_published_enabled()
 	                : (g_exc_entry_table.external_entry != 0);
@@ -1324,7 +1331,8 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		return e && e[0] && e[0] != '0';
 	}();
 
-	/* W2-4 step 0 (SS_NW_DEC_PUBLISHED=1, default OFF): the published-handler
+	/* W2-4 step 0 (SS_NW_DEC_PUBLISHED — newworld DEFAULT since the M7 Task C
+	 * cluster flip; opt-out =0): the published-handler
 	 * route — interrupt_entry defaults to 0x50313200 (the NK-published DEC
 	 * handler) and the shim is the sc/program/EXT 2-SPR shim, NOT the KDP
 	 * register-save shim below. Rationale (EE-CHAIN-RECON.md W2S-2 Q-W2
@@ -3137,9 +3145,14 @@ void init_emul_ppc(void)
 		 * semantics), inside the MachineProfileIsNewWorld() trampoline block:
 		 * gated-off and paravirtual boots are byte-identical. */
 		{
+			/* M7 Task C flip: SS_NW_HOST_IRQ is newworld-default-ON
+			 * (explicit-"0" opt-out) — polarity must match main_unix's
+			 * bring-up parse exactly. SS_NW_PIC stays default OFF (its
+			 * flip is HELD per W2-3 stop-rule 3), so this staging remains
+			 * test-cluster-only until the PIC flip lands. */
 			const char *hirq_env = getenv("SS_NW_HOST_IRQ");
 			const char *pic_env  = getenv("SS_NW_PIC");
-			const bool hirq_on = hirq_env && hirq_env[0] && hirq_env[0] != '0';
+			const bool hirq_on = !(hirq_env && strcmp(hirq_env, "0") == 0);
 			const bool pic_on  = pic_env  && pic_env[0]  && pic_env[0]  != '0';
 			if (hirq_on && pic_on) {
 				WriteMacInt32(irp_base + 0xf18, 0xF3040000);  // OPENPIC_CORE99_BASE
@@ -3188,8 +3201,9 @@ void init_emul_ppc(void)
 				fprintf(stderr, "[NW-SC] syscall surface OFF (SS_NW_SC_SURFACE=0 "
 				        "opt-out): syscall_entry=0 — abort-with-capture baseline\n");
 			}
-			/* W2-4 step 0: SS_NW_DEC_PUBLISHED=1 (default OFF — the flip is
-			 * W2-4's final acceptance) re-points the DEC delivery target from
+			/* W2-4 step 0: SS_NW_DEC_PUBLISHED (newworld DEFAULT since the M7
+			 * Task C cluster flip — the flip W2-4 reserved as its final
+			 * acceptance; opt-out =0) re-points the DEC delivery target from
 			 * the save-and-switch body 0x50412b1c (KDP shim) to the
 			 * NK-published handler 0x50313200, [KDP+0x384] [PROBE✓] — primary
 			 * copy, the publication precedent. Applied BEFORE the SS_EXC_ENTRY

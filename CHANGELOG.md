@@ -11,6 +11,51 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver][docs] M8 SLOT-4 CONSUMPTION MILESTONE COMPLETE — SHIPPED GATED-OFF-GREEN: the R-II10 livelocks fixed, the consumption round trip live through the 68k handler; the default flip refused on honest criteria
+
+Plan: `docs/superpowers/plans/2026-06-12-slot4-consumption.md` (rev 2). Arc:
+`5a40bebd` (plan rev 1) / `f2f78f93` (red-team fold rev 2 — torn-ctx mechanism
+statically confirmed pre-implementation) / `66f5298a` (Task 0: fork-(iii) confirmed
+LIVE — mid-stub `EXT restart=0x50318018`, torn r10/r11=0x9040 ctx images, SRR0-image
+slot pinned ctx+0xfc) / `5e3c4bde` (Task 0.5 coordinator ACK) / `42ce3e0e`+`09b74fe4`
+(Task A: deferred EE-edge latch + the passive-latch re-pin) / `d03c6c41` (Task-A
+review fold) / `02a0b74e`/`17e0d071`/`377edbf6`/`e6824327` (Task B: Q-C3 staging,
+ticks_keepset, MODE_EMUL_OP fence, starvation-backstop re-pin) / `3e42aa82` (Task B
+results — stop-rule-2 capture) / `f1fa89bf` (Task C P2 cleanup) / `52b69cd7` (Task C
+decision). The instr-hardening trio `05e0d921`/`736ae4b8`/`f1aca585` + the `09821b67`
+P0 fix (watch span + [WATCH-SAMPLE], R-II9 downgrade, r24-ring crash flush) rode the
+same window — see their own entries below.
+
+- **The decision (`52b69cd7`): `SS_NW_IRQ_CONSUME` stays default OFF** — a standalone
+  17th gate (folding an OFF gate into the default-ON M7 cluster would flip it
+  implicitly). Flip criteria (c)+(e) failed honestly: the post-flip-candidate config
+  shows a NEW deterministic behavior line (**SC#1 r0=0x0d**, 2/2 vs 0/19 — the Q-C3
+  stub's unconditional level-0 staging re-arming at the drain) with retirement RED, so
+  "unchanged-or-better" is falsified. Flip prerequisites named: the VIA-IFR surface
+  lands + the SC#1=0x0d divergence explained-or-fixed; **fold-into-cluster is
+  MANDATORY at that flip** (the fix edits the riser path — consume-on+riser-off is
+  undefined-by-construction).
+- **Acceptance (env-on `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`)**: world switch completes
+  (livelock-block probe visit=1 vs 10⁹ pre-fix; EXT restart at a REAL out-of-window
+  PC); round trip GREEN through leg 7 (post → staging → drain → slot-4 twi → 68k
+  level-1 handler at 60 Hz); fence held (zero host writers to per-event state);
+  exactly-once arithmetic clean; gated-off A/B byte-identical behavior-line sets.
+  Gates: task tier 5/5 on the final commits (incl. plain `make test-jit` 353/353,
+  `make e2e-test` 122, machine suite ALL PASS). Boot budgets honored: Task 0 4/≤8,
+  A 4/≤4, B 5/≤5, C 3/≤4 (crash/edge-miss reruns disclosed per protocol).
+- **Re-score #3's named M3-class surprise adjudicated**: resolved as fork-(iii) — OUR
+  riser stub's patch-created rfi non-atomicity, not unmodeled NK protocol; stop-rule 1
+  never fired; seeds-not-services held (fix set = one latch + one donor-mirror staging
+  stub + one poll kick; zero new service bodies). Re-score #4: trigger state recorded,
+  not drafted (gated-off ship — MACHINE-LAYER-PLAN §9).
+- **The named next frontier (stop-rule-2 capture): the VIA-IFR surface** — the 68k
+  handler's source dispatch finds no VIA IFR source bit in the via6522 model and
+  rte's source-less (0x5000eecc); the un-retired post re-traps slot-4 ~1.2k/s; Ticks
+  NOT guest-claimed (host keep-set census-proven). Residue table: R-II10 CLOSED;
+  R-II7 open-until-PIC-flip; R-II8 unchanged; R-II9 open-downgraded with the
+  0x500eXXXX cross-ref; new SC#1=0x0d + EXT-edge-flakiness residues (consolidated
+  table: INTERRUPT-INJECTION-RECON.md, M8 Task Z section).
+
 ### [SheepShaver] feat: M8 slot-4 consumption Task B — the Q-C3 from-emulator post staging fix + the starvation backstop; round trip live through the slot-4 twi and the 68k level-1 handler
 
 Commits `02a0b74e` / `17e0d071` / `377edbf6` / `e6824327`, all gated

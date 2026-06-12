@@ -152,6 +152,30 @@ the first item was acted on immediately, the rest are queued):
    territory. A short M5/framebuffer scoping spike (the historical home of M3-class
    surprises in other emulators) de-risks the same estimate from the other side.
 
+8. **The ROM-architecture reference doc (curation, not new RE).** A real fraction of
+   this project's reverse engineering is genuinely novel public documentation — the
+   firmware→ROM handoff contract (everything the trampoline stages: KDP fields,
+   timebase global, Execute68k pair, trap-table images, the level table), the
+   nanokernel's internals (published per-regime vector tables, syscall/FE1F selector
+   surfaces, scheduler/timeslice machinery, the idle-nap loop), and the 68k-emulator/NK
+   interface (DR dispatch tables, Mixed Mode protocol, entry-vector slots, the
+   interrupt chain). The full-hardware emulators (QEMU/PearPC/DingusPPC) never needed
+   the ROM's internals — nobody else has this written down. Editorial task, a few
+   sessions, zero new RE: extract the ROM FACTS from our recon docs into a standalone
+   "NewWorld ROM boot architecture notes," stripping machine-layer specifics (the
+   evidence tags [RAW-ROM]/[PATCH]/[PROBE✓] make the separation mechanical).
+   **Version-scoping is mandatory and the findings are version-tied** — pin every
+   claim to the exact ROM. Source-ROM provenance (community archive — possibly The
+   Macintosh Repository; not Macintosh Garden — exact origin unrecorded):
+   `2001-12-19 - Mac OS ROM 9.0.1.rom` md5 `66210b4f71df8a580eb175f52b9d0f88` (2,763,530 B;
+   decompressed image md5 7b1378be… per the dumps MANIFEST) ·
+   `1998-07-21 - Mac OS ROM 1.1.rom` md5 `e0fc03faa589ee066c411b4603e0ac89` (1,900,274 B) ·
+   `MacOS-ROM-9.0.4-G4-extracted.rom` md5 `97fae52ee255e1dc98d50ed77042804c` (2,430,604 B).
+   Optional force-multiplier rider: consolidate the hundreds of pinned addresses
+   scattered across the recon docs into one annotated-disassembly database (e.g. a
+   Ghidra project over the decompressed image) so future RE compounds instead of
+   re-deriving.
+
 ## Operational notes
 
 - Branch `macos-arm64`; the user pushes — **never push unprompted**.

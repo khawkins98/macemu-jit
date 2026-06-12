@@ -307,10 +307,13 @@ with M6a rung-2 Task W2, `43d42b83` — logs older than that show the 3-wide `ex
 form); the 5th is the syscall class (landed with NK-syscall-surface Task A, `bcce26c2` —
 older logs show the 4-wide form); the 6th is the program-interrupt (0x700) class (landed
 with FE1F-service-surface Task A, `89a28c15`/`669ccf7a` — older logs show the 5-wide form).
-**A 7th field (`delivered_ext`, the EXC_EXTERNAL class) appends ONLY when the Wave-2 W2-3
-PIC source is configured** (`SS_NW_PIC=1` boots / the `SS_TEST_EXT_PENDING` harness knob) —
-gated-off boots keep the 6-wide form byte-identical. PIC-on heartbeats also gain a
-` pic=out:O/r:RAISES/i:IACKS` brief (output level / total input raises / IACKs delivered):
+**A 7th field (`delivered_ext`, the EXC_EXTERNAL class) appends ONLY when an EXT source is
+configured** — since the M7 cluster flip (`81d60cc1`, 2026-06-12) that includes **default
+newworld boots** (the `SS_NW_HOST_IRQ` host source is default-ON; see the M7 section below),
+plus `SS_NW_PIC=1` boots and the `SS_TEST_EXT_PENDING` harness knob. Boots with every EXT
+source off (e.g. `SS_NW_HOST_IRQ=0` without SS_NW_PIC) keep the 6-wide form byte-identical.
+PIC-on heartbeats also gain a ` pic=out:O/r:RAISES/i:IACKS` brief (output level / total
+input raises / IACKs delivered):
 
 | Subfield | Meaning |
 |---|---|
@@ -320,7 +323,7 @@ gated-off boots keep the 6-wide form byte-identical. PIC-on heartbeats also gain
 | `deferred_native` | Deliveries deferred while a MixedMode **native excursion** is in flight — the M6a W2 DEC fence: `deliver_pending_dec_exception` defers while `[XLM_RUN_MODE]` (guest `0x2810`) `!= 0`. The NK maintains that word 1-forward/0-backward across exactly the MM switch pair, so a DEC cannot save into the MMCB mid-excursion. Known window (residue R-14): the word is 0 during the *backward* save — benign by same-values, recorded not fixed. **SEMANTIC BREAK at `3cb3b16e` (inj-s-fixes wake-up re-arm): now a RE-POLL count, not an event count** — a pending latch in a native window re-arms the HANDLE spcflag per poll (budget cap 65536/episode), so ONE deferral episode can contribute 65536+ counts. Logs older than `3cb3b16e` count one per deferral event; never compare this field across that commit. |
 | `delivered_sc` | **Delivered `sc` syscalls** (NK-syscall-surface Task A, plan rev 2 P-M4: counters for counts, probes for ABI). Incremented in `SheepExcSyscallShim` on every resolved-entry sc delivery; the first 5 also print `[EXC] SC delivered #N: …` to stderr (see below). With the surface opted out (`SS_NW_SC_SURFACE=0`) this stays 0 — the sc dies at the FATAL capture instead. **Beware the print cap when reading totals:** the long-quoted "5 sc deliveries" park baseline was the cap-5 PRINT artifact — the true parked total is 8 (7 distinct selectors); the FE1F-era default boot delivers 13 (9 distinct). Use this counter (or the `[EXC] sc selectors` per-selector line, below) for counts, never the printed lines. |
 | `delivered_program` | **Delivered program interrupts (0x700)** — trap-taken `twi`/`tw` routed to `ExcEnter(EXC_PROGRAM)` (FE1F-service-surface Task A). Incremented in `SheepExcProgramShim`; the first 5 also print `[EXC] PROGRAM delivered #N: …` (see below). With the surface opted out (`SS_NW_FE1F_SURFACE=0`) this stays 0. A healthy FE1F-era default boot shows 2 (selector $31 then $36, both entry-vector slot 8). |
-| `delivered_ext` | **Delivered external interrupts (0x500)** — the level-held OpenPIC output routed to `ExcEnter(EXC_EXTERNAL)` → `external_entry` (default `0x50314880`, the NK-published `[KDP+0x374]`) with the 2-SPR shim (Wave-2 W2-3). Appears only when the PIC source is configured. At the current frontier this stays 0 on live boots — **no EE riser exists on the boot path** (EE-CHAIN-RECON W2L-3); EXT kicks land as `deferred_ee` instead. The harness lane (`make test-exc-vectors` H6/H7) is where nonzero values are proven. |
+| `delivered_ext` | **Delivered external interrupts (0x500)** — EXT sources routed to `ExcEnter(EXC_EXTERNAL)` → `external_entry` (default `0x50314880`, the NK-published `[KDP+0x374]`) with the 2-SPR shim (Wave-2 W2-3). Two sources exist: the level-held OpenPIC output (`SS_NW_PIC`) and the M7 host-irq once-per-edge latch (`SS_NW_HOST_IRQ`, newworld default-ON — see the M7 section below). Since the M7 cluster flip a healthy default newworld boot delivers EXT live (the Task-C default-boot signature shows `…/1` — one host-sourced delivery per guest timer prime at the pre-WLSC frontier). *Historical note: until 2026-06-12 this field stayed 0 on live boots because no EE riser existed on the boot path (EE-CHAIN-RECON W2L-3) and the only proof channel was the harness lane (`make test-exc-vectors` H6/H7) — logs from that era show `delivered_ext=0` with EXT kicks landing as `deferred_ee`; that is no longer the current state.* |
 
 The same six counters are emitted as one `[EXC] delivered_dec=… deferred_ee=…
 deferred_depth=… deferred_native=… delivered_sc=… delivered_program=…` line on the
@@ -414,9 +417,16 @@ evidence without it, so the knob was dropped as moot.
 
 The OpenPIC model (`dev_openpic`, 206-check suite) is wired to the M1 bus and the
 delivery hook behind an env gate — **the flip to default-on is HELD** per the Wave-2
-stop-rule 3 (the guest never initializes the PIC at the current frontier, and no EE
-riser exists on the boot path, so live acceptance is unreachable; the chain is proven
-at harness level instead — `make test-exc-vectors` H6/H7).
+stop-rule 3 (the guest never initializes the PIC; device sources — SCC 0x25 / VIA 0x19 —
+await real guest PIC init). *The original second rationale ("no EE riser exists on the
+boot path, so live acceptance is unreachable") is retired: since the M7 cluster flip
+(2026-06-12) the riser is default-ON and EXT delivery is live on default boots via the
+host-irq source.* `SS_NW_PIC=1` now joins the **env-on test cluster** (it carries the
+M7 Task B-2 level staging — IACK/vector/level — so env-on boots post a nonzero 68k
+interrupt level); the retire-or-retain criterion for the hold: flip when a guest
+reaches its own native MPIC init (or when device-source acceptance demands it), with
+the tripwire-counter per-source split (Task C checklist item 4's binding condition)
+landed first.
 
 | Env var | Effect |
 |---|---|
@@ -439,6 +449,58 @@ Priority: **DEC before EXT** (one-shot-clear latch vs level-held line; justifica
 the hook site, M3b rev 2 m11/C1). The hook never clears PIC pending — the guest's
 handler retires it via IACK/EOI/mask (at the current frontier that would be the
 `[KDP+0x5b0]` fallback `0x50325f00`; the registered-handler table is not installed).
+
+### M7 interrupt injection — the host EXT source + the cluster flip (`SS_NW_HOST_IRQ`, newworld DEFAULT)
+
+Since the M7 cluster flip (`81d60cc1`, 2026-06-12) **three gates are the newworld profile
+DEFAULT**, each with an explicit-"0" opt-out (the `SS_NW_SC_SURFACE` polarity — only
+`=0` disables; unset or any other value = ON):
+
+| Gate | Default | What it does | Retire-or-retain criterion |
+|---|---|---|---|
+| `SS_NW_EE_RISER` | **ON (newworld)** | The 0x318000-stub EE riser (trap_return EE-only compose) — without it MSR[EE] never rises on the boot path and nothing delivers. | Retire the gate (hard-wire) once a full release cycle passes with no opt-out use; delete only with the cluster. |
+| `SS_NW_DEC_PUBLISHED` | **ON (newworld)** | DEC delivery → the NK-published handler `0x50313200` (`[KDP+0x384]`) via the 2-SPR shim; opt-out falls back to the legacy KDP-shim route at 0x50412b1c. | Retire together with the legacy-KDP-shim retirement follow-on (M3A-ENTRY-TABLE residue) — the opt-out path is the only remaining KDP-shim consumer. |
+| `SS_NW_HOST_IRQ` | **ON (newworld)** | The host interrupt source: `SetInterruptFlag` (newworld arm) forwards `InterruptFlags≠0` assert edges through a **deliver-once-per-assert-edge latch** into EXC_EXTERNAL delivery at `external_entry=0x50314880`, with a TriggerInterrupt kick on exactly the 0→1 edges; `ClearInterruptFlag` at `InterruptFlags==0` deasserts (with the lost-edge re-check, `2a452166`). | Permanent (this IS the host→guest interrupt rail); the latch word could merge into a PIC-only rail if/when SS_NW_PIC flips and all host sources ride PIC inputs. |
+
+**Three pending semantics coexist — do not conflate them:**
+1. **DEC**: one-shot latch, cleared at delivery (M3a).
+2. **PIC EXT**: level-held (W2-3 rev 2 C1, BINDING for PIC sources) — the hook never
+   clears it; only the PIC's deassert edge (guest IACK/EOI/mask) does.
+3. **Host-irq EXT** (M7): **deliver-once-per-assert-edge** — its own latch word beside
+   the PIC seam (`exc_host_irq_latch`), consumed at delivery, re-armed only by the next
+   assert edge. A bare level here is a statically-determined livelock pre-warm-start
+   (proven in vivo: 68.6M deliveries/40 s — M7 Task 0). The two EXT sources are
+   OR-composed at the poll site; neither writes the other's word.
+
+**Stat lines** (all conditional on an EXT source configured — the byte-identical-baseline
+idiom): `[EXC] EXT pending ASSERTED (host-irq latch, edge #N)` (first 6 edges);
+`[EXC] EXT delivered #N: … -> entry=50314880` (first 5); the
+`[EXC] host-irq: edges=N consumed=N deasserts=N pending=N` counter line on
+atexit/term-dump AND the crash path (healthy invariant: `consumed == edges`,
+exactly-once); the term-dump exc-tuple gains ` host_irq[…]`. The `exc=` tuple's 7th
+field (`delivered_ext`) appears on default newworld boots since the flip.
+
+**Interactions:** `SS_TEST_EXT_PENDING` (harness, asserts the PIC-style level seam) and
+the `SS_EXC_ENTRY=0xINT[,0xSC[,0xEXT]]` third field (overrides `external_entry`,
+no-rebuild) both compose with the host source unchanged. `SS_NW_PIC=1` adds the level
+staging (B-2): host edges also wiggle PIC input 0x3F so deliveries carry a real 68k
+level (default boots deliver with level 0 — the real chain's correct pre-guest-PIC-init
+behavior, R-II7).
+
+**Supported configurations (Task-C battery scope):** all-ON (the default) and all-OFF
+(`SS_NW_EE_RISER=0 SS_NW_DEC_PUBLISHED=0 SS_NW_HOST_IRQ=0`, byte-identical to the
+pre-flip baseline class) are the validated states. **Partial opt-outs are
+diagnostic-only and unvalidated** (e.g. `SS_NW_EE_RISER=0` alone leaves the published
+DEC route armed with no EE re-raise; riser-without-published was a known SIGTRAP in
+W2-4 step 2). Flip one member only when you mean to study the broken intermediate.
+
+**SS_NW_PIC default-flip carry-forward (for the flip task):** beside the tripwire
+per-source split (Task C item 4's binding condition), note the **stale caller-inventory
+comment** at `SetInterruptFlag` — its B-2-era lock-safety comment ("none of the callers
+hold a device lock") predates the lost-edge fix: `ClearInterruptFlag` (CPU thread, via
+OP_IRQ `emul_op.cpp:816–849`) is now a caller of the full edge path including
+`pic_input_locked`. Inert while SS_NW_PIC is HELD; load-bearing the day its default
+flips — re-audit lock ordering then.
 
 ### SCC Rx injection (`SS_SCC_RX_INJECT`)
 

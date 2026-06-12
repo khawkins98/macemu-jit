@@ -334,7 +334,7 @@ Files: `sheepshaver_glue.cpp`, `main_unix.cpp` (+ `timer.cpp`/`emul_op.cpp` only
 Q-I4 named a clear-site gap). Every new line newworld-profile + env-gated; gated off ⇒
 byte-identical baseline (E4's class).
 
-- [ ] Land the gate: `SS_NW_HOST_IRQ` (default OFF) — at bring-up, when on:
+- [x] Land the gate: `SS_NW_HOST_IRQ` (default OFF) — at bring-up, when on:
   `SheepExcExtConfigure()`; `SetInterruptFlag`/`ClearInterruptFlag` newworld arm
   forwards the Q-I4-pinned level **through the Q-I4-designed once-per-assert-edge
   latch** (rev 2 A1: deliver-once-per-edge is the host source's PINNED semantics, not
@@ -345,11 +345,11 @@ byte-identical baseline (E4's class).
   may not both forward; one loud line). If Q-I1 re-pinned to DEC-piggyback: the same
   edge-latched source instead arms the Q-I1-pinned DEC-side post condition — the gate
   name, counters, and acceptance shape are unchanged.
-- [ ] Tripwire conformance: the runaway (N=16) and U13 starvation (N=64) counters must
+- [x] Tripwire conformance: the runaway (N=16) and U13 starvation (N=64) counters must
   be live on this path; the once-per-edge latch lands WITH its written semantics comment
   at the site (C1 cited as the PIC-source contract this latch deliberately sits beside);
   expected tripwire arithmetic = Q-I4(c)'s exactly-1-per-assert.
-- [ ] **Probe sub-contract (PASS/FAIL), env-on (riser+published+host-irq):**
+- [x] **Probe sub-contract (PASS/FAIL), env-on (riser+published+host-irq):**
   (a) `[EXC] EXT pending ASSERTED` edges appear at host-post cadence; (b) **the first
   live EXT delivery ever**: `[EXC] EXT delivered #1: … entry=50314880` (or the Q-I1
   route's equivalent first-delivery line) with the entry probe conforming to the
@@ -363,10 +363,10 @@ byte-identical baseline (E4's class).
   `[EXC] TRIPWIRE: EXT re-delivery runaway …` (glue :1132); `RUNAWAY` uppercase appears
   in no output line and would vacuously pass. `TRIPWIRE` also catches the starvation
   tripwire — intended.)*
-- [ ] **Gated-off A/B (PASS/FAIL):** one boot without `SS_NW_HOST_IRQ` reproduces E4's
+- [x] **Gated-off A/B (PASS/FAIL):** one boot without `SS_NW_HOST_IRQ` reproduces E4's
   baseline class byte-identically (no EXT lines, exc= 7th field absent, same park
   signature class).
-- [ ] Gates: task tier (`tools/gates.sh task`) + paravirtual disposition per the
+- [x] Gates: task tier (`tools/gates.sh task`) + paravirtual disposition per the
   risk-based rule (SetInterruptFlag is SHARED — paravirtual e2e REQUIRED unless the arm
   is provably inside the profile gate; state which in the commit). Commit.
 
@@ -747,3 +747,56 @@ write the staging proposal as a dated addendum (which word, who owns it on a rea
 why staging is not the fake-poke pattern), and bring it back for sign-off — do not
 improvise it in-task. If the 68k chain consumes regardless of level (the OP_IRQ d0=1
 pre-WLSC arm), no staging is needed and the gate stands as re-graded.
+
+## Task A results (2026-06-12, label m7-taskA) — DONE, all sub-contracts green
+
+Commits: `b124556f` (implementation) + the acceptance/docs commit. Boots: **2 of ≤4**
+(slot0 `20260612-024837.9872` env-on, `20260612-025049.10064` gated-off A/B). Gates:
+task tier 5/5 PASS (incl. plain test-jit 353/353 authoritative, e2e-test 122 passed);
+exc-vector lane 14/14 with the new H9. No pinned contract falsified.
+
+- **As landed:** the Q-I4(c) damper = dedicated `exc_host_irq_latch`
+  (sheepshaver_glue.cpp, after the W2-3 EXT seam): assert = SetInterruptFlag's newworld
+  arm → `SheepExcHostIrqAssert()` (atomic exchange-1; returns edge) + TriggerInterrupt
+  on exactly the 0→1 edges; consume = atomic exchange-0 in the hook's EXT-delivery
+  branch; deassert = `ClearInterruptFlag` at `InterruptFlags==0`. A5: OR-composition at
+  the poll site + all six EE re-raise compose sites; neither source writes the other's
+  word (C1 untouched). The Q-I6 (ii) fence narrowing = route-aware skip of the
+  run_mode re-ask in `deliver_pending_dec_exception` (`route_published` =
+  dec_pending ? SS_NW_DEC_PUBLISHED : external_entry≠0); corruption-free argument
+  re-verified at the shim sites before landing (2-SPR = SPRG1/SPRG2 only; the legacy
+  KDP shim keeps the fence). exc_core untouched.
+- **(b) FIRST LIVE HOST-SOURCED EXT DELIVERY:** `[EXC] EXT delivered #1:
+  restart=50318018 srr1=00009040 msr=00001040 -> entry=50314880`, immediately after
+  `[EXC] EXT pending ASSERTED (host-irq latch, edge #1)`; entry probe [PROBE✓]
+  r1=0x68ffe000 (KDP) r6=0x68fff000 (ECB) — the NK EXT context. BOOT-VERDICT PASS
+  (`--expect 'EXT delivered #1;;EXT pending ASSERTED' --absent 'TRIPWIRE'`: 2/2, 0
+  violations).
+- **(d) Exactly-once-per-assert-edge PROVEN:** `[EXC] host-irq: edges=1 consumed=1
+  deasserts=0 pending=0` — delivery count == assert-edge count; ZERO tripwire lines.
+  (a) cadence note, honest: ONE host post in the 60 s window — pre-WLSC nothing
+  re-arms `wakeup_time` after an expiry post (TimerInterrupt is HasMacStarted-gated),
+  so the frontier cadence is one INTFLAG post per guest prime. H9 pins the same
+  once-per-edge consume in the harness lane per-vector.
+- **(c)** exc= 7th field live: `exc=4340/0/156/0/297/4/1` (HB 50 s).
+- **DEC chain under the narrowed fence — regime change, not regression:**
+  delivered_dec=4340@50 s (~87/s, all `(2-SPR)` published-route), **deferred_native=0**
+  (re-poll meter: narrowing removed the parked-window episodes entirely — within
+  Q-I4(d)'s ≈0–10² bound), mtspr_dec=10252 ≈ **2.0/delivery** (the NK pair
+  7fffffff park + 0x32e10 re-arm @0x503230d4/dc, small/mid value classes, no
+  zero/tiny storm). The "mtspr_dec single/low-double digits" expectation was the
+  E3-class regime (3 deliveries total); per-delivery ratio is the honest unregressed
+  metric. sc/program at baseline class (PROGRAM #1–4 slot=8 identical; sc selectors
+  baseline family).
+- **Gated-off A/B byte-identical to E4's class:** blocks=7354 (exact), PROGRAM#5
+  srr0=50324fec word=0fff0005 slot=5, sc census identical (16 distinct, 0xffffffff
+  x233 / 0xfffffffe x17), ZERO host-irq/EXT output, 6-field tuple. BOOT-VERDICT PASS.
+- **Recorded diagnostic (not a gate):** the env-on boot no longer reaches the
+  PROGRAM#5 park — it runs an NK spin (~82 M blocks/s jNK, comp frozen at 6991, DEC
+  cadence live, sc census growing). The riser+published+host-irq+narrowed-fence
+  config is a NEW frontier class; named for Task B/C baselining.
+- **Task B entry conditions (per the re-grade): SATISFIABLE** — EXT deliveries are
+  live and on-demand (one per host edge), the Q-I2 watch target 0x68fff070 +
+  write-event grading stand, deliveries interrupt native-window contexts
+  (restart=50318018/mirror-region) where the post's r7-bit-0x00200000 precondition
+  was proven, and [0xcfc] remains pre-WLSC (regime split applies as written).

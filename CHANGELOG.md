@@ -11,6 +11,29 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] M7 Task A — the FIRST host→guest interrupt delivered through the guest's own exception path (`b124556f`)
+
+Interrupt-injection milestone Task A
+(`docs/superpowers/plans/2026-06-12-interrupt-injection.md` rev 2 + Task 0 pins). New
+gate `SS_NW_HOST_IRQ` (default OFF, newworld-only): host interrupt posts
+(`SetInterruptFlag`, the `InterruptFlags≠0` level) are forwarded through a dedicated
+**deliver-once-per-assert-edge latch** (`exc_host_irq_latch` — a THIRD semantics
+beside the one-shot DEC latch and the level-held PIC seam, which stays untouched per
+W2-3 C1) with a TriggerInterrupt kick on each 0→1 edge; the delivery hook consumes the
+latch at EXC_EXTERNAL delivery. Sources OR-compose at the poll site + the six EE
+re-raise compose sites (A5 — no clobber). The bare-level alternative is Task 0's
+proven livelock (68.6M deliveries/40 s). Companion change (Task 0 Q-I6 verdict (ii)):
+the DEFER_NATIVE run_mode fence is **narrowed route-aware** — skipped for
+published-handler deliveries (2-SPR shim writes SPRG1/SPRG2 only), kept for the legacy
+KDP-shim DEC route. Acceptance (slot0 boots, riser+published+host-irq on): first live
+host-sourced `EXT delivered #1 → entry=50314880`; exactly-once-per-edge proven
+(`host-irq: edges=1 consumed=1 pending=0`); zero tripwires; DEC chain at real cadence
+under the narrowed fence (delivered_dec=4340@50 s all (2-SPR), deferred_native=0,
+mtspr_dec ≈ 2.0/delivery); gated-off A/B byte-identical to the E4 baseline class
+(blocks=7354, PROGRAM#5 srr0=50324fec, identical sc census, zero new output). Harness:
+`SS_TEST_HOST_IRQ` knob + H9 vector pin the once-per-edge consume (lane 14/14). Gates:
+task tier 5/5.
+
 ### [SheepShaver] NewWorld 9.0.1 — P-M5 SIGSEGV cleared: Execute68k ported to the trampoline boot via [KDP+0x1074]/[KDP+0x1078] staging (`34d3d441`)
 
 M7-critical item 1 (INTERRUPT-INJECTION-RECON.md Q1/Q5). The P-M5 crash (guest

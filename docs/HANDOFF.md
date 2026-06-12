@@ -67,6 +67,40 @@ milestone.
 | `docs/planning/machine/INTERRUPT-INJECTION-RECON.md` | The evidence base + the consolidated residue table (R-II7..R-II10, SC#1=0x0d). |
 | `LEARNINGS.md` | Non-obvious lessons; read before theorizing. |
 
+## Ideas queued at the pause (2026-06-12 discussion — candidates, not commitments)
+
+Three directions discussed with Ken at pause time, recorded here so resumption can
+weigh them against the default next milestone (VIA-IFR):
+
+1. **A two-gear sprint toward pixels.** The seeds-not-services pattern held ~7
+   consecutive times — most walls are one staged word found in 2–4 boots, and the
+   per-wall ceremony (plan/red-team/dual-review) now costs more than the walls.
+   Proposal: a timeboxed sprint whose goal is *the ?-disk icon on screen*, running
+   seed-class walls in a LIGHT gear (evidence-tagged root cause → gated fix → inner
+   gates → one-line log; no plan/red-team per wall) while keeping the full machine
+   ONLY for delivery/world-switch semantics or paravirtual-reachable changes.
+   Non-negotiables even in sprint gear: slot protocol, falsifiable evidence before
+   fixes, env gates. One consolidated review + docs pass at sprint end (the sprint
+   accumulates review debt deliberately — schedule the hardening pass). Suggested
+   day-one items: the M5 framebuffer (recon complete — a visible screen is itself
+   an instrument) and the QEMU differential rig below.
+2. **QEMU mac99 as a differential boot oracle.** Spike S1
+   (`docs/planning/spikes/SPIKE-S1-QEMU-GATE-CHECK.md`, 2026-06-10) already boots
+   our exact 9.0.1 ROM to Finder under QEMU mac99 — the rig is half-built (working
+   invocation, QEMU 11.0.1, hfsutils). Upgrade it from a one-off gate check to a
+   routine instrument: `-d` traces / gdbstub captures diffed against our boot at
+   the same PC regions, so "what does the NK expect here?" becomes observation
+   instead of RE. Caveat (already noted in MACHINE-LAYER-PLAN §oracles): QEMU boots
+   via OpenBIOS, not Apple OF — the oracle is valid from NK entry onward, which is
+   where our walls live. First customers: the VIA-IFR question (what does the IFR
+   present at tick time on a working boot?), the SC#1=0x0d divergence, the
+   0x500eXXXX crash class.
+3. **DingusPPC as the fidelity second-opinion.** For NewWorld/Core99 behaviors it
+   is the most faithful modern reference (real Apple-OF-path focus). Use when QEMU
+   and our RE disagree (Cuda/KeyLargo/VIA). Standing rules apply: import GPL code
+   with citation per backport hygiene; never contribute upstream to them. Existing
+   notes: `docs/planning/COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md`.
+
 ## Operational notes
 
 - Branch `macos-arm64`; the user pushes — **never push unprompted**.

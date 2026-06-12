@@ -691,3 +691,14 @@ bodies; the fix set = latch + staging stub + backstop kick).
   for the VIA-IFR milestone's Task 0; also flip prerequisite (2) for this gate.
 - **0x500eXXXX class**: 0/3 today; pooled honest rate ~4/21 (Task 0: 1/5, A: 3/7,
   B: 0/6, C: 0/3). Open, pre-existing, not consume-caused.
+
+## Residue disposition table (M8 Task Z close-out, 2026-06-12) — one row each, the consolidated state of record
+
+| Residue | Disposition post-M8 | Pointer |
+|---|---|---|
+| **R-II7** (level-source gap — default boots post level 0) | **OPEN until the SS_NW_PIC flip** (retired on the env-on cluster by B-2's staged init words; on default boots the zero-level post is the real chain's correct pre-guest-PIC-init behavior). Consumption stays test-cluster-only BY DESIGN until that flip. | M7 Task B-2 "Residue updates"; ROADMAP SS_NW_PIC follow-on row |
+| **R-II8** (`[KDP+0x910]` junk queue depth) | **UNCHANGED** — load-bearing-as-is for the IACK-leg selection only; Q-C4 verdict: INERT for the consumption/restore/drain path (zero readers [STATIC]; live junk value confirmed [PROBE✓]). No seed. Re-check only if the queue area is ever initialized. | M8 Task 0 blocking-answer table (Q-C4) |
+| **R-II9** (SS_PROBE_LINEAR crash suspicion) | **OPEN, downgraded** — 0/2 at HEAD under the delivery regime (instr-hardening re-test `736ae4b8`); LINEAR may be combined again. The crash CLASS recurred WITHOUT LINEAR as the **0x500eXXXX pre-engagement class** (cross-ref `7874ee6d`): pooled honest rate ~4/21 (Task 0 1/5, A 3/7, B 0/6, C 0/3) — pre-existing delivery-into-early-ROM fragility, not consume-caused; named open class, carried into the VIA-IFR milestone's flip considerations. | "R-II9 instrument-fix note" + its cross-reference paragraph |
+| **R-II10** (the parked-regime DR-poll gap / the three post-delivery livelock shapes) | **CLOSED by the M8 milestone** — shape A root-caused fork-(iii) + fixed (deferred EE-edge latch, `42ce3e0e`/`09b74fe4`); shape B's lost-arm mechanism closed (Q-C3 staging, `02a0b74e`); shape C superseded (post-fix the armed post drains and re-traps slot-4). | "Slot-4 consumption Task C" R-II10 disposition |
+| **SC#1=0x0d divergence** (NEW, M8 Task C) | **OPEN, named** — deterministic 2/2 on default+consume-on boots vs 0/19 without (r0=0x0d r1=1017ffde lr=5046c5ac, ahead of the canonical SC#1=0x3f); candidate mechanism = the Q-C3 stub's unconditional level-0 staging re-arming at the drain. VIA-IFR Task-0 recon question AND `SS_NW_IRQ_CONSUME` flip prerequisite (2). | "Task-C residue additions" |
+| **EXT-edge one-shot flakiness** (M8 Task B) | **OPEN, named** — 3/6 env-on boots never engaged (the 60 Hz ticker's `XLM_IRQ_NEST==0` exact test never sampled true); a test-cluster determinism issue, not default-correctness. Harness work for the VIA-IFR milestone. | Task B "Residue / census"; Task C criterion (d) |

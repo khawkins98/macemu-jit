@@ -17,6 +17,40 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-12 — QEMU rig experiment: what the rig is actually for, and a sixth pitfall
+
+A timeout-ladder experiment (5s / 10s / 50s) using the rig against VIA-IFR Task A
+produced two substantive findings and exposed one additional limitation.
+
+**How to think about the rig (the practical lift):** when SheepShaver does the wrong
+thing, you usually need to know what a *working* system does at that same moment. Before
+the rig, you had two options: read static ROM disassembly and reason about it, or run
+SheepShaver with probes and watch what your broken system does. The rig gives you a third:
+boot the same Mac OS on QEMU (which works), probe the live memory, and directly observe
+the working answer. Today's example — we didn't know what the ROM interrupt handler
+actually checked. One 5s boot and two memory reads later: it checks an NK PIC descriptor
+block at `0x68ffefd0`, not VIA MMIO. That would have taken hours to find statically.
+
+**Finding 1 — ROM stub checks NK PIC descriptor, not VIA MMIO:**
+The ROM level-1 handler at `0xffc0ec50` loads `$68ffefd0` into a2 and checks
+`$28(a2) AND [*$14(a2) + level*4]`. If that's zero, it rte's source-less. This is the
+VIA-IFR fix target — the NK PIC descriptor at KDP+0xFD0, not a VIA register read.
+See `docs/planning/machine/VIA-IFR-RECON.md` §4b for the full disassembly.
+
+**Finding 2 — system handler source-ID function is two instructions:**
+`jsr $47c526(pc)` resolves to `move.l *0x47c50c, d0; rts`. Not relevant to our early-boot
+scenario (the ROM stub is what's active at our frontier), but good to know for later.
+
+### 6. CD boot config is unreliable past ~30s
+
+The default rig config (9.2.1 installer CD) causes a guest reboot partway through the
+boot sequence. At 50s, probes are inconsistent — `0x64` may read `0x00000000` in one run
+and `0x0047d0ba` in another. Use the CD config only for early-boot observations (≤ 30s).
+For stable Finder-steady-state readings, the rig needs a hard-disk boot config (a
+pre-installed HD image, not the installer). This is a known gap in the current tooling.
+
+---
+
 ## 2026-06-12 — QEMU rig bringup: five pitfalls to know before using it
 
 Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`. Full context: `docs/planning/machine/VIA-IFR-RECON.md`.

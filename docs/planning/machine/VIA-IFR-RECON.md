@@ -86,61 +86,93 @@ The "VIA IFR source bit" issue is **NOT a direct MMIO read** — it is a LOW MEM
 
 ---
 
-## 4. The real question for VIA-IFR task A
+## 4. Task A findings — boot-stage ladder (2026-06-12 experiment)
 
-Since $d94 is zero even in QEMU's fully-booted Mac OS 9.2.1 at Finder, the $d94/$6e4
-dispatch path in the ROM is the BOOT-TIME STUB (installed by the ROM, used before Mac OS
-installs its own handler). Mac OS 9.2.1 replaces it with its own handler at 0x47d0ba
-(in RAM) which uses a different mechanism (`jsr $47c526(pc)` — a system-managed dispatch).
+Running the rig at 5s and 10s revealed when the handler transition happens and, more
+importantly, what the ROM stub actually does.
 
-**Confirmed at Finder steady-state (from rig run, 2026-06-12):**
+### 4a. Handler timeline (from timeout ladder)
 
-| Address | QEMU value | Meaning |
+| Timeout | `0x64` | Stage |
 |---|---|---|
-| `0x64` level-1 vector | `0x0047d0ba` | Mac OS system-installed handler (not ROM stub) |
-| `0x168` Ticks | non-zero, updating | 60 Hz tick is live |
-| `0x0d94` dispatch flag | `0x00000000` | Zero — ROM stub path never dispatches |
-| `0x06e4` VBL chain | `0x00493dfe` | **Non-zero** — VBL chain IS set up at Finder |
+| 5s | `0xffc0ec50` | ROM stub — interrupt dispatch table in ROM |
+| 10s | `0x0047d0ba` | Mac OS system handler installed in RAM |
+| 50s (CD boot) | `0x00000000` | **Unreliable** — installer CD reboots mid-run (see §5 limitations) |
 
-The $6e4 chain being non-zero confirms that once Mac OS is running, the VBL dispatch
-infrastructure exists and would work — the issue is the upstream path setting $d94.
+The transition happens between 5s and 10s. Our SheepShaver guest at the PROGRAM#5
+frontier is equivalent to the pre-5s stage — the ROM stub is almost certainly what's at
+0x64 when our 60 Hz interrupts fire.
 
-**The real level-1 handler in a booted Mac OS 9.2.1 (`0x47d0ba`, from rig disassembly):**
+### 4b. The ROM stub — the actual early-boot source dispatch (NEW — contradicts prior understanding)
+
+The ROM handler at `0xffc0ec50` (= `0x5000ec50` in ROMBase space) is a level-indexed
+jump table that flows into a common handler. What the common handler does at `0xffc0ec7e`:
+
 ```
-0x0047d0ba  cmpi.w   #$64, $6(a7)     ; check: is this a level-1 interrupt?
-0x0047d0c0  bne.b    $47d0b4           ; if not, rte
-0x0047d0c2  movem.l  d0-d1/a0-a1,-(a7); save registers
-0x0047d0c6  move.w   $10(a7), d0      ; get stacked SR
-0x0047d0ca  andi.w   #$e700, d0       ; mask to supervisor/IPL bits
-0x0047d0ce  bne.b    $47d0b0           ; if interrupted supervisor code, branch
-0x0047d0d0  jsr      $47c526(pc)       ; identify interrupt source → returns pointer in d0
-0x0047d0d4  movea.l  d0, a0
-0x0047d0d6  tst.b    (a0)             ; test source flag
-0x0047d0d8  bne.b    $47d0b0           ; if already-handling, branch
-0x0047d0da  move.l   $12(a7), d0      ; save return address
-0x0047d0de  move     usp, a0          ; get user sp
-0x0047d0e0  move.l   d0, -(a0)        ; push return addr to user stack
-0x0047d0e2  move     a0, usp          ; update usp
-0x0047d0e4  move.l   $47d124(pc),$12(a7) ; patch stacked return PC → to handler body
-0x0047d0ea  bra.b    $47d0b0           ; rte with patched return → jumps to handler
+addq.l  #$1, ([$2b6], $31c)      ; increment interrupt counter via interrupt-mgr base
+movea.l $68ffefd0.l, a2          ; load NK PIC descriptor block (KDP+0xFD0)
+moveq   #$0, d1
+move.l  $28(a2), d0              ; read interrupt pending bits
+movea.l $14(a2), a0              ; read pointer to level-indexed source bit table
+and.l   (a0, d3.l * 4), d0      ; mask by interrupt level (d3=1 for level-1)
+bne.b   $ffc0ecaa                ; → source found, handle it
+; --- no source found ---
+moveq   #$20, d1
+move.l  $2c(a2), d0              ; secondary pending check
+and.l   $20(a0, d3.l), d0
+beq.w   $ffc0ee58                ; → no source at all: fall to tst.l $d94.w path (rte's source-less)
 ```
-Key: source identification is via `jsr $47c526(pc)` (returns a pointer to a source-flag
-byte), NOT via direct VIA IFR MMIO read. The handler memory address (0x47d0ba) is
-**heap-allocated per boot** — different code may be at that address in different boots.
 
-**Two parallel questions for Task A:**
+**The mechanism:** the ROM handler checks an **NK PIC descriptor block at `0x68ffefd0`**
+(= KDP+0xFD0, 0x30 bytes before ECB). This is the structure the ROM uses to identify
+interrupt sources — NOT VIA MMIO, NOT `$d94` directly.
 
-1. **During our early-boot SheepShaver scenario (PROGRAM#5 frontier / 60 Hz interrupts
-   reaching 68k world):** what is the level-1 interrupt vector at 0x64? Does it point to
-   the ROM's stub at 0x5000ee58, the system-installed handler, or somewhere else?
-   → Use `SS_PROBE_68K` or a slot boot with `SS_DR_R24_RING` to check 0x64 in our running guest.
+- `0x68ffefd0 + 0x28` (`0x68ffeff8`): **interrupt pending word** — which sources are pending
+- `0x68ffefd0 + 0x14` (`0x68ffefe4`): **pointer to level-indexed source bit table**
 
-2. **What does `jsr $47c526(pc)` call**, and what does it return as the interrupt source?
-   Since this is heap code, the address 0x47c526 (relative to 0x47d0ba) also shifts per
-   boot. In the reference boot: `$47c526(pc)` where `pc` after `4eba` = 0x47d0d2,
-   offset 0xf454 (signed -2988) → target = 0x47d0d2 - 0x0BAC = **0x47c526**.
-   This function returns a pointer to a source-flag byte in d0. Once we know what byte
-   this is, we know what our Machine Layer needs to set at tick time.
+If `pending & source_table[level]` is zero, the handler falls through to `0x5000ee58`
+(the `tst.l $d94.w` path) and rte's source-less. **This is exactly our symptom.**
+
+**What this means for our machine layer:** for the 68k handler to dispatch at tick time,
+our PIC/`dev_via6522` layer needs to set the right bit in the NK PIC descriptor at
+`0x68ffeff8` (and ensure the source table at `0x68ffefe4` has the matching bit for level
+1). The `$d94` path is a dead-end fallback, not the fix target.
+
+### 4c. The system handler's source-ID function — trivially simple
+
+The system handler (`0x47d0ba`) calls `jsr $47c526(pc)` for source identification. That
+function is two instructions:
+
+```
+move.l  $47c50c(pc), d0   ; load pointer from fixed address 0x47c50c
+rts                        ; return it in d0
+```
+
+It just returns `*0x47c50c` — a pointer into the interrupt manager's data area (interrupt
+manager base is at `$2b6` = `0x44be0`). The handler then tests the flag byte at that
+pointer address to check for re-entrancy. There is no VIA MMIO read in this path either.
+
+The address `0x47c50c` and the interrupt manager at `0x44be0` are heap-allocated per boot
+and cannot be predicted in advance.
+
+### 4d. Remaining Task A question
+
+The ROM stub mechanism is now understood. The one open question before implementation:
+
+**What initializes `0x68ffefd0` and when?** The NK must set up this descriptor block
+(fields `+0x14` and `+0x28`) before the 68k world starts receiving interrupts. If our
+machine layer writes the correct pending bit to `0x68ffeff8` at tick time but the source
+table at `0x68ffefe4` is zero (never initialized), the AND still comes out zero. Task A
+is: confirm the NK initializes this structure before PROGRAM#5, and identify what
+value `0x68ffefe4` holds in a working boot.
+→ Use `SS_PROBE_68K` on a slot boot to read `0x68ffefd0` through `0x68ffeffc` when the
+first interrupt fires in our guest.
+
+**Prior "two parallel questions" are now answered:**
+- Q1 (what handler is at 0x64 in our early-boot guest): ROM stub at 0xffc0ec50 — confirmed
+  by the 5s bracket
+- Q2 (what does `jsr $47c526(pc)` return): `*0x47c50c` — trivial pointer load, confirmed
+  by 50s disassembly
 
 ---
 
@@ -199,3 +231,8 @@ SheepShaver/tools/qemu-rig.sh --trace /tmp/via_trace.txt --timeout 60
   (0xF3016000). Use QEMU for BEHAVIORAL reference only, not address values.
 - The gdbstub (`--gdbstub`) and the monitor share state; don't use both concurrently
   with Python clients — use a single lldb session OR the monitor, not both.
+- **CD boot config is unreliable past ~30s.** The 9.2.1 installer CD causes a reboot
+  partway through, making 50s+ probes inconsistent (observed: `0x64 = 0x00000000` at 50s
+  in one run, `0x0047d0ba` in a prior run). For stable Finder-steady-state readings, the
+  rig needs a hard-disk boot config (a pre-installed HD image), not the installer CD.
+  Use the CD config only for early-boot observations (≤ 30s).

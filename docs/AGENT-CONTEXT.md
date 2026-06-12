@@ -29,9 +29,17 @@ The real question is what sets `$0d94` at tick time (and whether it is even the 
 handler path — at Finder, Mac OS 9.2.1 installs its own handler in RAM, replacing the ROM
 stub). See `docs/planning/machine/VIA-IFR-RECON.md` for the full corrected picture.
 **Named next task: the VIA-IFR surface** (M-class device-model work — `dev_via6522`
-exists; the question is presenting the 60 Hz source so the active handler dispatches
-correctly; Task-0 questions: what sets `$0d94` + what handler is at 0x64 in our early-boot
-guest + the `$6e4` vector-chain dismissal).
+exists). **Task A substantially answered by QEMU rig experiment (2026-06-12):**
+- Handler at 0x64 in our early-boot guest: ROM stub at `0xffc0ec50` (confirmed — system
+  handler installs between 5s–10s in QEMU; our PROGRAM#5 frontier is pre-5s equivalent)
+- ROM stub source dispatch checks **NK PIC descriptor at `0x68ffefd0`** (KDP+0xFD0):
+  `pending=*(0x68ffeff8)` AND `table[level]=*(*(0x68ffefe4) + level*4)` — if zero, rte's
+  source-less. This is the fix target, not VIA MMIO reads or `$d94`.
+- System handler source-ID (`jsr $47c526(pc)`): trivially `move.l *0x47c50c, d0; rts` —
+  not relevant to our early-boot scenario.
+**One remaining Task A question:** does the NK initialize `0x68ffefd0` (fields `+0x14`
+and `+0x28`) before PROGRAM#5? Confirm with `SS_PROBE_68K` reading `0x68ffefd0..ffc` at
+first interrupt in our guest. Then: set the pending bit there at tick time.
 Default boots are unchanged (PROGRAM#5 srr0=0x50324fec park + the M7 delivery
 chronology; level-0 posts per R-II7 keep consumption unreachable by design until the
 SS_NW_PIC flip). **NEW named residue: SC#1 r0=0x0d** (r1=1017ffde lr=5046c5ac) —
@@ -135,6 +143,10 @@ as current claims — they are historical.
 ## Constants (probe-ready absolutes)
 
 ECB=0x68fff000 · MMCB=0x68fff400 · KDP=0x68ffe000 ([KDP+X] = 0x68ffeXXX… compute) ·
+**NK PIC descriptor=0x68ffefd0** (KDP+0xFD0, 0x30 bytes before ECB — ROM interrupt dispatch
+reads this to identify sources: `+0x28`=pending-bits word, `+0x14`=ptr to level-indexed
+source table; if `pending & table[level]` == 0, handler rte's source-less — this is the
+VIA-IFR fix target, not VIA MMIO directly; confirmed by QEMU rig 5s probe, 2026-06-12) ·
 XLM_RUN_MODE=0x2810 · XLM_IRQ_NEST=0x2818 · ROMBase=0x50000000 · mirror emulator base
 0x50460000 · DR dispatch table 0x50480000 (slot = base | opcode<<3) · entry-vector
 table 0x5046e8c0 (16 slots) · NK primary 0x5031xxxx / staged +0x100000 · guest→host:

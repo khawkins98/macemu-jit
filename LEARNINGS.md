@@ -3861,3 +3861,58 @@ level**, so level-semantics livelock the boot in permanent re-delivery. The plan
 for any "forward a flag into an exception/interrupt seam" design, ask *who deasserts it, and is
 that party alive at this boot stage* — and let the red-team answer it from static evidence
 before the implementation finds it the hard way.
+
+## 2026-06-12 — M7 interrupt injection: the circularity find, watch-word blindness, and what the review pipeline caught pre-flip
+
+### The park's only exit is the chain we built (the circularity find)
+
+The PROGRAM#5 park — the default-boot frontier we'd been treating as a wall — turned out
+to be the **NK idle task's power-saving nap loop**, and its designed release is **exactly
+the interrupt chain this milestone built**: env-on, the nap park never forms (the EXT edge
+pulls the DR into its interrupt path instead). Better: the NK's nap body **already couples
+to our post words** — the slot-5 service's own `[KDP+0x670] & [KDP-0x440]` check suppresses
+napping while 68k posts are pending. The "wall" and the work were the same object viewed
+from two sides. Lesson: when a boot parks in a wait loop, characterize WHAT it waits on
+before pricing it as a missing service — the slot-5 "missing service" theory would have
+been a wasted build (the service exists, is NK-internal, and is conformant); the real gap
+was one link downstream (the slot-4 consumption round trip). Full record:
+INTERRUPT-INJECTION-RECON.md "R-II10 / slot-5 park recon" (`b3e51b8d`).
+
+### The watch-word blindness class: change-detectors can't see correct no-ops
+
+Two instances in one milestone, now a named instrument class:
+1. **Zero-over-zero stores**: Task B's graded watch on the post target 0x68fff070 was
+   structurally BLIND to the very write it graded — at level 0 the NK post stores 0x0000
+   over 0x0000, and `SS_JIT_WATCH_ADDR` is a *change* detector. The write event had to be
+   carried by an adjacent discriminator (the fallback-body entry counter) instead.
+2. **The Ticks 0x16c correction**: Task B's "Ticks did not move" verdict was wrong-by-
+   instrument — the watch word 0x168 covers the HIGH half of the Ticks long (0x16a..0x16d;
+   the moving LSB lives in word **0x16c**). B-2's ring-pinned re-check showed Ticks had
+   been ticking all along (via the host HandleInterrupt keep-set, not the guest addq).
+Lesson: before grading a gate on a watch word, ask (a) can the expected write be
+value-identical (then a watch can never see it — use a counter or an adjacent
+discriminator), and (b) does the watch word actually cover the moving bytes of a
+multi-word lowmem long. Watch 0x16c for Ticks, and demand DR-window attribution to
+distinguish the guest addq from the host keep-set.
+
+### The review pipeline caught the lost-edge race BEFORE the default flip
+
+The Task-A review found a latent non-atomic window in `ClearInterruptFlag` (zero-check
+then Deassert — an interleaved Set could assert+kick between them and have its fresh edge
+silently retired: one post lost until the next). Unreachable at the current frontier
+(OP_IRQ's Clear is HasMacStarted-gated), so no boot would have shown it — but it went onto
+the pre-flip checklist and was FIXED (`2a452166`) before the cluster became the default.
+Same pipeline previously caught the lr-slot misattribution (see the P-M5 entry above) and,
+statically, the level-source livelock. Lesson: concurrency findings that are "unreachable
+today" belong on the flip checklist, not the backlog — the flip is exactly the moment
+reachability assumptions change.
+
+### R-II9: SS_PROBE_LINEAR is suspect under the env-on delivery regime
+
+Two of two `SS_PROBE_LINEAR=1` boots under the env-on cluster CRASHED (SIGTRAP at the
+DR-dispatch fetch / SIGSEGV on a wild ea after restarting the same block across
+deliveries) vs 0/2 for identical configs without it. Same-class precedent: W2-2's one-off
+SIGTRAP "delivery onto the DR-emulator init loop". Until cleared: do NOT use
+SS_PROBE_LINEAR on delivery-regime boots, and hold the instrument set constant across A/B
+boots — the env-on frontier class is timing-sensitive (ring-slowed boots reach the park;
+no-ring boots spin in the NK — Task B's baselining note).

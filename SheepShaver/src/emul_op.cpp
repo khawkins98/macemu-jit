@@ -853,6 +853,72 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				r->d[0] = 1;
 			break;
 
+		case OP_IRQ_NW: {		// Level 1 interrupt — frame-aware (NewWorld via_nw901_int patch)
+			// 0x5000ed08 is reached both via 68k interrupt (exception frame on A7) and
+			// via JSR during early 68k init (return address on A7).  Detect which case
+			// from the high byte of [A7]:
+			//   interrupt — 68020 short frame format/offset word: high byte = 0x00
+			//   interrupt — 68000 SR first: high byte = 0x20-0x27 (supervisor + IPL mask)
+			//   JSR from ROM (0x5000xxxx): high byte = 0x50
+			// Threshold 0x40 splits them cleanly for our ROM layout.
+			uint8 frame_hi = ReadMacInt8(r->a[7]);
+			if (frame_hi >= 0x40) {
+				// JSR caller: pop 4-byte return address, redirect PC to skip the rte
+				uint32 ret = ReadMacInt32(r->a[7]);
+				r->a[7] += 4;
+				r->pc = ret;
+				static int jsr_count = 0;
+				if (++jsr_count <= 5) {
+					fprintf(stderr, "[OP_IRQ_NW] JSR caller #%d: ret=%08x sp=%08x\n",
+					        jsr_count, ret, r->a[7]);
+					fflush(stderr);
+				}
+			} else {
+				// Interrupt path: run normal OP_IRQ work; rte fires on return
+				WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);
+				r->d[0] = 0;
+				if (HasMacStarted()) {
+					if (InterruptFlags & INTFLAG_VIA) {
+						ClearInterruptFlag(INTFLAG_VIA);
+#if !PRECISE_TIMING
+						TimerInterrupt();
+#endif
+						ExecuteNative(NATIVE_VIDEO_VBL);
+						static int tick_counter_nw = 0;
+						if (++tick_counter_nw >= 60) {
+							tick_counter_nw = 0;
+							SonyInterrupt();
+							DiskInterrupt();
+							CDROMInterrupt();
+						}
+						r->d[0] = 1;
+					}
+					if (InterruptFlags & INTFLAG_SERIAL) {
+						ClearInterruptFlag(INTFLAG_SERIAL);
+						SerialInterrupt();
+					}
+					if (InterruptFlags & INTFLAG_ETHER) {
+						ClearInterruptFlag(INTFLAG_ETHER);
+						ExecuteNative(NATIVE_ETHER_IRQ);
+					}
+					if (InterruptFlags & INTFLAG_TIMER) {
+						ClearInterruptFlag(INTFLAG_TIMER);
+						TimerInterrupt();
+					}
+					if (InterruptFlags & INTFLAG_AUDIO) {
+						ClearInterruptFlag(INTFLAG_AUDIO);
+						AudioInterrupt();
+					}
+					if (InterruptFlags & INTFLAG_ADB) {
+						ClearInterruptFlag(INTFLAG_ADB);
+						ADBInterrupt();
+					}
+				} else
+					r->d[0] = 1;
+			}
+			break;
+		}
+
 		case OP_SCSI_DISPATCH: {	// SCSIDispatch() replacement
 			uint32 ret = ReadMacInt32(r->a[7]);
 			uint16 sel = ReadMacInt16(r->a[7] + 4);

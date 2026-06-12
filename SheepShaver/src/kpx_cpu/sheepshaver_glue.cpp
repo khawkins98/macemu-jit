@@ -706,6 +706,7 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	for (int i = 0; i < 7; i++)
 		r68.a[i] = gpr(16 + i);
 	r68.a[7] = gpr(1);
+	r68.pc = gpr(24);
 	uint32 saved_cr = get_cr() & 0xff9fffff; // mask_operand::compute(11, 8)
 	uint32 saved_xer = get_xer();
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
@@ -746,6 +747,7 @@ void sheepshaver_cpu::execute_emul_op(uint32 emul_op)
 	for (int i = 0; i < 7; i++)
 		gpr(16 + i) = r68.a[i];
 	gpr(1) = r68.a[7];
+	gpr(24) = r68.pc;
 #if defined(__aarch64__) && defined(USE_AARCH64_JIT)
 	/* EMUL_OP return record ('R'): registers now hold the results (D0 = result code). */
 	ppc_jit_ring_record_emulop('R', gpr(24), emul_op, gpr(8), gpr(9), gpr(1), &gpr(16));

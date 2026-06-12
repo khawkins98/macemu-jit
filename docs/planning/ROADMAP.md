@@ -36,13 +36,14 @@ fidelity (interpreter-only; GPLv3 reuse feasible — cite per backport hygiene; 
 
 # Machine Layer milestones
 
-## M9: VIA-IFR → guest-claimed 68k ticks (ACTIVE)
+## M9: VIA-IFR → guest-claimed 68k ticks (ACTIVE — stalled)
 
-- [ ] **Fix**: Probe 1 (unpatched handler fires?) → if yes, add frame-aware return at 0xed08
+- [x] **Infrastructure**: OP_IRQ_NW (frame-aware handler) + M68kRegisters.pc writeback (harness 353/353)
+- [ ] **Blocker**: boot stall cause unknown — trampoline tp[25-26] vs ROM patch (need isolation boot)
 - [ ] **Verify**: `SS_PROBE_68K=0x5000ed08` fires, dec_expiries ~2393, boot advances
-- [ ] **Ship**: one-line CHANGELOG; retire pre-M7 default-ON gates (gate-retirement task)
+- [ ] **Ship**: one-line CHANGELOG; retire pre-M7 default-ON gates
 
-See `docs/HANDOFF.md` for the probe recipe. Gate: `SS_NW_VIA_IFR`.
+See `docs/HANDOFF.md` §Root cause for next step. Gate: `SS_NW_VIA_IFR`.
 
 ## M10: Framebuffer (recon done, not started)
 

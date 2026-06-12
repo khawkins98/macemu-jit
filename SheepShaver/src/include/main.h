@@ -40,6 +40,7 @@ extern system_info SysInfo;		// System information
 struct M68kRegisters {
 	uint32 d[8];
 	uint32 a[8];
+	uint32 pc;	// settable in EMUL_OP handlers to redirect 68k PC on return (kpx_cpu only)
 };
 
 

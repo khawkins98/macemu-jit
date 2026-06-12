@@ -3997,12 +3997,12 @@ static bool patch_68k(void)
 			base = find_rom_data(0xed00, 0xee00, via_nw901_int_dat, sizeof(via_nw901_int_dat));
 			if (base) {
 				wp = (uint16 *)(ROMBaseHost + base);
-				*wp++ = htons(M68K_EMUL_OP_IRQ);
-				*wp++ = htons(0x4e73);		// rte
+				*wp++ = htons(M68K_EMUL_OP_IRQ_NW);
+				*wp++ = htons(0x4e73);		// rte (interrupt path; JSR path skips via r->pc redirect)
 				*wp++ = htons(M68K_NOP);
 				*wp   = htons(M68K_NOP);
-				fprintf(stderr, "[ROMPATCH] via_nw901_int @%08lx → OP_IRQ+rte "
-				        "(SS_NW_VIA_IFR, VIA-IFR-RECON §5e)\n", (unsigned long)(ROMBase + base));
+				fprintf(stderr, "[ROMPATCH] via_nw901_int @%08lx → OP_IRQ_NW+rte "
+				        "(SS_NW_VIA_IFR, frame-aware)\n", (unsigned long)(ROMBase + base));
 			} else {
 				fprintf(stderr, "[ROMPATCH] SKIP via_nw901_int (pattern not found in 0xed00-0xee00)\n");
 			}

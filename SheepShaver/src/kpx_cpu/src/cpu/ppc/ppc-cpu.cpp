@@ -259,6 +259,17 @@ static inline void r24ring_record(uint32_t r24) {
 // X, r24 reads X+2 — pass the value you expect r24 to HOLD (e.g. to catch
 // execution of 0x5000f246, probe 0x5000f248). Zero cost unset (-1 -> parse
 // once -> 0 forever, same pattern as the rings).
+//
+// IMPORTANT — tool selection: SS_PROBE_68K fires at 68k instruction boundaries
+// inside the DR emulator. SS_PROBE_PC fires at PPC JIT block-entry boundaries.
+// They are mutually blind: a 68k PC address (0x5000xxxx inside the DR) will
+// never trigger SS_PROBE_PC, and a pure PPC address will never trigger
+// SS_PROBE_68K. If your probe never fires, check you used the right one.
+//
+// On first call (state=-1), regardless of SS_PROBE_68K, this function emits a
+// one-shot [DR68K] line recording the first 68k instruction the DR dispatches.
+// This confirms "68k world started" without any probe address set — use it to
+// distinguish "handler never reached" from "68k emulator never started."
 static int s_probe68k_state = -1;        // -1 unparsed, 0 off, 1 armed, 2 exhausted
 static uint32_t s_probe68k_pc = 0;
 static uint32_t s_probe68k_max = 8;
@@ -267,6 +278,13 @@ static uint32_t s_probe68k_prev = 0;     // previous r24 seen at the hook (edge 
 
 static void probe68k_check(powerpc_registers *r, uint32_t bpc) {
 	if (__builtin_expect(s_probe68k_state < 0, false)) {
+		// Always-on one-shot: first 68k instruction ever dispatched by the DR.
+		// Fires regardless of SS_PROBE_68K. If this line never appears, the 68k
+		// emulator never started — look upstream in PPC world (SS_PROBE_PC on
+		// NK Start68k, e.g. 0x503244d4, or check PROGRAM#5 in jit_diag.log).
+		fprintf(stderr, "[DR68K] first instruction: r24=0x%08x ppc_block=0x%08x"
+		        " — 68k DR emulator started\n",
+		        (unsigned)r->gpr[24], bpc);
 		const char *e = getenv("SS_PROBE_68K");
 		s_probe68k_state = 0;
 		if (e && *e) {

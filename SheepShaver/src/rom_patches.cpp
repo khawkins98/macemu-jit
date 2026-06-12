@@ -1003,6 +1003,15 @@ bool PatchROM(void)
 		// b → mirror cold-start 0x5046e964 (offset computed from the b's own slot)
 		tp[b_idx] = htonl(0x48000000u |
 		                  ((0x46e964u - (tramp_offset + b_idx * 4)) & 0x03FFFFFCu));
+		// Trampoline budget: 48 words (0x429b40–0x429bff). b_idx is the last slot.
+		// Maximal layout (pool+switch+VIA_IFR) fills exactly 48 words (b_idx=47).
+		// This fires at PatchROM time — a boot with an over-budget trampoline means
+		// some new feature added words without accounting for the fixed section.
+		if (b_idx > 47) {
+			fprintf(stderr, "[NW-TRAMP] BUDGET OVERRUN: b_idx=%u > 47 (48-word limit). "
+			        "Trampoline writes past 0x429bff into patch-space! "
+			        "Reduce word count or extend the budget region.\n", (unsigned)b_idx);
+		}
 
 		// Rung 2 Task W (SS_NW_MM_SWITCH pair; plan "Task W: FE02 switch-back"):
 		// the WARM/ONGOING arm at table[0].  Live falsification (Task-W boots

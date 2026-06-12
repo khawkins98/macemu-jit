@@ -774,6 +774,24 @@ r24 dump still fires separately on clean/SIGTERM exits).
 
 ### `SS_PROBE_68K=0x68KPC[:N]` — 68k register-file probe at the DR dispatch hook
 
+**Tool selection rule:** `SS_PROBE_68K` is for 68k code paths (addresses inside the DR
+emulator, typically `0x5000xxxx`). `SS_PROBE_PC` is for PPC JIT block-entry addresses.
+They are mutually blind: a 68k address will never trigger `SS_PROBE_PC`, and a PPC-world
+address will never trigger `SS_PROBE_68K`. If your probe never fires, check you used
+the right tool.
+
+**`[DR68K] first instruction` log** (always-on, no env var needed): the first time the
+DR dispatch hook fires, it emits one line regardless of `SS_PROBE_68K`:
+```
+[DR68K] first instruction: r24=0xNNNNNNNN ppc_block=0xNNNNNNNN — 68k DR emulator started
+```
+If this line never appears, the 68k emulator never started. Look upstream in PPC world:
+probe `SS_PROBE_PC=0x503244d4:1` (NK Start68k entry) to confirm whether the NK reached
+PROGRAM#5. If Start68k never fires either, check `dec_expiries` in `jit_diag.log` (very
+low count = PPC boot stall) and look at PROGRAM#1–#4 delivery. PROGRAM#N are not
+individually logged — infer from: `[IRQ-CONSUME] fired>0` = PROGRAM#4 fired; high
+`dec_expiries` = NK scheduling loop is running = PROGRAM#1–#3 delivered.
+
 The 68k counterpart of `SS_PROBE_PC` (68k PCs are PPC-probe-blind — this was the single
 biggest recurring recon tax). Fires when guest **r24** (the DR emulator's 68k PC)
 *transitions to* the target value at the JIT dispatcher block-entry hook (the same hook

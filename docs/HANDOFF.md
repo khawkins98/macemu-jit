@@ -5,61 +5,120 @@
 
 ## Resume prompt
 
-> Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants),
-> then `docs/planning/ROADMAP.md` §Machine Layer milestones.
-> Active work: M9 VIA-IFR — isolate the stall (see §Root cause below).
+> Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
+> Active work: M9 VIA-IFR stall — root cause is now isolated to the ROM patch alone (see §below).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
+> Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
-## Current state
+---
 
-- **M8** (NK-level interrupt consumption) — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
-- **M9** (VIA-IFR) — stalled. Infrastructure committed; root cause of boot stall unresolved.
+## Current state (2026-06-12 end-of-session)
 
-### M9 blocker: what we know
+- **M8** — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
+- **M9** — infrastructure committed; stall root-cause **isolated to ROM patch** (see below).
 
-With `SS_NW_VIA_IFR=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`:
-- 68k starts (`[DR68K] first instruction` fires), then stalls: dec_expiries=5, fired=1 (vs 7222/112 baseline)
-- OP_IRQ_NW at 0x5000ed08 **never fires** — stall is upstream of the handler
-- Without VIA_IFR: healthy baseline (dec_expiries=7222, fired=112, OP_IRQ_NW not installed)
-- 0x5000ed08 is also never reached without the patch — SS_NW_IRQ_CONSUME consumes interrupts at NK level; the 68k interrupt handler only fires when the NK delivers to 68k
+### What shipped this session
 
-### What's been shipped (this session)
+| Change | File(s) | Status |
+|--------|---------|--------|
+| `OP_IRQ_NW` moved to end of enum; append-only comment added | `emul_op.h` | ✅ committed `ab258361` |
+| Stale WriteMacInt16([KDP+0x67c]) removed from OP_IRQ_NW; comment explains why NK owns that cell | `emul_op.cpp` | ✅ committed `db67aded` |
+| tp[25-26] now **always nop** (was conditional on `SS_NW_VIA_IFR`); comment explains design | `rom_patches.cpp` | ✅ committed `db67aded` |
+| `SS_NW_VIA_IFR_ROM_PATCH=0` isolation gate added | `rom_patches.cpp` | ✅ committed `db67aded` |
+| `[PROGRESS]` atexit line — fires on every exit incl. SIGTERM | `main_unix.cpp`, `sheepshaver_glue.cpp`, `ppc-cpu.cpp` | ✅ committed `3b05ed8e` |
+| enum append-only rule added to CONTRIBUTING change table | `CONTRIBUTING.md` | ✅ committed `bf35cc1c` |
+| 8.6 boot regression fixed + verified clean | — | ✅ |
 
-- **OP_IRQ_NW handler** (`emul_op.cpp` case OP_IRQ_NW): frame-aware return — detects 68020 interrupt exception frame vs JSR return address from `[A7]` high byte (`>= 0x40` = JSR, pops 4-byte ret addr, sets `r->pc`). Harness 353/353.
-- **M68kRegisters.pc** (`main.h`, `sheepshaver_glue.cpp`): new `pc` field; initialized from `gpr(24)` in `execute_emul_op`, written back after `EmulOp` — allows EMUL_OP handlers to redirect 68k PC on return.
-- **rom_patches.cpp**: `via_nw901_int` now installs `OP_IRQ_NW` instead of `OP_IRQ`.
+---
 
-### Root cause: still unknown — two suspects
+## M9 blocker: root cause isolated
 
-`SS_NW_VIA_IFR=1` enables TWO things:
-1. **Trampoline tp[25-26]**: writes `[KDP+0x67c]` = `0x68ff6084` (NK cold-init phase)
-2. **ROM patch**: replaces 8 bytes at `0x5000ed08` with `OP_IRQ_NW + rte + nop + nop`
+### What changed since the last HANDOFF
 
-The stall could be caused by either. RECON §8b declared "ROM patch is sole cause" but that was before we verified OP_IRQ_NW never fires. **Next step: isolate.**
+The old HANDOFF listed "two suspects: trampoline tp[25-26] vs ROM patch." That isolation is now
+**done by construction**: tp[25-26] are unconditionally nop in the current code regardless of
+`SS_NW_VIA_IFR`. The only thing `SS_NW_VIA_IFR=1` now does is apply the ROM patch.
 
-### Next-step isolation probe (2 boots, ~5 minutes)
+**Confirmed isolation:**
+- `SS_NW_VIA_IFR=0` → tp=nop, no ROM patch → healthy
+- `SS_NW_VIA_IFR=1 SS_NW_VIA_IFR_ROM_PATCH=0` → tp=nop, no ROM patch → healthy (same as above)
+- `SS_NW_VIA_IFR=1` → tp=nop, ROM patch applied → **stall**
 
-**Step 1 — add a separate gate in `rom_patches.cpp`** (2-line change):
+**The ROM patch is the sole cause.** No further isolation needed.
 
-In `rom_patches.cpp`, find the `via_nw901_int` block (currently gated on `SS_NW_VIA_IFR`).
-Wrap it in a second guard: `getenv("SS_NW_VIA_IFR_ROM_PATCH") != nullptr` (default true when
-`SS_NW_VIA_IFR` is set, but suppressible).
+### What the ROM patch does
 
-**Boot A** — trampoline only: `SS_NW_VIA_IFR=1 SS_NW_VIA_IFR_ROM_PATCH=0`  
-If stall persists → trampoline tp[25-26] is the cause.  
-If healthy → ROM patch is the sole cause.
+In `rom_patches.cpp` `patch_68k()`, when `SS_NW_VIA_IFR=1`:
 
-**Boot B** — ROM patch only (trampoline suppressed): needs a `SS_NW_VIA_IFR_NOTRAMP=1` guard
-around the tp[25-26] writes in `rom_patches.cpp` (~`SS_NW_VIA_IFR` trampoline block).
+```
+Pattern found at 0x5000ed08:  48 e7 f0 f0  76 01 60 26
+                               movem.l d0-d7/a0-a3,-(sp)  moveq #1,d3  bra.s +0x28
+Replaced with:                 fe 79  4e 73  4e 71  4e 71
+                               OP_IRQ_NW  rte  nop  nop
+```
 
-One of the two boots will reproduce the stall cleanly. Fix the guilty part, then verify
-`SS_PROBE_68K=0x5000ed08:5` fires in both boots.
+`fe79` = `M68K_EMUL_BREAK + OP_IRQ_NW` (= 0xfe43 + 54 = 0xfe79).
 
-### Verification criteria (unchanged)
+### What we know about the stall mechanism
 
-- `SS_PROBE_68K=0x5000ed08:5` fires (confirms 68k reached the handler)
-- With `SS_NW_VIA_IFR=1`: dec_expiries recovers to ~2393
+- **OP_IRQ_NW never fires** — the 68k world never reaches 0x5000ed08 under the current gates
+- The stall (`dec_expiries=5`) sets in *before* the 68k interrupt handler would ever run
+- Therefore: the 8 replaced bytes must be **read as data** by PPC boot code before the DEC
+  scheduler goes idle — the NK is likely scanning ROM for a known pattern
+
+### [PROGRESS] signatures
+
+Every `ss-slot-boot.sh` run (which sets `SS_TERM_DUMP=1`) now ends with:
+
+```
+[PROGRESS] program_max=N dr68k=N dec_expiries=N irq_fired=N
+```
+
+| State | Expected |
+|-------|----------|
+| **Stall** (SS_NW_VIA_IFR=1) | `program_max=8 dr68k=1 dec_expiries=5 irq_fired=0` |
+| **Healthy baseline** (no VIA_IFR) | `program_max≥5 dr68k=1 dec_expiries≥40 irq_fired=0` |
+| **M9 done** | `dec_expiries≥200 irq_fired≥1` |
+
+---
+
+## Next step: find what reads 0x5000ed08
+
+The question is: **what PPC code reads those 8 bytes as data, and what does it do with them?**
+
+### Recommended probe (2 boots, ~5 min)
+
+Probe the NK DEC scheduler decision point (`0x5032306c`) — the code that either sets a real
+deadline or `DEC=0x7fffffff` (idle). Compare the task-context cell between stall and baseline:
+
+```bash
+# Boot A — stall: what does the NK see at the scheduling decision?
+SS_NW_VIA_IFR=1 SS_TERM_DUMP=1 tools/ss-slot-boot.sh --label stall-probe --timeout 20 \
+    --env 'SS_PROBE_PC=0x5032306c:r1,r0,[0x68ffd584],[0x68ffd588]'
+
+# Boot B — baseline: same probe, healthy path
+SS_NW_VIA_IFR=0 SS_TERM_DUMP=1 tools/ss-slot-boot.sh --label baseline-probe --timeout 20 \
+    --env 'SS_PROBE_PC=0x5032306c:r1,r0,[0x68ffd584],[0x68ffd588]'
+```
+
+`0x68ffd584` = `[r1-0xa7c]` = the NK task-context cell the scheduler reads to decide whether
+to arm a real deadline or go idle. If it's 0 in the stall boot and non-zero in baseline, that
+confirms the ROM patch is preventing something from writing the task deadline.
+
+### If the probe shows the cell is zero in the stall
+
+The NK failed to initialize a task entry that depends on finding the interrupt handler's address.
+The original first word `0x48e7f0f0` (`movem.l`) is likely the pattern it searches for.
+Next step: search the NK PPC code for a load from ROM range `0x5000e000–0x5001f000` and find
+what it does with the result (likely setting up a task block at `0x68ffd584`).
+
+### Acceptance criteria (unchanged)
+
+- `SS_PROBE_68K=0x5000ed08:5` fires (68k reaches the handler)
+- `[PROGRESS] dec_expiries≥200 irq_fired≥1` with `SS_NW_VIA_IFR=1`
 - Harness 353/353 throughout
+
+---
 
 ## Standing operational notes
 

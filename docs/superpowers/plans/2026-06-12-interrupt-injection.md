@@ -80,6 +80,14 @@ differ.)**
 
 ## ENTRY GATE — the in-flight `inj-s-fixes` task must land green FIRST
 
+**(Rev 2 coordinator update, 2026-06-12: inj-s-fixes is LANDED, review APPROVE —
+`34d3d441` (Execute68k KDP staging) / `3cb3b16e` (DEFER_NATIVE wake-up re-arm) /
+`bf571e26` (close-out). The E-rows now carry published ACTUALS; Task 0's entry check
+verifies against those, not expectations: E1 staged by `34d3d441`; E2 actual = default
+boot **44.4 s to the PROGRAM#5 srr0=0x50324fec park, no P-M5 SIGSEGV**; E3 actual =
+riser-on **delivered_dec=3, pending=0 drained, mtspr_dec=25**; E4 published in the
+`bf571e26` close-out. NOTE the E3 caveat below on `deferred_native` semantics.)**
+
 This plan is **conditioned on** the in-flight task (claim
 `docs/superpowers/.claims/inj-s-fixes.claim`: Q5 items 1+2 — Execute68k KDP staging +
 the DEFER_NATIVE wake-up re-arm). Task 0 does not start until every row below is
@@ -90,7 +98,7 @@ charged to Task 0's budget):
 |---|---|---|---|
 | E1 | `[KDP+0x1074]=0x50480000` + `[KDP+0x1078]=0x50460000` staged (probe `[0x68fff074]/[0x68fff078]` nonzero on a default boot) | its acceptance boot / one probe boot | Execute68k is the engine of OP_IRQ's `TimerInterrupt()` task calls AND of the recon's crash chain; without it the first OP_IRQ kills the boot (recon Q1) |
 | E2 | Default newworld boot survives OP_NAME_REGISTRY: **no SIGSEGV pc=0x100000/lr=0x504ff348**; parks at the boot-2-class frontier (PROGRAM slot=5 srr0=0x50324fec class), not pre-0.2s death | its gated/default A-B boots | every boot in this plan runs past the old crash point |
-| E3 | **`delivered_dec>0` live on the riser-on boot** (`SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1`): the exc= tuple's field 1 nonzero, `deferred_native` no longer terminal-starved at 97-with-zero-delivered (D-7's signature) | its re-arm acceptance boot | the DEFER_NATIVE wake-up is the same edge EXT deliveries will starve on; EXT acceptance is unfalsifiable while delivery itself starves |
+| E3 | **`delivered_dec>0` live on the riser-on boot** (`SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1`): the exc= tuple's field 1 nonzero, `deferred_native` no longer terminal-starved at 97-with-zero-delivered (D-7's signature). **ACTUAL (landed): delivered_dec=3, pending=0 drained, mtspr_dec=25.** ⚠️ **deferred_native SEMANTIC CUTOFF at `3cb3b16e`**: the counter now counts EVERY re-poll (one parked window can contribute 65536+), NOT deferral events — never compare its value across that commit as an event count; this applies to EVERY exc=-tuple comparison in this plan (this row, Task B invariants, Q-I5 baselines) | its re-arm acceptance boot | the DEFER_NATIVE wake-up is the same edge EXT deliveries will starve on; EXT acceptance is unfalsifiable while delivery itself starves |
 | E4 | The **new default-boot frontier signature** published (the inj-s-fixes close-out: term-dump exc= tuple shape, sc-selector census, park signature) | its addendum in INTERRUPT-INJECTION-RECON.md / CHANGELOG | the baseline class every A/B boot in this plan diffs against (Q-I5 starts from it, doesn't re-derive it) |
 
 **If any row is red or absent: HOLD — report to the coordinator; do not start Task 0
@@ -134,7 +142,12 @@ not the mechanism.
   via_int3 jmp @0x16dd6.
 - **The exc= tuple is 7 fields** (delivered_dec / deferred_ee / deferred_depth /
   deferred_native / delivered_sc / delivered_program / delivered_ext — appended LAST,
-  glue :1558–1572). The 7th field prints only when `exc_ext_configured` is set — that
+  glue :1558–1572). **(Rev 2 coordinator update) `deferred_native` is a RE-POLL METER
+  since `3cb3b16e`** — it counts every block-boundary re-poll inside a native window
+  (one parked window can contribute 65536+), NOT deferral events; any cross-commit
+  exc= comparison (entry-gate E3, Q-I5 baselines, Task B invariants) must not read it
+  as an event count, and expectations are bounded as ≤ 65536 × kick-episodes (Q-I4(d)).
+  The 7th field prints only when `exc_ext_configured` is set — that
   conditional is the byte-identical-baseline mechanism; **the new gate must use the same
   idiom** for any new counter.
 - **`SheepExcExtConfigure()` is currently set by SS_NW_PIC bring-up or the
@@ -278,11 +291,29 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   window — with the once-per-edge latch the window is one delivery long, but the
   assert-to-delivery interval still re-polls in every native window it crosses.
   **Deliverable: the expected per-assert `deferred_native` count** (order-of-magnitude,
-  from the D-7 window-length data) — Task B's deferral invariant is restated against
-  THIS number, not E3's DEC-era class. A residue here = Task B's invariant carries an
-  honest unknown, flagged.
+  from the D-7 window-length data; **post-`3cb3b16e` the counter is a re-poll meter —
+  the bound is ≤ 65536 × kick-episodes, never an event count**) — Task B's deferral
+  invariant is restated against THIS number, not E3's DEC-era class. A residue here =
+  Task B's invariant carries an honest unknown, flagged.
   Any deviation from the once-per-edge default (e.g. a DEC-piggyback re-pin making the
   latch moot) requires its own written justification here.
+- [ ] **(Q-I6 — blocks Task A; rev 2 coordinator update, R-II6 sharpened) Should
+  DEFER_NATIVE apply on the published-handler route at all?** The concrete consequence
+  the inj-s-fixes review pinned: a latch landing in a PARKED native window
+  (`[0x2810]=1` that never exits — the post-P-M5 frontier's observed regime) is
+  **undeliverable by design** — kicks re-poll but cannot deliver; EXC_EXTERNAL routing
+  inherits the exact same park unless the fence is narrowed for the published route.
+  The fence's ORIGINAL rationale was the legacy KDP shim (unsafe to enter mid-native-
+  excursion); the 2-SPR published route RETIRED that shim (M3A-ENTRY-TABLE, W2-4
+  step 0). **Deliverable: a written verdict — (i) fence kept as-is on the published
+  route (with the reason the 2-SPR handler still can't tolerate native-window entry:
+  name the state it would corrupt), (ii) fence NARROWED for the published route
+  (delivery permitted in native windows — the design + its riser/SRR1-compose
+  implications), or (iii) fence kept + the host source must guarantee its asserts land
+  outside parked windows (and HOW, given the timer thread can't see [0x2810]
+  transitions).** Static analysis of the 2-SPR handler body vs native-window state is
+  the primary tool; the verdict gates Task A because a kept fence + a parked frontier
+  = zero deliveries regardless of route — the EXT acceptance would be unfalsifiable.
 - [ ] **(Q-I5) The baseline:** confirm E4's published frontier signature reproduces on
   one default boot of our own (`--expect` on its named lines); extend the
   characterization of R-II3 (PROGRAM slot=5 srr0=0x50324fec; the sc 0xffffffff growth)
@@ -290,8 +321,9 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   milestone's quarry.
 - [ ] **Gate (the blocking-answer table):** addendum committed; every answer tagged
   ([STATIC]/[PROBE✓]/[PATCH-fresh]); **Task A blocks on Q-I1 (route verdict) + Q-I2
-  (post targets) + Q-I4 (source mapping + nesting expectation); Task B blocks on Q-I2 +
-  Q-I3; Task C blocks on nothing new** (it consumes A+B). A residue on a blocking
+  (post targets) + Q-I4 (source mapping + nesting expectation) + Q-I6 (the
+  DEFER_NATIVE fence verdict on the published route — rev 2 coordinator update); Task B
+  blocks on Q-I2 + Q-I3; Task C blocks on nothing new** (it consumes A+B). A residue on a blocking
   answer invokes the stop-rule — no improvisation. Budget: the 6-boot cap binds over
   per-question allowances.
 
@@ -383,8 +415,11 @@ frontier (stop-rule 2's shape).
   XLM_IRQ_NEST item — drift is EXPECTED and tolerated this milestone, but a NEW drift
   rate class is a finding); no reset ring; **deferred_native bounded against Q-I4(d)'s
   per-assert expectation (rev 2 A3 — NOT E3's DEC-era class; the host source crosses
-  native windows on a different cadence and the re-arm counts every re-poll)**; DEC
-  cadence stays healthy (mtspr_dec single digits per D-7).
+  native windows on a different cadence, and post-`3cb3b16e` the counter is a re-poll
+  meter — bound ≤ 65536 × kick-episodes, never an event count; the semantic cutoff
+  applies to every exc= comparison here)**; DEC
+  cadence stays healthy (mtspr_dec single digits per D-7, riser-on actual 25 per the
+  landed E3).
 - [ ] Gates: task tier (evidence task — smoke set per the stated-reason rule if zero
   source lines changed). Addendum results section. Commit.
 
@@ -607,6 +642,25 @@ Two rounds (A technical, B process/scope), both verdicts SOUND-WITH-FIXES, folde
   (per-member state/opt-out/retire-or-retain in DIAGNOSTICS + ROADMAP follow-on row);
   `SS_NW_*` census verified by grep: **15 in-tree + SS_NW_HOST_IRQ = 16 with this
   plan**, flagged as a re-score #3 input.
+
+**Coordinator update (2026-06-12, post-fold — inj-s-fixes LANDED, review APPROVE
+`34d3d441`/`3cb3b16e`/`bf571e26`; commits verified in-tree):**
+- **deferred_native semantic cutoff at `3cb3b16e` (supports A3):** the counter is now a
+  re-poll meter (one parked window can contribute 65536+), not an event count. The
+  cutoff commit is now stated at every exc=-tuple comparison site: entry-gate E3, the
+  Codebase-facts tuple bullet, Q-I4(d)'s expectation (bound ≤ 65536 × kick-episodes),
+  and Task B's deferral invariant.
+- **Q-I6 added (BLOCKS Task A; R-II6 sharpened):** should DEFER_NATIVE apply on the
+  published-handler route at all? Latches landing in a parked native window
+  ([0x2810]=1 never exiting) are undeliverable by design — kicks re-poll but cannot
+  deliver — and EXT routing inherits the same park unless the fence is narrowed; the
+  fence's original rationale (the legacy KDP shim) is retired on the 2-SPR route.
+  Verdict options (keep-with-reason / narrow / keep-plus-assert-placement-guarantee)
+  pre-stated; the blocking-answer table updated.
+- **Entry gate re-graded LANDED with actuals:** E1 staged (`34d3d441`); E2 = 44.4 s
+  default boot to the PROGRAM#5 srr0=0x50324fec park, no P-M5 SIGSEGV; E3 = riser-on
+  delivered_dec=3, pending=0 drained, mtspr_dec=25; E4 = the `bf571e26` close-out.
+  Task 0's entry check verifies against these actuals.
 
 **Falsified findings:** none — every finding's substance verified against source/docs.
 Corrections found while verifying (recorded above): A2's macos_util.h line number is

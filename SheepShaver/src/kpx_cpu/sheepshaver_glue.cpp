@@ -3481,6 +3481,18 @@ void HandleInterrupt(powerpc_registers *r)
     
 #if INTERRUPTS_IN_EMUL_OP_MODE
 	case MODE_EMUL_OP:
+		// M8 Task B (M7 Task C disposition 2, named for "the slot-4 consumption
+		// work"): fence the MODE_EMUL_OP Execute68k injection arm on newworld
+		// when the consumption machinery is armed. With the real consumption
+		// rail live (NK post -> DR slot-4/level-1 poll -> via_int chain on the
+		// JIT path), a host-side nested Execute68k of the interrupt proc
+		// mid-EMUL_OP is the redundant paravirtual injection path - it races
+		// the guest's own consumption of the same posted event and runs the
+		// via_int chain in a nested-execute excursion (probe-blind, Q-I4-class
+		// confusion). Same gate as the rest of this milestone's machinery
+		// (default OFF, flip-last at Task C); paravirtual byte-identical.
+		if (MachineProfileIsNewWorld() && ExcIrqConsumeEnabled())
+			break;
 		// 68k emulator active, within EMUL_OP routine, execute 68k interrupt routine directly when interrupt level is 0
 		if ((ReadMacInt32(XLM_68K_R25) & 7) == 0) {
 #if EMUL_TIME_STATS

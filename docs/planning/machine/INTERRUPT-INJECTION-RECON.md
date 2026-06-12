@@ -608,3 +608,51 @@ cost Q-C1 one extra boot (3 boots on Q-C1 vs the ≤2 cap; capture succeeded on 
   instr-hardening (see their addendum above) — not relied on here (no SS_PROBE_LINEAR used).
 - New instrument lesson for the house: the `--env` whitespace-split (see instrument note) —
   worth a README-slots line.
+
+## Slot-4 consumption Task B (M8, 2026-06-12, label s4tb) — the round trip advanced FIVE legs live (post → Q-C3 staging → drain → slot-4 twi → 68k level-1 handler) and stops at the VIA-IFR dispatch: the handler rte's source-less, the post is never retired, Ticks not guest-claimed
+
+Commits: `02a0b74e` (Q-C3 fix), `17e0d071` (ticks_keepset census), `377edbf6`
+(MODE_EMUL_OP fence), `e6824327` (re-pin: starvation backstop kick). Boots counted
+**5 of ≤5**: b1 `20260612-062232` (edge-miss, no engagement), b2 `-063150` (EXT +
+post + staging proven; watch budget exhausted at the post trip), b3 `-063725`
+(edge-miss; sentinel-init fact), b4 `-063939` (staging→drain→slot-4 twi proven; the
+starvation falsification), b5r `-064659` (re-pin verification; SIGSEGV late,
+post-evidence). Disclosed, not counted: b5 `-064535` (edge-miss pre-engagement;
+re-run once per the pre-engagement protocol).
+
+### The round-trip chain as observed (b4/b5r, env-on cluster + SS_NW_IRQ_CONSUME=1)
+
+| # | Leg | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Host EXT edge → delivery | ✓ (one-shot) | `EXT delivered #1: restart=500ed8ec` (b5r: same); **edge is a knife-edge race** — 3/6 env-on boots never got it (the ticker fires only while XLM_IRQ_NEST==0; nest drifts; named residue below) |
+| 2 | NK from-emulator post | ✓ | watch `68fff070=80010000` @50325520, attributing block `50325520->502fd280` = the Q-C3 detour live |
+| 3 | **Q-C3 staging (the fix, 02a0b74e)** | ✓ | `[PROBE 0x502fd280 visit=1] r13=… r28=0x00008001 r31=0x00e00000`; watch `[KDP-0x440]=00e00000` + `[KDP-0x43c]=8001` one record later (stub @0x2fd280, donor-mirror incl. task-flag 0x10) |
+| 4 | Scheduler-restore drain 0x324720 | ✓ | watch @0x503246b0 mask→0, @0x50324734 halfword re-posted + sentinel ffff reset (records #3568082-84, ~70 records after staging) — **the arm now survives ctx-reloading exits** (Q-C3's defect closed; also closes shape B's lost-arm mechanism) |
+| 5 | **Slot-4 twi (the re-graded PROGRAM#4 gate)** | ✓ | `PROGRAM delivered: srr0=5046e8d0 word=0fff0004 slot=4 lr=5046c4f4` — fires right after the drain |
+| 6 | Latch fire / no starvation (re-pin e6824327) | ✓ post-re-pin | b4 falsified Task A's "kick guaranteed": `deferred=1434126 fired=0 latch=1`, VCLK `pending=1` (the latched edge IS the DEC's own delivery; EXT one-shot) — the 60 Hz backstop kick cures it: b5r VCLK `pending=0`, scheduler-quantum mtspr writes resumed, `deferred_ee=121` healthy |
+| 7 | 68k level-1 handler runs | ✓ | r24 ring (b5r): repeated `5000ed0a…5000ee82…5000eecc(rte)` passes at the 60 Hz cycle; `delivered_program=48626` = the slot-4 re-trap loop while unretired |
+| 8 | VIA-source dispatch → 60 Hz proc → OP_IRQ retire | **✗ — THE NEXT FRONTIER** | the handler's source dispatch (`bclr d6,(a4); beq; movea.l $6e4.w,a0; jsr (a0)` @0x5000ee9a, rte @0x5000eecc [RAW-ROM, m68k-dis]) finds NO VIA IFR source in the via6522 model and rte's source-less; PROBE68K 0x5000bbca = 0 matches; post still `80010000` at obs=1e7; the un-retired post re-traps slot-4 at ~1.2k/s |
+| 9 | Multi-edge (edges past 1) | ✗ structurally pre-WLSC | retirement's deassert half (`ClearInterruptFlag`→`SheepExcHostIrqDeassert`) is HasMacStarted-gated (emul_op.cpp OP_IRQ head; Q-I4) — the plan's gate (c) presumed a cycle that cannot close pre-WLSC; recorded as a plan-gate flaw, not a code falsification |
+| 10 | TICKS RIDER | **NOT guest-claimed** | the 60 Hz 0x16c movement is the host keep-set (b4: 16c=0x000b == `ticks_keepset=11` exactly; b5r 60 Hz era = ticker keep-set class); the chain stops at leg 8 before the 60 Hz proc — per the rider's fallback clause, the stop site IS the recorded frontier: **the via6522 model's IFR never presents the 60 Hz source bit to the 68k dispatch** |
+
+### Verdict and stop (stop-rule 2)
+
+Consumption machinery (this milestone's scope) is GREEN end-to-end: post → staging →
+drain → slot-4 service → world switch → 68k handler execution, repeatably at 60 Hz.
+The chain dies on the NEXT surface — a device-model gap (VIA IFR source bit), not
+slot-4 consumption machinery. Per stop-rule 2: captured, nothing built for it.
+Retirement (leg 8) and the multi-edge invariant (leg 9) remain RED pending that
+frontier + WLSC respectively.
+
+### Residue / census
+
+- **EXT-edge one-shot flakiness (NEW, named)**: 3/6 env-on boots never saw the edge
+  (b1/b3/b5: `edges=0`, ticks_keepset=0 — the 60 Hz ticker's `XLM_IRQ_NEST==0` exact
+  test never sampled true). Feeds Task C's flip-criteria item (a) (EXT-only strand).
+- **0x500eXXXX pre-engagement DEC-crash class (Task A's 3/7)**: 0/6 recurrence this
+  task. Stays open as named (R-II9 cross-reference per the coordinator's note).
+- **NEW late-SIGSEGV (b5r)**: one instance, post-evidence, during the 60 Hz slot-4
+  cycle era — host pc 0x125382ef8, ea=0x4000010020c8 (RAM 0x10020c8); not the
+  0x500eXXXX class; unreproduced; recorded only.
+- Shape A/B/C: none formed post-fix in any engaged boot (b2/b4/b5r) — shape B's
+  config-discovery boot is moot (its mechanism is closed by leg 4's evidence).

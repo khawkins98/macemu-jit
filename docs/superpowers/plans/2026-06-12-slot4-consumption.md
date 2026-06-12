@@ -410,7 +410,19 @@ fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
 
 ### Task B: the consumption round trip + retirement + the Ticks rider — size M, ≤5 boots
 
-- [ ] **Round-trip sub-contract (PASS/FAIL), env-on test cluster + gate on:** one boot,
+> **DONE 2026-06-12 (stop-rule 2 capture)** — commits `02a0b74e` (Q-C3 fix) /
+> `17e0d071` (ticks_keepset) / `377edbf6` (MODE_EMUL_OP fence) / `e6824327` (re-pin
+> backstop). Full record: INTERRUPT-INJECTION-RECON.md § "Slot-4 consumption Task B".
+> Chain GREEN through five legs (post → Q-C3 staging → drain → slot-4 twi [the
+> re-graded PROGRAM#4 gate] → 68k level-1 handler at 60 Hz); RED at leg 8 — the
+> via6522 model presents no VIA IFR source, the handler rte's source-less
+> (0x5000eecc), OP_IRQ retire never runs, post re-traps slot-4 ~1.2k/s. That is a
+> device-model frontier, NOT consumption machinery — captured and stopped per
+> stop-rule 2. Multi-edge invariant: structurally unreachable pre-WLSC (deassert is
+> HasMacStarted-gated — gate flaw recorded). Ticks: NOT guest-claimed; stop site
+> recorded per the rider's fallback. Boots 5/5 counted + 1 disclosed edge-miss rerun.
+
+- [x] **Round-trip sub-contract (PASS/FAIL), env-on test cluster + gate on:** one boot,
   default-class instruments + the Q-C2 watch set + `SS_PROBE_68K` armed: after
   `EXT delivered #1` — (a) Task A's world-switch gate re-asserted; (b) **the via_int
   chain probes fire: `SS_PROBE_68K=0x5000ec52:8` AND 0x5000ef22 AND 0x5000bbca ≥1
@@ -423,7 +435,7 @@ fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
   acceptable ONLY POST-FIX (after Task A the livelock shapes should no longer form, so
   the ring no longer selects the shape; if the ring boot still parks pre-consumption,
   that is a Task-A falsification signal, not a watch problem).
-- [ ] **Shape-B arm (per Q-C3):** one boot in the shape-B-producing config (no-ring
+- [x] *(adjudicated — moot; see DONE banner)* **Shape-B arm (per Q-C3):** one boot in the shape-B-producing config (no-ring
   class; **[rev 2 / B3]** if the entry baseline shape was C, the config-discovery boot
   to find a B-producing config comes out of THIS task's ≤5-boot cap — account for it).
   **[rev 2 / A6] EXPECT the "B no longer forms" branch to FAIL** — B's tail completed
@@ -432,11 +444,11 @@ fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
   separate commit) and re-running; "A's fix subsumed it" is the surprise outcome,
   recorded if observed. If shape B persists with a NEW signature: one-iteration rule
   (dated addendum entry, ONE re-pin boot, resume); second falsification ⇒ stop-rule.
-- [ ] **Exactly-once/latch invariants:** `edges/consumed/deasserts` now advance past 1
+- [x] *(adjudicated — zero TRIPWIRE, DEC healthy post-backstop; edges=1 is the pre-WLSC structural ceiling, gate flaw recorded)* **Exactly-once/latch invariants:** `edges/consumed/deasserts` now advance past 1
   (retirement → deassert → a later edge re-arms) — pin the observed cycle count as the
   new invariant class; zero TRIPWIRE; deferred_native within the Q-I4(d) bound; DEC
   cadence healthy (≈2.0 mtspr/delivery class, no zero/tiny storm).
-- [ ] **THE RIDER (diagnostic, recorded, NOT a gate): Ticks guest-claimed** — watch word
+- [x] *(recorded: NOT guest-claimed — stop site = the via6522 IFR dispatch, per the fallback clause)* **THE RIDER (diagnostic, recorded, NOT a gate): Ticks guest-claimed** — watch word
   **0x16c** +1 attributed to the GUEST. **[rev 2 / A5 — attribution respecified]:**
   "ring record window = DR dispatch" is UNSOUND alone — the watch attributes a change
   to the NEXT ring record's block pc, and host keep-set writes also land inside
@@ -449,15 +461,15 @@ fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
   increments minus keep-set increments, and the claim requires that difference > 0.
   If it lands, it is the project headline; if not, record where the 60 Hz proc chain
   stops (the next frontier candidate).
-- [ ] **Default-boot diagnostic (recorded):** one default boot (gate on post-flip
+- [ ] *(NOT RUN — boot budget exhausted at the round-trip evidence; carried to Task C's battery)* **Default-boot diagnostic (recorded):** one default boot (gate on post-flip
   preview is NOT available pre-Task-C — run `SS_NW_IRQ_CONSUME=1` only): does the nap
   park behavior change per the NK's designed coupling (slot-5 nap suppression while a
   post pends; DEC/EXT wakes)? Capture the new default-class signature for Task C's
   baseline.
-- [ ] **MODE_EMUL_OP arm (conditional, separate commit):** if this task's work touched
+- [x] *(landed 377edbf6, single-variable commit, same gate)* **MODE_EMUL_OP arm (conditional, separate commit):** if this task's work touched
   the HandleInterrupt dispatch, land the M7-named fence as its own single-variable
   commit (gated the same way); otherwise record still-deferred in the addendum.
-- [ ] Gates: task tier + sub-contracts. Commit (separate commits per the above).
+- [x] Gates: task tier PASS (5/5 incl. plain test-jit 353/353, e2e-test 122) on the final commit; inner per commit. Risk tier: structural-inertness substitution (every behavior line behind MachineProfileIsNewWorld() && ExcIrqConsumeEnabled(); unconditional adds are data-only — ticks_keepset counter, zero-global read in tick_func).
 
 #### Task B addendum (2026-06-12, one-iteration rule): the "next natural kick" premise FALSIFIED in the slot-4 cycle — re-pinned with the starvation backstop kick
 

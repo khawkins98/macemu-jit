@@ -11,6 +11,38 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] feat: M8 slot-4 consumption Task B — the Q-C3 from-emulator post staging fix + the starvation backstop; round trip live through the slot-4 twi and the 68k level-1 handler
+
+Commits `02a0b74e` / `17e0d071` / `377edbf6` / `e6824327`, all gated
+`MachineProfileIsNewWorld() && SS_NW_IRQ_CONSUME` (default OFF, flip-last at Task C).
+
+- **Q-C3 fix (`02a0b74e`, rom_patches.cpp)**: the NK from-emulator interrupt-post leg
+  (0x325520) ORed the CR arm into the volatile working r13 only — any ctx-reloading
+  exit discarded it (Task-0 Q-C3; shape B's lost arm). The leg now detours through a
+  12-word patch-space stub (0x2fd280) that also stages the NK's own deferred-post pair
+  (`[KDP-0x440]`/`[KDP-0x43c]`) + task-flag 0x10, mirroring the NK's deferred leg
+  (donor 0x325668–0x32568c) word-for-word. Verify-EXPECTED-first (exact 6-word match,
+  GUARDED-SKIP banners). Live-proven: staging → scheduler-restore drain (0x324720) →
+  **the slot-4 twi fires** (`PROGRAM srr0=5046e8d0 word=0fff0004 slot=4` — the
+  re-graded PROGRAM#4 gate) → the 68k level-1 handler executes at 60 Hz.
+- **Starvation backstop (`e6824327`, main_unix.cpp, one-iteration-rule re-pin)**:
+  Task A's "next natural kick" premise falsified live (boot s4tb-b4:
+  `deferred=1.43e6 fired=0`, the latched edge WAS the DEC's own delivery and the EXT
+  edge is one-shot pre-WLSC). The 60 Hz tick thread now re-kicks `TriggerInterrupt()`
+  while the deferred-edge latch is set — a poll kick, fake-poke fence untouched.
+- **MODE_EMUL_OP fence (`377edbf6`)**: the M7-named carried item, landed
+  single-variable; the host-side nested Execute68k injection arm is fenced under the
+  same gate.
+- **ticks_keepset census (`17e0d071`)**: host keep-set Ticks(0x16a) increments counted
+  and printed in the `[IRQ-CONSUME]` dump — the Ticks-rider confounder census.
+- **Honest remainder (stop-rule 2 capture)**: the 68k handler rte's source-less at
+  0x5000eecc — the via6522 model presents no VIA IFR source bit, so the 60 Hz proc /
+  OP_IRQ retire never runs and the post re-traps slot-4 (~1.2k/s). Next frontier =
+  device-model (VIA IFR), not consumption machinery. Ticks NOT guest-claimed (the
+  60 Hz movement is the host keep-set — census-proven). Named residue: the EXT edge
+  one-shot is a knife-edge race (3/6 env-on boots never engaged). Full record:
+  INTERRUPT-INJECTION-RECON.md § "Slot-4 consumption Task B".
+
 ### [SheepShaver] feat: M8 slot-4 consumption Task A — rfi-atomicity emulation (deferred EE-edge latch, `SS_NW_IRQ_CONSUME`, default OFF)
 
 The shape-A restore-tail livelock (slot5-recon R-II10; Task-0 fork-(iii)) is patch-created

@@ -11,6 +11,28 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver][docs] M7 Task B — consumption round trip verified to its break link: the NK post fires on host-sourced EXT deliveries, the round trip dies at the post's zero-level test; Ticks unmoved (verify-don't-build, zero source changes)
+
+Interrupt-injection milestone Task B (plan "Task B results" + the recon's "M7 Task B"
+addendum). 4 slot boots, env-on. **PROVEN LIVE:** host edge → `EXT delivered #1` →
+the [KDP+0x5b0] fallback service body (its `[KDP+0xe80]` entry counter incremented
+delivery-adjacent and for nothing else all boot — the watch discriminator) → the 68k
+post body 0x3254e0 (r23=0x68fff070, r7 from-emulator bit SET, skip leg zero visits).
+**THE BREAK LINK, instruction-pinned:** at the current frontier the posted level r28=0
+(R-II7 — PIC IACK unmapped + lowmem 0x3f00 table zero), and at r28=0 the post stores
+0x0000 (a value-invisible write — the change-detecting watch on 68fff070 is
+structurally blind to it, instrument fact recorded) and actively CLEARS the
+emulator-CR interrupt bits (`and r13,[KDP+0x678]`) — the DR dispatch poll gets a null
+signal, via_int/OP_IRQ/Ticks never run (`SS_PROBE_68K` 0 matches ×2 boots; Ticks=0;
+`[0xcfc]` pre-WLSC throughout). Per the coordinator re-grade this is the "dies exactly
+at the level test" branch: the **level-source staging proposal** (the two guest-init
+words `[[KDP-0x20]+0xf18]` + `[0x3f00+vector]`, trampoline-staged-constant class, not
+the fenced fake-poke) is written in the recon addendum and the task STOPPED for
+sign-off. Invariants green: zero tripwires ×4, exactly-once re-proven, deferred_native=0,
+DEC/sc/program censuses at baseline class. New named anomaly R-II9: `SS_PROBE_LINEAR=1`
+env-on boots crashed 2/2 (vs 0/2 without) — the instrument is suspect under the
+delivery regime. Doc-only commits (no gates per the stated-reason rule).
+
 ### [SheepShaver] M7 Task A — the FIRST host→guest interrupt delivered through the guest's own exception path (`b124556f`)
 
 Interrupt-injection milestone Task A

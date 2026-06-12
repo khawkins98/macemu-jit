@@ -272,3 +272,82 @@ run (manifest OK pre-recon); fresh post-PatchROM dump taken boot 1 (`/tmp/rom901
   at the frontier and grows per fallback entry — the NK interrupt queue area is uninitialized
   pre-guest-init; harmless to the post path (all legs converge on the post), noted for any
   future fallback-behavior reasoning.
+
+## M7 Task B — the consumption round trip (2026-06-12, label m7-taskB; verify-don't-build, zero source changes)
+
+Plan + per-gate verdicts: `docs/superpowers/plans/2026-06-12-interrupt-injection.md`
+"Task B results". Boots 4 of ≤5 (slot0 runs 20260612-025958.16193 / -030445.16716 /
+-030701.16951 / -030924.17181), all env-on. Summary: **host EXT delivery → fallback →
+post is LIVE; the round trip dies at the NK post's level test (r28=0); via_int/OP_IRQ/
+Ticks never entered — the coordinator re-grade's staging-decision branch applies and
+this task STOPPED for sign-off.**
+
+### Evidence (the four boots)
+
+- **Write-EVENT at 0x68fff070 following a host-sourced EXT delivery — ESTABLISHED**
+  [PROBE✓+STATIC]: boot 4 (`SS_JIT_WATCH_ADDR=68fff070,168,68ffee80`) shows, in stderr
+  order: `EXT pending ASSERTED (edge #1)` → `EXT delivered #1 restart=50494400 →
+  entry=50314880` → EXT-entry probe `[0x68ffee80]=1` → `[WATCH] pc=50325f38
+  addr=68ffee80 value=2 (was 1, record #3629854, sp=68ffe000)` — the fallback body's
+  entry counter [KDP+0xe80] incremented exactly once, immediately after the delivery,
+  and at NO other point between init (record #4529) and the delivery despite thousands
+  of DEC/SC/PROGRAM deliveries: the fallback traversal is uniquely EXT-coupled. All
+  fallback exit legs converge on the post 0x3254e0 (Task 0 [STATIC]); the gate-fail
+  skip leg 0x5032562c had ZERO visits in all 4 boots; post-block entry observed
+  r23=0x68fff070 r28=0 r7=0x00a80000 (bit 0x00200000 SET).
+- **The graded watch on 68fff070 is structurally BLIND at this frontier** (instrument
+  fact, recorded for future graders): the post's `sth r28,0(r23)` stores 0x0000 over
+  0x0000 and SS_JIT_WATCH_ADDR is a change detector — a zero-level post can never trip
+  it. Write-event grading at zero level needs the fallback-counter discriminator
+  (68ffee80) or a post-block probe, as used here.
+- **The level test is the break link** [STATIC, /tmp/rom901_fresh_task0.bin @0x3254e0]:
+  `cmpwi cr7,r28,0` → `beq cr7,0x50325504` skips `ori r28,r28,0x8000` AND the
+  `[KDP+0x674]` mask load (r31 stays 0); the sth stores 0; `bgt cr7` not-taken executes
+  `and r13,r13,[KDP+0x678]` (=0xff9fffff) — at level 0 the post CLEARS the emulator-CR
+  interrupt bits 0x00600000 rather than setting them. Pending halfword AND CR arm are
+  both null ⇒ the DR dispatch poll has nothing to consume.
+- **68k chain never entered** [PROBE✓]: `SS_PROBE_68K=0x5000ec52:8` (boot 1) and
+  `0x5000bbca:8` (boot 4) — 0 matches in 59 s each. **Ticks did not move** (watch 0x168
+  silent post-init; `[0x168]`=0 at delivery and at term). `[0xcfc]`=0xffffffff (pre-WLSC)
+  every boot.
+- **Invariants** [PROBE✓]: zero TRIPWIRE lines ×4 boots; `host-irq: edges=1 consumed=1
+  deasserts=0 pending=0` (exactly-once re-proven); deferred_native=0 (boots 2/3 crash
+  tuples); nest `[0x2818]` −59/−60 (expected drift class); DEC mtspr/expiry pair
+  7fffffff@503230e4 / ffffffff@503230e8 (Task A's healthy class); sc/program census
+  identical to E4 (16 distinct, 0xffffffff x233, PROGRAM#5 srr0=50324fec slot=5).
+- **Anomaly R-II9 (named): SS_PROBE_LINEAR=1 under the env-on regime crashed 2/2**
+  (SIGTRAP guest pc=0x50460c00; SIGSEGV guest pc=0x500e708c ea=0x55590000 after 5
+  same-block DEC restarts) vs 0/2 without it, all else equal. Precedent class: W2-2's
+  one-off SIGTRAP@0x5046dc1c. SS_PROBE_LINEAR is suspect under env-on until cleared;
+  do not burn re-pin boots on crashes that correlate with it.
+
+### The level-source staging PROPOSAL (dated addendum for coordinator sign-off — NOT implemented)
+
+Per the Task-B re-grade: the round trip provably dies at the level test, so the staging
+decision is now live. Proposal, for sign-off only:
+
+- **The two words** (both guest-init-owned, both zero at the frontier — R-II7):
+  1. `[[KDP-0x20]+0xf18]` — the NK-held PIC virtual base; until set, the fallback's
+     IACK `lwbrx` never reaches the PIC model (pic stats i:0 across 68M deliveries).
+  2. `[0x3f00+vector]` — the lowmem vector→level table the post's `lbz r28` reads
+     (observed `[0x3f24]=0`).
+- **Who owns them on a real boot:** Mac OS's native interrupt init (the MPIC driver /
+  Interrupt Manager during InitInterrupts) writes both — they are init-time PLATFORM
+  CONSTANTS, not per-interrupt event state.
+- **Why staging them is not the fake-poke pattern:** the fenced fake-poke writes the
+  EVENT (pending halfword / CR bits) from the host per-interrupt, bypassing the NK
+  chain. Staging these two words writes configuration once, cold-start (trampoline
+  time), after which EVERY interrupt still traverses PIC-IACK → vector table → NK post
+  level test → 68k chain — the same class as the sanctioned trampoline-staged globals
+  `[KDP+0x1074/0x1078]` (Execute68k pair) and `[KDP+0xf2c]` (TimebaseSpeed).
+- **The open design wrinkle sign-off must resolve:** the host-irq latch deliberately
+  bypasses the PIC (Q-I4/A5), so an IACK on a host-sourced delivery has no asserted PIC
+  source to return a vector for. Either (i) the host source additionally asserts a
+  reserved PIC source (joining the device rail early — IACK then returns its real
+  vector, level read from the staged table), or (ii) the PIC model synthesizes a
+  designated vector on IACK when the host latch armed the delivery (smaller, but a
+  model fiction). Both shapes are S-sized; neither is authorized until signed off.
+- **If sign-off declines:** the milestone ships per stop-rule 2 / Rev 2 B6 —
+  delivery+post green pre-WLSC, consumption NOT-REACHED named as the next frontier
+  (the level inputs are then simply part of "guest interrupt init", owned by whatever
+  milestone first runs Mac OS's native interrupt init).

@@ -389,22 +389,22 @@ storm. The milestone may ship green on the pre-warm-start set with the post-warm
 set honestly NOT-REACHED — that outcome is acceptable and is recorded as the named
 frontier (stop-rule 2's shape).
 
-- [ ] **Post observed (PASS/FAIL):** `SS_JIT_TRACE_RING=1 SS_JIT_WATCH_ADDR=<Q-I2
+- [x] **Post observed (PASS/FAIL):** `SS_JIT_TRACE_RING=1 SS_JIT_WATCH_ADDR=<Q-I2
   resolved target, hex no-0x>` — the NK's post writes the pinned value class
   (`level|0x8000`) at delivery cadence; writer PC = the post site, not host code
   (**the fake-poke staying fenced is itself a gate: zero host-side writers**).
-- [ ] **via_int → OP_IRQ (PASS/FAIL):** `SS_PROBE_68K=<Q-I3 entry PCs>` fires in the
+- [x] **via_int → OP_IRQ (PASS/FAIL):** `SS_PROBE_68K=<Q-I3 entry PCs>` fires in the
   pinned order; OP_IRQ executes (EMULOP counter / one-shot counter at the fe6b site);
   the pending-word clear observed (the :812 write — pre-warm-start-reachable).
   *Conditional sub-gate (post-warm-start only, per the regime split above):*
   `InterruptFlags` consumed — the host level retires after OP_IRQ (assert edges paired
   with deasserts; no monotonic pending).
-- [ ] **TimerInterrupt → Execute68k (PASS/FAIL — conditional, post-warm-start only per
+- [x] **TimerInterrupt → Execute68k (PASS/FAIL — conditional, post-warm-start only per
   the regime split):** the task-proc call observed
   (`SS_PROBE_68K=0x5000bbba` per the +2 fetch idiom — the probe that NEVER fired in
   recon boots 1/2) and RETURNS (no recon-Q1 crash class; E1's staging carrying the
   load).
-- [ ] **The item-4 rider — Ticks (DIAGNOSTIC headline, recorded not gated):**
+- [x] **The item-4 rider — Ticks (DIAGNOSTIC headline, recorded not gated):**
   `[0x168]` probe / watch on 0x168: does `Ticks` (0x16a) advance under sustained
   deliveries? If yes — the recon's "falls out for free" verified; record the rate vs
   60 Hz. If no — capture the exact break link (post seen? OP_IRQ ran? TimerInterrupt
@@ -412,7 +412,7 @@ frontier (stop-rule 2's shape).
   and name it; **a broken link here is a finding, not a license to build — the
   one-iteration rule applies if a pinned Q-I3 contract was falsified, else it is the
   next frontier.**
-- [ ] **Invariant carry-over (PASS/FAIL):** nest drift `[0x2818]` recorded (the deferred
+- [x] **Invariant carry-over (PASS/FAIL):** nest drift `[0x2818]` recorded (the deferred
   XLM_IRQ_NEST item — drift is EXPECTED and tolerated this milestone, but a NEW drift
   rate class is a finding); no reset ring; **deferred_native bounded against Q-I4(d)'s
   per-assert expectation (rev 2 A3 — NOT E3's DEC-era class; the host source crosses
@@ -421,8 +421,11 @@ frontier (stop-rule 2's shape).
   applies to every exc= comparison here)**; DEC
   cadence stays healthy (mtspr_dec single digits per D-7, riser-on actual 25 per the
   landed E3).
-- [ ] Gates: task tier (evidence task — smoke set per the stated-reason rule if zero
-  source lines changed). Addendum results section. Commit.
+- [x] Gates: task tier (evidence task — smoke set per the stated-reason rule if zero
+  source lines changed). Addendum results section. Commit. **(As run: ZERO source lines
+  changed — doc-only commits, no gates per the stated-reason rule. Verdicts in "Task B
+  results" below; the round trip dies at the NK post's level test — the re-grade's
+  staging-decision branch applies, STOPPED for sign-off.)**
 
 ### Task C: acceptance + the flip cluster (flip LAST, revert-on-red) + dispositions — size S, ≤4 boots
 
@@ -441,6 +444,18 @@ frontier (stop-rule 2's shape).
   6-words-not-4 P3 note (inert today only because fresh-process RAM is zero — re-verify
   or fix before the flip makes the stub path default-reachable). Both verified-or-landed
   ⇒ checklist green; either open ⇒ the flip HOLDS.
+  **(Task-A-review carry-forwards, added 2026-06-12 per coordinator relay during
+  Task B — two more named checklist items:)** (3) **the latent lost-edge race (P2,
+  main_unix.cpp:2850–2851)**: ClearInterruptFlag's zero-check and Deassert are
+  non-atomic — the interleaving (Clear reads flags==0 → Set: or+Assert+kick → Clear:
+  Deassert) retires a fresh edge; the kick then finds Pending()==0 and one post is
+  silently lost until the next post. Unreachable today (OP_IRQ's Clear is
+  HasMacStarted-gated) but fix-or-verify before the flip; fix shape: re-check
+  `InterruptFlags!=0` after Deassert and re-Assert+kick. (4) **tripwire-counter
+  masking note (P3)**: `SheepExcHostIrqAssert` resets the shared episode counters
+  `exc_ext_delivs_this_assert`/`exc_dec_delivs_while_ext` — with host+PIC co-armed a
+  host edge can mask the PIC runaway tripwire; host-only flip may record it as
+  accepted-with-note, any co-armed default state requires the fix.
 - [ ] **THEN the flip decision (the cluster, explicitly):** flipping `SS_NW_HOST_IRQ`
   to the newworld default REQUIRES `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` flipped
   with it (the routing is meaningless without delivery) — this is the flip W2-4
@@ -800,3 +815,101 @@ exc-vector lane 14/14 with the new H9. No pinned contract falsified.
   write-event grading stand, deliveries interrupt native-window contexts
   (restart=50318018/mirror-region) where the post's r7-bit-0x00200000 precondition
   was proven, and [0xcfc] remains pre-WLSC (regime split applies as written).
+
+## Task B results (2026-06-12, label m7-taskB) — VERIFY-DON'T-BUILD, zero source changes; the round trip dies at the NK post's LEVEL TEST → re-grade staging branch, STOPPED for sign-off
+
+Boots: **4 of ≤5** (slot0 `20260612-025958.16193` watch+log-probes, `20260612-030445.16716`
+linear-probe CRASH, `20260612-030701.16951` linear-probe CRASH, `20260612-030924.17181`
+the clincher — fallback-counter watch discriminator). All env-on
+(`SS_NW_EE_RISER=1 SS_NW_DEC_PUBLISHED=1 SS_NW_HOST_IRQ=1`). Full evidence + the
+level-source staging proposal: INTERRUPT-INJECTION-RECON.md "M7 Task B — the consumption
+round trip". No pinned contract falsified; one instrument anomaly named (below).
+
+**THE TICKS VERDICT: Ticks did NOT move** (`[0x168]`=0 at delivery, watch on 0x168 silent
+after the three boot-init writes, both watch boots, 59 s each). **The break link, pinned
+to the instruction: the NK post's level test at r28=0** — at 0x503254ec `beq cr7`
+(level==0) skips the `ori r28,r28,0x8000` AND the `[KDP+0x674]` CR-mask load (r31 stays
+0), the `sth r28,0(r23)` then stores 0x0000 over 0x0000, and `bgt cr7` not-taken runs
+`and r13,r13,[KDP+0x678]` — at level 0 the post actively CLEARS the emulator-CR interrupt
+bits instead of setting them [STATIC, fresh dump]. The signal to the DR emulator is
+structurally null; everything downstream (via_int, OP_IRQ, pending-word clear,
+TimerInterrupt, Ticks) is unreachable at this frontier as the REAL chain's correct
+behavior pre-guest-init (R-II7), not a bug.
+
+**Per-gate verdicts (re-graded gate set):**
+- **Post observed (write-EVENT grading) — PASS.** Boot 4 sequence, stderr-adjacent:
+  `EXT pending ASSERTED (edge #1)` → `EXT delivered #1 … entry=50314880` → entry probe
+  `[0x68ffee80]=1` → `[WATCH] pc=50325f38 addr=68ffee80 1→2 (record #3629854, sp=68ffe000)`
+  — the [KDP+0x5b0] fallback service body entered immediately after the host-sourced
+  delivery, and its entry counter incremented for NOTHING ELSE all boot (init #4529 →
+  delivery #3629854: zero increments across thousands of DEC/SC/PROGRAM deliveries —
+  uniquely EXT-coupled). All fallback exit legs converge on the post 0x3254e0 (Q-I1
+  [STATIC]); the gate-fail skip leg 0x5032562c had ZERO visits in all 4 boots; the
+  post-block entry state observed live: r23=0x68fff070, r28=0, r7=0x00a80000 (bit
+  0x00200000 SET). **Instrument note, honest:** the graded watch on 68fff070 itself is
+  structurally BLIND here — the sth stores 0x0000 over 0x0000 and the watch is a change
+  detector; the write event is carried by the fallback-counter discriminator + the
+  static all-legs-converge fact + Task 0's live post-body proof. **Zero host-side
+  writers of 68fff070 (fake-poke fence): PASS** — no [WATCH] hit on it from any code,
+  host or guest, either watch boot.
+- **Level diagnostic value (recorded, not gated): 0** — `[0x68fff070]`=0 before and
+  after; r28=0 at the post (PIC IACK unmapped + lowmem 0x3f00 table zero, per R-II7
+  this is the correct pre-init behavior of the real chain).
+- **via_int → OP_IRQ — DID NOT RUN (graded per the re-grade, NOT milestone-RED):**
+  `SS_PROBE_68K=0x5000ec52:8` (boot 1) and `0x5000bbca:8` (boot 4): **0 matches in
+  59 s each** (armed-line confirmed; nested-execute blindness noted but no host
+  Execute68k excursion runs via_int here). The chain "tests-and-skips on a zero
+  level" — strictly: the NULL is established one link upstream, at the NK post's
+  level test, so the 68k chain's trigger inputs (pending halfword, CR bits) are
+  never raised and the via_int chain is never entered. This IS the re-grade's
+  "round trip dies exactly at the level test" condition → **the level-source staging
+  proposal is written as a dated addendum in INTERRUPT-INJECTION-RECON.md and this
+  task STOPPED for sign-off — no staging improvised** (zero source lines changed).
+- **TimerInterrupt → Execute68k — NOT-REACHED** (conditional gate; `[0xcfc]`=0xffffffff
+  pre-WLSC in every boot [PROBE✓] — the regime split applies as written; additionally
+  unreachable pre-level-fix per the break link above).
+- **Invariant carry-over — PASS:** ZERO tripwire lines all 4 boots (`--absent
+  'TRIPWIRE'`); exactly-once re-proven (`host-irq: edges=1 consumed=1 deasserts=0
+  pending=0`, boots 1+4); deferred_native=0 (crash-dump tuples, boots 2/3 — within
+  Q-I4(d)'s ≈0–10² bound); nest drift `[0x2818]`=-59/-60 at delivery (expected class,
+  no new rate class); DEC cadence healthy in the ring-slowed regime — mtspr_dec=27–31
+  per 6–7 expiries, the same 7fffffff@503230e4/ffffffff@503230e8 NK park+re-arm pair
+  as Task A's 2.0/delivery class, no zero/tiny storm; sc/program census IDENTICAL to
+  the E4 baseline class (16 distinct, 0xffffffff x233 / 0xfffffffe x17, PROGRAM#1–4
+  slot=8 + #5 srr0=50324fec slot=5).
+
+**Chain-walk table (the milestone's state after Task B):**
+| Link | State | Evidence |
+|---|---|---|
+| host edge → EXT delivery | **LIVE** | Task A + boots 1/4, exactly-once |
+| delivery → fallback service body 0x325f00 | **LIVE** | [KDP+0xe80] 1→2 watch, delivery-adjacent, uniquely EXT-coupled |
+| fallback → post body 0x3254e0 | **LIVE** (Task 0 live + all-legs [STATIC]; skip-leg 0 visits) | post entry r23=68fff070 r7-bit SET |
+| post level test r28 | **THE BREAK: r28=0** → sth 0x0000 (no-op value) + CR bits CLEARED | [STATIC] + R-II7 + level diag 0 |
+| pending word / CR → DR dispatch poll | dead input (null signal) | — |
+| via_int 0xef2c → OP_IRQ fe6b | NEVER ENTERED | PROBE68K 0 matches ×2 |
+| pending-word clear :812 / OP_IRQ d0=1 | NOT-REACHED | — |
+| InterruptFlags retirement / TimerInterrupt / Ticks | NOT-REACHED (pre-WLSC conditional + upstream break) | [0xcfc]=ffffffff |
+
+**Anomaly (named, not a falsification): `SS_PROBE_LINEAR=1` env-on boots crashed 2/2**
+(boot 2 SIGTRAP guest pc=0x50460c00 DR-dispatch fetch, pre-assert; boot 3 SIGSEGV host
+pc in JIT cache, guest pc=0x500e708c, wild ea guest 0x55590000, after 5 DEC deliveries
+restarting the same block) vs 0/2 crashes for the identical config without it.
+Same-class precedent: EE-CHAIN W2-2's one-off SIGTRAP@0x5046dc1c "delivery onto the
+DR-emulator init loop". Either the linear-probe path interacts with the delivery regime
+or the env-on early-boot window is perturbation-fragile — flagged to the coordinator;
+SS_PROBE_LINEAR is suspect under env-on until cleared. Not counted against any gate.
+
+**Baselining note for Task C:** the env-on frontier class is timing-sensitive — Task A's
+no-ring env-on boot ran the NK spin and never reached the park; BOTH ring-slowed env-on
+boots here reached the PROGRAM#5 srr0=50324fec park with the full E4-class census
+(blocks=7405 vs baseline 7354). Task C's A/B comparisons must hold the instrument set
+constant, not just the env gates.
+
+**What Task C needs (flip-cluster readiness):** Task A's delivery machinery is green and
+re-proven here; the consumption half is honestly NOT-REACHED pre-WLSC with the break
+link pinned (stop-rule 2's shape — ship-gated-off-green is available per Rev 2 B6 if
+the staging decision doesn't land first). Pre-flip checklist now carries FOUR items
+(P2 run-exc.sh guard, P3 stub words, + the two Task-A-review carry-forwards added
+above). The flip decision is orthogonal to the level-source staging decision: the flip
+makes the latch default; the staging decision governs whether deliveries ever carry a
+nonzero level pre-guest-init.

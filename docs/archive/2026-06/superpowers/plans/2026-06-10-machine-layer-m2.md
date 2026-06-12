@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # Machine Layer M2 — Virtual clock: guest TB/DEC + host event scheduler + DEC-expiry condition
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

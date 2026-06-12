@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** probe recipe extracted to HANDOFF.md; boot stall analysis preserved here for reference
+>
+
 # VIA-IFR Surface — Recon & QEMU Rig Findings
 
 > **Status:** Task-0 and Task A complete (sessions 1–2); SS_NW_VIA_IFR gate implemented

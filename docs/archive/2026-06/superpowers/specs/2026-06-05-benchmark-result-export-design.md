@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone shipped
+>
+
 # Benchmark result export & history — design
 
 > **Status:** ✅ SHIPPED 2026-06-05 (commits `cad1af88`…`286b0aa2`). The design below is

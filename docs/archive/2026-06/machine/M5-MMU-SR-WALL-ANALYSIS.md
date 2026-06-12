@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M5/M3 groundwork — MMU/SR wall static analysis: the 0x50326050 frontier
 
 > **Status:** 📋 Static-analysis memo (read-only investigation, no builds, no boots) ·

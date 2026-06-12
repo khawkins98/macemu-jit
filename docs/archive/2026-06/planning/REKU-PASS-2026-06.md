@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Reku pass complete.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** pass executed; light-gear rules in MILESTONE-WORKFLOW.md §8; archive pattern in CONTRIBUTING.md §3
+>
+
 # Reku Pass — Archive & Accelerate (2026-06)
 
 > **Status:** PROPOSED 2026-06-12 · **Owner:** khawkins · **Effort:** 1 sprint day

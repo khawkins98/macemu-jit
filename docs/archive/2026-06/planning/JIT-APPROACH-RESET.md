@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** guidance baked into CLAUDE.md
+>
+
 # MacEmu JIT Approach Reset
 
 > **Status:** ✅ Decided — standing guidance · **Created:** 2026-04-24 · **Updated:** 2026-06-04

@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** deferred indefinitely
+>
+
 # Plan: Supervisor-level fidelity — MMU, nanokernel, and preemptive (MP) tasks
 
 > **Status:** ⏸ Deferred — "never, unless a specific trigger appears" (researched, not scheduled) · **Created:** 2026-06-06 · **Updated:** 2026-06-07

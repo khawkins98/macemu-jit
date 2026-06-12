@@ -210,6 +210,33 @@ sweep date in the commit message so the next trigger is checkable via `git log`.
 
 
 
+### 3. When docs get too heavy: the archive pass
+
+**Trigger signals** (any one is enough):
+- Active markdown files exceed ~150 (check: `find . -name "*.md" ! -path "./docs/archive/*" ! -path "./.git/*" | wc -l`)
+- More than ~50% of recent commits are documentation, not code
+- Any single reference doc exceeds ~500 lines
+- You're spending more time maintaining docs than writing code
+
+**What to do — the "Reku pass" pattern:**
+
+1. **Archive, don't delete.** Move completed milestone plans/recon/specs to `docs/archive/YYYY-MM/`. Add the archive banner (see below) to every moved file. Use `git mv` so history is preserved.
+2. **Update references before moving.** Broken paths in CLAUDE.md and AGENT-CONTEXT.md misdirect every future agent session — fix them atomically with the moves.
+3. **Extract before archiving.** If a doc is referenced many times, extract the still-active pickup recipe into HANDOFF.md or AGENT-CONTEXT.md first, then archive and update refs.
+4. **Slim the survivors.** Target sizes: HANDOFF.md ≤80 lines, ROADMAP.md ≤300, AGENT-CONTEXT.md ≤200, LEARNINGS.md ≤400. Don't trim content that prevents re-deriving an expensive lesson.
+5. **Delete true zero-reference files** (auto-generated reports, one-off spike notes) rather than archiving them — they have no reference value even in the archive.
+
+**Archive banner** (prepend to every archived file):
+```markdown
+> **ARCHIVED YYYY-MM-DD** — Moved to archive during the [name] pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** [milestone complete / superseded by X / historical reference]
+>
+```
+
+**Full recipe:** `docs/archive/2026-06/planning/REKU-PASS-2026-06.md` — the first archive pass (2026-06-12), covering all phases, the execution script, and the light-gear sprint rules now in `docs/MILESTONE-WORKFLOW.md §8`.
+
 Docs rot when work lands but the docs don't move. Two rules keep them honest.
 
 ### 1. When you finish (or change) something

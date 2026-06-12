@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M1 Task 9 — Verified MMIO backpatch thunk encodings
 
 Pre-work for Machine Layer M1 Task 9 (the JIT MMIO backpatch thunk — the most

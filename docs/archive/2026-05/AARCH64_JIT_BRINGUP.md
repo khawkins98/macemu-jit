@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** BasiliskII deferred
+>
+
 # AArch64 JIT Bringup — BasiliskII on ARM64
 
 > For the concise cross-emulator architecture overview (both JITs + macOS arm64 constraints),

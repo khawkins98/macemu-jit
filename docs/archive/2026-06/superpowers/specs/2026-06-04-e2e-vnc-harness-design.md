@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone shipped
+>
+
 # Design Brief: SheepShaver End-to-End VNC Test Harness
 
 > **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-05

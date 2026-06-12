@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M6a Wave 2 rung 2 — ongoing-entry design: what the entry-vector table really is, why Boot B actually died, and the smallest honest re-entry contract
 
 > **Status:** 📋 Static-RE + design recon memo (READ-ONLY session — no builds, no boots) ·

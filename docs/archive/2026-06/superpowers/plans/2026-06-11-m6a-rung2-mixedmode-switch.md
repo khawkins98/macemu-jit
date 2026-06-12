@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M6a rung 2 — Mixed Mode switch completion: FE01 68k→PPC context switch, FE02 switch-back, NK entry-vector slots, real ongoing entry at table[0]
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — Tasks T/U/V/W/X edit the same trampoline/glue functions; NOTHING in this plan parallelizes (rev 2 P12).**

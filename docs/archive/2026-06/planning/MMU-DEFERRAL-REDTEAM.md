@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** decision memo, no pending actions
+>
+
 # Red-team: is the MMU deferral right, and is "MMU-via-fastmem" naive?
 
 > **Status:** 📋 Decision memo (adversarial review) · **Created:** 2026-06-07

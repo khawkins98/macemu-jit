@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # Disk-Path Recon — how do boot-volume blocks reach the newworld fidelity profile?
 
 > **Status:** recon complete (2026-06-11) · Stream C, M7 risk-retirement

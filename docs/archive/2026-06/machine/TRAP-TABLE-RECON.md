@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # OS trap table recon — the InsTime/SysError-12 wall (P-M4) (2026-06-12)
 
 > Stream-A recon for the post-tm_task-fix frontier (SLIDE-WALL-RECON.md "NEW FRONTIER

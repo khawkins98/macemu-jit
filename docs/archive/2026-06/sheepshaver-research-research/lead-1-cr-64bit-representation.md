@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** historical research
+>
+
 # Lead 1 — CR fields as 64-bit values (Dolphin's `cr_val` trick)
 
 > **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04

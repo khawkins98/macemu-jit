@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** historical research
+>
+
 # NK:DR Block Ratio Analysis — JIT 1:1 vs Interpreter 1:21
 
 > **Status:** 📖 Reference / archive · **Created:** 2026-06-04 · **Updated:** 2026-06-04

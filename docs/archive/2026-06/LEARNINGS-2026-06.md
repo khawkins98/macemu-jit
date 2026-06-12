@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Full session log archived during the Reku pass.
+> Active durable lessons moved to `LEARNINGS.md`.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** historical journal, not a reference
+>
+
 # LEARNINGS — macOS ARM64 JIT work
 
 Running log of non-obvious things learned while working on this fork.

@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** superseded by Machine Layer (Path A)
+>
+
 # Handoff: New World supervisor-stack fidelity (the PPC MMU / page-table work)
 
 > **Status:** ⏸ **Parked** (2026-06-09) — superseded by the **[Machine Layer](MACHINE-LAYER-PLAN.md)**

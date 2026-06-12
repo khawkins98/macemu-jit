@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M6a Wave 2 — Shim Recon: the 0x50466ee0 / ea=0xffffaad0 crash, root-caused statically
 
 > **Status:** static-RE memo (read-only recon, 2026-06-11). No code changed, nothing committed.

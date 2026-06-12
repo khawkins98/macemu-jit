@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** superseded (Path B dead-end)
+>
+
 # The Upgrade Card Path — Mac OS 9.2 on the 1.1 ROM
 
 > **⚠️ CLOSED — dead end (2026-06-10).** Superseded by [`MACHINE-LAYER-PLAN.md`](MACHINE-LAYER-PLAN.md).

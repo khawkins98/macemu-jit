@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M6 next milestone — the FE1F service surface: provision the DR's native-callout service (opcode $FE1F, selector 0x31) so the 68k CFM-prep routine fills its ExpandMem slot and the newworld boot advances past 0x5000f248
 
 > **✅ MILESTONE COMPLETE (2026-06-11)** — all tasks done, `SS_NW_FE1F_SURFACE` is the

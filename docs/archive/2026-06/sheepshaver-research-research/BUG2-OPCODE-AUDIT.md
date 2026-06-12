@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** historical research
+>
+
 # Bug #2 Opcode Audit: JIT Miscompilation Candidates
 
 > **Status:** 📖 Reference / archive · **Created:** 2026-06-04 · **Updated:** 2026-06-04

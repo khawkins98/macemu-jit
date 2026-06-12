@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M8 — the slot-4 interrupt consumption round trip: a delivered interrupt is CONSUMED — PROGRAM#4 → NK slot-4 service → world-restore tail COMPLETES → 68k via_int chain runs → the armed post is retired on the real path
 
 > **STATUS: MILESTONE COMPLETE (2026-06-12) — SHIPPED GATED-OFF-GREEN.**

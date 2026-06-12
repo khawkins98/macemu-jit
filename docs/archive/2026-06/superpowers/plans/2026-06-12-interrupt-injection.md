@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M7 host→guest interrupt routing — real delivery through the PIC/EXC_EXTERNAL path: host posts enter the guest's own level-1 chain and Ticks moves
 
 > **STATUS: MILESTONE COMPLETE (2026-06-12).** Tasks 0/A/B/B-2/C/Z all done; arc

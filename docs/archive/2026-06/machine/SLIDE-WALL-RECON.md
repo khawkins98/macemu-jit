@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # The 0x505bb060 garbage-return slide — next-wall recon (2026-06-11)
 
 > Stream-A recon for the post-DSAT frontier (DSAT-WALL-RECON.md Tasks B/C,

@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M6 next milestone — the NK syscall surface: resolve vector 0xC00 (`syscall_entry`) so MPLibrary's parcel init can make its NK system calls and return
 
 > ## ✅ MILESTONE COMPLETE (2026-06-11)

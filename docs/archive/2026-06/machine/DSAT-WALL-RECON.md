@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # DSAT stack-underflow wall — pre-milestone recon (2026-06-11)
 
 > **STATUS: RESOLVED (2026-06-11).** Root cause pinned in "Task 0" below (DR

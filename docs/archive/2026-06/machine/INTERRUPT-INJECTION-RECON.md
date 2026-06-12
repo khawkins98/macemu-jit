@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # Interrupt-injection recon — P-M5 crash + item 1b (2026-06-12)
 
 > Task-0 recon for the likely next milestone: **NewWorld host→68k interrupt injection**.

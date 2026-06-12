@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M3b Wave 2 — the EE/interrupt-delivery chain, verification-first: prove the chain under the current armed state, then wire the OpenPIC, then restore the tick
 
 > **STATUS: CLOSED / SUPERSEDED (2026-06-12).** W2-0…W2-3 shipped from this plan;

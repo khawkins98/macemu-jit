@@ -27,7 +27,7 @@ low-memory flag `$0d94` (NOT a VIA MMIO register). No `btst d6,(a4)` exists in t
 near that address; no `movea.l #$F3016xxx, a4` exists anywhere in the ROM.
 The real question is what sets `$0d94` at tick time (and whether it is even the active
 handler path — at Finder, Mac OS 9.2.1 installs its own handler in RAM, replacing the ROM
-stub). See `docs/planning/machine/VIA-IFR-RECON.md` for the full corrected picture.
+stub). See `docs/archive/2026-06/machine/VIA-IFR-RECON.md` for the full corrected picture.
 **Named next task: the VIA-IFR surface** (M-class device-model work — `dev_via6522`
 exists). **Task A COMPLETE (2026-06-12 session 2 probe campaign).**
 
@@ -59,7 +59,7 @@ pre-condition also blocks. A new 9.0.1-specific patch with range 0xed00–0xee00
 **Prerequisite:** `KernelDataAddr+0x67c` (`0x68ffe67c`) must not be zero before OP_IRQ
 runs — set it to a scratch address in the NewWorld trampoline init to avoid a write to
 68k address 0 (Initial SSP corruption). Gate: `SS_NW_VIA_IFR`.
-Full implementation plan: `docs/planning/machine/VIA-IFR-RECON.md` §5e–5f.
+Full implementation plan: `docs/archive/2026-06/machine/VIA-IFR-RECON.md` §5e–5f.
 
 **Tooling lesson (load-bearing):** Use `SS_PROBE_68K=0xPC:N` for 68k code paths, NOT
 `SS_PROBE_PC`. SS_PROBE_PC is PPC block-entry only and is probe-blind to 68k addresses.
@@ -153,7 +153,7 @@ as current claims — they are historical.
   property of QEMU's model, not of Mac OS in general — `dev_via6522` may still need to
   present the correct IFR bit via the Cuda protocol.
   Oracle scope: valid from NK entry onward (OpenBIOS ≠ Apple OF pre-NK).
-  Pitfalls: `LEARNINGS.md` "2026-06-12". First-session findings: `VIA-IFR-RECON.md`.
+  Pitfalls: `LEARNINGS.md` "2026-06-12". First-session findings: `docs/archive/2026-06/machine/VIA-IFR-RECON.md`.
 - ROM dumps — canonical location: **`/Users/Shared/macemu/dumps/`** with `MANIFEST.txt`
   (filename + md5 + provenance). `rom901_inventory.bin` = RAW (md5 7b1378be…, 16
   placeholder words at file 0x36e8c0); `rom901.bin` = PATCHED (md5 d1a267a9…,

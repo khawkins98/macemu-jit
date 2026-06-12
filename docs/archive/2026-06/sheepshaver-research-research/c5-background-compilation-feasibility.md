@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** historical research
+>
+
 # C5 — Background JIT compilation: internal feasibility audit
 
 > **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04

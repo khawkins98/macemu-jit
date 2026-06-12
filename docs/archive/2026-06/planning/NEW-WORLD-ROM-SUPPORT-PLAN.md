@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** superseded by Machine Layer
+>
+
 # Plan: Proper New World (parcels) ROM Support — break the 9.0.4 ceiling
 
 > **⚠️ SUPERSEDED (2026-06-10).** This was "Path A" — manually porting the 9.0.1 ROM's

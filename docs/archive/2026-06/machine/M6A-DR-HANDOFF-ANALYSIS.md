@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M6a groundwork — the DR-Emulator handoff wall: dispatch-table contract, cold-start anatomy, and the road past the Thud console
 
 > **Status:** 📋 Static-analysis memo + live probe forensics (no builds, no further boots) ·

@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete
+>
+
 # M3a Task 0 — Live entry table + recon findings (9.0.1 staged NK)
 
 > **Status:** ✅ Complete — 2026-06-10. Method: SS_PROBE_PC absolute-word dumps on live

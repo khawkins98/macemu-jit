@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-12** — Moved to archive during the Reku pass.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone shipped
+>
+
 # SheepShaver ARM64 JIT for Apple Silicon + macOS 26 — Design
 
 **Date:** 2026-06-01

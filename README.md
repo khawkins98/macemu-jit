@@ -34,6 +34,13 @@ I appreciate that plenty of people won't think much of that, and will consider t
 
 ---
 
+> **⏸ Project paused 2026-06-12.** Active development is on hold for a bit. When the
+> work picks back up, start at **[`docs/HANDOFF.md`](docs/HANDOFF.md)** — it has the
+> state summary, the reading order, and the exact resume prompt to hand a fresh
+> agent session.
+
+---
+
 ## macOS Apple Silicon (arm64)
 
 This branch (`macos-arm64`) is a macOS Apple Silicon port of [rcarmo/macemu-jit](https://github.com/rcarmo/macemu-jit), adding an AArch64 JIT backend that translates PowerPC instructions to native ARM64 at runtime. **SheepShaver** boots Mac OS 8.x–9.x to the Finder desktop with the full native JIT on M-series Macs.

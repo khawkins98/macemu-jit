@@ -429,14 +429,14 @@ frontier (stop-rule 2's shape).
 
 ### Task C: acceptance + the flip cluster (flip LAST, revert-on-red) + dispositions — size S, ≤4 boots
 
-- [ ] **PASS/FAIL gates first, env-on:** (a) full gates (`tools/gates.sh full`);
+- [x] **PASS/FAIL gates first, env-on:** (a) full gates (`tools/gates.sh full`);
   (b) Task A's delivery sub-contract re-asserted; (c) Task B's post/OP_IRQ/retirement
   gates re-asserted; (d) gated-off A/B byte-identical to E4's class; (e) tripwires
   quiet per Q-I4's expectation.
-- [ ] **Fix budget:** telemetry/capture commits free; at most ONE small in-scope fix
+- [x] **Fix budget:** telemetry/capture commits free; at most ONE small in-scope fix
   iteration per falsified contract, full gates re-run after any fix. Second
   falsification of the same contract ⇒ stop-rule.
-- [ ] **(Rev 2 B2) Pre-flip checklist — two wave2 carry-forwards land BEFORE the flip
+- [x] **(Rev 2 B2) Pre-flip checklist — two wave2 carry-forwards land BEFORE the flip
   commit:** (1) the run-exc.sh / `SS_NW_DEC_PUBLISHED` gate-ON-without-`SS_EXC_ENTRY`
   guard (wave2 W2-4 step-0 review note P2: gate-on aims the 2-SPR shim at the unmapped
   legacy default entry — a guard or loud comment in `SheepShaver/jit-test/run-exc.sh` +
@@ -456,7 +456,7 @@ frontier (stop-rule 2's shape).
   `exc_ext_delivs_this_assert`/`exc_dec_delivs_while_ext` — with host+PIC co-armed a
   host edge can mask the PIC runaway tripwire; host-only flip may record it as
   accepted-with-note, any co-armed default state requires the fix.
-- [ ] **THEN the flip decision (the cluster, explicitly):** flipping `SS_NW_HOST_IRQ`
+- [x] **THEN the flip decision (the cluster, explicitly):** flipping `SS_NW_HOST_IRQ`
   to the newworld default REQUIRES `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` flipped
   with it (the routing is meaningless without delivery) — this is the flip W2-4
   reserved as its final acceptance, now owned here. Flip all three (opt-out `=0` kept
@@ -465,7 +465,7 @@ frontier (stop-rule 2's shape).
   the milestone may ship gated-off green; it does not ship default-on red). `SS_NW_PIC`
   is NOT in the cluster — its flip stays HELD (W2-3 stop-rule 3; device sources await
   real guest PIC init, a later milestone).
-- [ ] **Dispositions in writing (the deferred residue, addendum entries):**
+- [x] **Dispositions in writing (the deferred residue, addendum entries):**
   (1) **XLM_IRQ_NEST ownership** (EE-CHAIN item 2, recon-deferred): with deliveries now
   routine, decide retire / re-base / document-as-dead for the −1/delivery drift — a
   decision record, implementation only if S-sized and gate-clean, else a named
@@ -474,7 +474,7 @@ frontier (stop-rule 2's shape).
   or record why it stays — either way written; (3) **R-II3 frontier**: the post-flip
   default boot's park signature captured in full (HB/exc=/sc-census/ring tail) — the
   next milestone's opening evidence, named honestly.
-- [ ] **DIAGNOSTIC outcomes (recorded, not gates):** Ticks rate; any boot-frontier
+- [x] **DIAGNOSTIC outcomes (recorded, not gates):** Ticks rate; any boot-frontier
   movement vs E4; first-ever sustained host→guest interrupt cadence numbers. Commit.
 
 ### Task Z: docs close-out — size S
@@ -1018,3 +1018,122 @@ SS_JIT_WATCH_DUMPS=8 + a narrowed watch set for ring capture around late events.
 **Task C readiness:** delivery + IACK + level + post are all green and guest-traversed;
 the staging rides the env-on test cluster (SS_NW_PIC default flip stays HELD). The
 flip-cluster decision is unchanged by B-2; the pre-flip checklist carries forward.
+
+## Task C results (2026-06-12, label m7-taskC) — pre-flip checklist 4/4 landed, battery green, THE CLUSTER FLIPPED (default-ON newworld); dispositions written
+
+Commits: `2a452166` (pre-flip checklist items 1–4) + `81d60cc1` (the cluster flip +
+M3A-ENTRY-TABLE cleanup) + the docs commit. Boots: **4 of ≤4** (slot0
+`20260612-040531.34797` env-on battery, `-040701.34976` pre-flip gated-off A/B,
+`-041333.41178` post-flip default, `-041445.41332` post-flip opt-out). Gates: full tier
+6/6 PASS **twice** (pre-flip and post-flip, incl. paravirtual e2e smoke), task tier 5/5
+on the flipped build, inner 3/3 on the checklist commit, exc-vector lane 14/14 on both
+builds. Instrument sets held constant per the Task-B baselining note (boot 1 = B-2's
+watch+ring set; boots 2–4 = default instruments); no SS_PROBE_LINEAR (R-II9). No
+falsified pinned contract; one baseline nuance named honestly (below).
+
+**Pre-flip checklist (4/4, `2a452166`):**
+1. **run-exc.sh gate guard (P2) — LANDED.** BASE_ENV pins `SS_NW_DEC_PUBLISHED=0` so
+   lane contracts cannot float with the flipped boot default (H8 re-sets `=1`; later env
+   wins); run_one aborts the whole run loudly (run.sh table-validation precedent) on any
+   lane wiring the gate on without `SS_EXC_ENTRY` (guard logic negative-tested TRIP/OK
+   ×4); gate-site half: `ss_test_exc_knobs_apply` warns for ad-hoc SS_TEST_HEX runs.
+2. **stub=1 six-words (P3) — VERIFIED-ACCEPTED, no code change.** The current plant
+   writes a fully-DEFINED 6-word image (blr at word 3, explicit zero tail for batch
+   replant — no reliance on fresh-process zero RAM; the zero words sit after the
+   terminating blr, never fetched). The stub path is harness-only (`SS_TEST_EXC_STUB`
+   read only in `ss_test_exc_knobs_apply`, reachable only via SS_TEST_HEX) — the flip
+   does NOT make it default-reachable.
+3. **ClearInterruptFlag lost-edge race (P2) — FIXED** per the review's shape: after the
+   Deassert, re-check `InterruptFlags != 0` and re-run the full assert-edge path
+   (`SetInterruptFlag(0)` — a flags no-op that takes exactly the edge path: latch + PIC
+   input edge + kick; no recursion; a concurrent winner makes the re-Assert a no-edge
+   no-op). Coverage honesty: the race window is not deterministically
+   harness-reachable; the latch semantics around it are pinned by H9 + the battery.
+4. **Tripwire-counter masking (P3) — ACCEPTED-WITH-NOTE** at the reset site
+   (`SheepExcHostIrqAssert`): a host edge resets the SHARED episode counters and could
+   mask a PIC re-delivery runaway. Accepted for the host-only default
+   (SS_NW_PIC default HELD; in the co-armed TEST cluster the PIC's only live source IS
+   the host line — no independent episode to mask). BINDING CONDITION recorded in the
+   code comment: split the counters per source before any DEFAULT state co-arms
+   SS_NW_PIC with independent device sources (SCC 0x25 / VIA 0x19).
+
+**Battery (env-on = riser+published+host-irq+SS_NW_PIC=1 test config):**
+(a) full gates PASS; (b) Task A's delivery sub-contract re-asserted — boot 1
+BOOT-VERDICT PASS 6/6: `EXT delivered #1`, exactly-once (`edges=1 consumed=1
+deasserts=0 pending=0`), zero TRIPWIRE; (c) Task B/B-2 gates re-asserted — watch
+68fff070 trips `value=80010000` (level test passes), `first-iacks: src=0x3f vec=0x3f`,
+lowmem staging survived to edge #1; invariants: deferred_native=0,
+mtspr_dec/dec_expiries ≈ 2.0/delivery (the B-2 NK park+re-arm class,
+7fffffff@503230e4/ffffffff@503230e8), exc tuple 4359/1/123/0/270/4/1 @50s (B-2 class);
+(d) gated-off A/B = E4 class — park + FULL sc census byte-identical (16 distinct,
+0xffffffff x233 / 0xfffffffe x17), zero EXT/host-irq output. **Baseline nuance, named:**
+blocks=7351 vs the 7354 "exact" citation — the full-log diff shows the ONLY divergence
+is ASLR cache address + block/hit counters (+10 ms first-compile); every
+[EXC]/[HB]/[VCLK]/census line is byte-identical. The block counter is
+host-timing-coupled (Task B already saw 7405 under ring) and is hereby dropped from the
+CLASS definition; the class is the behavior-line set. (e) tripwires quiet, ×4 boots.
+
+**THE FLIP (landed, `81d60cc1`):** `SS_NW_EE_RISER` + `SS_NW_DEC_PUBLISHED` +
+`SS_NW_HOST_IRQ` are the newworld DEFAULT (explicit-"0" opt-out each, the
+SS_NW_SC_SURFACE polarity; sites: main_unix bring-up, glue
+exc_dec_published_enabled + NW-trampoline parse, rom_patches EE-riser stub).
+`SS_NW_PIC` stays default-OFF/HELD (W2-3 stop-rule 3) — NOT structurally required for
+the host-irq default: delivery is proven without it (Task A; boot 3), and the B-2
+level staging is gated on the SS_NW_PIC pair, so the default boot delivers with level 0
+(the real chain's correct pre-init behavior, R-II7) until the PIC flip lands.
+- **Post-flip default boot (boot 3, no env): PASS 5/5** — cluster armed, DEC #1–4
+  delivered via 0x50313200 `(2-SPR)`, **the first host-sourced EXT delivery on a
+  default boot** (`restart=504a73a8 → entry=50314880`), exactly-once re-proven, no
+  PIC-HOST lines, AND the boot still reaches the PROGRAM#5 srr0=50324fec park with the
+  full E4-class sc census (blocks=7405 — the park-reaching variant Task B observed).
+  The new default-boot frontier class = E4's park signature + the live delivery
+  chronology (SC/PROGRAM#1–4 → DEC `(2-SPR)` → EXT #1 → PROGRAM#5 park); term-dump
+  `[VCLK] mtspr_dec=26 dec_expiries=4` (park regime, DEC napping at
+  7fffffff/ffffffff — consistent with the slot5-recon nap-loop anatomy).
+- **Post-flip opt-out boot (boot 4, SS_NW_*=0): PASS** — reproduces the pre-flip
+  default byte-identically (diff vs boot 2: only ASLR/blocks/hit lines; blocks=7354
+  EXACT) — the opt-out path IS today's default, as the coordinator required.
+
+**Dispositions in writing:**
+1. **XLM_IRQ_NEST ownership — DOCUMENT-AS-DEAD (with a wrap caveat).** Consumers on
+   newworld: `HandleInterrupt`'s `>0` early-return (glue :3393ff) and tick_func's `==0`
+   60 Hz trigger gate (main_unix :2735, already documented permanently-false on
+   newworld — M3a finding 3). The NK parks the word at 0xFFFFFFFF; the riser stub's
+   trap_return decrement (−1/delivery, EE-CHAIN item 2) and the −59/−60 classes (Task B)
+   drive it monotonically DOWN from −1, so neither consumer's predicate can ever flip
+   (`==0` stays false, `>0` stays false) — the drift is behaviorally dead for every
+   live consumer. Caveat: ~2³¹ deliveries (~283 days at 87/s) would wrap it positive;
+   re-base/retire is NOT owed this milestone — re-open only if a future consumer reads
+   the word with new semantics or long-soak boots become a thing.
+2. **MODE_EMUL_OP injection arm — STAYS, with the reason recorded (fencing = named
+   follow-on).** Post-E1 the arm is redundant-not-dangerous (recon Q3 item 5: Execute68k
+   is staged); it is reachable on newworld only when an interrupt lands inside an
+   EMUL_OP window with `(XLM_68K_R25&7)==0`, never observed firing in any M7 boot; and
+   fencing it DURING the flip task would have entangled the flip's A/B byte-identity
+   evidence with an unrelated behavioral change (single-variable discipline). Fence it
+   for architectural consistency in the next milestone's HandleInterrupt rework — the
+   slot-4 consumption work (below) touches exactly this dispatch.
+3. **R-II3/R-II10 frontier — pointer.** The substance is owned by the concurrent
+   slot5-recon: INTERRUPT-INJECTION-RECON.md "R-II10 / slot-5 park recon" (`b3e51b8d`)
+   — the park is the NK idle task's power-saving nap loop; the release IS the interrupt
+   chain; the post-delivery break is the **slot-4 consumption livelock** (three shapes
+   pinned). The post-flip default-boot park signature (this section's boot 3) is the
+   R-II3 capture: park + census + delivery chronology + VCLK park-regime numbers above.
+
+**W2-4 supersession closure rows (the absorbed items, per the rev-2 table):**
+- **via_int cluster (rom_patches :3474–3511) — RETAINED, disposition written:** the
+  patched chain is PRESENT and load-bearing — Task 0/Q-I3 pinned it as the consumption
+  path (level-1 @0xec50 → via_int 0xef2c → dispatch → 60 Hz proc 0xbbb8 → fe6b OP_IRQ →
+  `addq.l #1,$16a`), and B-2's level fix arms exactly its trigger inputs. Retention is
+  the verdict; the cluster is the next milestone's consumption rail, not dead code.
+- **polled-trampoline + SDL_PumpEvents — NAMED-DEFERRED per the rev-2 table default
+  (leave / keep+decouple recorded):** untouched by this plan's chain; the ROADMAP row
+  lands with Task Z's close-out.
+
+**What Task Z needs:** DIAGNOSTICS.md cluster-state update (three members now
+default-ON with `=0` opt-outs; SS_NW_PIC held; the once-per-edge semantics next to C1);
+the gated-off-ship disposition is NOT required (the cluster flipped) but the SS_NW_PIC
+hold + KDP-shim retirement follow-on rows are; the W2-4 supersession table mirror in the
+wave2 plan; CHANGELOG (landed with this task's docs commit); MACHINE-LAYER-PLAN
+header/M3b row + re-score #3 flag; the gate census note (16 SS_NW_* gates, three now
+default-ON — re-score #3 input).

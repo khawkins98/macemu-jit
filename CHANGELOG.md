@@ -11,6 +11,37 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] M7 Task C — THE CLUSTER FLIP: SS_NW_EE_RISER + SS_NW_DEC_PUBLISHED + SS_NW_HOST_IRQ are the newworld DEFAULT — the first host→guest interrupt delivered through the guest's own chain on a default boot
+
+Interrupt-injection milestone Task C (`2a452166` checklist + `81d60cc1` flip; plan "Task
+C results"). Pre-flip checklist 4/4: (1) run-exc.sh gate guard — BASE_ENV pins
+`SS_NW_DEC_PUBLISHED=0` per lane + a loud abort on gate-on-without-`SS_EXC_ENTRY`
+wiring + a glue-side warning for ad-hoc SS_TEST_HEX runs; (2) stub=1 six-words
+verified-accepted (defined zero tail after blr, harness-only path); (3) the
+ClearInterruptFlag lost-edge race FIXED (re-check `InterruptFlags!=0` after Deassert,
+re-run the full assert-edge path); (4) tripwire-counter masking accepted-with-note
+(split per source before any default co-arm of SS_NW_PIC with device sources).
+**The flip** (explicit-"0" opt-out each, SS_NW_SC_SURFACE polarity): the W2-4-reserved
+riser/published flip + the host-irq default land together; `SS_NW_PIC` stays HELD
+(default OFF — the B-2 level staging remains test-cluster-only, so default-boot EXT
+deliveries carry level 0 until the PIC flip, the real chain's correct pre-init
+behavior). **Battery:** full gates 6/6 PASS pre- AND post-flip (incl. paravirtual e2e),
+task 5/5, exc lane 14/14; 4 of ≤4 boots — env-on re-asserts Task A+B-2 (EXT delivered
+exactly-once, watch 68fff070=80010000, first-iacks 0x3f, zero tripwires, DEC
+~2.0 mtspr/delivery); **post-flip default boot delivers DEC #1–4 via 0x50313200 (2-SPR)
++ the first host-sourced EXT delivery with NO env vars and still reaches the PROGRAM#5
+srr0=50324fec park with the full E4 census**; post-flip opt-out (`SS_NW_*=0`)
+reproduces the pre-flip default byte-identically (blocks=7354 exact). The block/hit
+counters are recorded as host-timing-coupled and dropped from the baseline-class
+definition (behavior lines only). Dispositions written in the plan: XLM_IRQ_NEST drift
+documented-as-dead (both consumers' predicates unreachable from −1 downward),
+MODE_EMUL_OP injection arm stays (fencing = named follow-on with the next milestone's
+HandleInterrupt rework), R-II3/R-II10 → the slot5-recon section (`b3e51b8d`: the park
+is the NK idle nap loop; the new frontier is the slot-4 consumption livelock).
+M3A-ENTRY-TABLE dual-mode row updated (KDP shim = opt-out path; retirement a named
+follow-on).
+
+
 ### [SheepShaver] M7 Task B-2 — the host source joins the PIC rail (sign-off shape (i)): THE LEVEL TEST PASSES — first guest IACK of the OpenPIC model, post writes level|0x8000, CR bits SET
 
 Interrupt-injection milestone Task B-2 (plan "Task B-2 results" + recon "M7 Task B-2").

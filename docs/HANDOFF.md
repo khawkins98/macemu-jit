@@ -171,10 +171,23 @@ the first item was acted on immediately, the rest are queued):
    decompressed image md5 7b1378be… per the dumps MANIFEST) ·
    `1998-07-21 - Mac OS ROM 1.1.rom` md5 `e0fc03faa589ee066c411b4603e0ac89` (1,900,274 B) ·
    `MacOS-ROM-9.0.4-G4-extracted.rom` md5 `97fae52ee255e1dc98d50ed77042804c` (2,430,604 B).
-   Optional force-multiplier rider: consolidate the hundreds of pinned addresses
-   scattered across the recon docs into one annotated-disassembly database (e.g. a
-   Ghidra project over the decompressed image) so future RE compounds instead of
-   re-deriving.
+   Two riders, discussed and endorsed at pause time:
+   (i) **The deliberate NK-completion pass** — the nanokernel is small enough
+   (~tens of KB reachable) that finishing its RE systematically is bounded, and
+   everything routes through it; we're ~70% there by accretion. Highest-value
+   single RE investment.
+   (ii) **The annotated-disassembly consolidation** — pour the hundreds of pinned,
+   evidence-tagged addresses from the recon docs into Ghidra databases over the
+   decompressed images (ONE DB PER ROM VERSION — three images on hand, md5s above)
+   so future RE compounds instead of re-deriving. A few sessions of setup+scripting;
+   pairs naturally with the QEMU rig (ground truth to annotate against).
+   Cross-version expectation (informs the doc's structure): the NK's ARCHITECTURE
+   transfers across NewWorld ROM versions (the KDP block, vector publication, the
+   world-switch protocol, the 68k-emulator/MixedMode contract are compatibility-
+   constrained — confirmed across our 1.1 vs 9.0.1 spread, which spans NK v1 to v2);
+   the ADDRESSES do not transfer (offsets/anchors drift per version — the tm_task
+   lesson). Write one version-agnostic architecture document with per-version
+   address appendices.
 
 ## Operational notes
 

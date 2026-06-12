@@ -56,11 +56,14 @@ live-fired" as current claims — they are historical.
   `--r24-flow` (68k-PC transitions; odd-PC/odd-delta flagged DESYNC-CANDIDATE),
   `--find-pc 0xPC`, `--regs-at REC`. It follows the log's "dumped to" pointer and
   warns when /tmp/ss_jit_ring.txt is stale (shared across runs); `--ring` overrides.
-- `SS_JIT_WATCH_ADDR=<HEX,no-0x>` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
+- `SS_JIT_WATCH_ADDR=<HEX,no-0x>[:LEN]` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
   **It is a CHANGE detector — blind to value-identical writes** (a zero-over-zero store
-  never trips; use a counter/adjacent discriminator), and **check which word of a
-  multi-word lowmem long actually moves**: Ticks' LSB lives in word **0x16c**, not 0x168
-  (Task B's "Ticks did not move" was watch-word-blind). `SS_JIT_WATCH_DUMPS` default 3
+  never trips the `[WATCH]` line; use a counter/adjacent discriminator). Two blindness
+  mitigations landed 2026-06-12: **span form** `ADDR:LEN` (bytes, hex, cap 0x10) watches
+  every word of a multi-word lowmem long (`168:8` covers Ticks' LSB word 0x16c — Task B's
+  "Ticks did not move" was watch-word-blind), and **`[WATCH-SAMPLE]`** lines at
+  logarithmic record counts (1,10,100,…) prove frozen-vs-moving without a change edge.
+  Slot cap is 8 words (spans consume one slot per word). `SS_JIT_WATCH_DUMPS` default 3
   exhausts on early lowmem-init hits — use =8 + a narrowed set for late events.
 - **R-II9: `SS_PROBE_LINEAR=1` is SUSPECT under the delivery regime** (env-on/default
   post-flip boots): 2/2 crashes vs 0/2 without it. Don't combine; hold instrument sets

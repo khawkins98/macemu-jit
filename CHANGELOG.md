@@ -11,6 +11,26 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 ## 2026-06-12
 
+### [SheepShaver] instrument: SS_JIT_WATCH_ADDR span form + [WATCH-SAMPLE] periodic sampling (watch blindness fixes)
+
+Two watch blindness classes cost ~3 boots in the M7 cycle: (a) value-identical
+stores (zero-over-zero) never trip the change detector; (b) multi-word lowmem
+longs watched on the wrong word (Ticks' LSB lives in 0x16c, agents watched
+0x168). Landed in `jit_ring_record()` (`ppc-cpu.cpp`): **span form**
+`SS_JIT_WATCH_ADDR=ADDR:LEN` (hex bytes, cap 0x10) expands to per-word watch
+slots; slot cap raised 4→8 (per-record cost = one `vm_read_memory_4` + compare
+per slot, trivial next to the ~30-field ring record this rides on, and the
+recorder only runs under `SS_JIT_TRACE_RING=1`); **`[WATCH-SAMPLE]`**
+edge-independent value samples at logarithmic record counts (1, 10, 100, …)
+per watched word — frozen-vs-moving provable without a change edge. Honest
+limitation documented in DIAGNOSTICS.md: the watch remains a sampling
+change-detector; true store-event detection (codegen store instrumentation) is
+out of scope. Evidence (slot0 20260612-050606): `[WATCH] span 00000168:8 -> 2
+word slot(s)`; samples show 0x16c moving (Ticks `000b0000`) while 0x168 stays
+0 post-init — the exact previously-blind case. Inert when unset (same
+parse-once pattern; paravirtual unaffected — the watch block is reached only
+with `SS_JIT_TRACE_RING=1`). Gates: inner PASS (353/353, machine ALL PASS).
+
 ### [SheepShaver][docs] M7 INTERRUPT-INJECTION MILESTONE COMPLETE — first host→guest interrupt through the guest's own chain; first guest IACK of the OpenPIC model; riser/published/host-irq cluster newworld DEFAULT
 
 Milestone summary (per-task detail in the entries below + the plan

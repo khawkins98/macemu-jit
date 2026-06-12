@@ -1042,18 +1042,34 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 	for (int i = 0; i < 8; i++) rec->a[i] = r->gpr[16 + i];
 	for (int i = 0; i < 8; i++) rec->d[i] = r->gpr[8 + i];  /* 68k D0-D7 */
 
-	/* SS_JIT_WATCH_ADDR=<hex>[,<hex>...]: generic software watchpoints on up to
-	 * 4 guest words.  After every recorded event, read each (4-aligned) word
-	 * and report every change, identifying the block/event that made it.
+	/* SS_JIT_WATCH_ADDR=<hex>[:<lenhex>][,<hex>[:<lenhex>]...]: generic software
+	 * watchpoints on up to 8 guest words.  After every recorded event, read each
+	 * (4-aligned) word and report every change, identifying the block/event that
+	 * made it.
+	 * Span form (instr-hardening item 1): ADDR:LEN (both hex, no 0x; LEN in
+	 * bytes, capped at 0x10) expands to one watch entry PER WORD — so
+	 * `168:8` watches 0x168 AND 0x16c (the Ticks long: its LSB lives in 0x16c,
+	 * the word that was historically watch-blind). A span consumes one of the
+	 * 8 slots per word; excess words are dropped with a stderr note.  The cap
+	 * was raised 4 -> 8 because the per-record cost is one vm_is_mmio + one
+	 * vm_read_memory_4 + compare per slot — trivial next to the ~30-field ring
+	 * record this rides on, and the recorder only runs under SS_JIT_TRACE_RING=1.
+	 * Periodic sampling (same item): each watched word also emits a
+	 * [WATCH-SAMPLE] line at logarithmic record-observation counts (1, 10,
+	 * 100, ...), independent of change edges, so "frozen vs moving" is provable
+	 * even in a value-identical-store (e.g. zero-over-zero) regime where the
+	 * change detector below is structurally blind.
 	 * SS_JIT_WATCH_DUMPS=<n> (default 3): how many of the first changes also
 	 * dump the trace ring (set 0 when watching busy locations like stack slots).
 	 * Used for the bug-#2 hunt: watch the CD-ROM DrvSts flags word and the
 	 * Device Manager argument slot simultaneously. */
 	{
+		enum { AWATCH_MAX = 8 };
 		static int      awatch_state = -1;   /* -1 unread, 0 off, N = count */
-		static uint32   awatch_addr[4];
-		static uint32   awatch_last[4];
-		static bool     awatch_have_last[4];
+		static uint32   awatch_addr[AWATCH_MAX];
+		static uint32   awatch_last[AWATCH_MAX];
+		static bool     awatch_have_last[AWATCH_MAX];
+		static uint64   awatch_obs = 0;      /* records observed since watch init */
 		static int      awatch_dumps = 0;
 		static int      awatch_dump_budget = 3;
 		if (awatch_state < 0) {
@@ -1062,27 +1078,65 @@ static inline void jit_ring_record(powerpc_registers *r, char type,
 			if (e && *e) {
 				char buf[128]; strncpy(buf, e, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
 				char *save = NULL;
-				for (char *tok = strtok_r(buf, ",", &save); tok && awatch_state < 4;
-				     tok = strtok_r(NULL, ",", &save))
-					awatch_addr[awatch_state++] = (uint32)strtoul(tok, NULL, 16) & ~3u;
+				for (char *tok = strtok_r(buf, ",", &save); tok && awatch_state < AWATCH_MAX;
+				     tok = strtok_r(NULL, ",", &save)) {
+					uint32 addr = (uint32)strtoul(tok, NULL, 16) & ~3u;
+					uint32 len = 4;
+					const char *colon = strchr(tok, ':');
+					if (colon) {
+						len = (uint32)strtoul(colon + 1, NULL, 16);
+						if (len < 4) len = 4;
+						if (len > 0x10) {
+							fprintf(stderr, "[WATCH] span %08x:%x clamped to 0x10 bytes\n", addr, len);
+							len = 0x10;
+						}
+						len = (len + 3) & ~3u;
+					}
+					for (uint32 off = 0; off < len; off += 4) {
+						if (awatch_state >= AWATCH_MAX) {
+							fprintf(stderr, "[WATCH] slot cap (%d words) reached — %08x.. dropped\n",
+							        AWATCH_MAX, addr + off);
+							break;
+						}
+						awatch_addr[awatch_state++] = addr + off;
+					}
+					if (colon && len > 4)
+						fprintf(stderr, "[WATCH] span %08x:%x -> %u word slot(s)\n",
+						        addr, len, len / 4);
+				}
 			}
 			const char *d = getenv("SS_JIT_WATCH_DUMPS");
 			if (d) awatch_dump_budget = atoi(d);
 		}
-		for (int w = 0; w < awatch_state; w++) {
-			// M1: device reads are side-effecting; tools must never touch them (§2b).
-			if (vm_is_mmio(awatch_addr[w])) continue;
-			uint32 now = vm_read_memory_4(awatch_addr[w]);
-			if (awatch_have_last[w] && now != awatch_last[w]) {
-				fprintf(stderr, "[WATCH] pc=%08x addr=%08x value=%08x  (was %08x record #%u type=%c block %08x->%08x sp=%08x r24=%08x)\n",
-				        from_pc, awatch_addr[w], now, awatch_last[w], jit_ring_idx, type, from_pc, to_pc,
-				        rec->r1, rec->r24);
-				fflush(stderr);
-				/* Dump the ring on the first few changes so the lead-up is captured. */
-				if (awatch_dumps < awatch_dump_budget) { awatch_dumps++; ppc_jit_dump_trace_ring(); }
+		if (awatch_state > 0) {
+			awatch_obs++;
+			/* Logarithmic sample point? (1, 10, 100, ...) */
+			bool sample = false;
+			for (uint64 p = 1; p <= awatch_obs; p *= 10)
+				if (awatch_obs == p) { sample = true; break; }
+			for (int w = 0; w < awatch_state; w++) {
+				// M1: device reads are side-effecting; tools must never touch them (§2b).
+				if (vm_is_mmio(awatch_addr[w])) continue;
+				uint32 now = vm_read_memory_4(awatch_addr[w]);
+				if (sample) {
+					/* Edge-independent value sample: NOT a change report. Proves
+					 * frozen-vs-moving even when stores are value-identical. */
+					fprintf(stderr, "[WATCH-SAMPLE addr=%08x value=%08x obs=%llu record=#%u pc=%08x]\n",
+					        awatch_addr[w], now, (unsigned long long)awatch_obs,
+					        jit_ring_idx, from_pc);
+				}
+				if (awatch_have_last[w] && now != awatch_last[w]) {
+					fprintf(stderr, "[WATCH] pc=%08x addr=%08x value=%08x  (was %08x record #%u type=%c block %08x->%08x sp=%08x r24=%08x)\n",
+					        from_pc, awatch_addr[w], now, awatch_last[w], jit_ring_idx, type, from_pc, to_pc,
+					        rec->r1, rec->r24);
+					fflush(stderr);
+					/* Dump the ring on the first few changes so the lead-up is captured. */
+					if (awatch_dumps < awatch_dump_budget) { awatch_dumps++; ppc_jit_dump_trace_ring(); }
+				}
+				awatch_last[w] = now;
+				awatch_have_last[w] = true;
 			}
-			awatch_last[w] = now;
-			awatch_have_last[w] = true;
+			if (sample) fflush(stderr);
 		}
 	}
 

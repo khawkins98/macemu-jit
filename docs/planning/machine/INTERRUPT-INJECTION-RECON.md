@@ -406,3 +406,89 @@ cluster: the level test passes** — first guest IACK of the OpenPIC model ever
   the IACK-leg reachability.
 - **R-II10 named above** (parked-regime DR-poll gap) — the milestone's consumption
   remainder lives there.
+
+## R-II10 / slot-5 park recon (2026-06-12, label slot5-recon) — the park is the NK IDLE TASK in its power-saving nap loop; slot 5 is NOT a missing service; the release IS the interrupt chain; the new break is the post-delivery consumption livelock (three shapes pinned)
+
+Boots: **4 of ≤4** (slot0 `20260612-040140.28575` default + probes; slot0
+`-040346.29469` env-on cluster; slot1 `-040606.34863` env-on spin-pin; slot1
+`-040756.35057` env-on ctx-dump). Env-on cluster = `SS_NW_EE_RISER=1
+SS_NW_DEC_PUBLISHED=1 SS_NW_HOST_IRQ=1 SS_NW_PIC=1` (B-2's TEST cluster). No
+SS_PROBE_LINEAR (R-II9 honored); same 8-probe set held across boots 1–2.
+Canonical dump verified pre-read: rom901.bin md5 d1a267a9 (MANIFEST checked);
+every [STATIC] window below verified raw==patched against rom901_inventory.bin
+unless noted.
+
+### Answer table
+
+| Q | Answer | Tag |
+|---|---|---|
+| **Q-S5a — what the park IS** | **The NK idle task.** Entry 0x50324f04 (`li r31,0` + the developer-name easter-egg loads: "idle task", "Alan", "Jim ", "Alex", "Derrick "); body 0x324f48–0x325000 [STATIC raw==patched]: a 30-register rotate (`mr r30,r1 / mr r1,r2 / … / mr r29,r30`) per iteration; when the delay counter r31 hits 0 → `li r3,0xc; li r4,1; li r0,0x2e; sc`; **r3==0 → loop immediately; r3≠0 → `li r3,1; li r4,0;` + the inline word 0x0fff0005 at 0x324fec (`twi` slot-5 callout); post-callout r3≠0 → r31:=0x989680 (10M rotations ≈ busy delay) → loop**. The loop has NO exit branch — `b 0x50324f48` unconditional at 0x325000. Release = scheduler preemption (an interrupt making another task runnable), never a loop exit. | [STATIC]+[PROBE✓] |
+| **Q-S5a — selector 0x2e** | Body at NK dispatch target 0x5031bdfc (table NK_base+0xacb8, target=NK_base+table[sel]+4·sel): `li r8,0; bl 0x503148e0; r3:=r8,r4:=r9 → common exit 0x5031b124`. 0x3148e0 [STATIC]: bounds-checks r3(=0xc) as an index against the structure at `[KDP-0x338]` (`[+0x38]` table ptr, `[+0x44]` count): table null → r8=-0x7266; index OOB → r8=-0x7267; else a context-save + queue/processor-info walk. Idle args live-verified: `[PROBE✓] 0x5031bdfc r3=0xc r4=1`. Idle semantics = "may I power-save?" — nonzero return routes to the nap callout (observed path: one sc, then the twi). | [STATIC]+[PROBE✓] |
+| **Q-S5a — what the twi does** | NK published 0x700 handler 0x50314700 [STATIC]: reads the faulting word, `xoris 0xfff` → slot id; slot<0x10 → counter `[KDP+0xe40+4·slot]++`, dispatch `mtlr [KDP+0x5f0+4·slot]`, **resume SRR0 := twi+4** (r10+=4 before blr) — the placeholder IS a call instruction. Slot-5 exit pointer is built by **NK cold-init 0x311770–0x311820** [STATIC]: default-fills all 16 with NK+0x46d0 (loud unimplemented), then overrides slots 0–8,15; **slot 5 := NK_base+0x9d20 = 0x50319d20**. | [STATIC] |
+| **Q-S5a — the slot-5 service body** | **0x50319d20 = the NK power-management service** [STATIC raw==patched; PROBE✓ entry r3=1 r4=0]. r3 = mode (≤0xb; 8/9/0xb have special legs); **0x319d38: `and. r8,[KDP+0x670],r9` where r9 = live CR r13 (from-emulator) or `[KDP-0x440]` (the deferred-post mask) — if a pending 68k-interrupt post overlaps the mask `[KDP+0x670]`(=0x00200000 [PROBE✓]), return r3=0 immediately ("work pending, don't sleep")**. Else: capability byte `[KDP+0x6b8]` (=0x1b [PROBE✓] — mode-1 capable) gates; incapable → r3=-0x7267; capable → HID0 doze/nap bits + `mtmsr MSR\|0x8002[\|POW]` → **`b .` self-loop at 0x50319df8 with EE SET** — the architectural nap: the ONLY exit is an asynchronous interrupt (wake path 0x319dfc restores HID0, returns r3=0). | [STATIC]+[PROBE✓] |
+| **Q-S5b — what service is slot 5** | **FE0F opcode / power management** — upstream SheepShaver's own table comment (`patch_68k_emul`, rom_patches.cpp:2113–2118: slot 0=Emulator start, 1=Mixed Mode, 2=Reset/FC1E, 3=FE0A, **4=Interrupt**, 5=FE0F) + M6A-ONGOING-ENTRY-DESIGN §1.2 ("FE0F opcode (power mgmt)", exit ptr `[KDP+0x604]`). Slot 5 was excluded from the Task-U stops + FE1F restore because upstream's `patch_68k_emul` statically replaces table slots 0–3,5 with paravirtual stub branches (PATCHED table at file 0x36e8c0: `48001040/4800113c/48001238/48001334/0/4800142c/0…`; RAW: all 16 twi placeholders) — slot 5 was never a placeholder in the patched table. **The service is NOT missing: the NK implements it itself (exit-array override → 0x50319d20) and it ran to completion on boot 1.** | [RAW-ROM]+[PATCH]+[STATIC] |
+| **Q-S5c — does serving slot 5 release the park** | **NO — and nothing needs serving.** The slot-5 service is what PUTS the boot into the park's true resting state: boot 1 (default) [PROBE✓] sequence = idle entry (visit 1) → sc 0x2e (visit 1) → PROGRAM#5 → slot-5 service entry → **0x50319df8 nap self-loop entered (visit 1) and never exited** — visits of every other leg stayed at 1 (no 10M-spin: 0x324ff8 never fired; no capability-fail: 0x319e4c never fired). The default park = **the CPU napping with EE enabled, waiting for an interrupt that the default config never delivers**. No SS_SEED_MEM release exists: the loop polls no memory word — the release primitive is exception delivery itself. | [PROBE✓] |
+| **Q-S5d — circularity verdict** | **YES — the park is waiting on exactly the interrupt chain this milestone built, and it is now resolvable-in-mechanism but blocked one link downstream.** Env-on, the nap park never forms (idle probes 0 hits, boots 2–4): the EXT edge pulls the DR into its interrupt path instead. But all three env-on boots LIVELOCK post-delivery without the 68k world consuming the interrupt: **(shape A, boots 2–3)** EXT delivered mid-DR → DR branches to entry-vector **slot 4 ("Interrupt", the restored twi)** → PROGRAM#4 (srr0=5046e8d0, lr=5046c4f4) → NK slot-4 service 0x50314660 [STATIC] = 3 instructions: `mtlr [KDP+0x5b0]; blr` (the SAME EXT/PIC-IACK fallback body 0x50325f00) → NK world-restore tail block **0x503244e8 livelock: 10^9 visits** [PROBE✓ boot 3], r10(saved-MSR-image)=0x9040 r12=0x5046c4f4 constant, comp frozen, jDR static, DEC still delivering ~88/s underneath; **(shape B, boot 4)** EXT delivered at restart=0x50465f28 → no PROGRAM#4 at all (the CR arm never reached the live DR context) → the 68k world runs flat-out (jDR +100M blocks/s, comp frozen) in a guest 68k busy-wait — the classic waiting-for-Ticks/VBL spin; **(shape C, B-2's ring-slowed boots)** the timing lets the boot reach the idle/nap park with the post armed but unpolled (R-II10 as originally stated). All three shapes share one missing link: **delivery → 68k-interrupt consumption-and-retirement round trip**. | [PROBE✓]+[STATIC] |
+| **Q-S5e** | Next-task card below. | — |
+
+### The consumption-livelock evidence (the new frontier, one link past R-II10)
+
+- Shape A's livelock block 0x503244e8 [STATIC, in the 0x3242dc world-restore tail]:
+  XER fixup + `mtcrf r13` + reload r0,r7–r13 from ctx + `lwz r6,0x18(r1); lwz r1,4(r1);
+  bctr` — the restore-into-world tail executing 34–71M blocks/s without completing a
+  world switch (jDR frozen). Boot-4 ctx dump at visit 1 (cold, pre-livelock):
+  r6=0x68fff100 = ECB+0x100 emulator ctx (slot-fields +0x5c=0x5046e8c0, +0x9c=0x50480000,
+  +0xe0/+0xfc=0x5046f900 visible). The livelock-time ctx was not captured (boot 4 took
+  shape B; budget cap). The bctr resume target at livelock = the first open question of
+  the next task.
+- Shape A's PROGRAM#4 fired ONCE (counters then froze) — the cycle is NOT re-trapping
+  through the twi; the spin is pure-NK downstream of one delivery.
+- The interrupt arm is never retired in any shape: `edges=1, deasserts=0` class
+  (per B-2), once-per-edge latch held, no second edge possible — consistent with the
+  armed CR/post surviving unconsumed forever.
+- DEC deliveries run healthily UNDER all three livelocks (exc field 0 growing ~88/s)
+  — delivery machinery is not the gap; consumption/retirement is.
+
+### Recommended next-task card (Q-S5e)
+
+**"The slot-4 interrupt round trip: EXT post → DR interrupt vector → 68k IRQ dispatch
+→ retirement → DR resume"** — size **M** (not a FE1F-class service build; slot 4's NK
+side already exists and is 3 instructions; the work is making the
+fallback-post/world-restore cycle terminate in a 68k interrupt the emulator actually
+executes and RETIRES).
+
+- NOT the task: implementing a slot-5 service (exists, NK-internal, conformant), or
+  releasing the nap park directly (it releases itself the moment interrupts deliver —
+  proven: env-on boots never park in the nap).
+- Task-0 recon questions: (1) shape A's bctr resume target + why the restore tail
+  cycles (ring-windowed boot at the livelock, or `[r6:0x180]` ctx probe that survives
+  into the livelock regime); (2) what retires the CR arm / `[KDP+0x67c]` post on the
+  donor (real-NK) path — the 68k side must clear cr2.lt via the slot-0 re-entry after
+  servicing, find the clear site; (3) shape B's discriminator: why the mid-DR delivery
+  failed to arm the LIVE CR (restore ordering vs the [KDP+0x674] OR into saved r13).
+- Falsifiable acceptance gate: env-on cluster boot — after `EXT delivered #1`, (a)
+  PROGRAM#4 fires AND the DR/68k world RESUMES (jDR grows past the delivery with comp
+  unfrozen, no 0x3244e8/restart-block livelock ≥10s), and (b) the via_int/OP_IRQ 68k
+  chain probes fire (`SS_PROBE_68K=0x5000ec52:8`, the Q-I3 list) — "the NK leaves the
+  park and the DR/68k world runs post-delivery". Rider: Ticks LSB via watch word
+  **0x16c** (B-2's corrected word) moving with DR-window attribution (the guest addq,
+  not the host keep-set).
+- The default-config frontier converges on the same fix: flip-cluster + working
+  consumption ⇒ the nap park wakes per DEC/EXT and the scheduler has a runnable blue
+  task whenever a 68k interrupt is pending (the slot-5 service's own
+  `[KDP+0x670] & [KDP-0x440]` check then suppresses napping while posts are pending —
+  the NK's designed coupling, already in the ROM).
+
+### Falsifications / corrections
+
+- **R-II10's framing is corrected, not falsified**: "the parked NK regime never runs
+  the DR/68k world [to poll the post]" is shape C only and timing-dependent. Env-on
+  no-ring, the post IS polled (shape A: the DR took its interrupt vector — the first
+  slot-4 consumption ever observed); the break is the round trip's tail, not the poll.
+- The Q-I5/R-II3 reading "the park is an NK `sc 0x2e` polling loop" is REFINED: the
+  sc is incidental (one power-save query per idle cycle); the resting state is the
+  0x50319df8 nap self-loop (EE on), not an sc storm. The 0x2e-family storm in earlier
+  censuses = idle cycling when nap exits fast or fails — config-dependent.
+- No pinned contract of the interrupt-injection plan falsified; B-2's chain-walk rows
+  stand. The entry-vector slot-4 path was predicted "deliberately dead in the
+  paravirtual design" (M6A §1.2) — on newworld env-on it is LIVE and load-bearing.

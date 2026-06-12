@@ -157,11 +157,11 @@ NON-GOAL here).
 The M7 cluster is default-ON (`81d60cc1`), slot5-recon is committed (`b3e51b8d`),
 re-score #3 is confirmed. No in-flight prerequisite. The gate is REPRODUCTION:
 
-- [ ] One default boot (no env) reproduces the post-flip default-boot signature class
+- [x] One default boot (no env) reproduces the post-flip default-boot signature class
   (DEC #1–4 `(2-SPR)`, EXT #1, PROGRAM#5 srr0=50324fec park, E4 sc census) —
   `--expect 'EXT delivered #1;;DEC delivered;;srr0=50324fec' --absent 'TRIPWIRE'`,
   BOOT-VERDICT PASS.
-- [ ] One env-on test-cluster boot (`SS_NW_PIC=1`, default instruments) reproduces the
+- [x] One env-on test-cluster boot (`SS_NW_PIC=1`, default instruments) reproduces the
   delivery-green/consumption-livelock class: watch-or-log evidence of the 0x8001 post
   + one of shapes A/B/C identified BY ITS SIGNATURE (A: PROGRAM#4 + 0x3244e8-class
   spin, comp frozen, jDR static; B: no PROGRAM#4, jDR flat-out; C: park reached,
@@ -174,7 +174,7 @@ re-score #3 is confirmed. No in-flight prerequisite. The gate is REPRODUCTION:
   in this plan. **[rev 2 / B3]** If the entry baseline shape is C (ring-slowed class),
   Task B's shape-B arm needs a config-discovery boot to find a B-producing config —
   that boot comes out of Task B's ≤5-boot cap; state it in Task B's accounting.
-- [ ] Both boots within the Task-0 budget (they double as Task 0 boots 1–2 if probed
+- [x] Both boots within the Task-0 budget (they double as Task 0 boots 1–2 if probed
   accordingly — co-scheduling encouraged).
 
 ---
@@ -192,7 +192,7 @@ Pin each contract in a written addendum: **INTERRUPT-INJECTION-RECON.md, new sec
 disassembly has killed agents). Co-scheduling mandated; entry-gate boots count if
 probed. Capture-only telemetry commits allowed (inner gates).
 
-- [ ] **(Q-C1, BLOCKING for A — the restore-tail livelock root cause, shape A; owns
+- [x] **(Q-C1, BLOCKING for A — the restore-tail livelock root cause, shape A; owns
   re-score #3's named surprise.)** Why does 0x503244e8 cycle without completing the
   world switch? **[rev 2 / A1] The leading hypothesis is PINNED and statically
   confirmed (Rev 2 §A1): the riser's mtmsr fires the EE-edge re-raise MID-TAIL** —
@@ -230,7 +230,7 @@ probed. Capture-only telemetry commits allowed (inner gates).
   ⇒ STOP-RULE 1 fires here, after the addendum.** Fallback if 2 boots inconclusive:
   shape A's root cause becomes a residue ⇒ blocking ⇒ stop-rule 3 (re-scope, not
   improvisation).
-- [ ] **(Q-C2, BLOCKING for B — retirement on the real path.)** What retires the CR arm
+- [x] **(Q-C2, BLOCKING for B — retirement on the real path.)** What retires the CR arm
   and the post halfword when consumption WORKS? [STATIC] both sides: (a) the NK post
   family's own and-clear leg (`and r13,r13,[KDP+0x678]` — level-0 path today; is it
   also the post-service clear?); (b) the 68k via_int chain's interaction with the
@@ -254,7 +254,7 @@ probed. Capture-only telemetry commits allowed (inner gates).
   via_int probes fire (by ring record number / probe visit order); (c) the multi-edge
   invariant (Task B's `edges/consumed/deasserts` advancing past 1) is bound to the
   downgrade explicitly — a "clear" that does not unlock a second edge does not count.
-- [ ] **(Q-C3, BLOCKING for B's shape-B arm — the mid-DR delivery discriminator.)** Why
+- [x] **(Q-C3, BLOCKING for B's shape-B arm — the mid-DR delivery discriminator.)** Why
   did shape B's delivery never arm the LIVE CR? [STATIC] the post's r13 selection
   (live CR r13 from-emulator vs the saved image / `[KDP-0x440]` deferred-post mask —
   the slot-5 nap check reads BOTH; does the POST write both?) vs the restore ordering
@@ -268,13 +268,13 @@ probed. Capture-only telemetry commits allowed (inner gates).
   contingency.** Fallback: if static-only is inconclusive, classify shape B as a
   post-A re-test item: Task B re-runs the shape-B config after Task A and re-pins —
   but expect "B no longer forms" to FAIL (see Task B's shape-B arm).
-- [ ] **(Q-C4 — R-II8 on this path.)** Is the junk `[KDP+0x910]` queue load-bearing for
+- [x] **(Q-C4 — R-II8 on this path.)** Is the junk `[KDP+0x910]` queue load-bearing for
   the CONSUMPTION leg (it already selects the IACK leg)? One probe word `[0x68ffe910]`
   riding any env-on boot + [STATIC] the queue-drain reads on the restore/scheduler
   path (the 0x324720 deferred-post drain neighborhood). **Deliverable: verdict —
   inert / load-bearing-as-is / needs a clean seed (if a seed: stop and bring it through
   the Q-C1 fork's sanctioned-class test).** Non-blocking unless Q-C1's answer names it.
-- [ ] **Probe pack** (within budget, co-scheduled): [P-1] livelock-block register+ctx
+- [x] **Probe pack** (within budget, co-scheduled): [P-1] livelock-block register+ctx
   probe (Q-C1b — includes the ctx srr0-image slot, the torn-ctx confirmation field);
   [P-2] ring window at livelock onset (Q-C1c — OPTIONAL/confirmatory per rev 2 A4,
   named-config only); [P-3] watch set
@@ -282,7 +282,7 @@ probed. Capture-only telemetry commits allowed (inner gates).
   [P-4] `[0x68ffe910]` + nap-coupling words `[0x68ffe670]`/`[0x68ffdbc0]`-class reads
   riding boots 1–2. SS_PROBE_68K probes (0x5000ec52:8 etc.) reserved for Task B —
   don't burn Task-0 boots on a chain we know is upstream-blocked.
-- [ ] **Gate (the blocking-answer table):** the addendum exists; every answer tagged
+- [x] **Gate (the blocking-answer table):** the addendum exists; every answer tagged
   ([STATIC]/[PROBE✓]/[RAW-ROM]/[PATCH]); the blocking map honored — **Task A blocks on
   Q-C1 (root cause + fork verdict, incl. any seed's sanctioned-class justification);
   Task B blocks on Q-C2's predicate + Q-C3's discriminator (or their named fallback
@@ -570,3 +570,45 @@ i.e. at reload-region entry or mid-reload, not literally mid-instruction) — th
 text states the window as "before the ctx reloads + bctr complete", which is the
 verified form. A3's +0xa4 ctx SRR0-image offset was NOT independently re-verified at
 fold time — carried as expected-verify-in-Q-C1a, not as fact.
+
+## Task-0 results (2026-06-12, s4t0 recon) — fork-(iii) CONFIRMED LIVE; Tasks A/B unblocked pending the Task-0.5 ACK
+
+Full addendum (the blocking-answer table, per-gate evidence, the fix table):
+**INTERRUPT-INJECTION-RECON.md § "Slot-4 consumption recon (M8 Task 0)"**. Summary:
+
+- **Entry gate: PASS both boots** (grep-verdict BOOT-VERDICT PASS each; b1 default 3/3
+  expects, b2 env-on 2/2). **Baseline shape = A** (slot-4 PROGRAM srr0=5046e8d0
+  lr=5046c4f4 present; jNK ~82M/s with jDR static + comp frozen), reproduced 3/3 env-on
+  boots; livelock block run-variant within the reload region (0x3244f8 on b2, 0x3244e8
+  on b4). Shape-B config not yet observed — Task B's config-discovery boot stands (B3).
+- **Q-C1 = fork-(iii), CONFIRMED LIVE** [PROBE✓+STATIC]: b4's `EXT delivered #1:
+  restart=50318018` is the mid-stub (post-mtmsr) delivery A1 predicted, and the
+  livelock-time `[r6:0x180]` ctx (visits 10⁰..10⁹, constant) carries the torn images
+  **ctx+0x154=ctx+0x15c=0x9040** (the riser's composed-MSR scratch saved as the r10/r11
+  GPR images) with the armed post 0x8001 visible in-frame (+0x70) and the original DR
+  resume PC intact-but-unreached at the **real SRR0-image slot ctx+0xfc**
+  (+0xa4 = SRR1 image — the rev-2 verify-first offset is now pinned). Predicate
+  refinement recorded (resume-PC tear travels the register/CTR path, not the ctx slot;
+  mechanism confirmed by the stronger direct evidence; fork NOT re-opened).
+- **Q-C2**: retirement site table pinned — guest halfword retire = emul_op.cpp:812
+  (OP_IRQ head via fe6b@0xbbc8); NK level-0 retire leg = 0x325520/0x32552c
+  (sth 0 + CR and-clear); deassert = main_unix.cpp:2930 ClearInterruptFlag at
+  InterruptFlags==0; DR cr2-clear site mirror/[PROBE✓]-only (open half, covered by the
+  hardened-B1 downgrade conditions, all three stated in the addendum).
+- **Q-C3**: image-selection defect — the from-emulator post leg ORs the VOLATILE working
+  r13 only (no ctx+0xdc write-through, no deferred-pair staging); ctx-reloading exit
+  paths (scheduler restore `lwz r13,0xdc(r6)`) discard the arm; only the deferred pair
+  `[KDP-0x440]/[KDP-0x43c]` survives via the 0x324720 drain. Fix = bounded ordering
+  (stage the deferred pair from the from-emulator leg too); **NOT subsumed by A's fix**
+  (A6 confirmed).
+- **Q-C4**: `[KDP+0x910]` inert for the consumption/restore leg (zero readers there
+  [STATIC]; live junk value 0x503224e8 [PROBE✓ b1]) — no seed; R-II8 unchanged.
+- **Boots: 4 counted of ≤8** (+1 crash re-run disclosed, rebuild-race rule; Q-C1 took 3
+  boots due to a disclosed `--env` whitespace-split instrument mishap — b2/b3r ran
+  probe-less). Q-C1c ring window not run (demoted per A4).
+- **Task 0.5**: the fix table is in the addendum — rfi-atomicity emulation: defer the
+  EE-edge re-raise past the bctr (latch in execute_mtmsr when the edge fires inside the
+  stub window 0x318000-0x318020; fire at the first block boundary outside the
+  tail/reload window), files ppc-execute.cpp + ppc-cpu.cpp/exc_core (latch),
+  rom_patches.cpp untouched, gate `SS_NW_IRQ_CONSUME` default OFF, riser-conditional
+  per A7. **PROCEED awaits the one-line coordinator ACK.**

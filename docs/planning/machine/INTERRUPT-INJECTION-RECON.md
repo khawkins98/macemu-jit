@@ -527,3 +527,74 @@ set spanning the delivery chain (DEC entry 0x50313200, EXT entry 0x50314880, pos
   suppress exactly the highest-value fires (probing delivery entry/restart blocks IS
   the instrument's main use under this regime), and the crash it would insure against
   no longer reproduces.
+
+## Slot-4 consumption recon (M8 Task 0, 2026-06-12, label s4t0) — fork-(iii) CONFIRMED LIVE: the riser's mtmsr re-raise fires mid-tail (EXT restart=0x50318018 observed) and the saved ctx carries the torn r10/r11=0x9040 images; the SRR0-image slot is ctx+0xfc (NOT +0xa4) and the resume-PC tear travels the register/CTR path, not the ctx slot
+
+Boots (counted): **4 of ≤8** — b1 slot0 `20260612-051156.53432` (default, entry gate 1 +
+Q-C4/nap-word probes, BOOT-VERDICT PASS); b2 slot1 `-051304.53665` (env-on `SS_NW_PIC=1`,
+entry gate 2, PASS — shape A); b3r slot0 `-051623.59891` (env-on, PASS — shape A,
+probe-arming failure, see instrument note); b4 slot0 `-051854.60285` (env-on, PASS — shape
+A, the livelock-ctx capture). Not counted (disclosed): b3 `-051503.54470` crashed SIGSEGV in
+DR code pre-delivery on a build raced with instr-hardening's landing (05e0d921/f1aca585);
+per the rebuild-race rule it was re-run once after a fresh rebuild as b3r. Build state:
+all counted boots at HEAD f1aca585 (+ instr-hardening's then-uncommitted glue/ppc-cpu
+instrument edits in the working tree); no instrument-contract anomalies observed.
+
+**Instrument note (self-inflicted, disclosed):** `ss-slot-boot.sh --env` splits on
+WHITESPACE; a single quoted `'SS_NW_PIC=1;SS_PROBE_PC=…'` token becomes ONE env var
+(`SS_NW_PIC="1;SS_PROBE_PC=…"`) — PIC still parsed ON (non-"0"), but **SS_PROBE_PC was
+never armed** on b2/b3r (zero probe lines ≠ zero visits). Multi-var runs need repeated
+`--env` flags; SS_PROBE_PC's own multi-PC `;` separator is safe inside its own var. This
+cost Q-C1 one extra boot (3 boots on Q-C1 vs the ≤2 cap; capture succeeded on b4).
+
+### Entry-gate record
+
+- Default boot (b1): `--expect 'EXT delivered #1;;DEC delivered;;srr0=50324fec'
+  --absent 'TRIPWIRE'` → EXPECT 3/3, BOOT-VERDICT PASS. Class confirmed: DEC #1–4
+  `(2-SPR)` via 0x50313200, EXT #1 (restart=50319df8 = the nap loop), PROGRAM#5
+  srr0=50324fec slot-5 park, E4 sc census.
+- Env-on boot (b2): `--expect 'first-iacks: src=0x3f vec=0x3f;;EXT delivered #1'
+  --absent 'TRIPWIRE'` → EXPECT 2/2, PASS. **Baseline shape on this machine/instrument
+  set = SHAPE A** (classifier greps: slot-4 PROGRAM line `srr0=5046e8d0 word=0fff0004
+  slot=4 … lr=5046c4f4` PRESENT; HB signature jNK-growing ~82M/s with jDR STATIC
+  (2991623) + `comp frozen`). Reproduced on b3r and b4 (3/3 env-on boots → A; no
+  B-producing config seen — Task B's shape-B arm needs its config-discovery boot per
+  rev-2 B3, out of Task B's cap). Note the livelock block is RUN-VARIANT within the
+  reload region: b2 spun at **0x503244f8** (HOT-PC), b4 (and instr-hardening's two
+  051031/051246 boots) at **0x503244e8** — same family, the torn resume PC lands on
+  whichever block boundary the delivery hits.
+
+### Blocking-answer table
+
+| Q | Answer | Tag |
+|---|---|---|
+| **Q-C1 root cause + FORK VERDICT** | **Fork-(iii) patched-tail non-atomicity — CONFIRMED LIVE.** (a) [STATIC] restore path: slot-4 service 0x50314660 `mtlr [KDP+0x5b0]; blr` → fallback 0x325f00 → exits converge → reschedule gate → tail 0x3244cc (`lwz r8,0xedc(r1); mfspr r1,SPRG0; mtlr r12; mtctr r10; mtcrf 0xff,r13; b 0x318000` [PATCH; raw = `mtspr SRR0,r10; mtspr SRR1,r11 … rfi @0x324524`, raw-vs-patched word diff: 0x3244d8/dc/e0 + 0x324524]) → stub 0x318000 (authority rom_patches.cpp:2522-2556, 7-word default-ON shape: `lwz r10,XLM_IRQ_NEST; subi; stw; mfmsr r10; rlwimi r10,r11,0,16,16; mtmsr r10; b 0x3244e4`) → reload region 0x3244e4–0x324524 (XER fixup; `mtcrf 0xff,r13`; reload r10/r11/r12/r13/r7/r8/r9 ← ctx+0x154/15c/164/16c/13c/144/14c, r0←+0x104; `lwz r6,0x18(r1); lwz r1,4(r1); bctr`). The ctx is `[KDP-0x14]` (save path 0x313ce0/0x313d40: `lwz r6,-0x14(r1)`). **The ctx SRR0-image slot is +0xfc, NOT the plan's verify-first +0xa4** — save sites `stw r10,0xfc(r6)` @0x312b4c/0x31a6b0/0x324584, restore `lwz r10,0xfc(r6)` @0x32448c (CONDITIONAL — the fast path can skip it, keeping the register-carried resume PC) /0x324778/0x324d54; **+0xa4 is the SRR1/MSR image** (`stw r11,0xa4(r6)` @0x312be0/0x3245d8). (b) [PROBE✓ b4] livelock capture at 0x503244e8, visits 10⁰..10⁹, registers CONSTANT: r1=0x68ffe000(KDP) r6=0x68fff000 r7=0xffa00000 **r10=0x9040 r11=0x9040** r12=0x504a73a8 r13=0x001018f8; `[r6:0x180]` ctx dump: **+0x154(r10-image)=0x9040, +0x15c(r11-image)=0x9040 — the riser's composed-MSR scratch SAVED AS GPR IMAGES (the torn ctx, by-construction values; clean r11 image = 0xd032/f072-class)**; +0xfc(SRR0-image)=0x5046e1a0 (the DR switch-in resume — the ORIGINAL world's resume PC, intact but never reached); +0xdc(CR-image)=0x20100000 (no 0x00e00000 arm bits); **+0x70=0x80010000 — the 0x8001 post ARMED in-frame, unretired**. **The mid-tail re-raise observed directly: `EXT delivered #1: restart=50318018` (b4) = the stub's post-mtmsr block boundary** — execute_mtmsr (ppc-execute.cpp:1432-1439) fired the EE 0→1 edge inside the patched tail exactly as A1 predicted. Steady-state loop (~38M visits/s vs DEC's 88/s: the loop itself is delivery-free): CTR pinned at the reload-region PC by the onset episode's torn resume; block 0x3244e8 reloads the torn images, `r6←[KDP+0x18]=0x68fff000, r1←[KDP+4]=0x68ffe000` (the save protocol's own back-pointers), bctr→CTR→itself; the 88/s DEC deliveries ride the 2-SPR fast exit (0x313ba4: `lmw r14,0x38(r8); mtlr; rfi` with entry SRR0/SRR1) and return INTO the loop without touching CTR. **Predicate refinement (recorded, not a falsification-trigger):** the written proxy predicate "ctx+srr0-image holds a reload-region PC" did NOT hold (+0xfc holds the DR PC) because the resume-PC tear travels the REGISTER/CTR path (the conditional +0xfc reload @0x32448c + the 2-SPR exits), not the full-save slot; the MECHANISM is confirmed by the two stronger direct observations (restart=0x50318018 mid-stub delivery; r10/r11 ctx images = 0x9040 scratch). The fork does NOT re-open: no DR/foreign-PC resume is being attempted-and-failed — the restore never completes because the loop re-enters itself. | [STATIC]+[PROBE✓]+[PATCH] |
+| **Q-C2 retirement chain** | Site table (PC → action → word): **(1) emul_op.cpp:812** (OP_IRQ head, reached via fe6b @68k 0xbbc8 in the 60 Hz proc — the via_int chain) → `WriteMacInt16([[KDP+0x67c]],0)` → **0x68fff070 := 0, the guest-side halfword retire** (runs pre-WLSC: it precedes the HasMacStarted gate). (2) **NK post body 0x325520/0x32552c** [STATIC raw==patched]: on a pass with r28==0 (IACK'd vector, level 0) → `sth r28,0(r23)` writes 0 to 0x68fff070 AND `and r13,r13,[KDP+0x678]` clears the CR arm — the post's own level-0 retire leg; on r28<0 (queue-empty/spurious) `blt cr7 0x325530` skips BOTH (no retire). (3) DR-side cr2-arm clear at slot-4 dispatch: mirror code, **[PROBE✓]-only territory — statically unpinnable (no dump covers the mirror)**; recorded as the open half, covered by the hardened-downgrade conditions. (4) **main_unix.cpp:2930-2963 `ClearInterruptFlag`** → at InterruptFlags==0 (nw_host_irq_on) → `SheepExcHostIrqDeassert()` + the lost-edge re-check — the deassert that unlocks edge #2. Full cycle: post armed → DR consumes (slot-4/level-1 → via_int chain → OP_IRQ) → :812 clears halfword (+ INTFLAG consumption when HasMacStarted) → ClearInterruptFlag → deassert → latch re-armable. **Task-B falsifiable predicate:** watch 68fff070 records **0x8001→0x0000** with the attributing record in the PINNED writer family — (family a) DR-window record with r24≈0xbbca-class (the emul_op:812 path), or (family b) NK post-body PC 0x325520-class — AND temporally AFTER the 0x5000ec52/0x5000ef22 probes fire, AND bound to `edges/consumed/deasserts` advancing past 1 (all three hardened-B1 conditions stated in advance). | [STATIC]+[PATCH-fresh carried] |
+| **Q-C3 shape-B discriminator** | **Image-selection defect, fix is ORDERING (code) — NOT a seed, NOT subsumed by A's fix** (A6 expectation confirmed statically). The from-emulator post leg (0x325520-2c) ORs `[KDP+0x674]` into the **VOLATILE working r13 only** — no store to the ctx CR image (+0xdc) and no write to the deferred pair. The deferred-post pair (`[KDP-0x440]` mask + `[KDP-0x43c]` halfword, writer 0x325674) is the NOT-from-emulator leg only; the scheduler-restore drain 0x324720-0x324750 re-applies exactly that pair (`sth [KDP-0x43c]→[[KDP+0x67c]]; or r13,r13,[KDP-0x440]` — itself conditional on task-flag bit 0x10 @0x3246a4). The scheduler restore reloads r13/CR from the target ctx (`lwz r13,0xdc(r6)` @0x324658/0x3246f8) — **any working-r13 OR dies on a ctx-reloading exit path**. Shape B = the EXT episode's exit took such a path; the arm reached neither the live CR nor the deferred mask. Fix class: make the from-emulator leg ALSO stage the deferred pair (mirror 0x325674) or write-through to the ctx CR image — bounded, the NK's own staged-post mechanism is the donor; Task B applies it as Q-C3's pinned fix, separate commit. (Even shape A's frame shows the lost arm: live r13=0x001018f8 and ctx+0xdc=0x20100000 both lack 0x00e00000 bits while +0x70 holds 0x8001.) | [STATIC] |
+| **Q-C4 R-II8 on this path** | **Load-bearing-as-is for the IACK leg only; INERT for consumption/restore — no seed needed.** [STATIC] every `[KDP+0x910/0x912]` access in the NK window sits in the IACK/fallback family (0x325f44-0x3263c8) + init zeroing (0x310888) + reset (0x326fcc/fd4); zero readers on the restore/scheduler/drain path (0x3242xx-0x3247xx). [PROBE✓ b1] `[0x68ffe910]`=0x503224e8 (junk, non-zero) — the IACK-leg selection keeps working as today; nap-coupling words confirmed: `[0x68ffe670]`=0x00200000, `[0x68ffdbc0]`([KDP-0x440])=0. Verdict: inert here; R-II8 disposition unchanged (re-check only if the queue area is ever initialized). | [STATIC]+[PROBE✓] |
+
+### The fix table (Task 0.5 — fork-(iii), for coordinator ACK)
+
+| Item | Pin |
+|---|---|
+| Mechanism | **Defer the EE-edge re-raise past the bctr** (rfi-atomicity emulation): when the riser stub's `mtmsr` (guest PC ∈ [0x50318000,0x50318020), the stub window) takes the EE 0→1 edge with a source pending, do NOT `trigger_interrupt()` at that block boundary; latch a deferred-edge flag and fire it at the first subsequent block boundary whose entry PC is OUTSIDE the tail/reload window (i.e. after the 0x324524 bctr has executed and the resume PC is real). MSR.EE and the resume PC then become effectively atomic, as the raw NK `rfi` was (oracle: raw tail `mtspr SRR0,r10; mtspr SRR1,r11; … rfi` @0x3244d8-0x324524, rom901_inventory.bin). |
+| Files | `ppc-execute.cpp` (execute_mtmsr re-raise predicate — the only trigger site); the deferred-edge latch + consume check in the spcflags/block-dispatch path (`ppc-cpu.cpp` check_spcflags neighborhood or exc_core helper); `rom_patches.cpp` untouched (stub bytes unchanged; export the stub-window constant if needed). No new service bodies, no new machinery — one latch + one predicate, the M7 fix-class. |
+| Env gate | `SS_NW_IRQ_CONSUME` (default OFF, structurally inert off; flip LAST in Task C per plan). |
+| Riser-conditional (A7) | The deferral activates only when the riser is armed (`MachineProfileIsNewWorld()` && SS_NW_EE_RISER not opted out) — consume-on+riser-off is inert by construction; cluster-join decision carried to Task C (fix edits the re-raise path ⇒ B4's fold-into-cluster arm is the live one). |
+| Why it cures shape A | The torn save can no longer happen mid-tail: no delivery lands between the mtmsr and the bctr, so the saved ctx always carries the real resume PC and real r10/r11 images; the 0x9040-image self-loop cannot form. DEC cadence unharmed (delivery merely shifts ≤ a few blocks, to the first post-bctr boundary). |
+| What it does NOT fix | Shape B (Q-C3's image-selection defect — separate bounded ordering fix in Task B, expected per A6) and the retirement chain (Task B's round-trip work). |
+
+### Residue / falsification ledger
+
+- No pinned contract falsified. The +0xa4-srr0 expectation was verify-first by rev-2's own
+  precision note and is now PINNED CORRECTLY (+0xfc SRR0-image / +0xa4 SRR1-image); the
+  Q-C1b proxy predicate refined as recorded above (mechanism confirmed by stronger direct
+  evidence; fork not re-opened).
+- Q-C1c ring window: NOT RUN (demoted optional per rev-2 A4; the cycle path was statically
+  derived and live-confirmed without it).
+- Shape-B-producing config: not observed in 3 env-on boots (all A) — Task B's
+  config-discovery boot accounting stands (rev-2 B3).
+- R-II8: disposition refreshed by Q-C4 (inert for consumption). R-II9: downgraded by
+  instr-hardening (see their addendum above) — not relied on here (no SS_PROBE_LINEAR used).
+- New instrument lesson for the house: the `--env` whitespace-split (see instrument note) —
+  worth a README-slots line.

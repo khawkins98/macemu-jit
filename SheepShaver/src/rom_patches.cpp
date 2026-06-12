@@ -801,27 +801,17 @@ bool PatchROM(void)
 		tp[22] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
 		tp[23] = htonl(0x60004F00u);  // ori  r0, r0, 0x4f00    → r0=0x68ff4f00 ('Hnfo' record)
 		tp[24] = htonl(0x901C0000u);  // stw  r0, 0(r28)        [KDP+0xfd0] = record
-		// (3) KDP+0x67c = 0x68ff6084 (VIA IFR shadow word, OP_IRQ write-target).
-		// OP_IRQ unconditionally writes WriteMacInt16(ReadMacInt32(KernelDataAddr+0x67c), 0).
-		// In early NewWorld boot KDP+0x67c is zero → write to 68k addr 0 → corrupts reset vectors.
-		// GATED on SS_NW_VIA_IFR: without VIA_IFR the via_nw901_int ROM patch is not applied so
-		// OP_IRQ never runs; this write is skipped (nops below). Shadow: 0x68ff6084 = the word
-		// immediately after our cold/warm discriminator (0x68ff6080), in the unallocated gap between
-		// MM pool end and NK free-list (0x68ff7000). hnfo_scratch+0xf8=0x68ff50f8 was rejected:
-		// it is inside NK-owned Hnfo scratch reserve (0x68ff5000..0x68ff57ff); irq_post writes
-		// level|0x8000 there on every DEC interrupt, corrupting NK state (boot SIGSEGV).
-		// Register economy: r0=hnfo_rec=0x68ff4f00 (tp[23]); 0x68ff6084=hnfo_rec+0x1184.
-		//                   r28=KDP+0xfd0=0x68ffefd0 (tp[20-21]); KDP+0x67c=r28-0x954.
-		{
-			const char *via_ifr_tp = getenv("SS_NW_VIA_IFR");
-			if (via_ifr_tp && strcmp(via_ifr_tp, "0") != 0) {
-				tp[25] = htonl(0x38001184u);  // addi r0, r0, 0x1184   → r0=0x68ff6084 (VIA IFR shadow)
-				tp[26] = htonl(0x901CF6ACu);  // stw  r0, -0x954(r28)  → [KDP+0x67c] = 0x68ff6084
-			} else {
-				tp[25] = htonl(0x60000000u);  // nop (KDP+0x67c left 0; OP_IRQ not installed)
-				tp[26] = htonl(0x60000000u);  // nop
-			}
-		}
+		// (3) [KDP+0x67c] is left for the NK to initialize.
+		// The NK's cold-init writes [KDP+0x67c] = 0x68fff070 (ECB+0x70, the NK's
+		// from-emulator interrupt-pending halfword).  OP_IRQ_NW reads this pointer
+		// and writes 0 to 0x68fff070 to retire the interrupt post — that IS the
+		// correct retirement path.  A prior attempt to overwrite [KDP+0x67c] with a
+		// shadow address (0x68ff6084) in these two slots broke the NK's interrupt
+		// dispatch: the NK posts level|0x8000 to whatever address is in [KDP+0x67c];
+		// with our shadow value the ECB+0x70 pending cell was never set → no 68k
+		// delivery → stall (dec_expiries=5 boot).  Fix: always nops here.
+		tp[25] = htonl(0x60000000u);  // nop
+		tp[26] = htonl(0x60000000u);  // nop
 		uint32 idx = 27;
 		// M6a Wave 2 recon (MPLibrary reboot-loop diagnosis): the DR emulator's
 		// Mixed Mode Magic path (opcode 0xFE01, the $AAFE RoutineDescriptor
@@ -1511,13 +1501,10 @@ bool PatchROM(void)
 		                    "MRU[0x340/0x344]=0x68fff400)"
 		                  : "OFF (SS_NW_MM_SWITCH=0 opt-out)");
 		{
-			const char *via_ifr_tp = getenv("SS_NW_VIA_IFR");
-			const bool via_ifr_active = via_ifr_tp && strcmp(via_ifr_tp, "0") != 0;
 			fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
 			        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
 			        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "
-			        "re-asserted guest-side%s\n",
-			        via_ifr_active ? "; [KDP+0x67c]=0x68ff6084 (VIA IFR shadow, OP_IRQ write-target)" : "");
+			        "re-asserted guest-side; [KDP+0x67c] left for NK cold-init (NK sets=0x68fff070)\n");
 		}
 	};
 	PatchROM_NW_trampoline();
@@ -3992,7 +3979,13 @@ static bool patch_68k(void)
 	// SS_NW_VIA_IFR block) — patched there under the same gate.
 	if (ROMType == ROMTYPE_NEWWORLD) {
 		const char *via_ifr_env = getenv("SS_NW_VIA_IFR");
-		if (via_ifr_env && strcmp(via_ifr_env, "0") != 0) {
+		const char *via_ifr_rp_env = getenv("SS_NW_VIA_IFR_ROM_PATCH");
+		// SS_NW_VIA_IFR_ROM_PATCH=0 suppresses the ROM patch while keeping the trampoline
+		// (isolation probe: Boot A = trampoline-only, Boot B = ROM-patch-only)
+		bool rom_patch_suppressed = via_ifr_rp_env && strcmp(via_ifr_rp_env, "0") == 0;
+		bool via_ifr_rom_patch_active = (via_ifr_env && strcmp(via_ifr_env, "0") != 0)
+		                             && !rom_patch_suppressed;
+		if (via_ifr_rom_patch_active) {
 			static const uint8 via_nw901_int_dat[] = {0x48,0xe7,0xf0,0xf0, 0x76,0x01,0x60,0x26};
 			base = find_rom_data(0xed00, 0xee00, via_nw901_int_dat, sizeof(via_nw901_int_dat));
 			if (base) {

@@ -874,8 +874,14 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 					fflush(stderr);
 				}
 			} else {
-				// Interrupt path: run normal OP_IRQ work; rte fires on return
-				WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);
+				// Interrupt path: run normal OP_IRQ work; rte fires on return.
+				// NOTE: do NOT write to ReadMacInt32(KernelDataAddr+0x67c) here.
+				// In NewWorld, [KDP+0x67c] = ECB+0x70 = the NK's interrupt-pending
+				// halfword cell.  Writing 0 to it corrupts the NK's DEC scheduler:
+				// the NK uses ECB+0x70 to track pending-interrupt state; clearing it
+				// from the 68k side causes the NK to load DEC=0x7fffffff (idle mode)
+				// instead of the normal short timeslice.  The NK manages this cell;
+				// the 68k handler must leave it alone.
 				r->d[0] = 0;
 				if (HasMacStarted()) {
 					if (InterruptFlags & INTFLAG_VIA) {

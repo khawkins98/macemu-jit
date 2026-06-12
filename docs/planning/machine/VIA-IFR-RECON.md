@@ -1,9 +1,10 @@
 # VIA-IFR Surface — Recon & QEMU Rig Findings
 
-> **Status:** Task-0 and Task A both complete (2026-06-12 sessions 1–2).
-> Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`; `ss-slot-boot.sh` + `SS_PROBE_PC`.
-> Fix target identified: ROM offset 0xed08. See §5 for session-2 findings, corrections,
-> and implementation plan. Next: implement `SS_NW_VIA_IFR` gate.
+> **Status:** Task-0 and Task A complete (sessions 1–2); SS_NW_VIA_IFR gate implemented
+> (session 3, 2026-06-12). Build passes, harness 353/353. Boot stall unresolved —
+> SS_PROBE_68K=0x5000ed08:3 never fires. See §7 for session-3 implementation state,
+> symptom, open questions, and the next-step probe recipe.
+> Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`; `ss-slot-boot.sh` + `SS_PROBE_68K`.
 
 ---
 
@@ -346,6 +347,103 @@ entry, without any QEMU-vs-SheepShaver mapping confusion or address arithmetic.
 **Rule for the next session:** when investigating a 68k code path, start with
 `SS_PROBE_68K=0xPC:N` (fires at DR dispatch hook, first N matches, linear, edge-triggered).
 `SS_PROBE_PC` is for PPC-world investigation only.
+
+---
+
+## 7. Session-3 state — implementation done, boot stall open (2026-06-12)
+
+### 7a. What was implemented
+
+Two changes in `SheepShaver/src/rom_patches.cpp`, both gated by `SS_NW_VIA_IFR`:
+
+1. **via_nw901_int ROM patch** (after the via_int3 block, ~line 3950): replaces the 8-byte
+   secondary dispatch entry at ROM offset 0xed08 with `M68K_EMUL_OP_IRQ; rte; nop; nop`.
+   Pattern: `{0x48,0xe7,0xf0,0xf0, 0x76,0x01, 0x60,0x26}` in range 0xed00–0xee00.
+   Confirmed found: `[ROMPATCH] via_nw901_int @5000ed08 → OP_IRQ+rte`.
+
+2. **Trampoline tp[25]–tp[26]** (cold trampoline, after tp[24]): writes KDP+0x67c =
+   hnfo_scratch+0xf8, using r0=hnfo_rec and r28=KDP+0xfd0 from tp[23–24]. Exactly 2 words.
+   ```
+   tp[25] = addi r0, r0, 0x1f8    → r0 = 0x68ff50f8 (hnfo_scratch+0xf8)
+   tp[26] = stw  r0, -0x954(r28)  → [KDP+0x67c] = 0x68ff50f8
+   uint32 idx = 27;               // was 25 — trampoline budget now exactly 48 words
+   ```
+   This guards the `WriteMacInt16(ReadMacInt32(KDP+0x67c), 0)` inside OP_IRQ.
+
+**Build status:** clean. Harness: 353/353.
+
+**What was tried and removed:** a host-side write to KDP+0x67c in `sheepshaver_glue.cpp`
+inside the SS_NW_VIA_IFR guard. This caused a SIGSEGV (NK cold-init read KDP+0x67c during
+its memory-zeroing loop, using the value as a loop bound → ran 512MB deep). Removed entirely;
+replaced by the trampoline approach which runs post-cold-init.
+
+### 7b. Symptom — boot stall
+
+Slot boot with `SS_NW_VIA_IFR=1 SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1`:
+
+- No crash (NK cold-init crash fixed by trampoline approach)
+- `SS_PROBE_68K=0x5000ed08:3` armed, **never fires**
+- `fired=0` (no IRQ consumed), `dec_expiries=5` in 25s (vs 1912 baseline without VIA_IFR)
+- `ticks_keepset=19`
+- `[PROBE68K] armed: r24=0x5000ed08, first 3 matches` — then silence
+
+### 7c. Open questions
+
+Three plausible explanations, in order of likelihood:
+
+**Hypothesis A — boot stalls before 68k start.** `dec_expiries=5` in 25s (vs 1912) suggests
+something is fundamentally wrong. If the boot stalls in PPC world before PROGRAM#5 (Start68k),
+the DR emulator never runs and SS_PROBE_68K cannot fire. The via_nw901_int patch itself cannot
+cause this (it only modifies ROM bytes in the 68k section); but trampoline tp[25–26] runs
+before PROGRAM#5 — check whether the trampoline write to KDP+0x67c causes a secondary
+problem. Probe: boot with `SS_NW_VIA_IFR=1 SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1` and add
+`SS_PROBE_PC=0x50314880:3` (NK EXT handler) + `SS_PROBE_PC=0x503244d4:3` (Start68k) to see
+how far the PPC world reaches.
+
+**Hypothesis B — EMUL_OP dispatch broken for 0xfe6b in NewWorld DR emulator.** When the
+DR 68k emulator sees opcode 0xfe6b (M68K_EMUL_OP_IRQ), it may dispatch it as an F-line
+exception (vector 0x2C → stop stub `bra *` at 0x50429c20) instead of as a PPC EMUL_OP stub.
+`patch_68k_emul` installs PPC stubs at `ROM+0x380000 + (opcode * 8)`. For 0xfe6b, the stub
+is at ROM+0x3ff340. Whether the NewWorld DR emulator at 0x50480000 uses these stubs or has
+its own F-line handler is unverified. Probe: before adding VIA_IFR patch, fire `SS_PROBE_68K`
+at 0x5000ed08 with NO patch (probe the ORIGINAL movem.l instruction) to confirm SS_PROBE_68K
+fires at all; then compare WITH patch to isolate whether the opcode dispatch is the issue.
+
+**Hypothesis C — via_nw901_int patches the wrong instance.** The via_int3 block also finds
+pattern `{0x48,0xe7,0xf0,0xf0,0x76,0x01,0x60,0x26}` at ROM offset 0x15xxx (for OldWorld).
+For the 9.0.1 ROM, via_int3 searches 0x15000–0x19000 and is conditional on `level1_int`
+(which requires via_int to also find its pattern). If BOTH via_int3 and via_nw901_int find
+their patterns, they patch different instances of the same byte sequence. The secondary
+dispatch flow ALREADY goes through the 0xed08 instance (confirmed by §5b). But if
+via_int3 ALSO fires on the 9.0.1 ROM (g_rom_904_lenient=1 makes this possible) and redirects
+the 0x15xxx instance in a way that indirectly affects the 0xed08 flow, it could explain the
+stall. Check: run the boot with `SS_NW_VIA_IFR=1` and capture the FULL `[ROMPATCH]` log to
+see which patches fired in what order.
+
+### 7d. Recommended next-step probe (start here)
+
+Two-boot recon sequence, 2 minutes total:
+
+**Boot 1 — baseline PROBE_68K (no patch):** confirm the 68k level-1 handler at 0x5000ed08
+fires at all, without any via_nw901_int modification:
+```bash
+SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1 \
+  SS_PROBE_68K=0x5000ed08:3 \
+  SheepShaver/tools/ss-slot-boot.sh --label via-ifr-probe-baseline --timeout 20
+```
+If PROBE_68K fires → DR executes 0xed08 in normal operation; the patch is broken or
+breaks something upstream. If PROBE_68K does NOT fire without any VIA_IFR patch → different
+problem: the 68k handler isn't reaching 0xed08 at all.
+
+**Boot 2 — PPC world depth check (with patch):** confirm how far PPC world reaches:
+```bash
+SS_NW_VIA_IFR=1 SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1 \
+  SS_PROBE_PC=0x50314880:1 \
+  SheepShaver/tools/ss-slot-boot.sh --label via-ifr-ppc-depth --timeout 25
+```
+0x50314880 = NK EXT handler entry. If this fires: PPC world IS running, Start68k was
+reached. If not: the stall is before NK interrupt handling, meaning the trampoline or some
+other change broke the boot path.
 
 ---
 

@@ -1,8 +1,8 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-12** after the M8 (slot-4 consumption) milestone closed.
-> This document is the single entry point for picking the work back up. Hand the
-> resume prompt below to a fresh agent session verbatim, or read on for the state
+> **Status: PAUSED 2026-06-12** (updated mid-session — M9 VIA-IFR implementation in progress,
+> boot stall unresolved). This document is the single entry point for picking the work back up.
+> Hand the resume prompt below to a fresh agent session verbatim, or read on for the state
 > summary and pointers.
 >
 > (Not to be confused with `docs/planning/HANDOFF-NEWWORLD-SUPERVISOR-MMU.md`,
@@ -14,40 +14,34 @@ Paste this to start the next session:
 
 > Read `docs/HANDOFF.md` in full — including the "Recommended resumption order" and
 > the queued ideas — then `docs/AGENT-CONTEXT.md` (the standing context pack — its
-> "Current frontier" block is authoritative), then the header of
-> `docs/planning/ROADMAP.md`. The development process is BINDING:
+> "Current frontier" block is authoritative), then **`docs/planning/machine/VIA-IFR-RECON.md`
+> §7 in full** (the session-3 implementation state, boot stall symptom, and the two-boot
+> recon recipe — this is the immediate entry point). The development process is BINDING:
 > `docs/MILESTONE-WORKFLOW.md` (plan → red-team → rev-2 fold → binding Task-0 recon →
 > env-gated implementation → flip-last acceptance → docs close-out), with the
 > parallel-workstream layer (file-ownership claims, slot-protocol boots, always-green
-> fusion). **Follow the recommended resumption order below** unless Ken redirects:
-> the QEMU rig is DONE (shipped 2026-06-12; see `docs/planning/machine/VIA-IFR-RECON.md`
-> for findings + Task A questions); the two-gear sprint toward the first visible boot
-> screen is next, with VIA-IFR Task A as the first wall. Never push without being asked.
+> fusion). **Where we are:** SS_NW_VIA_IFR gate is implemented (build passes, harness
+> 353/353), but a boot stall has the 68k handler at 0x5000ed08 unreachable
+> (SS_PROBE_68K never fires). Start with the two-boot recon in VIA-IFR-RECON.md §7d.
+> Never push without being asked.
 
 ## Recommended resumption order (coordinator + Ken, decided at pause time)
 
 1. ~~**The QEMU differential rig FIRST (≤ half a day).**~~ **DONE (2026-06-12).**
-   Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`. VIA-IFR Task-0 answered:
-   the `btst d6,(a4)` description in AGENT-CONTEXT was wrong; the ROM handler at
-   0x5000ee98 does `tst.l $d94.w` (tests a low-memory flag, not a VIA MMIO register).
-   Key finding: QEMU's Cuda model never exposes VIA IFR bits to the guest — the
-   question is what sets `$0d94` and what the active handler at 0x64 is in our
-   early-boot guest. Full findings: `docs/planning/machine/VIA-IFR-RECON.md`.
-2. **The two-gear sprint toward pixels** (idea 1 below): VIA-IFR Task A first
-   (what sets `$0d94`; what handler is at 0x64 in our early-boot guest; what
-   `jsr $47c526(pc)` returns as the source pointer), the M5 framebuffer early
-   (recon complete — a visible screen converts later debugging from ring-forensics to
-   looking at it), then frontier-chase. Light gear for seed-class walls
-   (evidence-tagged root cause → gated fix → inner gates → one-line log); the FULL
-   milestone machine for anything touching delivery/world-switch semantics or
-   paravirtual-reachable code. Non-negotiables in either gear: slot protocol,
-   falsifiable evidence before fixes, env gates. One consolidated review + docs pass
-   at sprint end (scheduled review debt, not skipped review).
-3. **Day one, inside the sprint:** sketch the M9+ milestone map (item 6, rough is
-   fine) and kick off the QEMU wall census (item 7) as a background task — the rig
-   now exists, so this can start immediately.
-4. **Defer doc restructuring** (item 4's residual) to the next doc-sweep trigger —
-   it is not the bottleneck.
+   Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`. See full findings:
+   `docs/planning/machine/VIA-IFR-RECON.md`.
+2. ~~**VIA-IFR Task A**~~ **DONE (2026-06-12 session 2).** Fix target identified:
+   ROM offset 0xed08. See `docs/planning/machine/VIA-IFR-RECON.md` §5.
+3. **VIA-IFR boot stall (first task on resumption).** The `SS_NW_VIA_IFR` gate is
+   implemented (build passes, harness 353/353), but the 68k handler at 0x5000ed08
+   is never reached. Start with the two-boot recon in VIA-IFR-RECON.md §7d — two
+   15-20s slot boots, 2 minutes total, will distinguish the three hypotheses. Fix,
+   re-run the inner gates (353/353), then one-line changelog entry. This is light-gear
+   eligible (evidence-tagged root cause → gated fix → inner gates → one-line log).
+4. **Once VIA-IFR fires:** confirm `fired > 0` and `ticks_keepset` advancing before
+   claiming the gate. Retire the six pre-M7 default-ON gates (item 5 below) as a
+   first-milestone task.
+5. **Defer doc restructuring** (item 4's residual) to the next doc-sweep trigger.
 
 ## Where the project stands (2026-06-12)
 
@@ -73,12 +67,10 @@ Shipped in the final two days before the pause (details: `CHANGELOG.md` 2026-06-
 - Instrument hardening: watch spans + `[WATCH-SAMPLE]`, SS_PROBE_LINEAR cleared,
   r24-ring SIGSEGV flush.
 
-The honest red: **Ticks is still host-attributed.** The 68k handler `rte`s source-less
-because the VIA 6522 IFR presents no interrupt source — that is exactly the named next
-milestone. **Task-0 of that milestone is now answered** (2026-06-12, post-pause): the
-ROM dispatch at 0x5000ee98 tests low-memory flag `$0d94`, not a VIA MMIO register; Task A
-is what sets `$0d94` and what handler is actually at 0x64 in our early-boot guest. See
-`docs/planning/machine/VIA-IFR-RECON.md`.
+The honest red: **Ticks is still host-attributed.** M9 (VIA-IFR surface) is mid-flight:
+the `SS_NW_VIA_IFR` gate exists and builds clean (harness 353/353), but the 68k handler
+at 0x5000ed08 is never reached in a slot boot — SS_PROBE_68K never fires. Three hypotheses
+and a two-boot recon recipe to resolve them: see `docs/planning/machine/VIA-IFR-RECON.md` §7.
 
 ## Reading order for a fresh session
 

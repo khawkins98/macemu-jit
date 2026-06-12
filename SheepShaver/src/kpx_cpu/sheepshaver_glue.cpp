@@ -2881,6 +2881,7 @@ void init_emul_ppc(void)
 		        "scratch=%08x (machine-detect data path, memo §2 Option A)\n",
 		        hnfo_rec, hnfo_scratch);
 
+
 		ppc_cpu->sprg_reg(0) = kdp;
 		// M3a (Boot-A root cause): the cold MSR fiction 0xf072 claims EE=1 from the
 		// first instruction, so the first DEC expiry delivered into NK COLD-INIT

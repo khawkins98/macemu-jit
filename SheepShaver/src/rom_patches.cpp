@@ -801,7 +801,16 @@ bool PatchROM(void)
 		tp[22] = htonl(0x3C0068FFu);  // lis  r0, 0x68ff
 		tp[23] = htonl(0x60004F00u);  // ori  r0, r0, 0x4f00    → r0=0x68ff4f00 ('Hnfo' record)
 		tp[24] = htonl(0x901C0000u);  // stw  r0, 0(r28)        [KDP+0xfd0] = record
-		uint32 idx = 25;
+		// (3) KDP+0x67c = hnfo_scratch+0xf8 (OP_IRQ write-target guard, VIA-IFR-RECON §5f).
+		// OP_IRQ unconditionally writes WriteMacInt16(ReadMacInt32(KernelDataAddr+0x67c), 0).
+		// In early NewWorld boot KDP+0x67c is zero → write to 68k addr 0 → corrupts reset vectors.
+		// Written here unconditionally (NewWorld trampoline, after NK cold-init) so the field is
+		// safe whenever OP_IRQ runs (SS_NW_VIA_IFR or any future patch that installs OP_IRQ).
+		// Register economy: r0=hnfo_rec=0x68ff4f00 (from tp[23]); hnfo_scratch+0xf8=hnfo_rec+0x1f8.
+		//                   r28=KDP+0xfd0=0x68ffefd0 (from tp[20-21]); KDP+0x67c=r28-0x954.
+		tp[25] = htonl(0x380001F8u);  // addi r0, r0, 0x1f8    → r0=0x68ff50f8 (hnfo_scratch+0xf8)
+		tp[26] = htonl(0x901CF6ACu);  // stw  r0, -0x954(r28)  → [KDP+0x67c] = hnfo_scratch+0xf8
+		uint32 idx = 27;
 		// M6a Wave 2 recon (MPLibrary reboot-loop diagnosis): the DR emulator's
 		// Mixed Mode Magic path (opcode 0xFE01, the $AAFE RoutineDescriptor
 		// service) allocates a 0x220-byte 68k-context save record from a pool
@@ -1483,7 +1492,7 @@ bool PatchROM(void)
 		fprintf(stderr, "[NW-TRAMP] W2 vector stop stubs (bra.s *): "
 		        "illegal[0x10]=0x50429c00 aline[0x28]=0x50429c10 "
 		        "fline[0x2c]=0x50429c20; [KDP+0xfd0]=0x68ff4f00 ('Hnfo') "
-		        "re-asserted guest-side\n");
+		        "re-asserted guest-side; [KDP+0x67c]=0x68ff50f8 (OP_IRQ write-target)\n");
 	};
 	PatchROM_NW_trampoline();
 
@@ -3937,6 +3946,41 @@ static bool patch_68k(void)
 		*wp++ = htons((level1_int - 12) >> 16);
 		*wp = htons((level1_int - 12) & 0xffff);
 		} else fprintf(stderr, "[ROMPATCH] SKIP via_int3 (absent in parcels)\n");
+	}
+
+	// SS_NW_VIA_IFR: patch the 9.0.1 ROM secondary dispatch table entry (level-1)
+	// at ROM offset 0xed08 (guest 0x5000ed08).
+	//
+	// Background (VIA-IFR-RECON.md §5b-5e): in our early-boot 9.0.1 guest the
+	// level-1 interrupt vector at 0x64 points to 0x5000ed08 (the secondary dispatch
+	// table), NOT to 0x5000ec50 (primary table, which QEMU's Mac OS 9.2.1 reference
+	// boot uses).  The secondary path (0x5000ed36) checks the NK PIC descriptor
+	// (hnfo_rec+0x14 = source-table pointer), finds it NIL, reads garbage from
+	// 68k address 4, and falls to the hardware-reset path (0x5000980a) — so OP_IRQ
+	// is never reached, Ticks is never guest-claimed.
+	//
+	// Fix: replace the 8-byte level-1 secondary dispatch entry with OP_IRQ + rte,
+	// bypassing the source-table lookup entirely.  via_int3's range (0x15000-0x19000)
+	// misses 0xed00-0xee00; the existing via_int / via_int3 block does NOT apply.
+	// Prerequisite: KernelDataAddr+0x67c must be non-zero (see sheepshaver_glue.cpp
+	// SS_NW_VIA_IFR block) — patched there under the same gate.
+	if (ROMType == ROMTYPE_NEWWORLD) {
+		const char *via_ifr_env = getenv("SS_NW_VIA_IFR");
+		if (via_ifr_env && strcmp(via_ifr_env, "0") != 0) {
+			static const uint8 via_nw901_int_dat[] = {0x48,0xe7,0xf0,0xf0, 0x76,0x01,0x60,0x26};
+			base = find_rom_data(0xed00, 0xee00, via_nw901_int_dat, sizeof(via_nw901_int_dat));
+			if (base) {
+				wp = (uint16 *)(ROMBaseHost + base);
+				*wp++ = htons(M68K_EMUL_OP_IRQ);
+				*wp++ = htons(0x4e73);		// rte
+				*wp++ = htons(M68K_NOP);
+				*wp   = htons(M68K_NOP);
+				fprintf(stderr, "[ROMPATCH] via_nw901_int @%08lx → OP_IRQ+rte "
+				        "(SS_NW_VIA_IFR, VIA-IFR-RECON §5e)\n", (unsigned long)(ROMBase + base));
+			} else {
+				fprintf(stderr, "[ROMPATCH] SKIP via_nw901_int (pattern not found in 0xed00-0xee00)\n");
+			}
+		}
 	}
 
 	// Patch ZeroScrap() for clipboard exchange with host OS

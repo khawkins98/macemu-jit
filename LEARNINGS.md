@@ -3814,3 +3814,50 @@ The 9.2.1 compatibility check has TWO separate gates:
 OS 9 Helper patched the **installer** gate (gate 1). But we bypassed gate 1 by manually
 copying the System Folder. We're stuck at gate 2 — the System file's own boot-time check,
 which is a different code path from the installer check.
+
+## 2026-06-12 — Interrupt-chain night: slide wall, DEC storm, P-M5, and what the process caught
+
+### The lenient-relocation hazard class (the 0x505bb060 slide was OUR patch, not the guest)
+
+The "off-ROM PC slide through zeros to SIGSEGV" frontier — investigated as a possible guest
+stack drain — was a **ROM-patch misalignment we planted ourselves**: under lenient patch mode
+the tm_task patch matched at a slid location on 9.0.1 and wrote its replacement bytes off-target,
+leaving a time bomb that detonated minutes later as wild control flow. Fix shape: **verify
+EXPECTED bytes at the patch site FIRST, then write** (`2ff7765f`). Generalization: every
+lenient-mode `find_rom_data` patch is a member of this hazard class — a sibling sweep table now
+lives in `SLIDE-WALL-RECON.md`. Lesson: when a "guest" crash appears at an address with no
+plausible guest writer, audit our own patch sites before theorizing about guest bugs.
+
+### The 12.4M-delivery DEC storm was ONE unstaged global
+
+The first-ever EE-riser boot delivered 12.4M DEC exceptions in seconds — which looked like a
+delivery-path bug. It wasn't: the NK scheduler computes its DEC reload from a TimebaseSpeed
+global at `[KDP+0xf2c]` that nothing had staged (=0), so every reload was degenerate. Staging
+one word at the trampoline (`f31d475e`) produced a healthy 1.042 ms timeslice (mtspr_dec=8).
+Lesson: a storm/flood symptom in a feedback loop usually means a *parameter* of the loop is
+zero/garbage, not that the loop mechanism is wrong — check the inputs the guest derives its
+cadence from before touching the delivery machinery. (Same family as the Execute68k crash:
+the recurring newworld failure shape is "the NK/ROM is fine; a Trampoline-era global we were
+supposed to stage is NULL.")
+
+### The review pipeline caught an lr-slot misattribution before budget burned
+
+The P-M5 crash analysis initially mis-read the crash `lr=0x504ff348` chain; the coordinator's
+independent decode of the mirror slot (`sheep 0x18000029; b 0x50466084`) confirmed the actual
+EmulOp route and pinned the root cause as the unstaged `[KDP+0x1074/0x1078]` Execute68k pair —
+*before* an implementation task was dispatched at the wrong target. The seed discriminator
+(`SS_SEED_MEM` of the two words eliminating the SIGSEGV) then proved the fix shape for free.
+Lesson: cheap independent verification of the single load-bearing decode in a crash chain is
+worth a full task budget; and `SS_SEED_MEM` turns "stage a global" hypotheses into
+no-recompile experiments.
+
+### Red-team found the deliver-once-per-edge livelock statically
+
+The interrupt-injection plan's first draft forwarded `InterruptFlags != 0` into the EXT pending
+seam as a *level*. The red-team round determined — statically, before any code — that
+pre-warm-start (`HasMacStarted()` false, `[0xcfc] != 'WLSC'`) **no route ever deasserts the
+level**, so level-semantics livelock the boot in permanent re-delivery. The plan now forwards a
+**once-per-assert-edge latch** (rev 2 A1/A2) with `HasMacStarted()`-gated retirement. Lesson:
+for any "forward a flag into an exception/interrupt seam" design, ask *who deasserts it, and is
+that party alive at this boot stage* — and let the red-team answer it from static evidence
+before the implementation finds it the hard way.

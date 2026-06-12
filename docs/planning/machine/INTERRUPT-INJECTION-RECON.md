@@ -656,3 +656,38 @@ frontier + WLSC respectively.
   0x500eXXXX class; unreproduced; recorded only.
 - Shape A/B/C: none formed post-fix in any engaged boot (b2/b4/b5r) — shape B's
   config-discovery boot is moot (its mechanism is closed by leg 4's evidence).
+
+## Slot-4 consumption Task C (M8, 2026-06-12, label s4tc) — flip decision: SHIP GATED-OFF-GREEN; R-II10 disposition
+
+**THE FLIP DECISION: `SS_NW_IRQ_CONSUME` stays default OFF** (standalone 17th gate;
+full per-criterion verdict table + the named flip prerequisites:
+`docs/superpowers/plans/2026-06-12-slot4-consumption.md` § "Task C results"). The
+deciding evidence: on the post-flip-candidate config (default boot +
+`SS_NW_IRQ_CONSUME=1`, boots 2/2) a NEW deterministic behavior line appears —
+**SC#1 r0=0x0d r1=1017ffde lr=5046c5ac**, ahead of the canonical SC#1=0x3f, absent
+from 19/19 prior boots — the live face of the Task-B review's P1 (the Q-C3 stub
+stages the deferred pair UNCONDITIONALLY; the drain's and-clear leg at 0x324740-50
+runs only on a ZERO staged mask [STATIC, raw==patched], so level-0 posts — i.e. EVERY
+default-boot post, R-II7 — re-arm at the drain what the inline leg suppressed).
+Park class otherwise identical, zero TRIPWIRE, `[IRQ-CONSUME] 0/0/0` (the latch never
+engages on a default boot) — but "unchanged-or-better" is honestly falsified.
+
+**R-II10 disposition (the three livelock shapes): CLOSED by this milestone.** Shape A
+(torn-ctx restore livelock) — root-caused fork-(iii) and fixed (Task A, passive latch
++ backstop); shape B (lost CR arm) — mechanism closed by the Q-C3 staging fix (Task B
+leg 4); shape C (armed-unpolled park) — superseded: post-fix the armed post drains and
+re-traps slot-4 (Task B legs 4-7). **The named remainder is a NEW frontier, not
+R-II10**: the via6522 IFR presents no 60 Hz source bit (Task B leg 8) — retirement +
+multi-edge live there. **Re-score #3's prediction adjudicated**: the named M3-class
+surprise resolved as fork-(iii) (our patch's non-atomicity), NOT unmodeled NK
+protocol — the stop-rule-1 arm never fired; seeds-not-services held (zero new service
+bodies; the fix set = latch + staging stub + backstop kick).
+
+### Task-C residue additions
+
+- **SC#1=0x0d divergence (NEW, named)**: default+consume only, deterministic 2/2
+  (slot runs 20260612-070421 / -070707), vs 0/19 without. Candidate mechanism: the
+  level-0 staged pair's drain re-arm waking an early DR doorbell poll. Recon question
+  for the VIA-IFR milestone's Task 0; also flip prerequisite (2) for this gate.
+- **0x500eXXXX class**: 0/3 today; pooled honest rate ~4/21 (Task 0: 1/5, A: 3/7,
+  B: 0/6, C: 0/3). Open, pre-existing, not consume-caused.

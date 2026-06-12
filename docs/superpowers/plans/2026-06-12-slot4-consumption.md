@@ -359,7 +359,9 @@ trigger_interrupt (no spcflags set → the guest runs the reload+bctr unmolested
 boundary exists at all); in check_spcflags' HANDLE arm, gate-on, ANY in-window poll is
 suppressed (latch set, NO flags re-armed — the guest must run); the latched edge fires at
 the next natural kick's poll (DEC cadence / host edge — TriggerInterrupt is "the
-DEC-expiry idiom", main_unix.cpp:1447, so a kick is guaranteed) once the entry PC is
+DEC-expiry idiom", main_unix.cpp:1351 — the vclk DEC scheduler kick; the original
+:1447 citation pointed at the PIC output-edge comment, Task-C P2 correction — so a
+kick is guaranteed) once the entry PC is
 outside the windows. Deferred-delivery latency is bounded by the next natural kick;
 pending sources are level-held (EXT) or latched (DEC), so a suppressed kick loses nothing
 but latency. Re-pin boot s4ta-b4r (20260612-055910.70595): GREEN — see results below.
@@ -403,7 +405,8 @@ consumption path if that is what the real chain does, per Q-C2.
 trap_return patch site (rom_patches.cpp) from the emitted values — derived stub window is
 [0x50318000, 0x5031801c) (7 words: the plan's 0x318020 quote was the loose 8-word bound;
 the derivation is authoritative), reload [0x503244e4, 0x50324528). Latch/fire predicates
-are pure (exc_core.cpp, test_exc_chain U14, 24 checks). Riser-conditional per A7:
+are pure (exc_core.cpp, test_exc_chain U14, 17 checks — the 24 in the commit message
+was a miscount, Task-C P2 correction). Riser-conditional per A7:
 armed recorded at the rom_patches riser gate's one eval site; consume-on+riser-off inert
 by construction (empty windows). The fix edits the mtmsr re-raise path ⇒ **B4's
 fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
@@ -501,16 +504,16 @@ task.
 
 ### Task C: acceptance + default flip (flip LAST, revert-on-red) — size S, ≤4 boots
 
-- [ ] **PASS/FAIL battery first, env-on (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`):** (a) full
+- [x] *(adjudicated — env-on evidence stands from Task B at the same HEAD, no functional commit since; today's b1 baseline re-asserts the M7 carry-over + gated-off A/B; see results)* **PASS/FAIL battery first, env-on (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`):** (a) full
   gates (tools/gates.sh full); (b) Task A world-switch sub-contract; (c) Task B
   round-trip + retirement + fence gates; (d) M7 invariant carry-over (delivery
   chronology intact, exactly-once arithmetic in its new multi-edge class, DEC cadence
   class, zero TRIPWIRE); (e) gated-off A/B: default boot + env-on-without-IRQ_CONSUME
   byte-identical to their baseline classes.
-- [ ] **Fix budget:** at most ONE small in-scope fix iteration per falsified contract,
+- [x] *(unused — no fix iterations; the (c)/(e) failures are flip-criteria failures, recorded not patched)* **Fix budget:** at most ONE small in-scope fix iteration per falsified contract,
   full gates re-run after any fix; second falsification of the same contract ⇒
   stop-rule.
-- [ ] **[rev 2 / B4+A7] The 17th-gate decision — OWNER: Task C's implementer, DEADLINE:
+- [x] *(DECIDED: standalone 17th gate, retirement criterion named — fold-into-cluster mandatory at the future flip per A7; see results)* **[rev 2 / B4+A7] The 17th-gate decision — OWNER: Task C's implementer, DEADLINE:
   this flip step (decided, recorded, not drifted into):** EITHER (1) **fold
   `SS_NW_IRQ_CONSUME` into the M7 cluster** (atomic opt-out with
   EE_RISER/DEC_PUBLISHED/HOST_IRQ; mandatory if Task A's fix edits the riser stub —
@@ -522,7 +525,7 @@ task.
   sanctioned exception:** this task's own opt-out A/B boot IS a partial-opt-out-class
   boot — it is the one-time validation run that licenses the opt-out's existence, not
   a supported config.
-- [ ] **Flip-criteria additions (2026-06-12, Task-A review fold — coordinator P1,
+- [x] *(evaluated — per-criterion verdict table in the results: (a) PASS-as-mechanism, (b) open/not-consume-caused)* **Flip-criteria additions (2026-06-12, Task-A review fold — coordinator P1,
   re-examine BEFORE the default flip):** (a) **the EXT-only strand** — the deferred-edge
   consume relies on "the next natural kick" to fire a latched edge, but the DEC kick is
   a per-mtspr one-shot and the host EXT kick fires only on assert edges; an EXT-only
@@ -533,28 +536,82 @@ task.
   RAM) matches R-II9's ORIGINAL SIGSEGV (pc=0x500e708c, 5 same-block DEC restarts =
   the same class as Task A's 5x restart=500e7310), which tensions the R-II9 downgrade;
   carry it as a named open class into the flip decision.
-- [ ] **P2 list (recorded for Task C/Z, not fixed now — Task-A review fold):**
+- [x] *(LANDED as the Task-C cleanup commit — all six items)* **P2 list (recorded for Task C/Z, not fixed now — Task-A review fold):**
   exc_core.h:243's "8 words → +0x20" comment is stale (7 words, end 0x5031801c); the
   U14 suite is 17 checks, not the 24 claimed in the commit message/plan; U14's
   se=0x50318020 loose-bound labels; the Task-A addendum's main_unix.cpp:1447 citation
   should point at the DEC scheduler kick (~:1350); telemetry note — `fired` can exceed
   `deferred` (the suppressed-poll-sets-latch path; harmless).
-- [ ] **THEN flip** `SS_NW_IRQ_CONSUME` to the newworld default (explicit-"0" opt-out,
+- [ ] *(NOT FLIPPED — criteria (c)+(e) failed honestly; SHIP GATED-OFF-GREEN per the Rev-2 B4 arm; flip prerequisites named in the results)* **THEN flip** `SS_NW_IRQ_CONSUME` to the newworld default (explicit-"0" opt-out,
   SS_NW_SC_SURFACE polarity; supported configs remain all-ON/all-OFF). Re-run the
   battery with NO gate env: the default boot now carries the fix (still level-0
   deliveries — consumption stays test-cluster-only until the SS_NW_PIC flip, restate
   this in the commit); the opt-out boot reproduces today's default byte-identically.
   **Any post-flip red ⇒ revert the flip in the same task (machinery stays env-gated),
   record the failure — no shipping default-on with red gates.**
-- [ ] **DIAGNOSTIC OUTCOMES (recorded, not gates):** the post-fix default-boot frontier
+- [x] *(recorded — the default boot stays in the PROGRAM#5 park class with or without the gate; the consume-on default's only delta is the SC#1=0x0d residue; SS_NW_PIC criteria input + Ticks status recorded in the results/Task-B record)* **DIAGNOSTIC OUTCOMES (recorded, not gates):** the post-fix default-boot frontier
   (does the boot leave the PROGRAM#5 park class? what is the new park/progress
   signature?); the SS_NW_PIC flip-criteria delta (consumption working is one of its
   written criteria inputs — update the held-flip row, do NOT flip it); the Ticks
   headline status; the next named frontier, captured with the full census/HB/ring
   baseline per the house convention.
-- [ ] Record results: INTERRUPT-INJECTION-RECON.md (R-II10 disposition + the shape
+- [x] Record results: INTERRUPT-INJECTION-RECON.md (R-II10 disposition + the shape
   table's end-state), M3-class fork outcome noted against re-score #3's prediction.
   Commit.
+
+#### Task C results (2026-06-12, label s4tc) — THE FLIP DECISION: **SHIP GATED-OFF-GREEN** (no default flip; stop-rule-2 / Rev-2 B4 arm)
+
+`SS_NW_IRQ_CONSUME` stays **default OFF** (explicit-"1" opt-in; the test-cluster
+acceptance recipe is `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`). Boots **3 of ≤4**: b1
+default baseline (slot0 `20260612-070418`, BOOT-VERDICT PASS 3/3), b2 default +
+`SS_NW_IRQ_CONSUME=1` only — the post-flip-candidate config (slot1
+`20260612-070421`, PASS 3/3), b3 = b2 repeated for reproducibility (slot0
+`20260612-070707`, PASS 3/3). Gates: task tier on the cleanup commit.
+
+**Per-criterion verdict table** (the accumulated flip-criteria list):
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| (a) | EXT-only strand (does the 60 Hz backstop kick suffice for DEFAULT-ON, not just the test cluster?) | **PASS as mechanism (moot for the flip)** | [STATIC] the backstop (main_unix.cpp tick_func, `ExcIrqConsumeEnabled() && g_exc_deferred_ee_edge → TriggerInterrupt()`) is config-independent — the tick thread always runs, the latch is the only condition; worst-case deferred-delivery latency is bounded at one 16.7 ms retry per tick with the guest running between polls (it exits the window). Sufficient for a default-on config in principle. |
+| (b) | 0x500eXXXX pre-engagement crash class | **OPEN, not consume-caused — honest rate: ~4/21 pooled** | Task 0: 1/5; Task A: 3/7; Task B: 0/6; Task C: 0/3 (all three boots today clean). Pre-engagement (zero [IRQ-CONSUME] activity in every instance), matches R-II9's ORIGINAL SIGSEGV class — a pre-existing delivery-regime (M7 cluster, already default-ON) fragility, timing-sensitive. Named open class; not a consume-flip blocker by itself, but it stays on the books (R-II9 cross-ref `7874ee6d`). |
+| (c) | Q-C3 stub level-0 unconditional staging (the Task-B review P1 — default-relevant: every default-boot post IS level-0) | **FAIL for default-on — divergence REAL and LIVE-OBSERVED** | [STATIC] the drain (0x324740-50: `cmpwi r29,0; or r13,r13,r29; bne done; and r13,r13,[KDP+0x678]`) runs its and-clear ONLY when the staged mask is zero; our stub stages mask 0x00e00000 unconditionally, so a level-0 post re-arms the level bits at the drain that the inline leg's and-clear suppressed. (Donor-faithfulness caveat: the NK's OWN deferred leg 0x325668-8c also stages unconditionally — the divergence is vs the from-emulator leg's inline design, not vs the deferred path.) [LIVE, 2/2] default+consume boots show a NEW deterministic behavior line absent from 19/19 prior boots: **SC#1 r0=0x0d r1=1017ffde lr=5046c5ac** (a DR-region sc injected at the head of the sc chronology) + the census gains `0x0d x1` and +3 tail deliveries. Boot still reaches the identical PROGRAM#5 park, zero TRIPWIRE — but "unchanged" is falsified and "benign" is unproven (mechanism unpinned; retirement is RED so any spurious arm is un-retirable). |
+| (d) | EXT-edge one-shot flakiness (3/6 never engaged; XLM_IRQ_NEST exact-test sampling) | **OPEN — test-cluster determinism issue, not default-correctness** | On default boots EXT #1 was present 3/3 today (and is part of the default class). The flakiness afflicts the env-on acceptance recipe's engagement rate; named residue for the VIA-IFR milestone's harness work. |
+| (e) | Default-boot diagnostic (post-flip-candidate config, the boot Task B couldn't afford) | **FAIL "unchanged", run 2/2** | b2/b3: BOOT-VERDICT PASS, full class match on PROGRAM#1-5/DEC/EXT/host-irq/VCLK lines, `[IRQ-CONSUME] deferred=0 held=0 fired=0` (the latch machinery never engages on a default boot) — but the (c) divergence above is deterministic (2/2 vs 0/19). The default boot is NOT unchanged; "better" cannot be argued with the mechanism unpinned. |
+
+**Decision rationale:** criteria (c)+(e) fail the honest bar — a deterministic
+guest-visible divergence on the post-flip-candidate config, mechanically predicted by
+the Task-B review's P1, with retirement RED pending the VIA-IFR frontier. Per the
+plan's flip-last/revert-on-red discipline the machinery ships env-gated, green, and
+acceptance-proven on the test cluster (Task A/B records); the flip is deferred with
+named criteria (below).
+
+**The 17th-gate decision (B4, owner=Task C, decided here):** `SS_NW_IRQ_CONSUME`
+stays a **STANDALONE 17th gate** — folding an OFF gate into the default-ON M7 cluster
+would flip it implicitly, which the criteria above just refused. **Retirement
+criterion (named):** at the future flip, fold-into-cluster is MANDATORY (A7: the fix
+edits the riser/mtmsr re-raise path; consume is riser-conditional by construction and
+consume-on+riser-off is undefined — the one-time opt-out A/B boots are the sanctioned
+partial-opt-out exception, already spent: s4ta-b5 + today's b1). Flip prerequisites:
+(1) the VIA-IFR surface lands (leg-8 retirement closes — the un-retired post re-trap
+loop is the test-cluster terminal state), AND (2) the level-0 staging divergence is
+explained-or-fixed (either a level test in the Q-C3 stub mirroring the inline leg's
+`bgt cr7` suppression, or a pinned-benign verdict for the SC#1=0x0d line), re-run
+criterion (e) clean.
+
+**Battery disposition (items a–e of the PASS/FAIL battery):** the env-on evidence
+stands from Task B's record at the SAME HEAD (no functional commit between `3e42aa82`
+and this task; today's commits are comment/label/doc-only) — world-switch, round-trip
+legs 1–7, fence (zero host writers), M7 invariant carry-over (today's b1 baseline:
+chronology + E4 census + 7-wide tuple + VCLK park regime all intact), gated-off A/B
+(b1 default has zero IRQ-CONSUME/riser-window lines). Multi-edge stays at its
+structural pre-WLSC ceiling (edges=1; gate flaw recorded in Task B leg 9). Full gates:
+task tier run on the cleanup commit (this task changed no behavior lines).
+
+**NEW NAMED RESIDUE (for Task Z + the next milestone):** the **SC#1=0x0d divergence**
+(default+consume only, deterministic 2/2, r0=0x0d r1=1017ffde lr=5046c5ac, arrives
+before the canonical SC#1=0x3f) — mechanism unpinned (candidate: the level-0 staged
+pair's drain re-arm waking a DR doorbell poll early). Recon question for the VIA-IFR
+milestone's Task 0.
 
 ### Task Z: docs close-out — size S
 

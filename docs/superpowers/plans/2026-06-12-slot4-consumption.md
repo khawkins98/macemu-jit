@@ -387,6 +387,18 @@ with the 2-SPR route), timing-sensitive, NOT caused by the consume machinery (en
 later) but possibly timing-shifted by it. Deserves its own recon question if the rate
 holds.
 
+#### Task A sub-contract re-grade (2026-06-12, post-review fold — coordinator P1)
+
+The rev-2 world-switch sub-contract as written required "PROGRAM#4 fires AND no
+livelock". The landed Task A passed the livelock/fingerprint arms but **PROGRAM#4 was
+re-scoped out of Task A's gate and into Task B's round-trip gate** — legitimately: Task
+0's Q-C3 verdict (the from-emulator post ORs only the volatile working r13, so a clean
+post-fix delivery at an out-of-DR PC never arms a live DR) plus the finding that the
+shape-A chronology (PROGRAM#4 → livelock) was itself a torn-boundary artifact. The gate
+wording was not amended at the time; this note is the dated re-grade. PROGRAM#4 (slot-4
+twi) now belongs to Task B's round-trip sub-contract (a) — or to the direct CR-arm
+consumption path if that is what the real chain does, per Q-C2.
+
 **Design notes as landed:** windows single-source = `g_exc_riser_window` filled at the
 trap_return patch site (rom_patches.cpp) from the emitted values — derived stub window is
 [0x50318000, 0x5031801c) (7 words: the plan's 0x318020 quote was the loose 8-word bound;
@@ -470,6 +482,23 @@ fold-into-cluster arm is the live one for Task C's 17th-gate decision.**
   sanctioned exception:** this task's own opt-out A/B boot IS a partial-opt-out-class
   boot — it is the one-time validation run that licenses the opt-out's existence, not
   a supported config.
+- [ ] **Flip-criteria additions (2026-06-12, Task-A review fold — coordinator P1,
+  re-examine BEFORE the default flip):** (a) **the EXT-only strand** — the deferred-edge
+  consume relies on "the next natural kick" to fire a latched edge, but the DEC kick is
+  a per-mtspr one-shot and the host EXT kick fires only on assert edges; an EXT-only
+  suppressed in-window poll with a quiescent DEC has NO guaranteed re-kick (today the
+  ~88/s DEC metronome bounds the latency — that bound must be argued or fixed before
+  default-on). (b) **the 0x500eXXXX pre-engagement crash class** — Task A's 3/7 env-on
+  crash residue (DEC#1 delivered into 0x500eXXXX early-ROM code, r9 marching out of
+  RAM) matches R-II9's ORIGINAL SIGSEGV (pc=0x500e708c, 5 same-block DEC restarts =
+  the same class as Task A's 5x restart=500e7310), which tensions the R-II9 downgrade;
+  carry it as a named open class into the flip decision.
+- [ ] **P2 list (recorded for Task C/Z, not fixed now — Task-A review fold):**
+  exc_core.h:243's "8 words → +0x20" comment is stale (7 words, end 0x5031801c); the
+  U14 suite is 17 checks, not the 24 claimed in the commit message/plan; U14's
+  se=0x50318020 loose-bound labels; the Task-A addendum's main_unix.cpp:1447 citation
+  should point at the DEC scheduler kick (~:1350); telemetry note — `fired` can exceed
+  `deferred` (the suppressed-poll-sets-latch path; harmless).
 - [ ] **THEN flip** `SS_NW_IRQ_CONSUME` to the newworld default (explicit-"0" opt-out,
   SS_NW_SC_SURFACE polarity; supported configs remain all-ON/all-OFF). Re-run the
   battery with NO gate env: the default boot now carries the fix (still level-0

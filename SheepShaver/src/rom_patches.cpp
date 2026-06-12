@@ -68,6 +68,7 @@ const uint32 PUT_SCRAP_PATCH_SPACE = 0x2fcfc0;
 const uint32 GET_SCRAP_PATCH_SPACE = 0x2fd100;
 const uint32 ADDR_MAP_PATCH_SPACE = 0x2fd140;
 const uint32 TIME_MANAGER_PATCH_SPACE = 0x2fd240;	// 4 TM EMUL_OP stub bodies (SS_NW_TM_TRAPS; checked at the site, not in PatchROM's global check, so non-newworld ROMs are unaffected)
+const uint32 IRQ_POST_PATCH_SPACE = 0x2fd280;	// M8 Task B (Q-C3): from-emulator post-leg deferred-pair staging stub (SS_NW_IRQ_CONSUME; checked at the site)
 
 // Global variables
 int ROMType;				// ROM type
@@ -2586,6 +2587,77 @@ static bool patch_nanokernel(void)
 		        g_exc_riser_window.stub_base, g_exc_riser_window.stub_end,
 		        g_exc_riser_window.reload_start, g_exc_riser_window.reload_end);
 	} else fprintf(stderr, "[ROMPATCH] SKIP trap_return (absent in parcels)\n");
+
+	// M8 Task B (Q-C3, slot-4 consumption plan): the from-emulator interrupt-post
+	// leg's image-selection defect. The NK post body (9.0.1 NK, [RAW-ROM]==[PATCH]
+	// verified in this window, rom901.bin md5 d1a267a9 == rom901_inventory.bin):
+	//   0x325518  rlwinm. r8,r7,0,10,10     ; from-emulator test (bit 0x00200000)
+	//   0x32551c  beq     0x32562c          ; NOT from emulator -> deferred leg
+	//   0x325520  sth     r28,0(r23)        ; post halfword (level|0x8000) -> [[KDP+0x67c]]
+	//   0x325524  or      r13,r13,r31       ; CR arm -> VOLATILE working r13 ONLY  <- defect
+	//   0x325528  bgt     cr7,0x325530
+	//   0x32552c  and     r13,r13,r29       ; level-0 and-clear leg
+	// Any ctx-reloading exit path (scheduler restore lwz r13,0xdc(r6) @0x324658/
+	// 0x3246f8) DISCARDS the working-r13 arm — Task-0 Q-C3: shape B's lost arm, and
+	// post-Task-A the blocking defect (clean deliveries land outside the DR, the arm
+	// never reaches a live DR context). The NK's OWN deferred leg (the donor,
+	// 0x325668-0x32568c) survives such exits: it stages the deferred pair
+	// ([KDP-0x440] CR mask | [KDP-0x43c] halfword) AND sets task-flag bit 0x10
+	// (+0x64 of [KDP-0x8f0]), which the scheduler-restore drain 0x324720-0x324750
+	// consumes (re-posts the halfword, re-ORs the mask into the freshly reloaded
+	// r13, resets the 0xffff sentinel). Fix (ordering, donor-faithful — Task-0's
+	// pinned mechanism, coordinator-ACKed Task B scope): detour the from-emulator
+	// leg's `or r13,r13,r31` through a patch-space stub that ALSO stages the
+	// deferred pair + task flag, mirroring the donor word-for-word (register
+	// discipline incl. the r31 task-ptr reuse is the donor's own; r8 is dead at
+	// the return point — reloaded at 0x325534 before any read; cr0 is dead after
+	// the beq at 0x32551c consumed it). Direct post + working-r13 OR stay (the
+	// fast non-reloading exits still need them); on a reloading exit the drain
+	// re-applies the SAME halfword value (idempotent) + the mask. Known design
+	// note: on a fast exit the staged pair stays pending until the flagged task's
+	// next scheduler switch-in, whose drain re-posts an already-retired doorbell
+	// once (spurious-but-benign duplicate poll; the VIA chain dismisses an empty
+	// poll). GUEST-side writes only — the fake-poke fence is untouched (no host
+	// writes to per-event state; this changes what the GUEST's own post leg does).
+	if (MachineProfileIsNewWorld() && ExcIrqConsumeEnabled()) {
+		// verify-EXPECTED-first (tmtask precedent): the exact 6-word leg, incl.
+		// both branch displacements — any layout drift = loud skip, no patch.
+		static const uint8 irq_post_leg_dat[] = {
+			0x54, 0xe8, 0x02, 0x95,		// rlwinm. r8,r7,0,10,10
+			0x41, 0x82, 0x01, 0x10,		// beq     +0x110 (deferred leg)
+			0xb3, 0x97, 0x00, 0x00,		// sth     r28,0(r23)
+			0x7d, 0xad, 0xfb, 0x78,		// or      r13,r13,r31
+			0x41, 0x9d, 0x00, 0x08,		// bgt     cr7,+8
+			0x7d, 0xad, 0xe8, 0x38};	// and     r13,r13,r29
+		base = find_rom_data(0x320000, 0x328000, irq_post_leg_dat, sizeof(irq_post_leg_dat));
+		if (base == 0) {
+			fprintf(stderr, "[ROMPATCH] irq_post_stage GUARDED-SKIP (from-emulator post leg pattern absent — NK layout moved; Q-C3 arm loss stands on this ROM)\n");
+		} else if (!check_rom_patch_space(IRQ_POST_PATCH_SPACE, 0x40)) {
+			fprintf(stderr, "[ROMPATCH] irq_post_stage GUARDED-SKIP (patch space 0x%x not free — layout moved)\n", IRQ_POST_PATCH_SPACE);
+		} else {
+			D(bug("irq_post_stage %08lx\n", base + 12));
+			// The stub: displaced original + deferred-pair staging + task flag
+			// (donor 0x325668-0x32568c word-for-word, retargeted scratch r8).
+			lp = (uint32 *)(ROMBaseHost + IRQ_POST_PATCH_SPACE);
+			*lp++ = htonl(0x7dadfb78);		// or    r13,r13,r31      (displaced original)
+			*lp++ = htonl(0x8101fbc0);		// lwz   r8,-0x440(r1)    ([KDP-0x440] deferred CR mask)
+			*lp++ = htonl(0x7d08fb78);		// or    r8,r8,r31
+			*lp++ = htonl(0x9101fbc0);		// stw   r8,-0x440(r1)
+			*lp++ = htonl(0xb381fbc4);		// sth   r28,-0x43c(r1)   ([KDP-0x43c] deferred halfword)
+			*lp++ = htonl(0x83e1f710);		// lwz   r31,-0x8f0(r1)   (current task ptr — donor's own idiom @0x325678)
+			*lp++ = htonl(0x2c1f0000);		// cmpwi r31,0            (defensive: no task yet -> skip flag; cr0 dead here)
+			*lp++ = htonl(0x41820010);		// beq   +0x10            (-> the branch back)
+			*lp++ = htonl(0x811f0064);		// lwz   r8,0x64(r31)
+			*lp++ = htonl(0x61080010);		// ori   r8,r8,0x10       (task-flag bit 0x10 = the drain's enable, 0x3246a4)
+			*lp++ = htonl(0x911f0064);		// stw   r8,0x64(r31)
+			*lp = htonl(0x48000000 + (((base + 16) - ((uintptr)lp - (uintptr)ROMBaseHost)) & 0x03fffffc));	// b  back (bgt cr7 @base+16)
+			// The detour: replace the or at base+12 LAST (stub is complete first)
+			lp = (uint32 *)(ROMBaseHost + base + 12);
+			*lp = htonl(0x48000000 + ((IRQ_POST_PATCH_SPACE - (base + 12)) & 0x03fffffc));	// b  stub
+			fprintf(stderr, "[ROMPATCH] irq_post_stage ARMED (Q-C3): from-emulator post leg @%08x detours via 0x%x — stages deferred pair [KDP-0x440]/[KDP-0x43c] + task-flag 0x10 (donor 0x325668-0x32568c)\n",
+			        (uint32)(base + 12), IRQ_POST_PATCH_SPACE);
+		}
+	}
 
 	// Patch FEOA opcode, selector 0x0A (virtual->physical page index)
 	static const uint8 fe0a_0a_dat[] = {0x55, 0x23, 0xa3, 0x3e, 0x4b};

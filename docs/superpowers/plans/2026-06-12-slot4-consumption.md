@@ -1,5 +1,18 @@
 # M8 — the slot-4 interrupt consumption round trip: a delivered interrupt is CONSUMED — PROGRAM#4 → NK slot-4 service → world-restore tail COMPLETES → 68k via_int chain runs → the armed post is retired on the real path
 
+> **STATUS: MILESTONE COMPLETE (2026-06-12) — SHIPPED GATED-OFF-GREEN.**
+> `SS_NW_IRQ_CONSUME` stays default OFF (standalone 17th gate; acceptance recipe
+> `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`). The R-II10 livelock shapes are FIXED
+> (fork-(iii) torn-ctx root cause); the round trip is GREEN through leg 7 env-on
+> (post → Q-C3 staging → drain → slot-4 twi → 68k level-1 handler at 60 Hz); the
+> default flip was REFUSED on honest criteria (the deterministic SC#1=0x0d
+> divergence + retirement RED). **Remainder = the VIA-IFR retirement frontier (the
+> next milestone) + the named flip prerequisites** (Task C results: VIA-IFR lands +
+> SC#1=0x0d explained-or-fixed; fold-into-cluster mandatory at the flip). Close-out:
+> Task Z committed 2026-06-12 (DIAGNOSTICS M8 section, AGENT-CONTEXT frontier,
+> ROADMAP/MACHINE-LAYER-PLAN rows + re-score #4 trigger state, residue table,
+> LEARNINGS, CHANGELOG milestone entry).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps
 > use checkbox (`- [ ]`) syntax for tracking. **Dispatch ONE task at a time — Tasks A/B/C
@@ -291,7 +304,7 @@ probed. Capture-only telemetry commits allowed (inner gates).
 
 ### Task 0.5 (conditional, coordinator checkpoint): the fork sign-off
 
-- [ ] **[rev 2 / B2]** If Q-C1's verdict is fork-(i) seed-class or fork-(iii)
+- [x] *(satisfied — fix table recorded in the addendum, coordinator ACKed; see "Task 0.5 — coordinator ACK" below)* **[rev 2 / B2]** If Q-C1's verdict is fork-(i) seed-class or fork-(iii)
   atomicity-fix-class: record the seed table (word, value, real-boot owner, oracle
   citation) / the fix-shape table (mechanism, code site, why it restores rfi
   atomicity, why no new machinery) in the addendum, and **PROCEED requires a one-line
@@ -300,11 +313,11 @@ probed. Capture-only telemetry commits allowed (inner gates).
   coordinator re-scopes (M3-class machinery is a milestone of its own, red-teamed on
   its own). Any "seed" that is per-event state fails the sanctioned-class test (the
   fake-poke fence) and takes the fork-(ii) STOP too.
-- [ ] **[rev 2 / B2] Middle case (escalation, per-fork):** if a fork-(i) seed (or a
+- [x] *(not triggered — Task A passed within the one-iteration rule)* **[rev 2 / B2] Middle case (escalation, per-fork):** if a fork-(i) seed (or a
   fork-(iii) fix) fails Task A's world-switch sub-contract and ONE re-pin (the
   one-iteration rule) also fails, that escalates to stop-rule 1 — per FORK-BRANCH,
   not per individual seed/word (no seed-shopping).
-- [ ] **[rev 2 / B2] Termination clause:** a Task-0.5 STOP includes a mini-Z — the
+- [x] *(not triggered — no STOP; the plan proceeded to completion)* **[rev 2 / B2] Termination clause:** a Task-0.5 STOP includes a mini-Z — the
   addendum committed, the ROADMAP row updated to the stopped state, the re-score #4
   trigger flagged, and an AGENT-CONTEXT frontier note (no silent abandonment).
 
@@ -615,25 +628,25 @@ milestone's Task 0.
 
 ### Task Z: docs close-out — size S
 
-- [ ] DIAGNOSTICS.md: `SS_NW_IRQ_CONSUME` (default, opt-out, cluster relationship,
+- [x] *(done — new "M8 slot-4 consumption" section: the gate + the four arms, supported configs, flip prerequisites, the [IRQ-CONSUME] line incl. ticks_keepset and the fired>deferred note; watch-span/[WATCH-SAMPLE] verified already-current from instr-hardening)* DIAGNOSTICS.md: `SS_NW_IRQ_CONSUME` (default, opt-out, cluster relationship,
   the test-cluster acceptance recipe); the multi-edge latch counter class.
-- [ ] AGENT-CONTEXT.md: frontier rewrite (the consumption claim flips from "never
+- [x] *(done — frontier block rewritten: green through leg 7, RED at the via6522 IFR with the a4@0x5000ee9a Task-0 question; gate census 17 standalone; SC#1=0x0d residue; stale-claims list extended)* AGENT-CONTEXT.md: frontier rewrite (the consumption claim flips from "never
   consumed" to its new honest state; stale-claims list updated), gate census 16→17
   (or 16 stays if the gate folded into the cluster — state which, per Task C's
   recorded decision). **[rev 2 / B5]** Add the "named next task" pointer line AND
   extend the cross-tracker stale-claim grep to cover it.
-- [ ] MACHINE-LAYER-PLAN: header + the M7-follow-on row; **re-score #4 trigger check**
+- [x] *(done — header + new §9 "Re-score #4 trigger check": adjudication recorded (fork-(iii), stop-rule 1 never fired), re-score NOT drafted (gated-off ship, scores stand), FLAGGED DUE at the next default-flip-class landing; gate census 17)* MACHINE-LAYER-PLAN: header + the M7-follow-on row; **re-score #4 trigger check**
   (the named surprise's outcome — fired/resolved/avoided — is the §9 input; flag if
   a re-score is due, drafting per the convention).
-- [ ] ROADMAP: **[rev 2 / B5]** this row closed BY NAME (header/status line named, not
+- [x] *(done — closed BY NAME in the header status line, the phase-3 row, and the D3 detail block; VIA-IFR next-task row; SS_NW_PIC row gains the consumption input; gate retirement un-deferred as a flag)* ROADMAP: **[rev 2 / B5]** this row closed BY NAME (header/status line named, not
   implied); next named task row added; the SS_NW_PIC flip-criteria row updated with
   the consumption input; the deferred gate-retirement candidates un-deferred
   (re-score #3's coordinator addition expires with this task — flag, do not execute).
-- [ ] **[rev 2 / B5] Tabulated residue disposition** (one row each, in the addendum or
+- [x] *(done — consolidated table appended to INTERRUPT-INJECTION-RECON.md: R-II7 open-until-PIC-flip, R-II8 unchanged, R-II9 open-downgraded + 0x500eXXXX cross-ref, R-II10 CLOSED, SC#1=0x0d + EXT-edge new)* **[rev 2 / B5] Tabulated residue disposition** (one row each, in the addendum or
   Task Z commit): R-II7 stays-open-until-PIC-flip; R-II8 per Q-C4's verdict; R-II9
   still-open instrument suspect; R-II10 closed-by-this-milestone or its named
   remainder.
-- [ ] CHANGELOG + LEARNINGS (at minimum: the fork outcome, the retirement-chain
+- [x] *(done — CHANGELOG milestone entry [all 18 commits verified in-tree]; LEARNINGS: torn-context find + dump staleness, "kick guaranteed" falsification, plan-gate reachability flaw, unwired-instrument P0; stale-claim grep run — live offenders were exactly the three rewritten tracker blocks, the rest dated/historical)* CHANGELOG + LEARNINGS (at minimum: the fork outcome, the retirement-chain
   anatomy, any instrument lesson); cross-tracker grep for stale "post never
   consumed"/"Ticks never guest-claimed"/"slot-4 livelock" claims (historical sections
   stay). Commit.

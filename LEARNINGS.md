@@ -17,6 +17,69 @@ because 8.6/9.0 here don't VR-context-switch (single-app-safe). Caveats + roadma
 `docs/planning/sheepshaver-research/ALTIVEC-DETECTION-RESEARCH.md`.
 ---
 
+## 2026-06-12 — VIA-IFR session 2: three investigation failures and what to do instead
+
+A follow-on probe campaign (after the QEMU rig session) trying to identify and implement
+the VIA-IFR fix ran into three compounding problems. Recording them as rules.
+
+### 1. Use SS_PROBE_68K for 68k code paths — SS_PROBE_PC is blind to them
+
+`SS_PROBE_PC` fires at PPC JIT block-entry addresses. It cannot fire at 68k ROM addresses.
+When investigating a 68k interrupt handler (e.g. the one at 0x5000ed08), using SS_PROBE_PC
+at the NK EXT handler entry (0x50314880) and then reasoning backward about 68k state is
+slow and error-prone. The right tool is:
+
+```bash
+SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1 \
+  SS_PROBE_68K=0x5000ed08:10 \
+  SheepShaver/tools/ss-slot-boot.sh --label via-ifr-68k --timeout 20
+```
+
+`SS_PROBE_68K=0xPC:N` fires at the DR dispatch hook, first N matches, linear. It shows
+the 68k regfile (d0–d7, a0–a7) and PPC context at the handler entry. One probe would have
+shown `a2=0x68ff4f00` and `*(a2+0x14)=0` immediately, without any address arithmetic.
+
+**Rule: when the bug is in 68k code, start with SS_PROBE_68K. Reserve SS_PROBE_PC for
+PPC-world investigation.**
+
+### 2. AGENT-CONTEXT Hnfo record addresses were wrong (now corrected)
+
+AGENT-CONTEXT and the first RECON session described the pending bits address as
+`0x68ffeff8` and the source table pointer as `0x68ffefe4`. Both are wrong.
+
+`[KDP+0xfd0]` = address `0x68ffefd0` is the **pointer field** — it holds the hnfo_rec
+address as its value, not a field within the record. The actual record is at
+`hnfo_rec = 0x68ff4f00` (= `irp_base + 0xf00`). Correct field addresses:
+- source-table-ptr: **`0x68ff4f14`** (hnfo_rec + 0x14)
+- pending-bits:     **`0x68ff4f28`** (hnfo_rec + 0x28)
+
+The error propagated from a confusing name ("NK PIC descriptor at `0x68ffefd0`" was read
+as "the record base is `0x68ffefd0`" when it actually means "the pointer to the record
+lives at address `0x68ffefd0`"). The RECON doc §5a and AGENT-CONTEXT are now corrected.
+
+### 3. QEMU oracle and SheepShaver observe different boot stages — compare like with like
+
+The QEMU rig probes at N seconds after QEMU launch (default 50s). Our SS_PROBE_PC fires
+at the **first EXT interrupt** in our boot. These are very different stages:
+
+| Stage | `*(0x64)` | Meaning |
+|---|---|---|
+| QEMU 5s bracket | `0x5000ec50` | ROM's default (primary dispatch table) |
+| QEMU 10s bracket | `0x0047d0ba` | Mac OS 9.2.1 system handler (RAM) |
+| Our SS first EXT | `0x5000ed08` | ROM's early init (secondary dispatch table) |
+
+QEMU at 5s shows the *primary* dispatch (0x5000ec50), but our boot at first-interrupt time
+has the *secondary* (0x5000ed08). These are two different ROM dispatch paths with different
+semantics. Comparing them directly led to analyzing the wrong code path.
+
+**Rule: when using the QEMU rig as an oracle for early-boot state, probe at the same
+boot stage (3–5s = "before Mac OS installs anything"). The rig now has a `--ladder`
+option that probes at multiple points (3s, 5s, 10s, 30s by default) so the evolution is
+visible.** For stage-matching with our SheepShaver early-boot, use the 3–5s rig output,
+not the 50s output.
+
+---
+
 ## 2026-06-12 — QEMU rig experiment: what the rig is actually for, and a sixth pitfall
 
 A timeout-ladder experiment (5s / 10s / 50s) using the rig against VIA-IFR Task A
@@ -31,11 +94,12 @@ the working answer. Today's example — we didn't know what the ROM interrupt ha
 actually checked. One 5s boot and two memory reads later: it checks an NK PIC descriptor
 block at `0x68ffefd0`, not VIA MMIO. That would have taken hours to find statically.
 
-**Finding 1 — ROM stub checks NK PIC descriptor, not VIA MMIO:**
-The ROM level-1 handler at `0xffc0ec50` loads `$68ffefd0` into a2 and checks
-`$28(a2) AND [*$14(a2) + level*4]`. If that's zero, it rte's source-less. This is the
-VIA-IFR fix target — the NK PIC descriptor at KDP+0xFD0, not a VIA register read.
-See `docs/planning/machine/VIA-IFR-RECON.md` §4b for the full disassembly.
+**Finding 1 — ROM stub checks NK PIC descriptor, not VIA MMIO (corrected):**
+The secondary ROM level-1 handler at `0x5000ed08` (via_int3_dat entry) loads from
+`$68ffefd0` to get `a2=hnfo_rec=0x68ff4f00`, then checks `$28(a2) AND [*$14(a2) + level*4]`.
+If that's zero, it rte's source-less. The fix target is `hnfo_rec+0x14` (source table ptr)
+— but the simpler fix is patching ROM offset 0xed08 with OP_IRQ+rte directly. Full
+analysis: `docs/planning/machine/VIA-IFR-RECON.md` §5.
 
 **Finding 2 — system handler source-ID function is two instructions:**
 `jsr $47c526(pc)` resolves to `move.l *0x47c50c, d0; rts`. Not relevant to our early-boot

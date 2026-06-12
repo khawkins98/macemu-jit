@@ -29,17 +29,42 @@ The real question is what sets `$0d94` at tick time (and whether it is even the 
 handler path — at Finder, Mac OS 9.2.1 installs its own handler in RAM, replacing the ROM
 stub). See `docs/planning/machine/VIA-IFR-RECON.md` for the full corrected picture.
 **Named next task: the VIA-IFR surface** (M-class device-model work — `dev_via6522`
-exists). **Task A substantially answered by QEMU rig experiment (2026-06-12):**
-- Handler at 0x64 in our early-boot guest: ROM stub at `0xffc0ec50` (confirmed — system
-  handler installs between 5s–10s in QEMU; our PROGRAM#5 frontier is pre-5s equivalent)
-- ROM stub source dispatch checks **NK PIC descriptor at `0x68ffefd0`** (KDP+0xFD0):
-  `pending=*(0x68ffeff8)` AND `table[level]=*(*(0x68ffefe4) + level*4)` — if zero, rte's
-  source-less. This is the fix target, not VIA MMIO reads or `$d94`.
-- System handler source-ID (`jsr $47c526(pc)`): trivially `move.l *0x47c50c, d0; rts` —
-  not relevant to our early-boot scenario.
-**One remaining Task A question:** does the NK initialize `0x68ffefd0` (fields `+0x14`
-and `+0x28`) before PROGRAM#5? Confirm with `SS_PROBE_68K` reading `0x68ffefd0..ffc` at
-first interrupt in our guest. Then: set the pending bit there at tick time.
+exists). **Task A COMPLETE (2026-06-12 session 2 probe campaign).**
+
+**Corrected addresses (the AGENT-CONTEXT and RECON doc both had this wrong):**
+`[KDP+0xfd0]` (= address `0x68ffefd0`) is the POINTER FIELD holding the Hnfo record
+address; the record itself is at `hnfo_rec = 0x68ff4f00` (= irp_base + 0xf00).
+Fields: source-table-ptr = `hnfo_rec+0x14` = **`0x68ff4f14`**;
+pending-bits = `hnfo_rec+0x28` = **`0x68ff4f28`**. The previously cited
+`0x68ffeff8`/`0x68ffefe4` were wrong.
+
+**Probe results at first EXT interrupt (SS_PROBE_PC=0x50314880 visit=1):**
+- `*(0x64)` = **`0x5000ed08`** ← the active handler in OUR boot is the SECONDARY dispatch
+  table (NOT the QEMU-observed `0x5000ec50`; these are two different 9.0.1 ROM paths —
+  QEMU boots 9.2.1 Mac OS which may install the primary path early; our trampoline or
+  rom_patches writes something different to 0x64)
+- `hnfo_rec+0x14` = **`0x00000000`** — source table pointer NIL (never initialized)
+- `hnfo_rec+0x28` = **`0x80000000`** — pending bit set by NK/init before first interrupt
+
+**Root cause:** With source-table-ptr NIL, the secondary dispatch (0x5000ed36) does
+`and.l (0, 1*4), d0` = read from 68k address 4 (= Initial PC = 0x50010000); bit 31 = 0
+→ AND = 0 → both primary and secondary checks fail → no source found → hardware-reset
+path at 0x5000980a (which in our emulation likely loops or soft-falls-through without
+visible reset) → epilogue at 0x5000ee58 → `tst.l $d94.w` = 0 → rte source-less.
+
+**Fix target (identified):** Patch ROM offset 0xed08 (= 0x5000ed08) with
+`M68K_EMUL_OP_IRQ; rte; nop; nop`. The via_int3_dat pattern is confirmed present there;
+the existing via_int3 search range (0x15000–0x19000) misses it, and the via_int
+pre-condition also blocks. A new 9.0.1-specific patch with range 0xed00–0xee00 lands it.
+**Prerequisite:** `KernelDataAddr+0x67c` (`0x68ffe67c`) must not be zero before OP_IRQ
+runs — set it to a scratch address in the NewWorld trampoline init to avoid a write to
+68k address 0 (Initial SSP corruption). Gate: `SS_NW_VIA_IFR`.
+Full implementation plan: `docs/planning/machine/VIA-IFR-RECON.md` §5e–5f.
+
+**Tooling lesson (load-bearing):** Use `SS_PROBE_68K=0xPC:N` for 68k code paths, NOT
+`SS_PROBE_PC`. SS_PROBE_PC is PPC block-entry only and is probe-blind to 68k addresses.
+A single `SS_PROBE_68K=0x5000ed08:5` would have shown a2=hnfo_rec and *(a2+0x14)=0
+directly, without the address confusion or QEMU comparison step.
 Default boots are unchanged (PROGRAM#5 srr0=0x50324fec park + the M7 delivery
 chronology; level-0 posts per R-II7 keep consumption unreachable by design until the
 SS_NW_PIC flip). **NEW named residue: SC#1 r0=0x0d** (r1=1017ffde lr=5046c5ac) —

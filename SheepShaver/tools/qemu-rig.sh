@@ -3,16 +3,20 @@
 #
 # Boots the 9.0.1 ROM on QEMU mac99 + 9.2.1 installer CD (the S1 reference)
 # as a routine instrument: produces a per-run directory with trace logs,
-# and a monitor socket for post-boot virtual-memory inspection.
+# a monitor socket for post-boot virtual-memory inspection, and a ladder
+# probe file that captures key addresses at multiple points during the boot.
 #
 # Usage:
 #   ./qemu-rig.sh [--rundir DIR] [--timeout SECS] [--trace EVENTS_FILE]
-#                 [--gdbstub] [--no-vnc]
+#                 [--ladder SECS[,SECS,...]] [--gdbstub] [--no-vnc]
 #
 # Defaults:
 #   rundir  = /tmp/qemu-rig-<timestamp>
 #   timeout = 50  (Finder boot is ~30s; extra slack for slow machines)
 #   trace   = (none — for speed; supply --trace for device-event capture)
+#   ladder  = "3,5,10,30" — probe the interrupt vector and Hnfo record at each
+#             of these offsets (seconds after QEMU launch).  Values past --timeout
+#             are ignored.  Set to "" to disable ladder probes.
 #   gdbstub = off (add --gdbstub to enable on port 1234)
 #
 # Outputs inside rundir:
@@ -20,35 +24,54 @@
 #   qemu.log      — stdout/stderr from QEMU
 #   mon.sock      — QEMU monitor Unix socket
 #   trace.log     — trace-events output (if --trace supplied)
-#   finder.ppm    — screenshot captured at boot + timeout/2 (if sips available)
+#   probes.txt    — ladder probe results (one block per stage)
+#   finder.ppm    — screenshot captured at --timeout
+#   finder.png    — PNG version of above (if sips available)
 #
-# First-customer query (VIA-IFR task-0):
-#   After boot, use qemu-mon.py to read virtual memory:
-#     python3 qemu-mon.py --sock <rundir>/mon.sock \
-#       "x /8wx 0x64"          # level-1 interrupt vector
-#       "x /2wx 0x168"         # Ticks (confirms system is running)
-#       "x /2wx 0xd90"         # $d94 flag tested at 0x5000ee98
-#       "x /2wx 0x6e0"         # $6e4 vector chain pointer
+# Key probe addresses (see Architecture notes for interpretation):
+#   0x64          — 68k level-1 autovector (changes as boot progresses)
+#   0x168         — Ticks (non-zero once Mac OS is ticking)
+#   0x68ffefd0    — [KDP+0xfd0]: pointer to Hnfo record (when KDP=0x68ffe000)
+#   0x68ff4f14    — hnfo_rec+0x14: source-table pointer (NIL = bug, must be set)
+#   0x68ff4f28    — hnfo_rec+0x28: pending interrupt bits (0x80000000 = NK set)
+#   0xd90         — $d94 flag (tst.l at 0x5000ee98; non-zero = dispatch $6e4)
+#   0x6e0         — $6e4 VBL chain pointer (non-zero at Finder)
 #
-# Architecture notes (from S1 + rig bringup, 2026-06-12):
+# Architecture notes (from S1 + rig bringup, 2026-06-12; corrections 2026-06-12):
 #   - QEMU mac99 MacIO is at PCI BAR0 = 0x80000000 (NOT 0xF3000000 like real HW)
 #   - VIA (Cuda) = 0x80016000, SCC (ESCC) = 0x80012000
 #   - 68k low memory IS at virtual address 0 (NK maps it identically)
-#   - Level-1 interrupt vector (virtual 0x64) = 0x47d0ba at Finder
-#     (Mac OS 9.2.1 system-installed handler, not the ROM default)
+#   - *(0x64) EVOLVES during boot — probe multiple stages to see the ladder:
+#       ~3s  : 0x0000xxxx (ROM/NK writing; may still be transitioning)
+#       ~5s  : 0x5000ec50 (9.0.1 ROM default — primary dispatch table; `jmp 0x5000ef20`)
+#       ~10s : 0x0047d0ba (Mac OS 9.2.1 system handler, RAM-installed)
+#     **SheepShaver early-boot** shows 0x5000ed08 (secondary NK PIC dispatch table)
+#     at the *first* EXT interrupt — before Mac OS switches it.  The QEMU 5s value
+#     (0x5000ec50) may reflect a different 9.0.1 ROM initialization path than ours,
+#     or a later stage — exact cause is unresolved.  Use SS_PROBE_68K=0x5000ed08
+#     in SheepShaver to observe our actual handler, not this rig.
+#   - Hnfo record (KDP+0xfd0 chain, when KDP=0x68ffe000):
+#       0x68ffefd0 = pointer to hnfo_rec (= 0x68ff4f00 in our trampoline)
+#       hnfo_rec+0x14 = source-table pointer (NIL in our boot — the VIA-IFR bug)
+#       hnfo_rec+0x28 = pending bits (0x80000000 set by NK/init in our boot)
+#     CAVEAT: QEMU's KDP may differ from our 0x68ffe000 so these addresses may
+#     not be meaningful in the QEMU context — read the pointer at 0x68ffefd0 first
+#     and dereference only if it is a plausible address.
 #   - 60 Hz tick arrives via ppc_irq_set pin 5 level 1 (OpenPIC)
-#   - The VIA MMIO registers are NOT directly read by the 68k tick handler
-#     in QEMU mac99; the Cuda device handles the interrupt internally
-#   - The ROM handler at 0x5000ee98 does `tst.l $d94.w; beq; movea.l $6e4.w,a0`
-#     (AGENT-CONTEXT said "btst d6,(a4)" — that was WRONG; no such instruction
-#     at 0x5000ee9a in the static ROM; it is mid-word of tst.l $d94.w)
+#   - VIA MMIO registers NOT directly read by 68k tick handler in QEMU mac99
+#   - ROM dispatch at 0x5000ee98 is `tst.l $d94.w; beq; movea.l $6e4.w,a0`
+#     (AGENT-CONTEXT said "btst d6,(a4)" — WRONG; corrected 2026-06-12)
 #
 # Limitations vs real hardware:
 #   - OpenBIOS, not Apple OF: oracle valid from NK entry onward
 #   - Bare HFS images (.dsk) are not OpenBIOS-bootable; use real-format CD/HD
 #   - MacIO MMIO addresses differ from real hardware (PCI-assigned vs hardwired)
+#   - QEMU boots Mac OS 9.2.1 (from the CD); SheepShaver boots 9.0.1 system.
+#     Values at Finder may differ.  Values at ~5s (before Mac OS installs handlers)
+#     are the best early-ROM comparison point.
 #
 # See also: docs/planning/spikes/SPIKE-S1-QEMU-GATE-CHECK.md (S1 results)
+#           docs/planning/machine/VIA-IFR-RECON.md §5 (session-2 probe findings)
 
 set -euo pipefail
 
@@ -132,16 +155,18 @@ TIMEOUT=50
 TRACE_FILE=""
 GDBSTUB=0
 NO_VNC=0
+LADDER_ARG="3,5,10,30"   # default ladder stages (seconds after QEMU launch)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --rundir)   RUNDIR="$2"; shift 2 ;;
         --timeout)  TIMEOUT="$2"; shift 2 ;;
         --trace)    TRACE_FILE="$2"; shift 2 ;;
+        --ladder)   LADDER_ARG="$2"; shift 2 ;;
         --gdbstub)  GDBSTUB=1; shift ;;
         --no-vnc)   NO_VNC=1; shift ;;
         -h|--help)
-            sed -n '3,60p' "$0" | grep '^#' | sed 's/^# \?//'
+            sed -n '3,80p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0
             ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -188,59 +213,98 @@ QPID=$!
 echo "$QPID" > "$RUNDIR/qemu.pid"
 echo "QEMU PID: $QPID"
 echo "Monitor: $RUNDIR/mon.sock"
-echo "Waiting ${TIMEOUT}s for Finder boot..."
+echo "Waiting ${TIMEOUT}s..."
 
-# Wait for boot + optionally screenshot
-sleep $((TIMEOUT / 2))
+MON="$(dirname "$0")/qemu-mon.py"
+PROBE_OUTPUT="$RUNDIR/probes.txt"
 
-# Take a mid-boot screenshot if the monitor socket exists
-if [[ -S "$RUNDIR/mon.sock" ]]; then
-    python3 "$(dirname "$0")/qemu-mon.py" \
-        --sock "$RUNDIR/mon.sock" \
-        "screendump $RUNDIR/midboot.ppm" \
-        2>/dev/null || true
-fi
-
-sleep $((TIMEOUT / 2))
-
-# Final screenshot + key probes
-if [[ -S "$RUNDIR/mon.sock" ]]; then
-    PROBE_OUTPUT="$RUNDIR/probes.txt"
+# Helper: run a standard probe set against the monitor socket at a given label.
+# Appends output to PROBE_OUTPUT.
+run_probe_stage() {
+    local label="$1"
+    local sock="$2"
     {
-        echo "=== Post-boot probes ($TIMEOUT s after launch) ==="
+        echo "======================================================================"
+        echo "=== Probes at ${label}s after launch ==="
+        echo "======================================================================"
         echo ""
-        echo "--- Ticks (virtual 0x168) ---"
-        python3 "$(dirname "$0")/qemu-mon.py" --sock "$RUNDIR/mon.sock" "x /2wx 0x168" || echo "(read failed)"
+
+        echo "--- *(0x64) Level-1 interrupt vector ---"
+        VEC_LINE=$(python3 "$MON" --sock "$sock" "x /1wx 0x64" 2>/dev/null || true)
+        echo "  ${VEC_LINE:-"(read failed)"}"
+        VEC=$(printf '%s' "$VEC_LINE" | grep -oE '0x[0-9a-f]+' | head -1)
         echo ""
-        echo "--- Level-1 interrupt vector (virtual 0x64) ---"
-        # Read ONCE and reuse — vector changes during boot so two reads can differ.
-        # The probe is intended for a stable post-boot system; the header note warns
-        # about short-timeout (mid-boot) runs where the value may still be changing.
-        VEC_LINE=$(python3 "$(dirname "$0")/qemu-mon.py" --sock "$RUNDIR/mon.sock" "x /2wx 0x64" 2>/dev/null || true)
-        echo "${VEC_LINE:-"(read failed)"}"
-        VEC=$(printf '%s' "$VEC_LINE" | grep -o '0x[0-9a-f]*' | head -1)
-        if [[ "$TIMEOUT" -lt 30 ]]; then
-            echo "  NOTE: timeout=${TIMEOUT}s — system may still be mid-boot; vector may not be stable"
+
+        echo "--- *(0x168) Ticks ---"
+        python3 "$MON" --sock "$sock" "x /1wx 0x168" 2>/dev/null || echo "  (read failed)"
+        echo ""
+
+        echo "--- Hnfo record chain (valid when KDP=0x68ffe000) ---"
+        echo "  [0x68ffefd0] KDP+0xfd0 pointer:"
+        HNFO_PTR_LINE=$(python3 "$MON" --sock "$sock" "x /1wx 0x68ffefd0" 2>/dev/null || true)
+        echo "    ${HNFO_PTR_LINE:-"(read failed)"}"
+        HNFO_PTR=$(printf '%s' "$HNFO_PTR_LINE" | grep -oE '0x[0-9a-f]+' | head -1)
+        if [[ -n "$HNFO_PTR" && "$HNFO_PTR" != "0x00000000" ]]; then
+            echo "  (Hnfo record pointer = $HNFO_PTR — reading field offsets from known addr)"
         fi
-        if [[ -n "$VEC" ]]; then
-            echo "--- Level-1 handler disassembly at $VEC (same read as above) ---"
-            python3 "$(dirname "$0")/qemu-mon.py" --sock "$RUNDIR/mon.sock" \
-                --disasm "$VEC" --count 128 || echo "(disasm failed)"
+        echo "  [0x68ff4f14] hnfo_rec+0x14 source-table-ptr:"
+        python3 "$MON" --sock "$sock" "x /1wx 0x68ff4f14" 2>/dev/null || echo "    (read failed)"
+        echo "  [0x68ff4f28] hnfo_rec+0x28 pending-bits:"
+        python3 "$MON" --sock "$sock" "x /1wx 0x68ff4f28" 2>/dev/null || echo "    (read failed)"
+        echo "  [0x68ff4fa8] hnfo_rec+0xa8 source-dev-ptr:"
+        python3 "$MON" --sock "$sock" "x /1wx 0x68ff4fa8" 2>/dev/null || echo "    (read failed)"
+        echo ""
+
+        echo "--- *(0xd90) \$d94 flag (non-zero → \$6e4 dispatch runs) ---"
+        python3 "$MON" --sock "$sock" "x /1wx 0xd90" 2>/dev/null || echo "  (read failed)"
+        echo ""
+
+        echo "--- *(0x6e0) \$6e4 VBL chain pointer ---"
+        python3 "$MON" --sock "$sock" "x /2wx 0x6e0" 2>/dev/null || echo "  (read failed)"
+        echo ""
+
+        if [[ -n "$VEC" && "$VEC" != "0x00000000" ]]; then
+            echo "--- Level-1 handler disassembly at $VEC (32 insns) ---"
+            python3 "$MON" --sock "$sock" --disasm "$VEC" --count 32 2>/dev/null \
+                || echo "  (disasm failed)"
+            echo ""
         fi
-        echo ""
-        echo "--- \$d94 flag (tested at ROM 0x5000ee98; 0=no-tick-dispatch) ---"
-        python3 "$(dirname "$0")/qemu-mon.py" --sock "$RUNDIR/mon.sock" "x /2wx 0xd90" || echo "(read failed)"
-        echo ""
-        echo "--- \$6e4 vector chain pointer ---"
-        python3 "$(dirname "$0")/qemu-mon.py" --sock "$RUNDIR/mon.sock" "x /2wx 0x6e0" || echo "(read failed)"
-        echo ""
-        echo "--- Screenshot ---"
-        python3 "$(dirname "$0")/qemu-mon.py" --sock "$RUNDIR/mon.sock" "screendump $RUNDIR/finder.ppm" || echo "(screenshot failed)"
-        if [[ -f "$RUNDIR/finder.ppm" ]] && command -v sips &>/dev/null; then
-            sips -s format png "$RUNDIR/finder.ppm" --out "$RUNDIR/finder.png" 2>/dev/null && \
-                echo "PNG: $RUNDIR/finder.png" || true
-        fi
-    } | tee "$PROBE_OUTPUT"
+    } | tee -a "$PROBE_OUTPUT"
+}
+
+# Build sorted ladder from LADDER_ARG, filtering points past TIMEOUT.
+IFS=',' read -ra RAW_LADDER <<< "$LADDER_ARG"
+LADDER=()
+for T in "${RAW_LADDER[@]}"; do
+    T="${T// /}"  # strip spaces
+    if [[ "$T" =~ ^[0-9]+$ ]] && [[ "$T" -lt "$TIMEOUT" ]]; then
+        LADDER+=("$T")
+    fi
+done
+# Always include TIMEOUT as the final stage.
+LADDER+=("$TIMEOUT")
+
+# Walk the ladder: sleep to each stage, probe if monitor is ready.
+PREV=0
+for STAGE in "${LADDER[@]}"; do
+    DELTA=$(( STAGE - PREV ))
+    if [[ "$DELTA" -gt 0 ]]; then
+        sleep "$DELTA"
+    fi
+    PREV="$STAGE"
+    if [[ -S "$RUNDIR/mon.sock" ]]; then
+        run_probe_stage "$STAGE" "$RUNDIR/mon.sock"
+    else
+        echo "(monitor not ready at ${STAGE}s)" | tee -a "$PROBE_OUTPUT"
+    fi
+done
+
+# Final screenshot after the last ladder stage.
+if [[ -S "$RUNDIR/mon.sock" ]]; then
+    python3 "$MON" --sock "$RUNDIR/mon.sock" "screendump $RUNDIR/finder.ppm" 2>/dev/null || true
+    if [[ -f "$RUNDIR/finder.ppm" ]] && command -v sips &>/dev/null; then
+        sips -s format png "$RUNDIR/finder.ppm" --out "$RUNDIR/finder.png" 2>/dev/null || true
+    fi
 fi
 
 echo ""

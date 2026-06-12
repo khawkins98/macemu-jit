@@ -1,8 +1,9 @@
 # VIA-IFR Surface — Recon & QEMU Rig Findings
 
-> **Status:** Task-0 complete (2026-06-12). AGENT-CONTEXT description corrected.
-> Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`.
-> Next: Task A (what sets $d94 / what $6e4 chain expects).
+> **Status:** Task-0 and Task A both complete (2026-06-12 sessions 1–2).
+> Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`; `ss-slot-boot.sh` + `SS_PROBE_PC`.
+> Fix target identified: ROM offset 0xed08. See §5 for session-2 findings, corrections,
+> and implementation plan. Next: implement `SS_NW_VIA_IFR` gate.
 
 ---
 
@@ -176,7 +177,179 @@ first interrupt fires in our guest.
 
 ---
 
-## 5. QEMU rig operational notes
+## 5. Session-2 findings — Task A complete (2026-06-12 probe campaign)
+
+### 5a. Critical correction: Hnfo record base address
+
+The QEMU RECON doc and AGENT-CONTEXT carried a structural error in the Hnfo record
+addresses. `[KDP+0xfd0]` (= address 0x68ffefd0) is the **pointer field** — it contains
+the 4-byte address of the Hnfo record, not the record itself. The 68k instruction
+`movea.l $68ffefd0.l, a2` loads a2 with the VALUE at that address:
+
+```
+[KDP+0xfd0] = 0x68ffefd0 → VALUE = 0x68ff4f00  ← this is hnfo_rec (= irp_base + 0xf00)
+```
+
+All Hnfo field offsets are relative to **hnfo_rec = 0x68ff4f00**:
+
+| Field | Address | Meaning |
+|---|---|---|
+| hnfo_rec + 0x08 | `0x68ff4f08` | Writable scratch pointer (set by trampoline) |
+| hnfo_rec + 0x14 | `0x68ff4f14` | **Source table pointer** (NIL in our boot) |
+| hnfo_rec + 0x18 | `0x68ff4f18` | Re-entrancy check gate |
+| hnfo_rec + 0x28 | `0x68ff4f28` | **Pending interrupt bits** (0x80000000 in our boot) |
+| hnfo_rec + 0x2c | `0x68ff4f2c` | Secondary pending bits |
+| hnfo_rec + 0x70 | `0x68ff4f70` | `'Hnfo'` tag (set by trampoline) |
+| hnfo_rec + 0x76 | `0x68ff4f76` | Machine id word (set by trampoline) |
+| hnfo_rec + 0xa8 | `0x68ff4fa8` | Source-device table pointer (NIL in our boot) |
+
+The AGENT-CONTEXT claims `pending=*(0x68ffeff8)` and source table at `*(0x68ffefe4)` are
+WRONG — those are KDP+0xfd0 plus offset arithmetic against the POINTER FIELD, not the
+record. The correct addresses are 0x68ff4f28 and 0x68ff4f14.
+
+### 5b. *(0x64) diverges from the QEMU reference
+
+| Boot | *(0x64) level-1 vector | Path |
+|---|---|---|
+| QEMU 9.2.1 (5s bracket) | `0x5000ec50` | **Primary dispatch table** — `jmp $5000ef20.l` → VIA device handler |
+| Our SheepShaver 9.0.1 | `0x5000ed08` | **Secondary dispatch table** — NK PIC descriptor check |
+
+These are different code paths with different mechanisms. The RECON doc's analysis of
+"what the ROM stub does at 0x5000ec50" (§4b) does NOT apply to our boot — that code is
+never reached. The active path in our boot is the secondary table at 0x5000ed08.
+
+**Why the divergence:** the 9.0.1 ROM's 68k initialization code installs 0x5000ed08 at
+*(0x64). QEMU boots Mac OS 9.2.1 which installs 0x5000ec50. Different ROM versions; the
+QEMU rig is a behavioral oracle for the same ROM version only.
+
+### 5c. Probe results — Hnfo record state at first EXT interrupt
+
+All values captured at `SS_PROBE_PC=0x50314880` (NK EXT handler entry, before NK has
+executed any instructions of this invocation):
+
+| Field | Address | Value | Meaning |
+|---|---|---|---|
+| `*(0x64)` | — | `0x5000ed08` | Level-1 vector → secondary dispatch path |
+| `*(0x0192)` | — | `0x50008180` | VIA device handler pointer (unreachable via our path) |
+| `*(0x0000)` | — | `0x50010000` | Initial SSP reset vector |
+| `*(0x0004)` | — | `0x50010000` | Initial PC reset vector (byte at [4] = 0x50) |
+| hnfo_rec | `0x68ff4f00` | `0x00000000` | Record first word (tag is at +0x70) |
+| hnfo_rec+0x14 | `0x68ff4f14` | **`0x00000000`** | **Source table pointer = NIL ← THE BUG** |
+| hnfo_rec+0x18 | `0x68ff4f18` | `0x00000000` | Re-entrancy gate (zero → bypassed) |
+| hnfo_rec+0x28 | `0x68ff4f28` | **`0x80000000`** | **Pending bits (bit 31 set by NK/init)** |
+| hnfo_rec+0xa8 | `0x68ff4fa8` | `0x00000000` | Source-device table pointer = NIL |
+
+### 5d. Source-dispatch trace through the secondary path
+
+At entry to 0x5000ed08:
+```
+movem.l d0-d3/a0-a3, -(a7)
+moveq   #$1, d3              ; level = 1
+bra.b   $5000ed36            ; common handler
+```
+
+At 0x5000ed36 (common handler for secondary dispatch table):
+```
+addq.l  #$1, ([$2b6], $31c)  ; increment interrupt counter
+movea.l $68ffefd0.l, a2      ; a2 = *(0x68ffefd0) = hnfo_rec = 0x68ff4f00
+moveq   #$0, d1
+move.l  $28(a2), d0          ; d0 = hnfo_rec+0x28 = 0x80000000 ✓ (pending bit set)
+movea.l $14(a2), a0          ; a0 = hnfo_rec+0x14 = 0x00000000 ← NIL!
+and.l   (a0, d3.l * 4), d0  ; d0 &= *(0 + 1*4) = *(4) = 0x50010000 as a word
+                              ; d0 = 0x80000000 & [whatever is at addr 4] → unpredictable
+bne.b   $5000ed62            ; source found? depends on *(4)
+moveq   #$20, d1
+move.l  $2c(a2), d0          ; secondary pending (hnfo_rec+0x2c) = 0
+and.l   $20(a0, d3.l), d0   ; *(0 + 0x21) — another garbage read
+beq.w   $5000980a            ; if both zero → hardware reset path
+```
+
+**The primary AND reads garbage from address 4 (byte 0x50) ANDed with 0x80000000 = 0.**
+The secondary AND also reads garbage. Both land at 0x5000980a — the hardware reset path.
+Yet the machine keeps running (observed). The probable explanation: a0=0 causes the `and.l`
+to read from 68k address 4 as a full 32-bit word = 0x50010000; AND with 0x80000000 = 0
+(bit 31 of 0x50010000 is clear). Both checks fail → the handler falls to 0x5000980a.
+
+The code at 0x5000980a is a PPC-timing hardware reset sequence (or equivalent) — its exact
+behavior in our emulation may differ from real hardware (it may just loop or effectively
+rte). This branch explains why the machine doesn't visibly reset, and also why $d94 is
+never set and the $6e4 chain is never dispatched: the handler never reaches the interrupt
+source-ID path.
+
+### 5e. Fix target
+
+The fix-target is **not** the source table + pending fields (those are correct in concept
+but the source-found path requires five more uninitialized Hnfo fields and a live Mac OS
+interrupt manager table — too many unknowns for early boot).
+
+**The correct fix for our boot stage: patch ROM offset 0xed08 to install OP_IRQ.**
+
+The via_int3_dat pattern `{0x48, 0xe7, 0xf0, 0xf0, 0x76, 0x01, 0x60, 0x26}` is confirmed
+present at ROM offset 0xed08 (= guest address 0x5000ed08). This is exactly the 8-byte
+secondary dispatch entry for level-1. The existing `via_int3` patch in `rom_patches.cpp`
+searched range 0x15000–0x19000 (miss) and was conditional on `via_int` also finding a
+match (which it doesn't in the 9.0.1 ROM). Both conditions block the patch.
+
+**Proposed patch (rom_patches.cpp, gated by `SS_NW_VIA_IFR`):**
+```cpp
+static const uint8 via_nw901_int_dat[] = {0x48,0xe7,0xf0,0xf0, 0x76,0x01,0x60,0x26};
+base = find_rom_data(0xed00, 0xee00, via_nw901_int_dat, sizeof(via_nw901_int_dat));
+if (base) {
+    wp = (uint16 *)(ROMBaseHost + base);
+    *wp++ = htons(M68K_EMUL_OP_IRQ);  // replaces movem.l
+    *wp++ = htons(M68K_RTE);          // 0x4e73 — replaces moveq
+    *wp++ = htons(M68K_NOP);          // padding (replaces bra.b)
+    *wp++ = htons(M68K_NOP);          // padding (replaces bra.b operand word)
+}
+```
+
+This replaces the 8-byte level-1 secondary dispatch entry with `OP_IRQ; rte; nop; nop`,
+leaving the level-2 entry at 0x5000ed10 untouched. When the level-1 interrupt fires:
+the 68k handler runs OP_IRQ (which in early boot sets d[0]=1 and returns; after Mac OS
+loads it dispatches TimerInterrupt, VBL, etc.) then rte.
+
+### 5f. Implementation prerequisite: KernelDataAddr+0x67c safety
+
+`OP_IRQ` (emul_op.cpp line 812) always executes:
+```cpp
+WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);
+```
+`KernelDataAddr = 0x68ffe000`; `KernelDataAddr+0x67c = 0x68ffe67c`. In the paravirtual
+profile this holds a valid pointer; in our NewWorld early boot it is zero (pre-zeroed
+pool) → `WriteMacInt16(0, 0)` → writes word 0 to 68k address 0x0000 (Initial SSP),
+corrupting the exception vector table.
+
+**Fix:** in the NewWorld trampoline init (sheepshaver_glue.cpp, near the hnfo_rec setup),
+write a scratch address into this field before interrupts fire:
+```cpp
+// OP_IRQ unconditionally does WriteMacInt16(ReadMacInt32(KernelDataAddr+0x67c), 0).
+// In early boot this field is zero → write to addr 0 → corrupts reset vector.
+// Point it at hnfo_scratch+0xf8 (the last 8 bytes of the scratch reserve) — safely writable.
+WriteMacInt32(KernelDataAddr + 0x67c, hnfo_scratch + 0xf8);
+```
+
+Gate this write inside the same `SS_NW_VIA_IFR` guard as the ROM patch.
+
+### 5g. Tooling lesson
+
+The wrong tool was used throughout this investigation. **SS_PROBE_PC fires at PPC
+block-entry addresses and is probe-blind to 68k code.** All the address-deduction and
+dispatch-path analysis could have been replaced by one probe:
+```bash
+SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1 \
+  SS_PROBE_68K=0x5000ed08:5 \
+  SheepShaver/tools/ss-slot-boot.sh --label via-ifr-68k --timeout 20
+```
+That would have shown d3=1, a2=hnfo_rec, *(a2+0x14)=0 directly at the interrupt handler
+entry, without any QEMU-vs-SheepShaver mapping confusion or address arithmetic.
+
+**Rule for the next session:** when investigating a 68k code path, start with
+`SS_PROBE_68K=0xPC:N` (fires at DR dispatch hook, first N matches, linear, edge-triggered).
+`SS_PROBE_PC` is for PPC-world investigation only.
+
+---
+
+## 6. QEMU rig operational notes
 
 ### Boot the reference machine
 ```bash

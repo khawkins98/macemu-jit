@@ -419,7 +419,7 @@ codegen comparisons.
 | `ppc-jit.cpp` (instruction handler) | `jit-test/run.sh` (test vector), **`ROADMAP.md` + `OPTIMIZATION-PLAN.md` (both, if the item is in both — grep the op name)** |
 | `ppc-jit.cpp` (RA/flush/block structure) | `LEARNINGS.md`, **`ROADMAP.md` + `OPTIMIZATION-PLAN.md` (grep the item)** |
 | Prefs parsing (`prefs.cpp`) | `USER-HANDBOOK.md` prefs table |
-| Emul ops (`emul_op.cpp`, `emul_op.h`) | `CHANGELOG.md`, `USER-HANDBOOK.md` |
+| Emul ops (`emul_op.cpp`, `emul_op.h`) | `CHANGELOG.md`, `USER-HANDBOOK.md` — **append new enum entries before `OP_MAX` only; inserting mid-enum shifts all subsequent opcode values** |
 | Harness (`jit-test/run.sh`) | nothing — the count is derived (`make harness-count`); docs are de-hardcoded |
 | Build system (`Makefile`, `configure.ac`) | `CLAUDE.md` build commands |
 | Env vars (any `getenv()` call) | `USER-HANDBOOK.md` env var table, `CLAUDE.md` |

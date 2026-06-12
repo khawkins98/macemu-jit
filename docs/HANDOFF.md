@@ -188,6 +188,20 @@ the first item was acted on immediately, the rest are queued):
    the ADDRESSES do not transfer (offsets/anchors drift per version — the tm_task
    lesson). Write one version-agnostic architecture document with per-version
    address appendices.
+9. **ROM portability strategy (discussed at pause; shapes item 8's payoff).** Today a
+   different NewWorld ROM would boot some distance, GUARDED-SKIP loudly, and stall —
+   fail-safe but not portable. Three robustness tiers already exist: (i) runtime
+   self-description (the NK publishes its vector table; we read it live — lean harder
+   on this), (ii) content-based pattern searches with verify-EXPECTED-first guards
+   (degrade loudly), (iii) blind absolute pins (trampoline staging offsets, patch-space
+   addresses — the real exposure; KDP field layout is NK-version-defined). The mature
+   shape is NOT general runtime detection but a cheap ladder: checksum-keyed
+   per-version offset profiles (generated mostly mechanically from item 8's Ghidra
+   DBs — that is the consolidation's concrete payoff), then signature-search for the
+   few staging constants that drift, and only-if-needed true dynamic discovery.
+   Scope reality: the M7 goal needs ~3 supported ROM versions (9.0.1 now, the
+   9.2.x-era ROM, maybe one more), not the full 1.1-to-10.2.1 family — three curated
+   profiles beat a general mechanism.
 
 ## Operational notes
 

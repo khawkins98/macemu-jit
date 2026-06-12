@@ -86,7 +86,13 @@ fi
 # Common env for every vector. SS_EXC_BARE=1: skip the KDP register-save shim —
 # the harness maps no KDP/ECB guest memory (the shim would abort on ECB=0); the
 # BARE transition is the architectural surface under test here.
-BASE_ENV=(SS_MACHINE=newworld SS_EXC_BARE=1 SS_TEST_DUMP=1)
+# SS_NW_DEC_PUBLISHED=0: PIN the published-DEC gate OFF at lane level (M7 Task C
+# pre-flip item 1 / W2-4 step-0 review P2). The gate selects the SHIM SHAPE in
+# the delivery hook, and the hook is live on the harness path — the lane
+# contract must not float with the gate's newworld boot default (default ON
+# since the M7 cluster flip). Lanes that TEST the gate (H8) re-set it in
+# EXC_ENV; later env assignments win.
+BASE_ENV=(SS_MACHINE=newworld SS_EXC_BARE=1 SS_TEST_DUMP=1 SS_NW_DEC_PUBLISHED=0)
 
 # run_one <name> <mode:interp|jit> <hex> <env...>
 #   stderr+stdout -> $RUN_DIR/<name>.<mode>.log
@@ -94,6 +100,28 @@ BASE_ENV=(SS_MACHINE=newworld SS_EXC_BARE=1 SS_TEST_DUMP=1)
 #   returns the emulator exit code
 run_one() {
     local name="$1" mode="$2" hex="$3"; shift 3
+    # LANE-WIRING GUARD (M7 Task C pre-flip item 1; W2-4 step-0 review P2):
+    # SS_NW_DEC_PUBLISHED=<non-0> without an SS_EXC_ENTRY override aims the
+    # 2-SPR shim's deliveries at the entry-table default (0x50412b1c legacy /
+    # 0x50313200 published) — ROM is NOT mapped on the harness path, so the
+    # vector dies as an unmapped-entry crash masquerading as a flaky lane.
+    # Mis-wiring is a harness-integrity violation: abort the whole run loudly
+    # (the run.sh table-validation precedent), don't fail one vector quietly.
+    local a _gate_on=0 _entry_set=0
+    for a in "$@"; do
+        case "$a" in
+            SS_NW_DEC_PUBLISHED=0) _gate_on=0 ;;
+            SS_NW_DEC_PUBLISHED=*) _gate_on=1 ;;
+            SS_EXC_ENTRY=*)        _entry_set=1 ;;
+        esac
+    done
+    if [ "$_gate_on" = 1 ] && [ "$_entry_set" = 0 ]; then
+        echo "ERROR: lane '$name' sets SS_NW_DEC_PUBLISHED on without SS_EXC_ENTRY" >&2
+        echo "       (the 2-SPR shim would deliver to the unmapped entry-table default;" >&2
+        echo "        give the lane an SS_EXC_ENTRY=0x1000C000-class override)" >&2
+        echo "METRIC pass=0 fail=0 total=0 score=0"
+        exit 1
+    fi
     local jit_env=""
     [ "$mode" = "jit" ] && jit_env="1"
     ss_timeout env "${BASE_ENV[@]}" "$@" \

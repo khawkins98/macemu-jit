@@ -346,7 +346,17 @@ extern "C" int SheepExcHostIrqAssert(void)
 		return 0;
 	exc_host_irq_edges++;
 	/* Tripwire edge bookkeeping — same idiom as SheepExcExtSetPending
-	 * (telemetry-only, racy-benign). */
+	 * (telemetry-only, racy-benign).
+	 * M7 Task C pre-flip item 4 (Task-A review P3) — ACCEPTED-WITH-NOTE:
+	 * these episode counters are SHARED with the PIC level source, so a host
+	 * assert edge resets the PIC's runaway/starvation episode arithmetic and
+	 * could mask a PIC re-delivery runaway. Accepted for the host-only
+	 * default state (SS_NW_PIC's default stays HELD; in the co-armed TEST
+	 * cluster the PIC's only live source IS this host line, so there is no
+	 * independent PIC episode to mask). Before any DEFAULT state co-arms
+	 * SS_NW_PIC with independent device sources (SCC 0x25 / VIA 0x19), split
+	 * the episode counters per source — recorded in the M7 plan Task C
+	 * dispositions. */
 	exc_ext_delivs_this_assert = 0;
 	exc_dec_delivs_while_ext = 0;
 	static uint64_t hedge_count = 0;
@@ -2147,6 +2157,18 @@ static void ss_test_exc_knobs_apply(sheepshaver_cpu *cpu, uint8 *test_ram)
 		knob_stub = (e && e[0] && e[0] != '0') ? (e[0] == '2' ? 2 : 1) : 0;
 		/* F1: harness-side entry-table setup via the shared parse. */
 		exc_entry_table_apply_env_override();
+		/* M7 Task C pre-flip item 1 (W2-4 step-0 review P2), the gate-site
+		 * half of the guard: SS_NW_DEC_PUBLISHED selects the 2-SPR shim
+		 * shape, and on the harness path NO ROM is mapped — gate-on without
+		 * an SS_EXC_ENTRY override aims deliveries at the unmapped
+		 * entry-table default. run-exc.sh pins the gate per lane and aborts
+		 * on mis-wiring; warn loudly here for ad-hoc SS_TEST_HEX runs. */
+		if (exc_dec_published_enabled() && !getenv("SS_EXC_ENTRY"))
+			fprintf(stderr, "[EXC-TEST] WARNING: SS_NW_DEC_PUBLISHED is ON with no "
+			        "SS_EXC_ENTRY override - DEC deliveries aim the 2-SPR shim at "
+			        "entry 0x%08x, which is NOT mapped on the harness path "
+			        "(expect an unmapped-entry crash)\n",
+			        g_exc_entry_table.interrupt_entry);
 		/* Profile resolution (see block comment). */
 		e = getenv("SS_MACHINE");
 		if (e && e[0])

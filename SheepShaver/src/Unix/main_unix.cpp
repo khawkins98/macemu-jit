@@ -2938,8 +2938,26 @@ void ClearInterruptFlag(uint32 flag)
 	// (Lower is an oracle no-op, openpic_set_irq :388); a latched-but-retired
 	// edge stays pending in the PIC until the next delivery's IACK, which only
 	// happens after a NEW assert edge re-raised it anyway (benign by pairing).
-	if (nw_host_irq_on && InterruptFlags == 0)
+	if (nw_host_irq_on && InterruptFlags == 0) {
 		SheepExcHostIrqDeassert();
+		// M7 Task C pre-flip item 3 (Task-A review P2): the lost-edge race
+		// fix. Between this thread's zero-read above and the Deassert, a
+		// concurrent SetInterruptFlag can or-in a fresh flag, take the assert
+		// edge, and kick — the Deassert then retires that FRESH edge, and the
+		// kick's delivery poll finds Pending()==0: one post silently lost
+		// until the next post (pre-warm-start this path never runs, see
+		// above; the fix closes the window for the warm-start regime the
+		// default flip makes reachable). Re-check the level after the
+		// Deassert; if it re-asserted, re-run the full assert-edge path —
+		// SetInterruptFlag(0) is a flags no-op that takes exactly that path
+		// (latch + PIC input edge + TriggerInterrupt kick). No recursion:
+		// SetInterruptFlag never calls back into ClearInterruptFlag. If the
+		// concurrent Set's own Assert won instead (it ran after our
+		// Deassert), our re-Assert sees the latch already armed and is a
+		// no-edge no-op — no double kick.
+		if (InterruptFlags != 0)
+			SetInterruptFlag(0);
+	}
 }
 
 

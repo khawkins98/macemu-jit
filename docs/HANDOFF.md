@@ -5,8 +5,9 @@
 
 ## Resume prompt
 
-> Read `docs/HANDOFF.md` then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Then read `docs/planning/ROADMAP.md` §Machine Layer milestones.
+> Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants),
+> then `docs/planning/ROADMAP.md` §Machine Layer milestones.
+> Active work: M9 VIA-IFR — isolate the stall (see §Root cause below).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 
 ## Current state
@@ -36,15 +37,23 @@ With `SS_NW_VIA_IFR=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`:
 
 The stall could be caused by either. RECON §8b declared "ROM patch is sole cause" but that was before we verified OP_IRQ_NW never fires. **Next step: isolate.**
 
-### Next-step isolation probe (2 boots)
+### Next-step isolation probe (2 boots, ~5 minutes)
 
-**Boot A — trampoline only, no ROM patch (add a `SS_NW_VIA_IFR_NOROM=1` bypass or comment out the `via_nw901_int` block temporarily):**
-If stall persists → trampoline is the cause.  
-If healthy → ROM patch is the cause.
+**Step 1 — add a separate gate in `rom_patches.cpp`** (2-line change):
 
-**Quick path (no code change): run with `SS_NW_VIA_IFR=1` but check what's at 0x5000ed08 post-boot to confirm the patch applied, then do a separate boot that skips just the ROM patch by probing an address that's only hit if the patched bytes ran.**
+In `rom_patches.cpp`, find the `via_nw901_int` block (currently gated on `SS_NW_VIA_IFR`).
+Wrap it in a second guard: `getenv("SS_NW_VIA_IFR_ROM_PATCH") != nullptr` (default true when
+`SS_NW_VIA_IFR` is set, but suppressible).
 
-The cleaner approach: add `SS_NW_VIA_IFR_ROM_PATCH=1` as a separate gate for the `via_nw901_int` block, so trampoline and patch can be tested independently.
+**Boot A** — trampoline only: `SS_NW_VIA_IFR=1 SS_NW_VIA_IFR_ROM_PATCH=0`  
+If stall persists → trampoline tp[25-26] is the cause.  
+If healthy → ROM patch is the sole cause.
+
+**Boot B** — ROM patch only (trampoline suppressed): needs a `SS_NW_VIA_IFR_NOTRAMP=1` guard
+around the tp[25-26] writes in `rom_patches.cpp` (~`SS_NW_VIA_IFR` trampoline block).
+
+One of the two boots will reproduce the stall cleanly. Fix the guilty part, then verify
+`SS_PROBE_68K=0x5000ed08:5` fires in both boots.
 
 ### Verification criteria (unchanged)
 

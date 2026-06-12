@@ -3916,3 +3916,67 @@ SIGTRAP "delivery onto the DR-emulator init loop". Until cleared: do NOT use
 SS_PROBE_LINEAR on delivery-regime boots, and hold the instrument set constant across A/B
 boots — the env-on frontier class is timing-sensitive (ring-slowed boots reach the park;
 no-ring boots spin in the NK — Task B's baselining note).
+
+## 2026-06-12 — M8 slot-4 consumption: the torn-context find, "kick guaranteed" falsified, plan-gate flaws, and the unwired instrument
+
+### A red-team solved the livelock STATICALLY before any boot ran (and a canonical dump nearly hid it)
+
+The shape-A restore-tail livelock (10⁹ visits at 0x3244e8, the milestone's named
+M3-class surprise) was root-caused by red-team review A from two static facts alone:
+(1) the emitted stub encoding in rom_patches.cpp — our patched trap_return tail raises
+MSR.EE via `mtmsr` BEFORE the ctx reloads and the `bctr`, where the raw NK `rfi` raises
+MSR+PC atomically; (2) `execute_mtmsr`'s edge semantics — it calls `trigger_interrupt()`
+on every EE 0→1 edge with a source pending (DEC ~88/s underneath). Window patch-created,
+torn ctx by construction, even the "anomalous" probe constants (r10=0x9040) explained as
+the riser's composed-MSR scratch. The live boots then merely CONFIRMED the predicted
+fingerprint (mid-stub restart=0x50318018; ctx r10/r11 images = 0x9040). Lesson: when the
+suspect code is OUR OWN PATCH, the cheapest root-cause tool is re-reading what we emit
+against the semantics of what we replaced — before burning timing-sensitive boots.
+**The staleness trap that almost derailed it:** the canonical ROM dump (rom901.bin,
+manifest-blessed) PREDATED the cluster flip — its 0x318000 stub was the riser-LESS
+4-word shape. A static walk trusting "the canonical dump" would have analyzed code that
+no longer runs. Dumps are snapshots of a *config*, not of "the ROM": re-baseline after
+any default flip that changes patch output, and treat the emitting source
+(rom_patches.cpp) as the stub authority.
+
+### "A kick is guaranteed" — one-shot kicks are not level sources
+
+Task A's passive latch relied on "the next natural kick" (DEC cadence / host EXT edge)
+to fire a deferred edge. Falsified live in the slot-4 cycle (boot s4tb-b4:
+deferred=1.43e6, fired=0): the latched edge WAS the DEC's own delivery — no future
+mtspr kick was coming until the very delivery the latch was holding — and the host EXT
+kick fires only on assert edges (one-shot pre-WLSC, InterruptFlags never clears). Both
+"guaranteed" kicks were dead in exactly the regime that needed them. Fix: an explicit
+60 Hz backstop retry while the latch is set (a poll kick, not guest state). Lesson: for
+any defer-then-fire design, enumerate the kick sources and ask of each "can the deferral
+itself consume or block this source?" — a kick that the deferred event depends on is
+circular, and only a level-style/periodic re-kick breaks the knot. (Same family as the
+M8 first falsification: the HANDLE re-arm hold starved the guest because the JIT exits
+on non-empty spcflags BEFORE executing — a "wait here" mechanism that prevents the
+condition it waits for. Two falsifications, one shape: the mechanism must let the system
+RUN toward the state it is waiting on.)
+
+### Plan gates that structurally cannot pass (write the reachability proof at plan time)
+
+Task B's multi-edge gate ("edges/consumed/deasserts advance past 1") was structurally
+unreachable: the deassert half of retirement (`ClearInterruptFlag` →
+`SheepExcHostIrqDeassert`) sits behind a `HasMacStarted()` gate that is false for the
+ENTIRE pre-WLSC regime the milestone runs in. No implementation could have passed it —
+the plan gate presumed a cycle the boot stage cannot close. Recorded as a plan-gate
+flaw, not a code falsification. Lesson: every PASS/FAIL gate in a plan needs a one-line
+reachability argument ("who flips this observable, and is that party alive at this boot
+stage?") — the same question LEARNINGS already prescribes for deassert parties, now
+applied to the plan's own gates. A gate that cannot pass is worse than no gate: it
+manufactures a false RED that costs a re-grade round.
+
+### The unwired instrument: "defined" is not "called" (a review P0)
+
+The instr-hardening crash-flush fix (f1aca585) defined `ppc_jit_r24ring_crash_flush()`
+with the right semantics — and never called it from the SIGSEGV handler; the once-shot
+dump it existed to protect still died with the process. Caught by post-commit review
+(P0, fixed in 09821b67), invisible to every green gate (no test exercises the crash
+path by design). Lesson: for instrumentation on terminal paths (crash handlers, atexit,
+signal context), the review question is not "is the function right?" but "walk the
+caller chain from the signal/exit entry to this function" — terminal-path code has no
+test harness, so call-site verification IS the test. grep for the symbol at review
+time: a definition with one hit is a red flag.

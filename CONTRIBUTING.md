@@ -198,7 +198,7 @@ tiers, new protocols). The sweep checklist:
 | `README.md` (top-level + SheepShaver/) | The project description/status doesn't contradict the trackers |
 | `docs/AGENT-CONTEXT.md` | Constants match code; recipes/knobs match DIAGNOSTICS; gate tiers match MILESTONE-WORKFLOW §6 |
 | `docs/MILESTONE-WORKFLOW.md` | The rules table reflects practice; new earned rules added with their incidents |
-| `docs/planning/MACHINE-LAYER-PLAN.md` header + `docs/planning/ROADMAP.md` status | Current-state lines true; "next" points at the real frontier |
+| `docs/planning/MACHINE-LAYER-PLAN.md` header + `docs/planning/ROADMAP.md` status | Current-state lines true; "next" points at the real frontier. **HEADER BUDGET (rule earned 2026-06-12): ≤5 lines of current state + pointers.** Headers are NOT changelogs — milestone narrative goes to `CHANGELOG.md`; a superseded header narrative moves VERBATIM to the doc's "Archived status narratives" section (relocate, never delete). Close-out tasks (Task Z) update the 5 lines in place; they do not append. |
 | `SheepShaver/docs/DIAGNOSTICS.md` | Every live env knob documented; no documented knob removed from code |
 | CLAUDE.md (local, each contributor's) | Pointers resolve; the binding process section current |
 

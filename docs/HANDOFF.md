@@ -101,6 +101,35 @@ weigh them against the default next milestone (VIA-IFR):
    with citation per backport hygiene; never contribute upstream to them. Existing
    notes: `docs/planning/COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md`.
 
+Four more from an external review of the plan (2026-06-12, accepted at pause time —
+the first item was acted on immediately, the rest are queued):
+
+4. **Header discipline — DONE at the pause**: ROADMAP/MACHINE-LAYER-PLAN headers
+   trimmed to a 5-line current-state budget; the old narratives relocated verbatim to
+   "Archived status narratives" sections in each doc; the budget is now an enforced
+   rule in CONTRIBUTING's sweep checklist (Task Zs update in place, never append).
+   Residual candidate for a future doc-sweep: split other long trackers into
+   status-front + dated-annex on the same pattern (relocate, never delete).
+5. **Gate retirement needs a trigger, not a vibe.** 17 SS_NW_* gates in-tree, 6
+   named retirement candidates, but "after a quiet release cycle" is not a schedule.
+   Proposed trigger: the FIRST milestone after resumption includes a gate-retirement
+   task (hard-wire the six pre-M7 default-ON surfaces), and the all-ON/all-OFF-only
+   support claim becomes an enforced contract (a gates.sh check or a documented
+   refusal), not a doc sentence.
+6. **The consumption path needs M9+ milestone framing.** The plan structurally ends
+   at M8 + "VIA-IFR next". The remaining path to 9.2.x-to-Finder is ~3-4 milestone-class
+   efforts: M9 consumption (VIA-IFR → retirement → Ticks guest-claimed), M10 visible
+   framebuffer (M5 work, recon done), M11+ CFM / Process Manager / drivers (unscoped).
+   First planning act on resumption: write the milestone map, even rough.
+7. **Measure the wall count instead of re-flagging it.** Every re-score names the
+   CFM/Process-Mgr "unmeasured wall tail" as the residual drag; nobody has measured
+   it. The QEMU rig (idea 2) pointed FORWARD — a traced reference boot enumerating
+   the syscall/trap/device surfaces between the current frontier and Finder — turns
+   the unknown into a checklist. Honest caveat from the review: seeds-not-services
+   has held because NK state is inspectable; it may NOT hold in Process Manager
+   territory. A short M5/framebuffer scoping spike (the historical home of M3-class
+   surprises in other emulators) de-risks the same estimate from the other side.
+
 ## Operational notes
 
 - Branch `macos-arm64`; the user pushes — **never push unprompted**.

@@ -1,6 +1,13 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-12 (D3 Machine Layer: M0 + M1 + M2 + M3a + M3b Wave 1 + M6a rung 2 + NK syscall surface ✅ + FE1F service surface ✅ + 68k PC-desync ✅ all newworld DEFAULT; M3b Wave 2: OpenPIC LANDED (`b86449c9`), W2-3 EXT delivery shipped gated-off, **W2-4 steps 0–2 landed gated-off** (`181efc02`/`10b1b3e8`: SS_NW_DEC_PUBLISHED + SS_NW_EE_RISER — **first DEC deliveries ever**, 12.4M storm-scale, then `delivered_dec=3` live on the published route); 2026-06-12: slide wall FIXED (`2ff7765f` tm_task guard), **SysError-12 wall CLEARED** (`f808a7fb`/`adea99bc` SS_NW_TM_TRAPS default-ON), **P-M5 Execute68k SIGSEGV CLEARED** (`34d3d441` [KDP+0x1074/78] staging + `3cb3b16e` DEFER_NATIVE wake-up), DEC cadence fixed (`f31d475e` [KDP+0xf2c]); **M7 interrupt injection ✅ SHIPPED 2026-06-12** (`2026-06-12-interrupt-injection.md`, commits `b124556f`…`81d60cc1`): first host→guest EXT delivery through the guest's own exception path, first guest IACK of the OpenPIC model, the NK post's level test passes env-on, **the riser/published/host-irq cluster flipped to newworld DEFAULT** (`81d60cc1`; `SS_NW_PIC` stays HELD); default-boot frontier = the PROGRAM#5 srr0=0x50324fec park + live delivery chronology (DEC #1–4 published + EXT #1); **M8 slot-4 consumption round trip ✅ CLOSED 2026-06-12 — SHIPPED GATED-OFF-GREEN** (`2026-06-12-slot4-consumption.md`, commits `42ce3e0e`…`52b69cd7`; `SS_NW_IRQ_CONSUME` standalone 17th gate, default OFF): the R-II10 livelock shapes FIXED (fork-(iii) torn-ctx root cause — our riser's mtmsr re-raise mid-tail — cured by the deferred EE-edge latch + Q-C3 staging + 60 Hz backstop); round trip GREEN through leg 7 env-on (post → staging → drain → slot-4 twi → 68k level-1 handler at 60 Hz); default flip REFUSED on honest criteria (the deterministic SC#1=0x0d divergence + retirement RED at leg 8); **named next task: the VIA-IFR surface** (device-model M-class — the 68k handler rte's source-less; resolve a4@0x5000ee9a + the d6 bit index first); standing process/tooling: gate tiers (MILESTONE-WORKFLOW §6) + parallel-boot slot protocol (`SheepShaver/tools/README-slots.md`) + the `docs/AGENT-CONTEXT.md` pack)
+> **Status:** ⏸ PAUSED 2026-06-12 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
+> **Current state (header budget = 5 lines; the full arc lives in `CHANGELOG.md` and the
+> archived narrative at the bottom of this doc):** SheepShaver boots 8.6 to Finder, full
+> native JIT (stable). Machine Layer: through **M7 interrupt injection SHIPPED default-ON**;
+> **M8 slot-4 consumption CLOSED, shipped gated-off-green** (`SS_NW_IRQ_CONSUME`, flip
+> prerequisites in its plan). **Active critical path: the VIA-IFR surface** (the 68k handler
+> rte's source-less; resolve a4@0x5000ee9a first). Live frontier detail:
+> `docs/AGENT-CONTEXT.md` "Current frontier" · history: §"Archived status narratives" below.
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -1080,3 +1087,39 @@ not map to our native networking goals).
 - JIT perf (cheap wins): CR0 cleanup, LogicalImm encoder, code-cache sizing, atomic spcflags,
   trailing-MOV elimination, register allocator (P1). See `docs/planning/OPTIMIZATION-PLAN.md` §Completed.
 - BasiliskII: configure host-routing fix + `main_unix.cpp` guards (partial — see D1).
+
+---
+
+## Archived status narratives (relocated from the header — nothing deleted)
+
+> Per the 2026-06-12 doc-structure feedback: the header carries a 5-line current-state
+> budget; superseded header narratives move here verbatim, dated. The authoritative
+> per-change record remains `CHANGELOG.md`.
+
+### Header narrative as of 2026-06-12 (the M0→M8 arc)
+
+D3 Machine Layer: M0 + M1 + M2 + M3a + M3b Wave 1 + M6a rung 2 + NK syscall surface ✅ +
+FE1F service surface ✅ + 68k PC-desync ✅ all newworld DEFAULT; M3b Wave 2: OpenPIC LANDED
+(`b86449c9`), W2-3 EXT delivery shipped gated-off, **W2-4 steps 0–2 landed gated-off**
+(`181efc02`/`10b1b3e8`: SS_NW_DEC_PUBLISHED + SS_NW_EE_RISER — **first DEC deliveries
+ever**, 12.4M storm-scale, then `delivered_dec=3` live on the published route); 2026-06-12:
+slide wall FIXED (`2ff7765f` tm_task guard), **SysError-12 wall CLEARED**
+(`f808a7fb`/`adea99bc` SS_NW_TM_TRAPS default-ON), **P-M5 Execute68k SIGSEGV CLEARED**
+(`34d3d441` [KDP+0x1074/78] staging + `3cb3b16e` DEFER_NATIVE wake-up), DEC cadence fixed
+(`f31d475e` [KDP+0xf2c]); **M7 interrupt injection ✅ SHIPPED 2026-06-12**
+(`2026-06-12-interrupt-injection.md`, commits `b124556f`…`81d60cc1`): first host→guest EXT
+delivery through the guest's own exception path, first guest IACK of the OpenPIC model,
+the NK post's level test passes env-on, **the riser/published/host-irq cluster flipped to
+newworld DEFAULT** (`81d60cc1`; `SS_NW_PIC` stays HELD); default-boot frontier = the
+PROGRAM#5 srr0=0x50324fec park + live delivery chronology (DEC #1–4 published + EXT #1);
+**M8 slot-4 consumption round trip ✅ CLOSED 2026-06-12 — SHIPPED GATED-OFF-GREEN**
+(`2026-06-12-slot4-consumption.md`, commits `42ce3e0e`…`52b69cd7`; `SS_NW_IRQ_CONSUME`
+standalone 17th gate, default OFF): the R-II10 livelock shapes FIXED (fork-(iii) torn-ctx
+root cause — our riser's mtmsr re-raise mid-tail — cured by the deferred EE-edge latch +
+Q-C3 staging + 60 Hz backstop); round trip GREEN through leg 7 env-on (post → staging →
+drain → slot-4 twi → 68k level-1 handler at 60 Hz); default flip REFUSED on honest
+criteria (the deterministic SC#1=0x0d divergence + retirement RED at leg 8); **named next
+task: the VIA-IFR surface** (device-model M-class — the 68k handler rte's source-less;
+resolve a4@0x5000ee9a + the d6 bit index first); standing process/tooling: gate tiers
+(MILESTONE-WORKFLOW §6) + parallel-boot slot protocol (`SheepShaver/tools/README-slots.md`)
++ the `docs/AGENT-CONTEXT.md` pack.

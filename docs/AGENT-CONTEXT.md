@@ -4,6 +4,17 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
+## Current frontier (2026-06-12)
+
+Default newworld diagnostic boot runs **44.4 s to the PROGRAM#5 srr0=0x50324fec park** —
+SysError-12 is CLEARED (SS_NW_TM_TRAPS default-ON, f808a7fb/adea99bc) and the P-M5
+Execute68k SIGSEGV is CLEARED ([KDP+0x1074/0x1078] staged, 34d3d441). On a riser-on boot
+the published DEC route delivers live (`delivered_dec=3` — the first live published-route
+deliveries). Active milestone: **interrupt injection**
+(`docs/superpowers/plans/2026-06-12-interrupt-injection.md`, rev 2; W2-4's remainder is
+superseded into it). Do not treat "EE has never risen" / "delivered_dec=0" /
+"SysError 12" as current claims — they are historical.
+
 ## Boot recipes
 
 - **Slot protocol (DEFAULT — never global `pkill`)**:
@@ -42,6 +53,14 @@
 - `SS_JIT_WATCH_ADDR=<HEX,no-0x>` — parser is HEX; requires `SS_JIT_TRACE_RING=1`.
 - `SS_SEED_MEM`, `SS_EXC_ENTRY=0xINT[,0xSC]` (no-comma form preserves the syscall
   default), `SS_CUDA_TRACE=1`, `SS_INTERP_RING` — see DIAGNOSTICS.md.
+- **`deferred_native` is a RE-POLL count post-`3cb3b16e`** (wake-up re-arm: one deferral
+  episode can contribute up to 65536 counts) — never compare it across that commit.
+- **`SS_PROBE_68K` is nested-execute-blind**: it hooks the DR dispatch loop, so 68k code
+  run via host-side `Execute68k()` excursions never hits the probe (it "never fires"
+  ≠ "never runs").
+- **mtspr-DEC capture is default-on** in the `[VCLK]` exit dump (`21704614`): last-8
+  (value@PC) ring + zero/tiny/small/mid/msb value-class buckets — the DEC-cadence
+  evidence channel.
 - ROM dumps — canonical location: **`/Users/Shared/macemu/dumps/`** with `MANIFEST.txt`
   (filename + md5 + provenance). `rom901_inventory.bin` = RAW (md5 7b1378be…, 16
   placeholder words at file 0x36e8c0); `rom901.bin` = PATCHED (md5 e432df64…). The /tmp
@@ -58,6 +77,28 @@ XLM_RUN_MODE=0x2810 · XLM_IRQ_NEST=0x2818 · ROMBase=0x50000000 · mirror emula
 table 0x5046e8c0 (16 slots) · NK primary 0x5031xxxx / staged +0x100000 · guest→host:
 add NATMEM_OFFSET 0x400000000000. DR 68k register map: r8–r15=D0–D7, r16–r22=A0–A6,
 r1=A7, r24=68k PC.
+
+NK-published exception entries (the `[KDP+0x360]` vector table): DEC 0x50313200
+(`[KDP+0x384]`, SS_NW_DEC_PUBLISHED route) · EXT 0x50314880 (`[KDP+0x374]`) ·
+SC 0x50314ac0 (`[KDP+0x390]`) · PROGRAM
+0x50314700 (`[KDP+0x37c]`). Trampoline-staged globals: `[KDP+0xf2c]` = NK scheduler
+TimebaseSpeed (tb-freq; the DEC-cadence fix, `f31d475e`) · `[KDP+0x1074]`=0x50480000 /
+`[KDP+0x1078]`=0x50460000 = the Execute68k emulator pair (dispatch-table/emulator-code;
+`34d3d441` — without them any host `Execute68k()` is a wild jump) · TM patch space
+`TIME_MANAGER_PATCH_SPACE=0x2fd240` (ROM-offset; HLE TM trap population, `f808a7fb`).
+
+## Env-gate state (SS_NW_*, the ones that bite)
+
+15 `SS_NW_*` gates live in-tree (census 2026-06-12; flagged for re-score #3 disposition).
+The ones whose default you must know:
+
+- **Default-ON (newworld)**: `SS_NW_TM_TRAPS` (HLE TM trap population — flipping it OFF
+  re-introduces SysError-12), `SS_NW_MM_SWITCH`/`SS_NW_MM_POOL`, `SS_NW_SC_SURFACE`,
+  `SS_NW_FE1F_SURFACE`, `SS_NW_DR_R0_INVARIANT`.
+- **Default-OFF, flip RESERVED** for the interrupt-injection milestone acceptance:
+  `SS_NW_DEC_PUBLISHED` (DEC → NK-published 0x50313200 + 2-SPR shim, `181efc02`) and
+  `SS_NW_EE_RISER` (the 0x318000-stub EE riser, `10b1b3e8`). Riser-on boots deliver
+  (storm-scale 12.4M proven; `delivered_dec=3` live on the published route).
 
 ## Gate tiers (see MILESTONE-WORKFLOW.md §6/§6b for the policy)
 
@@ -90,7 +131,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-Plans: `docs/superpowers/plans/` (canonical exemplar: 2026-06-11-nk-syscall-surface.md).
-Evidence/addenda: `docs/planning/machine/` (M6A-ONGOING-ENTRY-DESIGN.md,
-M6A-WAVE2-SHIM-RECON.md, M3A-ENTRY-TABLE.md, EE-CHAIN-RECON.md, DISK-PATH-RECON.md).
+Plans: `docs/superpowers/plans/` (canonical exemplar: 2026-06-11-nk-syscall-surface.md;
+ACTIVE: 2026-06-12-interrupt-injection.md). Evidence/addenda: `docs/planning/machine/`
+(M6A-ONGOING-ENTRY-DESIGN.md, M6A-WAVE2-SHIM-RECON.md, M3A-ENTRY-TABLE.md,
+EE-CHAIN-RECON.md, TRAP-TABLE-RECON.md [the InsTime/SysError-12 wall + fix record],
+INTERRUPT-INJECTION-RECON.md [P-M5 anatomy, the paravirtual donor chain, the
+exception-path architecture answer], SLIDE-WALL-RECON.md, DSAT-WALL-RECON.md,
+DISK-PATH-RECON.md).
 Knob reference: `SheepShaver/docs/DIAGNOSTICS.md`. Process: `docs/MILESTONE-WORKFLOW.md`.

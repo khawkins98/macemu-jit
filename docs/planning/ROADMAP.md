@@ -1,6 +1,6 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-12 (D3 Machine Layer: M0 + M1 + M2 + M3a + M3b Wave 1 + M6a rung 2 + NK syscall surface ✅ + FE1F service surface ✅ + 68k PC-desync ✅ all newworld DEFAULT; M3b Wave 2: OpenPIC LANDED (`b86449c9`), W2-3 EXT delivery shipped gated-off, **W2-4 steps 0–2 landed gated-off** (`181efc02`/`10b1b3e8`: SS_NW_DEC_PUBLISHED + SS_NW_EE_RISER — **first DEC deliveries ever**, 12.4M storm-scale, then `delivered_dec=3` live on the published route); 2026-06-12: slide wall FIXED (`2ff7765f` tm_task guard), **SysError-12 wall CLEARED** (`f808a7fb`/`adea99bc` SS_NW_TM_TRAPS default-ON), **P-M5 Execute68k SIGSEGV CLEARED** (`34d3d441` [KDP+0x1074/78] staging + `3cb3b16e` DEFER_NATIVE wake-up), DEC cadence fixed (`f31d475e` [KDP+0xf2c]); **current default-boot frontier: 44.4 s to the PROGRAM#5 srr0=0x50324fec park**; **ACTIVE: M7 interrupt-injection milestone** (`2026-06-12-interrupt-injection.md` rev 2, Task 0 in flight; W2-4 remainder superseded into it); standing process/tooling: gate tiers (MILESTONE-WORKFLOW §6) + parallel-boot slot protocol (`SheepShaver/tools/README-slots.md`) + the `docs/AGENT-CONTEXT.md` pack)
+> **Status:** 🟡 Active · **Created:** 2026-06-04 · **Updated:** 2026-06-12 (D3 Machine Layer: M0 + M1 + M2 + M3a + M3b Wave 1 + M6a rung 2 + NK syscall surface ✅ + FE1F service surface ✅ + 68k PC-desync ✅ all newworld DEFAULT; M3b Wave 2: OpenPIC LANDED (`b86449c9`), W2-3 EXT delivery shipped gated-off, **W2-4 steps 0–2 landed gated-off** (`181efc02`/`10b1b3e8`: SS_NW_DEC_PUBLISHED + SS_NW_EE_RISER — **first DEC deliveries ever**, 12.4M storm-scale, then `delivered_dec=3` live on the published route); 2026-06-12: slide wall FIXED (`2ff7765f` tm_task guard), **SysError-12 wall CLEARED** (`f808a7fb`/`adea99bc` SS_NW_TM_TRAPS default-ON), **P-M5 Execute68k SIGSEGV CLEARED** (`34d3d441` [KDP+0x1074/78] staging + `3cb3b16e` DEFER_NATIVE wake-up), DEC cadence fixed (`f31d475e` [KDP+0xf2c]); **M7 interrupt injection ✅ SHIPPED 2026-06-12** (`2026-06-12-interrupt-injection.md`, commits `b124556f`…`81d60cc1`): first host→guest EXT delivery through the guest's own exception path, first guest IACK of the OpenPIC model, the NK post's level test passes env-on, **the riser/published/host-irq cluster flipped to newworld DEFAULT** (`81d60cc1`; `SS_NW_PIC` stays HELD); default-boot frontier = the PROGRAM#5 srr0=0x50324fec park + live delivery chronology (DEC #1–4 published + EXT #1); **named next task: the slot-4 consumption round trip** (M-sized, slot5-recon `b3e51b8d` — delivery is live, consumption/retirement is the break); standing process/tooling: gate tiers (MILESTONE-WORKFLOW §6) + parallel-boot slot protocol (`SheepShaver/tools/README-slots.md`) + the `docs/AGENT-CONTEXT.md` pack)
 > **Why this doc exists:** The single tracker for all outstanding work, arranged into four tracks so context survives across pickups.
 
 
@@ -29,7 +29,7 @@ covers both the *drive/test* and *measure* lifecycle stages** (the harnesses and
 |-------|--------|-------|
 | **1. Foundation (run)** | Native **AArch64 JIT** on macOS — SheepShaver boots Mac OS 8.6/9 to Finder with full PPC→ARM64 codegen, on Apple Silicon. | ✅ done |
 | **2. Instrumentation (drive/test + measure)** | **Tools to control/validate + empirical benchmarks** — differential opcode harness (`make test-jit`), E2E boot/workload harness + guest-UI introspection, Speedometer/MacBench capture, kernel microbench (`a64/op`), per-block/mix profiler. The safety net that makes everything after it measurable. | ✅ done (maintained) |
-| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ M2 ✅ **M3a ✅** (real PPC exception model: exc_core, sc/rfi real semantics, DEC delivery hook, first real exception delivered, end-to-end demo with SS_SCC_RX_INJECT). **M3b Wave 1 ✅** (dev_cuda + adb_stub live; sync frontier crossed; cuda_init/adb_init retired). **M6a rung 2 ✅** (2026-06-11: the 68k→PPC **Mixed Mode switch complete in both directions, newworld DEFAULT** — first complete MixedMode round trip; MPLibrary's TVector executes; boot transformed jNK 116M→4104). **NK syscall surface ✅ COMPLETE** (2026-06-11, plan `2026-06-11-nk-syscall-surface.md` rev 2: vector 0xC00 → the NK's own handler `0x50314ac0` [primary copy, NK-published `[KDP+0x390]`], 2-SPR shim [SPRG1:=r1, SPRG2:=LR], **first guest syscall ever resolved** — selector 0x3f → r3=0, 5 selectors per boot, MPLibrary's excursion RETURNS; **newworld DEFAULT**, `SS_NW_SC_SURFACE=0` opt-out; the **FE1F service surface ✅** — first DR native callout round trip, newworld DEFAULT). M3b Wave 2: OpenPIC model + 206-check suite landed (`b86449c9`); W2-3 EXT delivery shipped gated-off; **W2-4 steps 0–2 landed gated-off — first DEC deliveries ever** (riser-on: 12.4M storm-scale handled, then `delivered_dec=3` live on the published route). 2026-06-12: SysError-12 + P-M5 walls both CLEARED (SS_NW_TM_TRAPS default-ON; Execute68k [KDP+0x1074/78] staging); **default-boot frontier 44.4 s to the PROGRAM#5 srr0=0x50324fec park**; **ACTIVE critical path: the M7 interrupt-injection milestone** (`docs/superpowers/plans/2026-06-12-interrupt-injection.md`; W2-4's remainder + the gate flips superseded into it). | 🟡 active |
+| **3. Widen emulation** | Emulate **more of the full PowerPC Mac stack** — the structural gaps SheepShaver never closed (AltiVec reachable by guests ✅ first win; broader OS/software: Mac OS 9.2 as a JIT-correctness forcing-function, fuller device/OS modeling). Correctness first. **Current primary thrust** — **D3 pivoted to Machine Layer** (2026-06-10): MMIO bus + real device models (SCC/VIA-Cuda/PIC/NVRAM/MacIO), strangler-fig fidelity profile beside the frozen paravirtual path. M0 ✅ M1 ✅ M2 ✅ **M3a ✅** (real PPC exception model: exc_core, sc/rfi real semantics, DEC delivery hook, first real exception delivered, end-to-end demo with SS_SCC_RX_INJECT). **M3b Wave 1 ✅** (dev_cuda + adb_stub live; sync frontier crossed; cuda_init/adb_init retired). **M6a rung 2 ✅** (2026-06-11: the 68k→PPC **Mixed Mode switch complete in both directions, newworld DEFAULT** — first complete MixedMode round trip; MPLibrary's TVector executes; boot transformed jNK 116M→4104). **NK syscall surface ✅ COMPLETE** (2026-06-11, plan `2026-06-11-nk-syscall-surface.md` rev 2: vector 0xC00 → the NK's own handler `0x50314ac0` [primary copy, NK-published `[KDP+0x390]`], 2-SPR shim [SPRG1:=r1, SPRG2:=LR], **first guest syscall ever resolved** — selector 0x3f → r3=0, 5 selectors per boot, MPLibrary's excursion RETURNS; **newworld DEFAULT**, `SS_NW_SC_SURFACE=0` opt-out; the **FE1F service surface ✅** — first DR native callout round trip, newworld DEFAULT). M3b Wave 2: OpenPIC model + 206-check suite landed (`b86449c9`); W2-3 EXT delivery shipped gated-off; **W2-4 steps 0–2 landed gated-off — first DEC deliveries ever** (riser-on: 12.4M storm-scale handled, then `delivered_dec=3` live on the published route). 2026-06-12: SysError-12 + P-M5 walls both CLEARED (SS_NW_TM_TRAPS default-ON; Execute68k [KDP+0x1074/78] staging). **M7 interrupt injection ✅ SHIPPED 2026-06-12**: first host→guest interrupt through the guest's own chain (EXT delivered, guest IACK, level test passes), the riser/published/host-irq cluster newworld DEFAULT; honest remainder = consumption (the slot-4 round trip; Ticks unclaimed). **ACTIVE critical path: the slot-4 consumption round trip** (slot5-recon `b3e51b8d`). | 🟡 active |
 | **4. Optimize** | *Then* make it faster — per-block overhead ceiling, cross-block pinning, a vector register allocator (P-VRA), HLE — with Phase-2 benchmarks gating every change as a regression check. | 🟡 levers open, paced behind Phase 3 |
 | **Cross-cutting: Silicon Sheep** | A first-class macOS desktop experience (Tauri launcher/VM manager + Inspector). Runs alongside all phases. | ⏸ researched / in progress |
 
@@ -902,13 +902,48 @@ rig** to validate the Linux JIT + VDE (also exercises the Wayland fix from A3).
 > (65536/episode; `deferred_native` is a re-poll count from `3cb3b16e` — DIAGNOSTICS
 > updated `cefaed7d`). **`delivered_dec=3` live on the riser-on boot — the first live
 > published-route deliveries.**
-> **▶ Current default-boot frontier: 44.4 s to the PROGRAM#5 srr0=0x50324fec park.**
-> **▶ ACTIVE critical path: M7 interrupt injection**
-> (`docs/superpowers/plans/2026-06-12-interrupt-injection.md`, rev 2 — both red-team
-> rounds folded; entry gate LANDED; Task 0 in flight). **W2-4's remainder — including the
-> SS_NW_DEC_PUBLISHED/SS_NW_EE_RISER flips — is superseded into it** (rev-2 B1
-> supersession table); SDL_PumpEvents relocation + deliverability harness vector +
-> nested-execute path completion remain Wave-2 backlog.
+> **M7 interrupt injection ✅ SHIPPED 2026-06-12**
+> (`docs/superpowers/plans/2026-06-12-interrupt-injection.md`; arc `153c088b`…`81d60cc1`;
+> evidence `INTERRUPT-INJECTION-RECON.md`): the **first host→guest interrupt delivered
+> through the guest's own exception path** — host timer edge → once-per-assert-edge
+> latch (`SS_NW_HOST_IRQ`, `b124556f`) → EXC_EXTERNAL → NK-published 0x50314880 →
+> `[KDP+0x5b0]` fallback service body → **first guest IACK of the OpenPIC model ever**
+> (B-2 level staging `68c8fc3e`, sign-off shape (i): host edge rides PIC input 0x3F) →
+> the NK post's level test PASSES (watch 68fff070=80010001 class) env-on. Exactly-once
+> per assert edge proven (edges=consumed, zero tripwires); Q-I6 fence narrowed for the
+> published route (deferred_native 97→0). **THE CLUSTER FLIPPED** (`81d60cc1`):
+> SS_NW_EE_RISER + SS_NW_DEC_PUBLISHED + SS_NW_HOST_IRQ newworld DEFAULT (explicit-"0"
+> opt-outs; pre-flip checklist 4/4 `2a452166` incl. the ClearInterruptFlag lost-edge
+> race fix); default boot delivers DEC #1–4 (2-SPR) + EXT #1 and still reaches the
+> PROGRAM#5 park; all-OFF opt-out byte-identical to the pre-flip baseline. W2-4's
+> reserved flip + absorbed items closed per its supersession table.
+> **▶ Current default-boot frontier: the PROGRAM#5 srr0=0x50324fec park (the NK idle
+> nap loop) + live delivery chronology.** Honest remainder: **consumption** — the
+> armed 68k post is never consumed/retired (Ticks unclaimed; the guest `addq.l #1,$16a`
+> has never run).
+> **▶ ACTIVE critical path / named next task: the slot-4 consumption round trip**
+> (M-sized; slot5-recon `b3e51b8d`, recon "R-II10 / slot-5 park recon" + Q-S5e card:
+> EXT post → DR interrupt vector → 68k IRQ dispatch → retirement → DR resume; three
+> livelock shapes pinned; first open question = shape A's 0x503244e8 bctr resume
+> target. The MODE_EMUL_OP injection-arm fencing rides this task — it touches exactly
+> that HandleInterrupt dispatch.)
+> **M7 follow-on rows (owned, not blocking):**
+> - **SS_NW_PIC default flip — HELD** (W2-3 stop-rule 3): criteria = real guest MPIC
+>   init (or device-source acceptance) + the tripwire-counter per-source split
+>   (Task C item 4 binding condition) + re-audit the stale SetInterruptFlag
+>   caller-inventory/lock comment (Task-C review P3: ClearInterruptFlag now calls the
+>   full edge path incl. pic_input_locked). Until then SS_NW_PIC=1 is the env-on TEST
+>   cluster (carries the B-2 level staging — default boots deliver at level 0, R-II7).
+> - **Legacy-KDP-shim retirement + M3A dual-mode-row cleanup** (deferred from Task C):
+>   the opt-out `SS_NW_DEC_PUBLISHED=0` route is the KDP shim's last consumer; retire
+>   both together (M3A-ENTRY-TABLE "Residue" row updated by `81d60cc1` — the legacy
+>   row is historical post-flip; schedule the retirement when the opt-out window ends).
+> - **polled-trampoline + SDL_PumpEvents decisions — NAMED-DEFERRED** (W2-4
+>   supersession default: leave / keep+decouple): the ROM VIA/SCC pollers coexist with
+>   delivery; untouched by the M7 chain; re-evaluate when the 68k consumption side is
+>   live (slot-4 task or later).
+> SDL_PumpEvents relocation + deliverability harness vector + nested-execute path
+> completion remain Wave-2 backlog.
 > **Deferred (tracked, donor study §7.2 item 4):** full **host-input-over-ADB** — real
 > autopoll packets driving the guest's ADB stack replace `adb_stub` behind the same
 > interface (`SheepShaver/src/include/adb_stub.h` documents the seam; pickup requirements

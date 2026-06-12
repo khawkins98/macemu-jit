@@ -50,7 +50,7 @@ enum {	// Selectors for EMUL_OP opcodes
 	OP_CHECK_SYSV, OP_NTRB_17_PATCH, OP_NTRB_17_PATCH2, OP_NTRB_17_PATCH3, OP_NTRB_17_PATCH4, OP_CHECKLOAD,
 	OP_EXTFS_COMM, OP_EXTFS_HFS, OP_IDLE_TIME, OP_IDLE_TIME_2,
 	OP_POWEROFF,
-	OP_IRQ_NW,  // MUST stay last before OP_MAX — inserting before existing entries shifts all opcode values
+	OP_IRQ_NW,  // new opcodes go here (append only — inserting before existing entries shifts their values)
 	OP_MAX
 };
 const uint16 M68K_EMUL_RETURN = 0xfe40;	// Extended opcodes

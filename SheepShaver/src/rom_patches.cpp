@@ -1011,6 +1011,7 @@ bool PatchROM(void)
 		                  ((0x46e964u - (tramp_offset + b_idx * 4)) & 0x03FFFFFCu));
 		// Trampoline budget: 48 words (0x429b40–0x429bff). b_idx is the last slot.
 		// Maximal layout (pool+switch+VIA_IFR) fills exactly 48 words (b_idx=47).
+		// VIA_IFR uses 0 trampoline words (redirects the existing branch slot only).
 		// This fires at PatchROM time — a boot with an over-budget trampoline means
 		// some new feature added words without accounting for the fixed section.
 		if (b_idx > 47) {
@@ -3965,46 +3966,28 @@ static bool patch_68k(void)
 		} else fprintf(stderr, "[ROMPATCH] SKIP via_int3 (absent in parcels)\n");
 	}
 
-	// SS_NW_VIA_IFR: patch the 9.0.1 ROM secondary dispatch table entry (level-1)
-	// at ROM offset 0xed08 (guest 0x5000ed08).
+	// SS_NW_VIA_IFR: M9 gate — VIA-IFR surface.
 	//
-	// Background (VIA-IFR-RECON.md §5b-5e): in our early-boot 9.0.1 guest the
-	// level-1 interrupt vector at 0x64 points to 0x5000ed08 (the secondary dispatch
-	// table), NOT to 0x5000ec50 (primary table, which QEMU's Mac OS 9.2.1 reference
-	// boot uses).  The secondary path (0x5000ed36) checks the NK PIC descriptor
-	// (hnfo_rec+0x14 = source-table pointer), finds it NIL, reads garbage from
-	// 68k address 4, and falls to the hardware-reset path (0x5000980a) — so OP_IRQ
-	// is never reached, Ticks is never guest-claimed.
+	// The previous approach (replacing 0x5000ed08 with OP_IRQ_NW+rte) is WRONG:
+	// those 8 bytes are read as DATA by the NK during boot (pattern scan); corrupting
+	// them → NK fails to initialize → dec_expiries=5 stall.  The stall is the sole
+	// symptom; removing the patch restores dec_expiries to baseline levels.
 	//
-	// Fix: replace the 8-byte level-1 secondary dispatch entry with OP_IRQ + rte,
-	// bypassing the source-table lookup entirely.  via_int3's range (0x15000-0x19000)
-	// misses 0xed00-0xee00; the existing via_int / via_int3 block does NOT apply.
-	// Prerequisite: KernelDataAddr+0x67c must be non-zero (see sheepshaver_glue.cpp
-	// SS_NW_VIA_IFR block) — patched there under the same gate.
-	if (ROMType == ROMTYPE_NEWWORLD) {
-		const char *via_ifr_env = getenv("SS_NW_VIA_IFR");
-		const char *via_ifr_rp_env = getenv("SS_NW_VIA_IFR_ROM_PATCH");
-		// SS_NW_VIA_IFR_ROM_PATCH=0 suppresses the ROM patch while keeping the trampoline
-		// (isolation probe: Boot A = trampoline-only, Boot B = ROM-patch-only)
-		bool rom_patch_suppressed = via_ifr_rp_env && strcmp(via_ifr_rp_env, "0") == 0;
-		bool via_ifr_rom_patch_active = (via_ifr_env && strcmp(via_ifr_env, "0") != 0)
-		                             && !rom_patch_suppressed;
-		if (via_ifr_rom_patch_active) {
-			static const uint8 via_nw901_int_dat[] = {0x48,0xe7,0xf0,0xf0, 0x76,0x01,0x60,0x26};
-			base = find_rom_data(0xed00, 0xee00, via_nw901_int_dat, sizeof(via_nw901_int_dat));
-			if (base) {
-				wp = (uint16 *)(ROMBaseHost + base);
-				*wp++ = htons(M68K_EMUL_OP_IRQ_NW);
-				*wp++ = htons(0x4e73);		// rte (interrupt path; JSR path skips via r->pc redirect)
-				*wp++ = htons(M68K_NOP);
-				*wp   = htons(M68K_NOP);
-				fprintf(stderr, "[ROMPATCH] via_nw901_int @%08lx → OP_IRQ_NW+rte "
-				        "(SS_NW_VIA_IFR, frame-aware)\n", (unsigned long)(ROMBase + base));
-			} else {
-				fprintf(stderr, "[ROMPATCH] SKIP via_nw901_int (pattern not found in 0xed00-0xee00)\n");
-			}
-		}
-	}
+	// M9 finding (session-4 probe campaign): the 68k handler at 0x5000ed08 does NOT
+	// fire in the current boot, even in baseline.  Root cause chain:
+	//   1. NK EXT handler (0x50314880) checks r11.bit16 (PR = user-mode bit).
+	//      In our boot the DR emulator runs in kernel mode (SS_M6A_USER_MSR=0),
+	//      so r11.bit16=0 → EXT always takes the fallback (0x50314660), never reaches
+	//      the CGRP delivery path.
+	//   2. CGRP+0x20 = 1 (a function pointer, never initialized by NK cold-start to a
+	//      valid address) — even if the PR check passed, CGRP delivery would bail.
+	//
+	// SS_NW_VIA_IFR=1 is now a no-op (gate kept for future use).
+	//
+	// M10 prerequisites: (a) fix SS_M6A_USER_MSR or provide an equivalent user-mode
+	// path for the DR emulator so PR=1 at EXT time; (b) initialize CGRP+0x20/+0x38/
+	// +0x3c/+0x40/+0x44 with valid NK function pointers and descriptor tables so the
+	// NK can route the EE interrupt to the 68k handler at 0x5000ed08.
 
 	// Patch ZeroScrap() for clipboard exchange with host OS
 	uint32 zero_scrap = find_rom_trap(0xa9fc);	// ZeroScrap()

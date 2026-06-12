@@ -6,7 +6,8 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M9 VIA-IFR stall — root cause is now isolated to the ROM patch alone (see §below).
+> Active work: M9 VIA-IFR — stall fixed (ROM patch removed); 68k handler delivery is M10 work
+> (needs user-mode DR + CGRP init; see §Session 4 findings below).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
@@ -15,7 +16,7 @@
 ## Current state (2026-06-12 end-of-session)
 
 - **M8** — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
-- **M9** — infrastructure committed; stall root-cause **isolated to ROM patch** (see below).
+- **M9** — stall fixed (ROM patch removed); 68k handler delivery blocked by deeper issues (see §S4 findings).
 
 ### What shipped this session
 
@@ -128,38 +129,71 @@ is wrong, the NK may not complete delivery. The trampoline previously wrote a sh
 here (causing corruption per commit `db67aded` comment), which is now fixed to nop. But the
 stall persists — suggesting a different mechanism.
 
-### Next step: probe the NK EXT delivery path
+---
 
-Compare the EXT handler (`0x50314880`) between stall and baseline to find where delivery
-diverges:
+## Session 4 findings (2026-06-12) — full root cause analysis
 
-```bash
-# Boot A — stall
-SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_NW_VIA_IFR=1 SS_TERM_DUMP=1 \
-  /path/to/SheepShaver/tools/ss-slot-boot.sh --label stall-ext --timeout 25 \
-  --env 'SS_PROBE_PC=0x50314880:r8,r9,r10,r11,[0x68ffe67c],[0x68fff070]'
+### What was done
 
-# Boot B — baseline
-SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_NW_VIA_IFR=0 SS_TERM_DUMP=1 \
-  /path/to/SheepShaver/tools/ss-slot-boot.sh --label base-ext --timeout 25 \
-  --env 'SS_PROBE_PC=0x50314880:r8,r9,r10,r11,[0x68ffe67c],[0x68fff070]'
+1. **ROM patch removed** (`patch_68k()` VIA_IFR block → comment-only). This fixes the stall.
+   `SS_NW_VIA_IFR=1` is now a no-op. Harness 353/353 unchanged.
+
+2. **SS_PROBE_68K=0x5000ed08 never fires**, even in baseline. 30s runs with `SS_NW_PIC=1
+   SS_NW_IRQ_CONSUME=1`: probe armed but never matched. The 68k interrupt handler is NOT
+   being called in any current boot configuration.
+
+### Root cause chain — why 68k interrupt handler never fires
+
+**Layer 1 — NK EXT handler PR-bit check (0x50314880):**
 ```
-
-Also confirm 68k never reaches handler in stall:
-```bash
-SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_NW_VIA_IFR=1 SS_TERM_DUMP=1 \
-  /path/to/SheepShaver/tools/ss-slot-boot.sh --label stall-68k --timeout 25 \
-  --env 'SS_PROBE_68K=0x5000ed08:5'
+bl 0x50313d40          ← save context
+rlwinm. r9, r11, 0, 0x10, 0x10   ← extract r11.bit16 = PR bit (user-mode flag)
+beq 0x50313ab0         ← if PR=0 (kernel mode) → fallback, skip CGRP entirely
 ```
+In our boot r11=0x0000000a at EXT handler entry → PR=0 → ALWAYS takes fallback.
+The DR emulator runs in **kernel mode** (SS_M6A_USER_MSR=0 by default). External
+interrupts fired in kernel mode bypass the CGRP 68k-delivery path entirely.
 
-If the EXT handler probe shows different register values at the delivery decision point,
-disassemble the NK EXT handler from `0x50314880` to find the guard condition and what it reads.
+**Layer 2 — CGRP+0x20 not a counter (was misidentified):**
+CGRP+0x20 = 0x00000001 in baseline (probe at NK scheduler visit=1). The NK init code
+at 0x503115f8 writes `NK_base + 0x3da0 = 0x503143a0` to CGRP+0x20 — it's a **function
+pointer**, not a "registered group count." Value 1 means the NK cold-start never ran
+that init code for our specific CGRP instance. The `cmpwi r9, 2; blt` guard at
+0x50314894 checks whether this pointer is valid (≥2 = non-null/non-error), but this
+check is NEVER REACHED because the PR-bit check bails first.
 
-### Acceptance criteria (unchanged)
+**Layer 3 — CGRP delivery fields uninitialized:**
+CGRP+0x38 (guard) = 0, CGRP+0x3c (TABLE_BASE) = 0, CGRP+0x40 (STACK_TABLE) = 0,
+CGRP+0x44 (COUNT) = 0. The NK delivery function at 0x503148e0 would also bail on
+CGRP+0x38==0. These are normally populated by Mac OS calling NK interrupt-registration
+services during System startup — our boot stalls before that point.
 
-- `SS_PROBE_68K=0x5000ed08:5` fires (68k reaches the handler)
-- `[PROGRESS] dec_expiries≥200 irq_fired≥1` with `SS_NW_VIA_IFR=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`
-- Harness 353/353 throughout
+### M10 prerequisites to get 68k handler to fire
+
+1. **User-mode DR** — fix SS_M6A_USER_MSR or provide an equivalent mechanism so the
+   DR emulator runs with MSR PR=1. This makes external interrupts fired during 68k
+   execution take the CGRP path (r11.bit16=1) instead of the fallback.
+   SS_M6A_USER_MSR is quarantined (zero-page slide crash) — needs proper fix.
+
+2. **CGRP initialization** — after user-mode is working, populate CGRP:
+   - CGRP+0x20 = valid function pointer (NK_base + 0x3da0 = 0x503143a0)
+   - CGRP+0x38 = non-zero guard
+   - CGRP+0x3c = TABLE_BASE (array of context descriptor pointers)
+   - CGRP+0x40 = STACK_TABLE (array of stack pointers per interrupt group)
+   - CGRP+0x44 = COUNT (≥10, since NK EXT handler posts source index 9)
+   Each TABLE_BASE entry is a pointer to a 2-word descriptor [RFI_target, r2].
+   RFI_target must be the 68k interrupt injection entry in the DR emulator (TBD).
+
+### Revised acceptance criteria for M9 close-out
+
+M9 is **partially complete**. The stall is fixed; the probe criterion requires M10 work:
+
+| Criterion | Status |
+|-----------|--------|
+| Harness 353/353 | ✅ |
+| dec_expiries≥200 irq_fired≥1 (baseline w/ full env) | ✅ ~1577 / 376 |
+| ROM patch removed (stall root cause fixed) | ✅ committed (this session) |
+| SS_PROBE_68K=0x5000ed08:5 fires | ❌ requires M10 (user-mode DR + CGRP init) |
 
 ---
 

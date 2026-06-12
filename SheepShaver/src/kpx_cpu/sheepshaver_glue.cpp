@@ -212,6 +212,7 @@ static uint64_t exc_stat_deferred_depth = 0;
 static uint64_t exc_stat_deferred_native = 0;	// M6a W2: deferred during native excursion ([XLM_RUN_MODE]!=0)
 static uint64_t exc_stat_delivered_sc   = 0;	// NK-syscall-surface Task A (plan rev 2 P-M4): delivered sc count
 static uint64_t exc_stat_delivered_program = 0;	// FE1F-service-surface Task A: delivered 0x700 (trap) count
+static uint32_t exc_stat_max_program_slot  = 0;	// highest NK slot# seen (slot 5 = Start68k = 68k world up)
 static uint64_t exc_stat_delivered_ext  = 0;	// Wave-2 W2-3: delivered EXC_EXTERNAL count (7th field, appended LAST)
 
 /* M7 item 2 (DEFER_NATIVE wake-up edge, INTERRUPT-INJECTION-RECON.md Q4 +
@@ -1755,6 +1756,7 @@ extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
 	exc_stat_delivered_program++;
 	const bool is_slot = (trap_word & 0xffff0000u) == 0x0fff0000u;
 	const uint32 slot = trap_word & 0xffffu;
+	if (is_slot && slot > exc_stat_max_program_slot) exc_stat_max_program_slot = slot;
 	if (exc_stat_delivered_program <= 5) {
 		char slotbuf[16];
 		if (is_slot) snprintf(slotbuf, sizeof slotbuf, "%u", slot);
@@ -1788,6 +1790,8 @@ extern "C" void SheepExcStats(uint64_t out[7])
 	out[5] = exc_stat_delivered_program;
 	out[6] = exc_stat_delivered_ext;
 }
+
+extern "C" uint32_t SheepExcMaxProgramSlot(void) { return exc_stat_max_program_slot; }
 
 // C2.0 RPC: dump PPC registers as JSON for the SiliconSheep Inspector
 extern "C" void ss_dump_registers_json(char *buf, int bufsz) {

@@ -1374,6 +1374,8 @@ static bool nw_pic_force = false;     // [DIAG-FORCED] knob (SS_NW_PIC_FORCE=1)
 // The EXT pending flag + configure seam live in sheepshaver_glue.cpp (declared
 // in ppc-cpu.hpp, which this file does not include — file-scope externs by the
 // established TriggerInterrupt/main.h pattern, not function-scope ones).
+extern "C" uint32_t SheepExcMaxProgramSlot(void);  // [PROGRESS] max NK slot# delivered
+extern "C" int      SheepDR68KStarted(void);        // [PROGRESS] 68k DR emulator fired
 extern "C" void SheepExcExtSetPending(int asserted);
 extern "C" void SheepExcExtConfigure(void);
 // M7 Task A: the host once-per-assert-edge latch (SS_NW_HOST_IRQ; glue owns it).
@@ -1585,6 +1587,18 @@ int main(int argc, char **argv)
 	GtkApplication *app = NULL;
 	int ret;
 #endif
+	// [PROGRESS] — registered first so it runs last (LIFO), after all detail dumps.
+	// Emits one summary line on every exit including SIGTERM (SS_TERM_DUMP converts
+	// SIGTERM to exit(1)).  Greppable milestone readout for Machine Layer work.
+	atexit([]() {
+		fprintf(stderr,
+		        "[PROGRESS] program_max=%u dr68k=%d dec_expiries=%llu irq_fired=%u\n",
+		        SheepExcMaxProgramSlot(),
+		        SheepDR68KStarted(),
+		        (unsigned long long)g_virt_clock.dec_expiries,
+		        g_exc_consume_stats.fired);
+	});
+
 	char str[256];
 	bool memory_mapped_from_zero, ram_rom_areas_contiguous;
 	const char *vmdir = NULL;

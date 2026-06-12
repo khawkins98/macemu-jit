@@ -276,6 +276,8 @@ static uint32_t s_probe68k_max = 8;
 static uint32_t s_probe68k_hits = 0;
 static uint32_t s_probe68k_prev = 0;     // previous r24 seen at the hook (edge trigger)
 
+extern "C" int SheepDR68KStarted(void) { return s_probe68k_state >= 0 ? 1 : 0; }
+
 static void probe68k_check(powerpc_registers *r, uint32_t bpc) {
 	if (__builtin_expect(s_probe68k_state < 0, false)) {
 		// Always-on one-shot: first 68k instruction ever dispatched by the DR.

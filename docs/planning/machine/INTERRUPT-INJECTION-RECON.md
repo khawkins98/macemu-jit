@@ -219,3 +219,56 @@ TimerInterrupt task calls are de-mined). New named residue:
   route retires the KDP save shim (the fence's original corruption rationale), so
   whether DEFER_NATIVE should apply on the 2-SPR route at all is an open design
   question for item 3.
+
+---
+
+## M7 Task 0 — EXT/DEC post-path recon (2026-06-12, label inj-task0)
+
+Plan: `docs/superpowers/plans/2026-06-12-interrupt-injection.md` (rev 2). Boots: **2 of ≤6**
+(slot0 runs 20260612-021607.5156 default, 20260612-021835.5366 EXT-forced). Provenance ritual
+run (manifest OK pre-recon); fresh post-PatchROM dump taken boot 1 (`/tmp/rom901_fresh_task0.bin`).
+
+### Entry gate (E1–E4) — GREEN
+
+| Row | Verdict | Evidence |
+|---|---|---|
+| E1 | **VERIFIED** | [PROBE✓] boot 1: `[0x68fff074]=0x50480000 [0x68fff078]=0x50460000` |
+| E2 | **VERIFIED** | [PROBE✓] boot 1 reproduces the actuals: `PROGRAM delivered #5 srr0=50324fec word=0fff0005 slot=5 r1=0 lr=0 -> entry=50314700`, sc census 16 distinct `0xffffffff x233`/`0xfffffffe x17`, blocks=7354, no SIGSEGV, full 49 s session |
+| E3 | **VERIFIED** (landed record `bf571e26`: delivered_dec=3, pending=0, mtspr_dec=25) + consistency: boot 2 riser-on shows the published DEC route delivering at scale (delivered_dec=3395) | record + [PROBE✓] |
+| E4 | **VERIFIED** — published in the RESULTS section above; boot 1 `--expect` matched its named lines | [PROBE✓] |
+
+### Blocking-answer table
+
+| Q | Answer | Tag |
+|---|---|---|
+| **Q-I1** | **ROUTE = EXT** (decision-rule branch 1 satisfied). Instruction-level path: EXT body 0x314880 → shared prologue 0x313d40 → EE guard → `[[KDP-0x338]+0x20]<2` → `mtlr [KDP+0x5b0]`(=0x50325f00)`; blr` → **fallback body 0x325f00** (lock 0x312700; r20–r31 save via 0x3238d4; `[KDP+0xe80]++`; segment-switch; **PIC IACK `lwbrx` @+0x200a0**; vector queue `[KDP+0x910/0x912]` + pending bitmap `[r20+0xf28]`; **level := `lbz [0x3f00+vector]`** (lowmem vector→level table); EOI `stwx` @+0x200b0 on special/OOB legs) → ALL exits converge 0x3260fc → **`b 0x3254e0` = the 68k-post body**: `r23:=[KDP+0x67c]`; r28<0 skip / r28>0 `ori 0x8000`+`r31:=[KDP+0x674]`; gate `rlwinm. r7,bit 0x00200000`: SET → `sth r28,0(r23)` + CR `or r13,r31` / `and r13,[KDP+0x678]`; CLEAR → **staged post**: `[KDP-0x440] \|= mask`, `[KDP-0x43c] := r28` (sentinel 0xffff=empty; drained into `[[KDP+0x67c]]` at world-restore 0x324720) → unlock → restore 0x323944 → `b 0x312cb0`. **LIVE: the first EXT deliveries ever fired** (boot 2, `SS_NW_PIC=1 SS_NW_PIC_FORCE=1 SS_SCC_RX_INJECT=12:0D`, riser+published on): `EXT delivered #1: restart=50463028 srr1=0000f072 -> entry=50314880`; post body REACHED with `r7=0x00a80000` (bit 0x00200000 SET — from-emulator). **DEC-piggyback REJECTED by evidence**: the DEC body/exit tree never invokes the post family (timer service `bl 0x322eac` → `b 0x312cb0`; the only other `[KDP+0x67c]` readers are trace-log stubs 0x32345c and the restore-drain 0x324724). | [STATIC]+[PROBE✓] |
+| **Q-I1 — THE LEVEL-SOURCE GAP (new, blocks Task B's post-value gate)** | At this frontier the post executes with **r28=0**: the guest's PIC virtual mapping (`[[KDP-0x20]+0xf18]`) is uninitialized so the IACK never reaches the PIC model (pic stats `i:0` with 68M deliveries), and the lowmem vector→level table 0x3f00 is zero (`[0x3f24]=0`). Observed post write = 0 (`[0x68fff070]=0`). A nonzero level via the fallback requires guest state Mac OS's native interrupt init owns. Options for the coordinator: (a) stage `[0x3f00+vector]` + PIC mapping — donor-less, same class as the rejected fake guest PIC init; (b) re-scope Task B's "post observed" gate to writer-PC + write-event (value 0 accepted at this frontier, value `level\|0x8000` deferred to post-guest-init); (c) none better — DEC-piggyback does not reach the post at all. **Not stop-rule NEITHER** (the post is reached without unstaged surfaces; the gap is the level INPUT). | [PROBE✓]+[STATIC] |
+| **Q-I1 — A1 livelock proven in vivo** | The level-held source with no retirement path: **68,657,433 EXT deliveries in 40 s**, runaway tripwire fired, comp frozen, guest progress zero, re-delivery storm parked on restart=0x50318018 (the riser restore tail — the EE-rise re-delivery loop exactly as A1 derived). DEC was NOT starved (delivered_dec=3395 interleaved — DEC-before-EXT order + U13 held). The once-per-assert-edge latch is the only viable host-source shape; this is its measured counterfactual. | [PROBE✓] |
+| **Q-I2** | `[KDP+0x67c]` = **0x68fff070** (ECB+0x70) — W2L-R1 RETIRED. Task B watch address: `SS_JIT_WATCH_ADDR=68fff070`. `[KDP+0x674]`=0x00e00000 (CR OR-mask), `[KDP+0x678]`=0xff9fffff (CR AND-mask). Expected written value class `level\|0x8000` (e.g. 0x8001) — at the current frontier the observed write is 0 (the level gap above). NK init writer: 0x310800 block, `[KDP+0x67c] := r8 + cfg[0x7c]` (ECB-relative — consistent with the probe). Deferred-post staging slot (new): `[KDP-0x43c]` level halfword + `[KDP-0x440]` mask accumulator, writers 0x311d30 (init) / 0x325674 (not-from-emulator post leg), drain 0x324720. | [PROBE✓]+[STATIC] |
+| **Q-I3** | 68k chain [PATCH-fresh, from the boot-1 fresh dump]: CHRP level-1 @file **0xec50** = patched `jmp 0x5000ef20` (**CORRECTION: the recon's "via_int3 jmp @0x16dd6" was wrong** — that site holds `4ef9 41234567`, unrelated; 0xec50 is the first via_int3_dat hit, second raw hit 0xed08 stays unpatched) → 0xef20 `movem.l d0-d3/a0-a3,-(sp)` → `pea` ret → `movea.l $1d4.w,a1` → **patched via_int head @0xef2c** `moveq #2,d0` + 4×nop → dispatch `movea.w 0xef40(pc,d0),a0` → table[2]=lowmem **$192** (Lvl1DT slot) → `movea.l (a0),a0; jmp (a0)` → 60 Hz handler = task proc 0xbbb8 → **fe6b OP_IRQ @0xbbc8** → `tst.l d0; beq -0x18` → **`addq.l #1,$16a` (Ticks++)**. Pre-WLSC OP_IRQ returns d0=1 ⇒ **the Ticks++ tail is pre-warm-start-reachable** once a level-1 dispatch occurs. SS_PROBE_68K list (+2 idiom): `0x5000ec52, 0x5000ef22, 0x5000bbca`; expected order ec50→ef20→([$192])→bbb8/bbc8. CR-arm consumption: the post ORs `[KDP+0x674]`=0x00e00000 into saved r13 (the emulator world's CR); consumed by the DR emulator's interrupt poll (donor-analogy — Task B probes it). **`[0xcfc]`=0xffffffff ≠ 'WLSC' ⇒ PRE-warm-start regime at the frontier**: OP_IRQ runs the :812 pending-word clear + d0=1 leg only; no InterruptFlags consumption. | [PATCH-fresh]+[STATIC]+[PROBE✓] |
+| **Q-I4** | (a) **Level predicate: `InterruptFlags≠0`** (whole-word — matches OP_IRQ's whole-block consumption); assert edge = SetInterruptFlag's newworld arm latching per call. **Pre-warm-start retirement story: NONE** (`[0xcfc]` probe above) — reachable pre-WLSC: delivery (proven), NK post-path execution (proven, value-0 caveat), OP_IRQ entry + :812 pending-word clear, the via_int2 Ticks++ tail; deferred post-WLSC: InterruptFlags retirement/deassert pairing, TimerInterrupt, task re-prime. (b) Assert-edge kick = `TriggerInterrupt()` from the timer thread (F5: store-release then kick; spurious-safe, missed-unsafe). (c) **Damper design**: dedicated `host_irq_latch` word (single-copy-atomic uint32; release store on the asserting thread; atomic-exchange-0 consume at delivery on the CPU thread). **A5 composition: OR at the POLL site** — `ext_pending = SheepExcExtPending() \|\| host_latch`; the host arm NEVER writes `exc_ext_pending_flag` (no clobber; C1 level-held stays PIC-only). Delivery consumes the latch only. Expected deliveries-per-assert = **exactly 1**; boot 2's 68M storm is the counterfactual. (d) `deferred_native` (re-poll meter post-3cb3b16e): bound **≤ 65537 × kick-episodes**, episodes ≈ host asserts + DEC expiries; if Q-I6's narrow lands, in-window deliveries make the per-assert re-poll count ~0–10² (no full-cap episodes); if the fence were kept, every parked-phase assert burns a full 65536 cap. Task B's invariant restates against this, not E3's class. | [STATIC]+[PROBE✓] |
+| **Q-I5** | Baseline reproduced (boot 1) — E2 row above. R-II3 one static window: **0x324fec is the slot-5 placeholder word `0x0fff0005` inside an NK polling loop** (0x324f48..0x325000: `li r0,0x2e; sc`; on r3≠0 → `li r3,1; li r4,0` → the placeholder → loop). The PROGRAM#5 cadence and the `sc 0x2e`-family storm are this single wait loop. Next milestone's quarry, not chased. | [PROBE✓]+[STATIC] |
+| **Q-I6** | **VERDICT (ii): fence NARROWED for the published route.** (1) The fence's stated rationale (exc_core.cpp:70–73) is the legacy KDP register-save shim — retired on the 2-SPR published route (M3A/W2-4 step 0). (2) State a published-route delivery would corrupt mid-native-window: **NONE** — the 2-SPR shim writes SPRG1/SPRG2 only (NK scratch consumed by the prologue); the NK bodies do complete save/restore (prologue r0,r7–r13 → ctx; the fallback's `bl 0x3238d4`/`bl 0x323944` entries are offset-matched to its r20–r31 clobber set); restart PC = JIT block start is a clean boundary; boot 2's delivery at restart=0x50463028 (mirror region) round-tripped. (3) Kept fence + the parked frontier (`[0x2810]=1` indefinitely, EE=1, pending — boot-1 probe + boot-4/5 record) = undeliverable by design ⇒ option (i) makes Task A's acceptance unfalsifiable. (4) Option (iii) impossible — the timer thread cannot observe `[0x2810]` transitions; no placement guarantee exists. Design shape: route-aware fence — skip the run_mode defer when the resolved entry is a published handler (EXT `external_entry≠0`; DEC only under `SS_NW_DEC_PUBLISHED`); legacy-route DEC keeps the fence. SRR1/riser compose: unchanged. Note: delivering in the emulator window is also exactly where the post's r7-bit-0x00200000 precondition holds (`r7=0x00a80000` observed). | [STATIC]+[PROBE✓] |
+
+### Falsifications / corrections (this task)
+
+- **None of this plan's pinned contracts falsified.** Corrections of record: (1) the recon Q3
+  row's "via_int3 jmp @0x16dd6" → the patched site is **0xec50** (0x16dd6 holds an unrelated
+  `jmp 0x41234567`); (2) **the canonical `rom901.bin` dump is STALE** — persisted 2026-06-11
+  08:01, it PREDATES `f808a7fb` (2026-06-12 00:40, patch_68k .Sony-abort lift) and lacks the
+  via_int/via_int2/via_int3 + 68k-HLE patches (raw patterns still present at 0xef2c/0xbbc8).
+  Fresh dump at `/tmp/rom901_fresh_task0.bin` (boot 1). **Re-baseline of the shared canonical
+  dump deferred to the coordinator** (denied as an unsanctioned shared-resource overwrite this
+  task); until then, [PATCH] reads of 68k patch sites from rom901.bin are SUSPECT — use the
+  fresh dump or the [PATCH-fresh] bytes recorded here.
+
+### New residues (named)
+
+- **R-II7 (the level-source gap)**: the EXT fallback's posted level is IACK-vector → lowmem
+  `[0x3f00+vector]`-derived; both inputs are guest-init-owned and zero at the frontier — the
+  post fires but writes 0. Blocks Task B's post-VALUE expectation as written; coordinator
+  re-scope options recorded in the Q-I1 gap row.
+- **R-II8**: `[KDP+0x910]` queue-depth halfword holds junk (0x5031-class code-pointer bytes)
+  at the frontier and grows per fallback entry — the NK interrupt queue area is uninitialized
+  pre-guest-init; harmless to the post path (all legs converge on the post), noted for any
+  future fallback-behavior reasoning.

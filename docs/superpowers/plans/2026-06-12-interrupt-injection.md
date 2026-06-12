@@ -223,9 +223,10 @@ dumps, provenance ritual `tools/dump-manifest.sh --check` FIRST) is the primary 
 decided; static windows ≤2 call levels / ≤12 functions per body (the P-C2 idiom)**.
 Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner gates).
 
-- [ ] **Entry gate first:** verify rows E1–E4 against the landed inj-s-fixes evidence
+- [x] **Entry gate first:** verify rows E1–E4 against the landed inj-s-fixes evidence
   (≤1 verification boot if its record is ambiguous). Red ⇒ HOLD, report.
-- [ ] **(Q-I1 — THE FORK; blocks Task A) Does a delivery reach the 68k post?** Static
+  **GREEN 2026-06-12** (boot 1 [PROBE✓]; see Task 0 results below).
+- [x] **(Q-I1 — THE FORK; blocks Task A) Does a delivery reach the 68k post?** Static
   walk of the EXT body 0x50314880 (and its frontier exit = the fallback 0x50325f00)
   for a delivery whose interrupted context carries flags bit 0x00200000 (from-emulator):
   does control reach the post family (the `rlwinm. r8,r7,0,0xa,0xa`-guarded
@@ -242,7 +243,7 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   service-body range whose 9 tail-branches reach the 68k post (W2S-1, EE-CHAIN-RECON
   :433–434) — the frontier "fallback swallow" may itself BE a post-reaching service
   body. Start the static walk there.)**
-- [ ] **(Q-I2 — blocks Task A/B) The post's live targets:** probe `[0x68ffe67c]`
+- [x] **(Q-I2 — blocks Task A/B) The post's live targets:** probe `[0x68ffe67c]`
   (the pointer), `[[KDP+0x67c]]` resolved target value-before, `[0x68ffe674]` (CR mask)
   in the cold 68k world — retires W2L-R1. Pin: is the resolved target the DR emulator's
   pending word the 68k dispatch polls (and at what 68k-side check site)? **Deliverable:
@@ -252,7 +253,7 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   frontier), the [STATIC] fallback is the NK init writers of `[KDP+0x67c]` (the
   `bl 0x3254a0` ×2 init callers, W2S-1) — pin the target class statically, mark the live
   value a residue, and Task B's watch gate downgrades to probe-on-first-post.)*
-- [ ] **(Q-I3 — blocks Task B) The 68k consumption side:** from the resolved pending
+- [x] **(Q-I3 — blocks Task B) The 68k consumption side:** from the resolved pending
   word to OP_IRQ — static on the patched via_int chain (**68k disassembly via
   `tools/m68k-dis.py`** — capstone-M68K mis-decodes `fe1f`-class A/F-line words,
   AGENT-CONTEXT): the 68k level-1 entry PC for `SS_PROBE_68K`, the via_int head (file
@@ -267,7 +268,7 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   bounded window, the fallback is the patch-site bytes themselves ([PATCH-fresh] file
   offsets above) + one `SS_PROBE_68K` boot on the via_int head — order pinned
   empirically, the full static chain recorded as residue.)*
-- [ ] **(Q-I4 — blocks Task A) Host-source mapping + retirement regime + the
+- [x] **(Q-I4 — blocks Task A) Host-source mapping + retirement regime + the
   once-per-edge damper DESIGN (rev 2 A1/A2/A3 — reshaped):**
   (a) the exact level predicate (`InterruptFlags≠0` vs `INTFLAG_TIMER` bit) and the
   retirement story BY REGIME: the clear site is KNOWN (emul_op.cpp:841, inside the
@@ -297,7 +298,7 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   Task B's invariant carries an honest unknown, flagged.
   Any deviation from the once-per-edge default (e.g. a DEC-piggyback re-pin making the
   latch moot) requires its own written justification here.
-- [ ] **(Q-I6 — blocks Task A; rev 2 coordinator update, R-II6 sharpened) Should
+- [x] **(Q-I6 — blocks Task A; rev 2 coordinator update, R-II6 sharpened) Should
   DEFER_NATIVE apply on the published-handler route at all?** The concrete consequence
   the inj-s-fixes review pinned: a latch landing in a PARKED native window
   (`[0x2810]=1` that never exits — the post-P-M5 frontier's observed regime) is
@@ -314,12 +315,12 @@ Co-schedule probes (8 PCs/run). Capture-only telemetry commits allowed (inner ga
   transitions).** Static analysis of the 2-SPR handler body vs native-window state is
   the primary tool; the verdict gates Task A because a kept fence + a parked frontier
   = zero deliveries regardless of route — the EXT acceptance would be unfalsifiable.
-- [ ] **(Q-I5) The baseline:** confirm E4's published frontier signature reproduces on
+- [x] **(Q-I5) The baseline:** confirm E4's published frontier signature reproduces on
   one default boot of our own (`--expect` on its named lines); extend the
   characterization of R-II3 (PROGRAM slot=5 srr0=0x50324fec; the sc 0xffffffff growth)
   ONLY as far as one boot + one static window — it is the comparison baseline, not this
   milestone's quarry.
-- [ ] **Gate (the blocking-answer table):** addendum committed; every answer tagged
+- [x] **Gate (the blocking-answer table):** addendum committed; every answer tagged
   ([STATIC]/[PROBE✓]/[PATCH-fresh]); **Task A blocks on Q-I1 (route verdict) + Q-I2
   (post targets) + Q-I4 (source mapping + nesting expectation) + Q-I6 (the
   DEFER_NATIVE fence verdict on the published route — rev 2 coordinator update); Task B
@@ -677,3 +678,54 @@ stop-rule triggers are unchanged in number and binding. Consistency check: the
 once-per-edge latch appears with the same semantics in Codebase facts, Q-I4(c), Task A,
 and the Rev 2 header; the regime split appears identically in Q-I4(a), Task B, and
 stop-rule 2.
+
+## Task 0 results (2026-06-12, label inj-task0)
+
+Full blocking-answer table + evidence detail: **INTERRUPT-INJECTION-RECON.md "M7 Task 0 —
+EXT/DEC post-path recon"**. Boots: 2 of ≤6 (slot0 20260612-021607.5156 default,
+20260612-021835.5366 EXT-forced via `SS_NW_PIC=1 SS_NW_PIC_FORCE=1 SS_SCC_RX_INJECT`).
+No pinned contract falsified.
+
+- **Entry gate E1–E4: GREEN** ([PROBE✓] E1 staged pair exact; E2/E4 baseline reproduced —
+  PROGRAM#5 srr0=50324fec, sc 0xffffffff x233, blocks=7354, no SIGSEGV; E3 per landed record
+  + riser-on consistency).
+- **Q-I1 ROUTE VERDICT: EXT** — the EXT body via the [KDP+0x5b0] fallback 0x50325f00
+  (itself a PIC-IACK-reading service body) reaches the 68k post 0x3254e0 on ALL exit legs;
+  live-proven: **the first EXT deliveries ever** (entry=50314880), post body reached with
+  r7 bit 0x00200000 SET. DEC-piggyback rejected (DEC body never invokes the post family).
+  **NEW BLOCKER FOR TASK B's post-value gate (R-II7)**: the posted level r28=0 at this
+  frontier (IACK unmapped → pic i:0; lowmem 0x3f00 vector→level table zero) — the post
+  fires but writes 0. Coordinator re-scope options recorded in the addendum.
+  **A1 livelock proven in vivo**: 68,657,433 deliveries/40 s under the level-held source,
+  runaway tripwire, guest frozen — the once-per-edge latch is the only viable host shape
+  (DEC not starved: 3395 interleaved).
+- **Q-I2**: resolved target = **0x68fff070** (ECB+0x70); Task B watch
+  `SS_JIT_WATCH_ADDR=68fff070`; CR masks [KDP+0x674]=0x00e00000 / [KDP+0x678]=0xff9fffff;
+  W2L-R1 retired. Plus the deferred-post staging slot [KDP-0x43c]/[KDP-0x440] (drained at
+  world-restore 0x324720) — the NK posts from BOTH context classes.
+- **Q-I3**: 68k chain [PATCH-fresh]: level-1 @0xec50 jmp→0xef20 → via_int head 0xef2c
+  (moveq #2) → dispatch table[2]→lowmem $192 → 60 Hz proc 0xbbb8 → **fe6b @0xbbc8 →
+  `addq.l #1,$16a`** — pre-WLSC OP_IRQ returns d0=1 so **Ticks++ is pre-warm-start-reachable**.
+  Probe list (+2): 0x5000ec52, 0x5000ef22, 0x5000bbca. **[0xcfc]=0xffffffff ⇒ PRE-warm-start
+  regime** [PROBE✓]. (Correction: via_int3 site is 0xec50, not the recon's 0x16dd6.)
+- **Q-I4**: level predicate InterruptFlags≠0; pre-WLSC NO retirement (explicit story in the
+  addendum); kick=TriggerInterrupt on assert edge; damper = dedicated `host_irq_latch` word,
+  **OR-composed at the poll site** (never writes exc_ext_pending_flag — A5 answered, C1
+  untouched); exactly-1-per-assert tripwire arithmetic; deferred_native bound
+  ≤65537 × kick-episodes (≈0–10² per assert if Q-I6's narrow lands).
+- **Q-I6 VERDICT: (ii) fence NARROWED for the published route** — the KDP-shim rationale is
+  retired on 2-SPR; nothing the published round trip touches is corruptible (offset-matched
+  save/restore verified); kept fence + the parked frontier ([0x2810]=1, EE=1, pending) =
+  undeliverable by design; option (iii) impossible. Shape: route-aware skip of the run_mode
+  defer for published entries only; legacy DEC keeps the fence.
+- **Q-I5**: baseline reproduced; R-II3 pinned to one window — the park is an NK `sc 0x2e`
+  polling loop containing the slot-5 placeholder word 0x0fff0005 at 0x324fec.
+- **Flagged to the coordinator**: (1) R-II7 — Task B's "post observed = level|0x8000" gate
+  is unsatisfiable at this frontier as written; re-scope (writer-PC/write-event grading, or a
+  justified level-source staging decision) BEFORE Task B dispatch. Task A (delivery machinery,
+  latch, narrow fence) is NOT blocked by it. (2) The canonical rom901.bin dump is stale
+  (pre-f808a7fb, lacks the 68k patches); re-baseline is the coordinator's call — fresh dump
+  at /tmp/rom901_fresh_task0.bin, [PATCH-fresh] bytes recorded in the addendum.
+
+**GO for Task A** (Q-I1/Q-I2/Q-I4/Q-I6 pinned; design inputs complete). **Task B holds for
+the R-II7 re-scope decision** on the post-value expectation; its Q-I2/Q-I3 inputs are pinned.

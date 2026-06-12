@@ -32,12 +32,14 @@ Paste this to start the next session:
    `docs/planning/machine/VIA-IFR-RECON.md`.
 2. ~~**VIA-IFR Task A**~~ **DONE (2026-06-12 session 2).** Fix target identified:
    ROM offset 0xed08. See `docs/planning/machine/VIA-IFR-RECON.md` §5.
-3. **VIA-IFR boot stall (first task on resumption).** The `SS_NW_VIA_IFR` gate is
-   implemented (build passes, harness 353/353), but the 68k handler at 0x5000ed08
-   is never reached. Start with the two-boot recon in VIA-IFR-RECON.md §7d — two
-   15-20s slot boots, 2 minutes total, will distinguish the three hypotheses. Fix,
-   re-run the inner gates (353/353), then one-line changelog entry. This is light-gear
-   eligible (evidence-tagged root cause → gated fix → inner gates → one-line log).
+3. **VIA-IFR boot stall (first task on resumption).** Baseline regression fixed
+   (session 4 — tp[25-26] gated on SS_NW_VIA_IFR; shadow address corrected to 0x68ff6084).
+   Remaining: the via_nw901_int ROM patch (OP_IRQ+rte @0x5000ed08) reduces dec_expiries
+   to 6 (vs 2393 baseline). Probable cause: 0x5000ed08 is entered via JSR during early 68k
+   init and `rte` corrupts the return. **Start with Probe 1 from VIA-IFR-RECON.md §8c:**
+   probe the UNPATCHED 0x5000ed08 with SS_PROBE_68K (no VIA_IFR gate) to confirm the
+   interrupt path fires at all, then A/B the patch. Fix: replace `rte` with frame-aware
+   return (detect interrupt vs JSR frame from SR format word on stack).
 4. **Once VIA-IFR fires:** confirm `fired > 0` and `ticks_keepset` advancing before
    claiming the gate. Retire the six pre-M7 default-ON gates (item 5 below) as a
    first-milestone task.
@@ -68,9 +70,9 @@ Shipped in the final two days before the pause (details: `CHANGELOG.md` 2026-06-
   r24-ring SIGSEGV flush.
 
 The honest red: **Ticks is still host-attributed.** M9 (VIA-IFR surface) is mid-flight:
-the `SS_NW_VIA_IFR` gate exists and builds clean (harness 353/353), but the 68k handler
-at 0x5000ed08 is never reached in a slot boot — SS_PROBE_68K never fires. Three hypotheses
-and a two-boot recon recipe to resolve them: see `docs/planning/machine/VIA-IFR-RECON.md` §7.
+`SS_NW_VIA_IFR` gate exists, builds clean (harness 353/353), baseline regression fixed
+(session 4). Remaining: the via_nw901_int patch (OP_IRQ+rte @0x5000ed08) stalls the 68k
+boot (dec_expiries=6 vs 2393) — probable JSR-caller rte corruption. See VIA-IFR-RECON.md §8.
 
 ## Reading order for a fresh session
 

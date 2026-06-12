@@ -1,9 +1,10 @@
 # VIA-IFR Surface — Recon & QEMU Rig Findings
 
 > **Status:** Task-0 and Task A complete (sessions 1–2); SS_NW_VIA_IFR gate implemented
-> (session 3, 2026-06-12). Build passes, harness 353/353. Boot stall unresolved —
-> SS_PROBE_68K=0x5000ed08:3 never fires. See §7 for session-3 implementation state,
-> symptom, open questions, and the next-step probe recipe.
+> (session 3) + baseline regression fixed (session 4, 2026-06-12). Build passes, harness 353/353.
+> Boot stall unresolved — the via_nw901_int ROM patch (OP_IRQ+rte @0x5000ed08) causes the 68k
+> boot to stall (dec_expiries=6 vs 2393 baseline); probable cause: rte breaks early-init callers
+> that enter 0x5000ed08 via JSR, not interrupt. See §7/§8 for session 3–4 state and next steps.
 > Tools: `SheepShaver/tools/qemu-rig.sh` + `qemu-mon.py`; `ss-slot-boot.sh` + `SS_PROBE_68K`.
 
 ---
@@ -444,6 +445,62 @@ SS_NW_VIA_IFR=1 SS_NW_IRQ_CONSUME=1 SS_NW_PIC=1 \
 0x50314880 = NK EXT handler entry. If this fires: PPC world IS running, Start68k was
 reached. If not: the stall is before NK interrupt handling, meaning the trampoline or some
 other change broke the boot path.
+
+---
+
+## 8. Session-4 state — baseline fixed, patch stall isolated (2026-06-12)
+
+### 8a. Fixes committed this session
+
+**Baseline regression fix (critical):** trampoline tp[25]–tp[26] was unconditional —
+it wrote KDP+0x67c on every NewWorld boot regardless of SS_NW_VIA_IFR. The irq_post
+`sth r28,0(r23)` hook fires on every DEC interrupt and writes `level|0x8000` to the
+KDP+0x67c target address. With the unconditional write pointing at hnfo_scratch+0xf8
+(0x68ff50f8), this corrupted the NK-owned Hnfo scratch reserve → dec_expiries=5 baseline
+stall. Fix: gated tp[25–26] on SS_NW_VIA_IFR (nop otherwise). Baseline restored:
+dec_expiries=2393 with full cluster (SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1).
+
+**Shadow address corrected:** hnfo_scratch+0xf8 (0x68ff50f8) is inside the NK-owned
+Hnfo scratch reserve (0x68ff5000..0x68ff57ff). New shadow: 0x68ff6084 — the word
+immediately after our cold/warm discriminator (0x68ff6080), in the unallocated gap
+between MM pool end and NK free-list (0x68ff7000). No SIGSEGV with the new address.
+
+### 8b. Remaining stall — via_nw901_int patch causes 68k boot regression
+
+A/B confirmed: with the full cluster (SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1) and shadow-address
+fixed trampoline, **adding SS_NW_VIA_IFR=1 reduces dec_expiries from 2393 to 6**. The ROM
+patch is the sole difference. SS_PROBE_68K=0x5000ed08:3 never fires.
+
+Probable cause: the original code at 0x5000ed08 is entered via JSR (as a subroutine) during
+early 68k initialization, not only via the interrupt mechanism. Our `rte` after OP_IRQ
+corrupts the caller's stack in that case — it pops an interrupt stack frame where the caller
+expected a regular JSR return.
+
+### 8c. Recommended next step (start here)
+
+**Probe 1 — confirm PROBE_68K fires without the patch:**
+```bash
+SheepShaver/tools/ss-slot-boot.sh --label via-no-patch-probe \
+  --env 'SS_NW_IRQ_CONSUME=1' --env 'SS_NW_PIC=1' \
+  --env 'SS_PROBE_68K=0x5000ed08:5' --timeout 25
+```
+Expected if working: `[PROBE68K] MATCH` lines with d3=1, showing the unpatched handler
+fires at interrupt time. If the probe fires: we can A/B the patch. If it NEVER fires
+without the patch: the 68k level-1 interrupt is taking a different path (wrong vector at
+0x64, or EMUL_OP_IRQ dispatch broken — Hypothesis B from §7c).
+
+**Probe 2 — if probe 1 fires, identify JSR vs interrupt callers:**
+```bash
+SheepShaver/tools/ss-slot-boot.sh --label via-no-patch-callers \
+  --env 'SS_NW_IRQ_CONSUME=1' --env 'SS_NW_PIC=1' \
+  --env 'SS_PROBE_68K=0x5000ed08:10' --timeout 25
+```
+Capture r[0-7]/a[0-7] values at each match. If early matches have SP pointing to a
+normal subroutine return frame (not an interrupt frame), a JSR caller is confirmed.
+
+**Fix candidate:** if JSR callers exist, replace `rte` with logic that detects whether
+the call was via interrupt (check SR on stack or use a different stub that restores
+registers and executes `rts` or `rte` based on the stack frame format word).
 
 ---
 

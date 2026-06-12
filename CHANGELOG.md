@@ -9,6 +9,22 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-12 (session 4 — VIA-IFR baseline fix)
+
+### [SheepShaver] M9 VIA-IFR: fix baseline regression + correct shadow address
+
+Fixed unconditional trampoline write of KDP+0x67c that stalled all NewWorld boots
+(dec_expiries=5 regardless of SS_NW_VIA_IFR) by gating tp[25]–tp[26] on SS_NW_VIA_IFR.
+Root cause: irq_post `sth r28,0(r23)` fires on every DEC interrupt and writes
+`level|0x8000` to the KDP+0x67c target; the old target (hnfo_scratch+0xf8 = 0x68ff50f8)
+is inside the NK-owned Hnfo scratch reserve → NK state corruption. Shadow moved to
+0x68ff6084 (word after cold/warm discriminator, unallocated gap). No SIGSEGV. Baseline
+restored (dec_expiries=2393 with full cluster). Harness: 353/353.
+
+Still open: the via_nw901_int ROM patch itself (OP_IRQ+rte @0x5000ed08) reduces
+dec_expiries to 6 with the full cluster — probable cause: 0x5000ed08 is entered via JSR
+during early 68k init; rte corrupts the return path. See VIA-IFR-RECON.md §8.
+
 ## 2026-06-12
 
 ### [SheepShaver][docs] M8 SLOT-4 CONSUMPTION MILESTONE COMPLETE — SHIPPED GATED-OFF-GREEN: the R-II10 livelocks fixed, the consumption round trip live through the 68k handler; the default flip refused on honest criteria

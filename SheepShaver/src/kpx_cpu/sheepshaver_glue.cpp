@@ -3444,6 +3444,11 @@ void HandleInterrupt(powerpc_registers *r)
 		// increments Ticks, but only after the nanokernel hands off — these
 		// early-boot spin-waits never reach that handoff, so no double-count.
 		WriteMacInt32(0x16a, ReadMacInt32(0x16a) + 1);
+		// M8 Task B (Ticks rider, rev-2 A5): census the host keep-set writer so
+		// guest-claimed Ticks = total 0x16c increments minus this delta. Counter
+		// only (data-only, unconditional); printed in the consume-gated
+		// [IRQ-CONSUME] atexit dump.
+		g_exc_consume_stats.ticks_keepset++;
 		// [NW-INT] tick-50 injection deleted (M3a): real DEC delivery via the exception core replaces it (plan 2026-06-10-machine-layer-m3a.md Task 4).
 		break;
     

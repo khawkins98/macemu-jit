@@ -265,7 +265,11 @@ extern int ExcDeferredEdgeFire(uint32_t entry_pc, uint32_t stub_base, uint32_t s
  * standalone tests stay link-clean): */
 extern ExcRiserWindow g_exc_riser_window;   /* defined in rom_patches.cpp (patch-time fill) */
 extern uint32_t g_exc_deferred_ee_edge;     /* the latch — defined in ppc-cpu.cpp */
-struct ExcConsumeStats { uint32_t deferred, held, fired; };
+/* ticks_keepset appended LAST (house rule): host keep-set Ticks(0x16a)
+ * increments — the Ticks-rider confounder census (M8 Task B, rev-2 A5:
+ * guest claims = total 0x16c increments minus this counter's delta).
+ * Data-only; printed in the consume-gated atexit dump. */
+struct ExcConsumeStats { uint32_t deferred, held, fired, ticks_keepset; };
 extern ExcConsumeStats g_exc_consume_stats; /* defined in ppc-cpu.cpp */
 extern int ExcIrqConsumeEnabled(void);      /* SS_NW_IRQ_CONSUME gate (default OFF,
                                              * SS_NW_PIC polarity) — ppc-cpu.cpp */

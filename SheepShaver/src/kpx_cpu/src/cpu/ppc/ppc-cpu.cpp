@@ -1912,13 +1912,14 @@ void powerpc_registers::interrupt_copy(powerpc_registers &oregs, powerpc_registe
  * CPU — plain globals, declared in exc_core.h (the g_exc_entry_table
  * pattern). */
 uint32_t g_exc_deferred_ee_edge = 0;
-ExcConsumeStats g_exc_consume_stats = { 0, 0, 0 };
+ExcConsumeStats g_exc_consume_stats = { 0, 0, 0, 0 };
 
 static void exc_consume_atexit_dump(void)
 {
-	fprintf(stderr, "[IRQ-CONSUME] deferred=%u held=%u fired=%u latch=%u\n",
+	fprintf(stderr, "[IRQ-CONSUME] deferred=%u held=%u fired=%u latch=%u ticks_keepset=%u\n",
 	        g_exc_consume_stats.deferred, g_exc_consume_stats.held,
-	        g_exc_consume_stats.fired, g_exc_deferred_ee_edge);
+	        g_exc_consume_stats.fired, g_exc_deferred_ee_edge,
+	        g_exc_consume_stats.ticks_keepset);
 }
 
 int ExcIrqConsumeEnabled(void)

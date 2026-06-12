@@ -503,6 +503,57 @@ OP_IRQ `emul_op.cpp:816–849`) is now a caller of the full edge path including
 `pic_input_locked`. Inert while SS_NW_PIC is HELD; load-bearing the day its default
 flips — re-audit lock ordering then.
 
+### M8 slot-4 consumption — the deferred EE-edge latch (`SS_NW_IRQ_CONSUME`, default OFF)
+
+The M8 slot-4 consumption milestone (plan `docs/superpowers/plans/2026-06-12-slot4-consumption.md`,
+commits `42ce3e0e`…`e6824327`) **shipped GATED-OFF-GREEN**: the machinery is
+acceptance-proven on the env-on test cluster but is NOT the newworld default (Task C
+flip criteria (c)+(e) failed honestly — see the flip prerequisites below).
+
+| Env var | Default | Effect |
+|---|---|---|
+| `SS_NW_IRQ_CONSUME=1` | **OFF** (explicit-"1" opt-in — `SS_NW_PIC` polarity, NOT the cluster's explicit-"0") | Arms the consumption machinery (newworld + riser-armed only; structurally inert off): **(1)** the **deferred EE-edge latch** (rfi-atomicity emulation, Task A): `execute_mtmsr`'s EE 0→1 re-raise inside the riser-stub window `[0x50318000,0x5031801c)` is LATCHED instead of fired (raw NK `rfi` raises MSR+PC atomically; our patched tail's mtmsr precedes the ctx reloads + bctr — an un-deferred edge mid-tail saves a torn ctx and livelocks the restore, the R-II10 shape-A root cause); the latch fires at the first delivery poll whose entry PC is outside the stub+reload windows. Windows are single-source (`g_exc_riser_window`, filled at the rom_patches trap_return patch site from the emitted values; a `[ROMPATCH] riser windows …` line announces them gate-on). **(2)** the **Q-C3 post-staging detour** (Task B): the NK from-emulator interrupt-post leg (0x325520) detours through a patch-space stub (0x2fd280) that also stages the NK's own deferred-post pair `[KDP-0x440]`/`[KDP-0x43c]` + task-flag 0x10 (donor-mirror of the NK deferred leg 0x325668), so the CR arm survives ctx-reloading exits. **(3)** the **60 Hz starvation backstop** (re-pin `e6824327`): the tick thread re-kicks `TriggerInterrupt()` while the latch is set (a poll kick, not guest state — the fake-poke fence is untouched). **(4)** the **MODE_EMUL_OP fence** (`377edbf6`, the M7-named carried item): the host-side nested `Execute68k()` interrupt-injection arm in HandleInterrupt is fenced off — the real consumption rail replaces it. |
+
+**Supported configs:** the acceptance recipe is the env-on test cluster
+**`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`** (default boots post level 0 per R-II7, so the
+consumption chain is unreachable on a default boot BY DESIGN until the SS_NW_PIC flip).
+`SS_NW_IRQ_CONSUME` is a **standalone 17th gate** (Task-C decision): it is NOT part of
+the M7 cluster, and consume-on + `SS_NW_EE_RISER=0` is riser-conditional-inert by
+construction (empty windows — not a supported config, rev-2 A7). **Flip prerequisites
+(named, Task C):** (1) the VIA-IFR surface lands (the test-cluster terminal state is the
+un-retired post re-trapping slot-4 — the 68k handler rte's source-less because the
+via6522 model presents no 60 Hz IFR source bit); (2) the Q-C3 stub's unconditional
+level-0 staging divergence is explained-or-fixed (the deterministic **SC#1 r0=0x0d**
+behavior line on default+consume boots, 2/2 vs 0/19); at the flip, fold-into-cluster is
+MANDATORY.
+
+**Stat line** (atexit + term-dump, gate-on only):
+
+```
+[IRQ-CONSUME] deferred=N held=N fired=N latch=N ticks_keepset=N
+```
+
+- `deferred` — EE edges latched by `execute_mtmsr`'s in-window check (first 4 also
+  print `[IRQ-CONSUME] EE edge deferred at pc=… (stub …)`).
+- `held` — delivery polls suppressed at an in-window block boundary (latch set, no
+  flags re-armed — the guest must run; the original HANDLE re-arm hold starved the
+  guest at held=1.12e9, the Task-A falsification).
+- `fired` — latched edges released at an out-of-window poll (first 4 print
+  `[IRQ-CONSUME] deferred edge fired at pc=…`). **`fired` can legitimately EXCEED
+  `deferred`** — a suppressed poll sets the latch via the `held` path without a
+  `deferred++`; not an accounting bug (Task-C P2).
+- `latch` — the latch value at exit (1 = an edge died holding; healthy boots end 0).
+- `ticks_keepset` — **the Ticks-rider confounder census** (Task B, rev-2 A5): counts
+  the host keep-set writer's `Ticks(0x16a)` increments (the 60 Hz VBL tick in
+  `sheepshaver_glue.cpp`). Guest-claimed Ticks = total `0x16c` watch increments minus
+  this counter's delta; b4 evidence: `16c=0x000b` == `ticks_keepset=11` exactly —
+  Ticks is NOT yet guest-claimed (the chain stops at the VIA-IFR dispatch). The
+  counter itself increments unconditionally (data-only); only the print is gate-on.
+
+Watch instrumentation for this chain: the span form `SS_JIT_WATCH_ADDR=168:8` covers
+both Ticks words (LSB = 0x16c) and `[WATCH-SAMPLE]` proves frozen-vs-moving without a
+change edge — see the `SS_JIT_WATCH_ADDR` row in the debug-env-var table above.
+
 ### SCC Rx injection (`SS_SCC_RX_INJECT`)
 
 ```

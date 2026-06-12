@@ -63,7 +63,10 @@ superseded into it). Do not treat "EE has never risen" / "delivered_dec=0" /
   evidence channel.
 - ROM dumps — canonical location: **`/Users/Shared/macemu/dumps/`** with `MANIFEST.txt`
   (filename + md5 + provenance). `rom901_inventory.bin` = RAW (md5 7b1378be…, 16
-  placeholder words at file 0x36e8c0); `rom901.bin` = PATCHED (md5 e432df64…). The /tmp
+  placeholder words at file 0x36e8c0); `rom901.bin` = PATCHED (md5 d1a267a9…,
+  re-baselined 2026-06-12 post-f808a7fb — the EMUL_OP tail now applied; the previous
+  image preserved as `rom901_pre-f808a7fb.bin` md5 e432df64… for older [PATCH]
+  evidence). The /tmp
   copies remain valid but ephemeral. Provenance ritual before tagging [RAW-ROM]/[PATCH]:
   `tools/dump-manifest.sh --check`. Mirror-region facts are [PROBE✓]-only (no dump covers
   the mirror). capstone-M68K mis-decodes `fe1f`-style words — use `tools/m68k-dis.py`

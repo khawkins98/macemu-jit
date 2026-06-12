@@ -76,46 +76,89 @@ Every `ss-slot-boot.sh` run (which sets `SS_TERM_DUMP=1`) now ends with:
 
 | State | Expected |
 |-------|----------|
-| **Stall** (SS_NW_VIA_IFR=1) | `program_max=8 dr68k=1 dec_expiries=5 irq_fired=0` |
-| **Healthy baseline** (no VIA_IFR) | `program_max≥5 dr68k=1 dec_expiries≥40 irq_fired=0` |
+| **Stall** (SS_NW_VIA_IFR=1, full env-on) | `program_max=8 dr68k=1 dec_expiries=5 irq_fired=0` |
+| **Healthy baseline** (full env-on, no VIA_IFR) | `program_max≥5 dr68k=1 dec_expiries≥40 irq_fired=0` |
+| **Default newworld boot** (no extra env) | `program_max=8 dr68k=1 dec_expiries=5 irq_fired=0` — **this is expected; the newworld ROM is not expected to boot fully** |
 | **M9 done** | `dec_expiries≥200 irq_fired≥1` |
+
+> **Note (2026-06-12 session 3):** The "Stall" and "Healthy baseline" rows are measured with the
+> full env-on cluster (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`). The default newworld diagnostic boot
+> (no extra env) parks at `dec_expiries=5` in ALL configs — this is not a regression, it is the
+> NK going idle quickly without a real interrupt source. The stall/baseline distinction only
+> manifests with the full env-on cluster active.
 
 ---
 
-## Next step: find what reads 0x5000ed08
+## Session 3 findings (2026-06-12) — probe campaign results
 
-The question is: **what PPC code reads those 8 bytes as data, and what does it do with them?**
+All probes used the full env-on cluster: `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`.
+All boots used the absolute path `SheepShaver/tools/ss-slot-boot.sh` from the repo root.
 
-### Recommended probe (2 boots, ~5 min)
+### What we probed and learned
 
-Probe the NK DEC scheduler decision point (`0x5032306c`) — the code that either sets a real
-deadline or `DEC=0x7fffffff` (idle). Compare the task-context cell between stall and baseline:
+**Probe 1 — NK scheduler task-context cell `[0x68ffd584]` at 0x5032306c:**
+- Stall: `[0x68ffd584]=0x68ffd57c` — non-zero (task context pointer present)
+- Baseline: `[0x68ffd584]=0x68ffd57c` — **identical**
+- ❌ **Hypothesis DISPROVED**: the task-context cell is NOT zero in the stall. The HANDOFF's
+  "NK failed to initialize a task" theory is wrong.
+
+**Probe 2 — Task deadline cells `[0x68ffd5b4]/[0x68ffd5b8]` at same PC:**
+- Both boots: `0x7fffffff/0xffffffff` (int64_max = "no deadline" sentinel)
+- ❌ The task deadline is identical — not the divergence point.
+
+**Probe 3 — Linear mode, all visits to 0x5032306c:**
+- **Stall boot: only 1 visit total.** NK reaches the scheduler once, parks DEC at `0x7fffffff`
+  (because task deadline = int64_max → deadline too far → DEC armed to long park), and never
+  returns (DEC fires ~every 85s at 25MHz, only 5 expiries in 20s boot).
+- Baseline boot: 2000+ visits — real tasks with tight deadlines get created, DEC fires ~80Hz.
+
+**Key finding:** OP_IRQ_NW never fires in the stall boot (no `[OP_IRQ_NW] JSR caller` log).
+The 68k never reaches `0x5000ed08` even though the ROM patch is applied and the interrupt
+delivery mechanism is running. The NK posts the interrupt but something prevents 68k delivery.
+
+### Refined root cause hypothesis
+
+With the ROM patch active, the NK's EXT delivery path (at `0x50314880`) does NOT deliver the
+interrupt to the 68k. The NK should jump to the 68k interrupt vector at address `0x64`
+(= `0x5000ed08`), but it doesn't — or it does and something causes immediate un-delivery.
+
+The NK's EXT handler has a condition before 68k delivery that involves `[KDP+0x67c]`
+(= a pointer to `ECB+0x70 = 0x68fff070`, the NK's interrupt-pending halfword). If this cell
+is wrong, the NK may not complete delivery. The trampoline previously wrote a shadow address
+here (causing corruption per commit `db67aded` comment), which is now fixed to nop. But the
+stall persists — suggesting a different mechanism.
+
+### Next step: probe the NK EXT delivery path
+
+Compare the EXT handler (`0x50314880`) between stall and baseline to find where delivery
+diverges:
 
 ```bash
-# Boot A — stall: what does the NK see at the scheduling decision?
-SS_NW_VIA_IFR=1 SS_TERM_DUMP=1 tools/ss-slot-boot.sh --label stall-probe --timeout 20 \
-    --env 'SS_PROBE_PC=0x5032306c:r1,r0,[0x68ffd584],[0x68ffd588]'
+# Boot A — stall
+SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_NW_VIA_IFR=1 SS_TERM_DUMP=1 \
+  /path/to/SheepShaver/tools/ss-slot-boot.sh --label stall-ext --timeout 25 \
+  --env 'SS_PROBE_PC=0x50314880:r8,r9,r10,r11,[0x68ffe67c],[0x68fff070]'
 
-# Boot B — baseline: same probe, healthy path
-SS_NW_VIA_IFR=0 SS_TERM_DUMP=1 tools/ss-slot-boot.sh --label baseline-probe --timeout 20 \
-    --env 'SS_PROBE_PC=0x5032306c:r1,r0,[0x68ffd584],[0x68ffd588]'
+# Boot B — baseline
+SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_NW_VIA_IFR=0 SS_TERM_DUMP=1 \
+  /path/to/SheepShaver/tools/ss-slot-boot.sh --label base-ext --timeout 25 \
+  --env 'SS_PROBE_PC=0x50314880:r8,r9,r10,r11,[0x68ffe67c],[0x68fff070]'
 ```
 
-`0x68ffd584` = `[r1-0xa7c]` = the NK task-context cell the scheduler reads to decide whether
-to arm a real deadline or go idle. If it's 0 in the stall boot and non-zero in baseline, that
-confirms the ROM patch is preventing something from writing the task deadline.
+Also confirm 68k never reaches handler in stall:
+```bash
+SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_NW_VIA_IFR=1 SS_TERM_DUMP=1 \
+  /path/to/SheepShaver/tools/ss-slot-boot.sh --label stall-68k --timeout 25 \
+  --env 'SS_PROBE_68K=0x5000ed08:5'
+```
 
-### If the probe shows the cell is zero in the stall
-
-The NK failed to initialize a task entry that depends on finding the interrupt handler's address.
-The original first word `0x48e7f0f0` (`movem.l`) is likely the pattern it searches for.
-Next step: search the NK PPC code for a load from ROM range `0x5000e000–0x5001f000` and find
-what it does with the result (likely setting up a task block at `0x68ffd584`).
+If the EXT handler probe shows different register values at the delivery decision point,
+disassemble the NK EXT handler from `0x50314880` to find the guard condition and what it reads.
 
 ### Acceptance criteria (unchanged)
 
 - `SS_PROBE_68K=0x5000ed08:5` fires (68k reaches the handler)
-- `[PROGRESS] dec_expiries≥200 irq_fired≥1` with `SS_NW_VIA_IFR=1`
+- `[PROGRESS] dec_expiries≥200 irq_fired≥1` with `SS_NW_VIA_IFR=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`
 - Harness 353/353 throughout
 
 ---

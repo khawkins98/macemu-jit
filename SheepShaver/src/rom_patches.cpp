@@ -622,6 +622,10 @@ bool PatchROM(void)
 	// ROMTYPE_* enum ordering in rom_patches.h.
 	ROMType = rom_detect_type(ROMBaseHost);
 	fprintf(stderr, "[ROMPATCH] ROM type detected: %d (%s)\n", ROMType, rom_type_name(ROMType));
+	if (ROMType == ROMTYPE_NEWWORLD)
+		fprintf(stderr, "[ROMPATCH] NOTE: NewWorld ROM detected — full boot is NOT expected to succeed.\n"
+		        "[ROMPATCH]   This ROM requires ongoing Machine Layer work (M9+). See docs/planning/MACHINE-LAYER-PLAN.md.\n"
+		        "[ROMPATCH]   Use SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 for the current frontier.\n");
 	if (ROMType < 0)
 		return false;
 

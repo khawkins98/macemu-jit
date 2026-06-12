@@ -4,22 +4,35 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-12, post-M7-flip)
+## Current frontier (2026-06-12, post-M8-slot-4-consumption)
 
-**The M7 interrupt-injection milestone SHIPPED and its cluster is the newworld DEFAULT**
-(`81d60cc1`): a default newworld diagnostic boot now runs the **park signature + live
-delivery chronology** — SC/PROGRAM#1–4 → **DEC #1–4 delivered via the published
-0x50313200 `(2-SPR)` route** → **EXT #1, the first host-sourced external interrupt on a
-default boot** (entry=50314880) → the PROGRAM#5 srr0=0x50324fec park (the NK idle task's
-power-saving NAP LOOP, slot5-recon `b3e51b8d` — not a missing service). The exc= tuple is
-7-wide on default boots. EXT deliveries carry **level 0 on default boots** (correct
-pre-init behavior, R-II7) — the B-2 level staging rides the env-on test cluster
-(`SS_NW_PIC=1`). The honest remainder / **named next task: the slot-4 consumption round
-trip** (M-sized; recon "R-II10 / slot-5 park recon" — three post-delivery livelock
-shapes; the armed 68k post 0x8001@0x68fff070 is never consumed; Ticks never
-guest-claimed). Do not treat "EE has never risen" / "delivered_dec=0" / "delivered_ext
-stays 0 on live boots" / "no EE riser on the boot path" / "SysError 12" / "EXT never
-live-fired" as current claims — they are historical.
+**The M8 slot-4 consumption milestone SHIPPED GATED-OFF-GREEN** (`42ce3e0e`…`52b69cd7`;
+`SS_NW_IRQ_CONSUME` stays default OFF — a standalone 17th gate, acceptance recipe
+`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`). On the env-on test cluster the **consumption round
+trip is GREEN through leg 7**: EXT delivery → NK from-emulator post (0x8001@0x68fff070)
+→ the Q-C3 staging detour (deferred pair `[KDP-0x440]/[KDP-0x43c]` + task-flag) → the
+scheduler-restore drain (0x324720) → **the slot-4 twi fires** (PROGRAM srr0=5046e8d0
+word=0fff0004 slot=4) → world switch completes (the R-II10 livelock shapes are FIXED —
+torn-ctx root cause fork-(iii), the riser's mtmsr re-raise mid-tail, cured by the
+deferred EE-edge latch + 60 Hz backstop) → **the 68k level-1 handler runs at 60 Hz**.
+**RED at leg 8, the via6522 IFR surface**: the handler's source dispatch
+(`btst d6,(a4); beq; movea.l $6e4.w,a0; jsr (a0)` @0x5000ee9a) finds NO VIA IFR source
+bit in the via6522 model and **rte's source-less** (0x5000eecc) — OP_IRQ retire never
+runs, the un-retired post re-traps slot-4 ~1.2k/s, Ticks is NOT guest-claimed (the 60 Hz
+0x16c movement is the host keep-set, census-proven via `ticks_keepset`). **Named next
+task: the VIA-IFR surface** (M-class device-model work — `dev_via6522` exists; the
+question is presenting the 60 Hz source to the 68k handler's IFR read, **and the next
+milestone's Task-0 must first resolve a4 at 0x5000ee9a** — the MMIO address of the IFR
+the handler bit-tests — and which bit d6 indexes; plus the `$6e4` vector-chain dismissal).
+Default boots are unchanged (PROGRAM#5 srr0=0x50324fec park + the M7 delivery
+chronology; level-0 posts per R-II7 keep consumption unreachable by design until the
+SS_NW_PIC flip). **NEW named residue: SC#1 r0=0x0d** (r1=1017ffde lr=5046c5ac) —
+deterministic 2/2 on default+consume-on boots vs 0/19 without; candidate mechanism =
+the Q-C3 stub's unconditional level-0 staging re-arming at the drain; a flip
+prerequisite and a VIA-IFR Task-0 recon question. Do not treat "the post is never
+polled" / "PROGRAM#4 never fires" / "the slot-4/0x3244e8 livelock" / "Ticks never
+moves" / "EE has never risen" / "delivered_ext stays 0 on live boots" / "SysError 12"
+as current claims — they are historical.
 
 ## Boot recipes
 
@@ -115,8 +128,9 @@ TimebaseSpeed (tb-freq; the DEC-cadence fix, `f31d475e`) · `[KDP+0x1074]`=0x504
 
 ## Env-gate state (SS_NW_*, the ones that bite)
 
-16 `SS_NW_*` gates live in-tree (census 2026-06-12 post-M7; full disposition in
-MACHINE-LAYER-PLAN re-score #3). The ones whose default you must know:
+17 `SS_NW_*` gates live in-tree (census 2026-06-12 post-M8: the 16 of re-score #3 +
+the standalone `SS_NW_IRQ_CONSUME`; full disposition in MACHINE-LAYER-PLAN re-score #3
++ the M8 trigger-check note). The ones whose default you must know:
 
 - **Default-ON (newworld)**: `SS_NW_TM_TRAPS` (HLE TM trap population — flipping it OFF
   re-introduces SysError-12), `SS_NW_MM_SWITCH`/`SS_NW_MM_POOL`, `SS_NW_SC_SURFACE`,
@@ -129,6 +143,12 @@ MACHINE-LAYER-PLAN re-score #3). The ones whose default you must know:
   adds the B-2 level staging: IACK/vector/level, so the NK post writes level|0x8000).
   Its default flip awaits real guest MPIC init + the tripwire per-source split
   (criteria in DIAGNOSTICS M7 section / ROADMAP follow-on row).
+- **Default-OFF, standalone 17th gate**: `SS_NW_IRQ_CONSUME` (M8, ships gated-off-green;
+  explicit-"1" opt-in, SS_NW_PIC polarity) — the deferred EE-edge latch + Q-C3 staging
+  detour + 60 Hz backstop + MODE_EMUL_OP fence. Riser-conditional (consume-on +
+  riser-off is inert by construction). **Retirement criterion: fold-into-cluster is
+  MANDATORY at its future flip**; prerequisites = the VIA-IFR surface + the SC#1=0x0d
+  divergence explained-or-fixed (DIAGNOSTICS M8 section).
 
 ## Gate tiers (see MILESTONE-WORKFLOW.md §6/§6b for the policy)
 
@@ -162,8 +182,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 ## Where things are
 
 Plans: `docs/superpowers/plans/` (canonical exemplar: 2026-06-11-nk-syscall-surface.md;
-2026-06-12-interrupt-injection.md is COMPLETE — next named task: the slot-4 consumption
-round trip, card in INTERRUPT-INJECTION-RECON.md "Recommended next-task card (Q-S5e)"). Evidence/addenda: `docs/planning/machine/`
+2026-06-12-interrupt-injection.md and 2026-06-12-slot4-consumption.md are COMPLETE —
+**next named task: the VIA-IFR surface** [device-model M-class; Task-0 questions: a4 at
+0x5000ee9a + the d6 bit index + the $6e4 vector chain + the SC#1=0x0d residue],
+frontier evidence in INTERRUPT-INJECTION-RECON.md "Slot-4 consumption Task B" leg 8
++ "Task C"). Evidence/addenda: `docs/planning/machine/`
 (M6A-ONGOING-ENTRY-DESIGN.md, M6A-WAVE2-SHIM-RECON.md, M3A-ENTRY-TABLE.md,
 EE-CHAIN-RECON.md, TRAP-TABLE-RECON.md [the InsTime/SysError-12 wall + fix record],
 INTERRUPT-INJECTION-RECON.md [P-M5 anatomy, the paravirtual donor chain, the

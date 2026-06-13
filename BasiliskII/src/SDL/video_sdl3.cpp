@@ -76,6 +76,9 @@
 #include "vnc_server.h"		// VNC server (ported to SDL3 2026-06-05; mirrors video_sdl2.cpp)
 #include "vm_alloc.h"
 #include "cdrom.h"
+#ifdef SHEEPSHAVER
+#include "machine_profile.h"   // ss_m11_fb, fb_aperture_base (M11 framebuffer aperture)
+#endif
 
 #define DEBUG 0
 #include "debug.h"
@@ -1137,6 +1140,22 @@ void driver_base::init()
 	set_video_mode(display_type == DISPLAY_SCREEN ? SDL_WINDOW_FULLSCREEN : 0, pitch);
 	if (!s)
 		return;
+
+	// M11: framebuffer aperture (quiet mode — real RAM at fb_aperture_base).
+	// Point the_buffer at the guest aperture so update_display_static_bbox reads
+	// directly from 0x81000000.  Mac OS draws to fb_aperture_base (the frame base
+	// set below), so pixels reach the host pointer without a copy.
+	// The_buffer_copy shadow is already allocated above and sized for the current mode.
+#ifdef SHEEPSHAVER
+	if (ss_m11_fb && MachineProfileIsNewWorld() && fb_aperture_base) {
+		uint8 *aperture_host = (uint8 *)Mac2HostAddr(fb_aperture_base);
+		if (aperture_host) {
+			the_buffer = aperture_host;
+			fprintf(stderr, "[M11-FB] SDL: the_buffer -> aperture host %p (guest 0x%08x)\n",
+			        (void *)the_buffer, fb_aperture_base);
+		}
+	}
+#endif
 
 	// Set frame buffer base
 	set_mac_frame_buffer(monitor, VIDEO_MODE_DEPTH, true);

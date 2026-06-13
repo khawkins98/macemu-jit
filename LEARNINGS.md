@@ -17,6 +17,23 @@ gated on `MachineProfileIsNewWorld()`. M10/M11a changes carry zero risk to the 8
 
 ---
 
+## 2026-06-13 — M11a: r24 at STUB entry is always the interrupted 68k PC (static RE)
+
+Deep NK static RE (2026-06-13 session 2) traced the full EXT→CGRP→STUB delivery path:
+
+1. `bl 0x50313d40` (context-save): saves r0, r7-r13 to ctx. r24 **not touched**.
+2. `bl 0x503238ac`: saves r14-r31 to ctx — `stw r24, 0x1c4(r6)` at 0x503238f0 captures r24. r24 **not modified**.
+3. `bl 0x503148e0` (CGRP delivery): uses r16-r23 as temporaries. r24 **never touched**. Ends with RFI.
+4. At STUB entry: r24 = interrupted 68k PC — **always stable, never clobbered**.
+
+The restore counterpart (`bl 0x5032391c` at 0x503148b0, `lwz r24, 0x1c4(r6)`) is only reached on the CGRP delivery early-exit path (beqlr/bgelr returns), **never** on the successful RFI path. So `mr r12, r24` in the STUB is always reading the correct value.
+
+**M10 open tail ("non-deterministic crash-after-probe") does not reproduce:** 3/3 × 90s slot runs with `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_M10_CGRP=1 SS_PROBE_68K=0x5000ed08:5` all produced match=1/5 and no SIGSEGV. M11a COMPLETE.
+
+**Previous LEARNINGS correction:** "r16+0x1c4 is UNRELIABLE" was correct (r16 ≠ ctx at all times), but "live r24 is non-deterministic" was speculative and wrong. The NK does not clobber r24 between EXT entry and CGRP RFI.
+
+---
+
 ## 2026-06-13 — M10 CGRP delivery: key findings
 
 **CGRP field layout confirmed** (9.0.1 ROM, KDP=0x68ffe000):

@@ -6,9 +6,9 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M10 complete — `SS_PROBE_68K=0x5000ed08` fires (CGRP init + STUB delivery).
-> Next option A: M11a frame-PC stability — plan at `docs/planning/superpowers/plans/2026-06-13-m11-frame-pc-stability.md`.
-> Next option B: M11b framebuffer — recon at `docs/planning/machine/FRAMEBUFFER-RECON.md`.
+> Active work: M10+M11a COMPLETE — `SS_PROBE_68K=0x5000ed08` fires, 3/3 clean (no SIGSEGV).
+> r24-stability confirmed by NK static RE; no code change needed (see LEARNINGS 2026-06-13 M11a).
+> Next: M11 framebuffer — recon at `docs/planning/machine/FRAMEBUFFER-RECON.md`.
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
@@ -18,7 +18,8 @@
 
 - **M8** — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
 - **M9** — stall fixed (ROM patch removed); 68k handler delivery blocked by deeper issues (see §S4 findings).
-- **M10** — COMPLETE (2026-06-13). `SS_PROBE_68K=0x5000ed08` fires (match=1/5, clean run). Gate: `SS_M10_CGRP=1`. Open tail: frame-PC non-determinism (see LEARNINGS 2026-06-13 + CHANGELOG 2026-06-13).
+- **M10** — COMPLETE (2026-06-13). `SS_PROBE_68K=0x5000ed08` fires. Gate: `SS_M10_CGRP=1`.
+- **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change. Next: M11 framebuffer.
 
 ### What shipped this session
 

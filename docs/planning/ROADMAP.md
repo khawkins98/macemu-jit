@@ -2,9 +2,9 @@
 
 > **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10 COMPLETE — `SS_PROBE_68K=0x5000ed08` fires via CGRP
-> delivery (`SS_M10_CGRP=1`). **Next: M11 framebuffer** (recon complete) or frame-PC
-> stability. Live frontier: `docs/AGENT-CONTEXT.md`.
+> JIT (stable). Machine Layer: M10+M11a COMPLETE — `SS_PROBE_68K=0x5000ed08` fires via CGRP
+> delivery (3/3 clean), r24-stability confirmed by NK static RE. **Next: M11 framebuffer.**
+> Live frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
 
@@ -64,10 +64,10 @@ fixes user-mode DR AND initializes CGRP. Full root cause: `docs/HANDOFF.md` §Se
 - EXT shim re-syncs CGRP on every delivery (sheepshaver_glue.cpp)
 - STUB: A7 guard + 68k exception frame push (SR=0, PC=interrupted PC from live r24) + DR_WARM branch
 
-**Known open tail (M11):** interrupted-PC is read from live r24 at STUB entry — correct
-when the NK fully restores r24 before RFI; non-deterministic crash in some timing runs
-(r24 = NK-internal value rather than interrupted 68k PC). Probe fires in all runs;
-crash-after-probe is an M11 correctness item.
+**Open tail resolved (M11a, 2026-06-13):** Static RE confirmed r24 is never clobbered by
+NK between EXT entry and CGRP RFI. `mr r12, r24` in the STUB is always correct. The
+non-deterministic crash was speculative; 3/3 × 90s acceptance runs produced probe match
+and no SIGSEGV. No code change needed. M11a → COMPLETE.
 
 ## M11: Framebuffer (recon done, not started)
 

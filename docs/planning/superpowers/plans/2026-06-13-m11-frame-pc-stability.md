@@ -1,6 +1,6 @@
 # M11a — Frame-PC stability: reliable interrupted-68k-PC at STUB entry
 
-> **Status: PLAN Rev 1** · Branch: `macos-arm64`
+> **Status: COMPLETE 2026-06-13** · Branch: `macos-arm64`
 > Predecessor: M10 COMPLETE (2026-06-13). Gate: `SS_M10_CGRP=1`.
 > M10 open tail: r24 at STUB entry is NK-restored when the NK fully restores registers
 > before the CGRP RFI, but is NK-internal in some timing runs → non-deterministic

@@ -1147,7 +1147,10 @@ void driver_base::init()
 	// set below), so pixels reach the host pointer without a copy.
 	// The_buffer_copy shadow is already allocated above and sized for the current mode.
 #ifdef SHEEPSHAVER
-	if (ss_m11_fb && MachineProfileIsNewWorld() && fb_aperture_base) {
+	// fb_aperture_mapped is only true in quiet mode (real RAM mapped).
+	// LOUD mode (fault-trap diagnostic) leaves the aperture unmapped and must
+	// not call Mac2HostAddr on it (would abort — address in MMIO hull).
+	if (ss_m11_fb && MachineProfileIsNewWorld() && fb_aperture_mapped && fb_aperture_base) {
 		uint8 *aperture_host = (uint8 *)Mac2HostAddr(fb_aperture_base);
 		if (aperture_host) {
 			the_buffer = aperture_host;

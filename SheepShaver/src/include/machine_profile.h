@@ -50,9 +50,11 @@ extern bool MachineUsesMMIOBus(void);
 extern bool MachineUsesMMIOBusParse(MachineProfile p, const char *env_mmio_bus);
 
 // M11: framebuffer aperture state (set by main_unix.cpp at init time).
-// ss_m11_fb: SS_M11_FB=1 gate is active.
+// ss_m11_fb:        SS_M11_FB=1 gate is active.
+// fb_aperture_mapped: real RAM mapped at fb_aperture_base (quiet mode only; false in LOUD mode).
 // fb_aperture_base: guest base address (0x81000000 when ss_m11_fb is true, 0 otherwise).
 extern bool ss_m11_fb;
+extern bool fb_aperture_mapped;
 extern uint32_t fb_aperture_base;
 
 #endif // MACHINE_PROFILE_H

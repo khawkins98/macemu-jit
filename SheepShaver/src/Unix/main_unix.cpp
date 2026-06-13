@@ -243,7 +243,7 @@ static bool rom_area_mapped = false;		// Flag: Mac ROM mmap()ped
 static bool ram_area_mapped = false;		// Flag: Mac RAM mmap()ped
 static bool dr_cache_area_mapped = false;	// Flag: Mac DR Cache mmap()ped
 static bool dr_emulator_area_mapped = false;// Flag: Mac DR Emulator mmap()ped
-static bool fb_aperture_mapped = false;		// Flag: M11 framebuffer aperture mmap()ped
+bool fb_aperture_mapped = false;			// Flag: M11 framebuffer aperture mmap()ped (quiet mode)
 bool ss_m11_fb = false;						// Gate: SS_M11_FB=1 framebuffer aperture active
 uint32_t fb_aperture_base = 0;				// Guest base of framebuffer aperture (0x81000000)
 static KernelData *kernel_data;				// Pointer to Kernel Data
@@ -1593,7 +1593,20 @@ int main(int argc, char **argv)
 	// [PROGRESS] — registered first so it runs last (LIFO), after all detail dumps.
 	// Emits one summary line on every exit including SIGTERM (SS_TERM_DUMP converts
 	// SIGTERM to exit(1)).  Greppable milestone readout for Machine Layer work.
+	// M11: [FB-DIRTY] is emitted here when we exit via SIGTERM (fb_aperture_mapped
+	// still true — memory not yet released).  The quit: path (normal/crash exit) emits
+	// it inline BEFORE vm_mac_release and clears fb_aperture_mapped so this block
+	// is a no-op there (prevents double-scan on freed memory).
 	atexit([]() {
+		if (fb_aperture_mapped && fb_aperture_base) {
+			const uint32_t fb_size = 16 * 1024 * 1024;
+			const uint32_t *p = (const uint32_t *)Mac2HostAddr(fb_aperture_base);
+			uint64_t non_zero = 0;
+			for (uint32_t i = 0; i < fb_size / 4; i++)
+				if (p[i]) non_zero++;
+			fprintf(stderr, "[FB-DIRTY] non_zero_pixels=%llu\n",
+			        (unsigned long long)non_zero);
+		}
 		fprintf(stderr,
 		        "[PROGRESS] program_max=%u dr68k=%d dec_expiries=%llu irq_fired=%u\n",
 		        SheepExcMaxProgramSlot(),
@@ -2229,11 +2242,13 @@ int main(int argc, char **argv)
 			}
 		}
 
-		// M11: register framebuffer aperture (non-hull) and optional loud-stub (T-F4).
-		// The aperture entry goes in the MMIOAperture registry; it does NOT extend the
-		// trap hull.  The loud-stub (SS_M11_FB_LOUD=1) adds a one-shot MMIO_TRAPPED
-		// handler that logs [FB-TOUCH] at the first guest write to the aperture.
-		// Remove the loud-stub before the milestone acceptance run.
+		// M11: register framebuffer aperture in the non-hull aperture registry.
+		// The MMIO_TRAPPED loud-stub approach is NOT used for 0x81000000 — registering
+		// a MMIO_TRAPPED region there expands the hull to [0x81000000, 0xF3080000),
+		// covering 1.8 GB of address space with no handlers, causing fatal dispatches
+		// to unregistered addresses.  Instead, [FB-DIRTY] is emitted at atexit by
+		// scanning the aperture host memory for non-zero pixels (see the atexit hook
+		// registered below).
 		if (ss_m11_fb) {
 			const uint32 fb_aperture_size = 16 * 1024 * 1024;
 			static const MMIODevice fb_aperture_dev = { "fb-aperture", 0,
@@ -2246,26 +2261,6 @@ int main(int argc, char **argv)
 			else
 				fprintf(stderr, "[M11-FB] aperture registered: 0x%08x+0x%x (non-hull)\n",
 				        fb_aperture_base, fb_aperture_size);
-
-			const char *loud_env = getenv("SS_M11_FB_LOUD");
-			if (loud_env && loud_env[0] && loud_env[0] != '0') {
-				static const MMIODevice fb_loud_dev = { "fb-loud-stub", 0,
-					[](void *, uint32_t addr, unsigned) -> uint64_t {
-						fprintf(stderr, "[FB-TOUCH] read  addr=0x%08x\n", addr);
-						return 0;
-					},
-					[](void *, uint32_t addr, unsigned, uint64_t val) {
-						fprintf(stderr, "[FB-TOUCH] write addr=0x%08x val=0x%llx\n",
-						        addr, (unsigned long long)val);
-					},
-					nullptr };
-				if (!MMIOBusRegister(fb_aperture_base, fb_aperture_size,
-				                     MMIO_TRAPPED, &fb_loud_dev))
-					fprintf(stderr, "[M11-FB] warning: loud-stub registration failed\n");
-				else
-					fprintf(stderr, "[M11-FB] loud-stub armed at 0x%08x+0x%x (T-F4)\n",
-					        fb_aperture_base, fb_aperture_size);
-			}
 		}
 
 		// SS_JIT_VERIFY replays blocks; device reads are side-effecting (clear-on-read,
@@ -2503,8 +2498,18 @@ static void Quit(void)
 		vm_mac_release(DR_EMULATOR_BASE, DR_EMULATOR_SIZE);
 	if (dr_cache_area_mapped)
 		vm_mac_release(DR_CACHE_BASE, DR_CACHE_SIZE);
-	if (fb_aperture_mapped)
-		vm_mac_release(fb_aperture_base, 16 * 1024 * 1024);
+	if (fb_aperture_mapped) {
+		// Scan before release — atexit guard is fb_aperture_mapped; clearing it here
+		// prevents the atexit lambda from accessing freed memory (use-after-free fix).
+		const uint32_t fb_size = 16 * 1024 * 1024;
+		const uint32_t *p = (const uint32_t *)Mac2HostAddr(fb_aperture_base);
+		uint64_t non_zero = 0;
+		for (uint32_t i = 0; i < fb_size / 4; i++)
+			if (p[i]) non_zero++;
+		fprintf(stderr, "[FB-DIRTY] non_zero_pixels=%llu\n", (unsigned long long)non_zero);
+		fb_aperture_mapped = false;   // prevent atexit re-scan of freed memory
+		vm_mac_release(fb_aperture_base, fb_size);
+	}
 
 	// Delete Low Memory area
 	if (lm_area_mapped)

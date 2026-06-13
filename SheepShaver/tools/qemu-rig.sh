@@ -173,6 +173,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Allow callers to inject extra QEMU args without editing this script.
+# Example: QEMU_EXTRA_ARGS="-nographic -vga none" ./qemu-rig.sh
+IFS=' ' read -ra QEMU_EXTRA_ARGS_ARR <<< "${QEMU_EXTRA_ARGS:-}"
+
 if [[ -z "$RUNDIR" ]]; then
     RUNDIR="/tmp/qemu-rig-$(date +%Y%m%d-%H%M%S)"
 fi
@@ -201,6 +205,10 @@ fi
 if [[ "$GDBSTUB" == "1" ]]; then
     QEMU_ARGS+=(-s)
     echo "GDB stub enabled on port 1234"
+fi
+
+if [[ ${#QEMU_EXTRA_ARGS_ARR[@]} -gt 0 && -n "${QEMU_EXTRA_ARGS_ARR[0]}" ]]; then
+    QEMU_ARGS+=("${QEMU_EXTRA_ARGS_ARR[@]}")
 fi
 
 echo "=== QEMU rig: $RUNDIR ===" | tee "$RUNDIR/qemu.log"

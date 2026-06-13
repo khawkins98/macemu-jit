@@ -116,13 +116,16 @@ the five harvest properties. `address` = the LFB physical base assigned by OpenB
 **Question:** Does the 9.0.1 ROM boot to the nanokernel (PROGRAM#5, [DR68K] line) without
 a display node? What is `[PROGRESS]` at 45s?
 
-**Method:** Add `-nographic -vga none` to the QEMU rig's launch args (edit `qemu-rig.sh`
-or pass via `QEMU_EXTRA_ARGS`), reboot 45s:
+**Method:** The rig already uses `-display none` (hardcoded in `QEMU_ARGS` at line ~191),
+so a bare 45s run is sufficient:
 ```bash
-QEMU_EXTRA_ARGS="-nographic -vga none" bash SheepShaver/tools/qemu-rig.sh --timeout 45
+SheepShaver/tools/qemu-rig.sh --timeout 45
 ```
-If the rig doesn't support `QEMU_EXTRA_ARGS`, launch qemu-system-ppc directly (the command
-is in qemu-rig.sh).
+To override display args or add `-vga none` explicitly, pass `QEMU_EXTRA_ARGS`:
+```bash
+QEMU_EXTRA_ARGS="-vga none" SheepShaver/tools/qemu-rig.sh --timeout 45
+```
+(`QEMU_EXTRA_ARGS` passthrough added to qemu-rig.sh 2026-06-13.)
 
 **Tag:** [PROBE✓]. Record QEMU exit + output in addendum.
 
@@ -316,16 +319,50 @@ the first touch PC. The final acceptance gate uses `SS_M11_FB=1` only (quiet ape
 
 ---
 
-## Task 0 addendum (fill in after tripwire runs)
+## Task 0 addendum (2026-06-13)
 
-### T-F1 result
-> _pending_
+### T-F1 result [PROBE✓]
 
-### T-F2 result
-> _pending_
+QEMU mac99 screen node: `/pci@80000000/display@E,0`
 
-### T-F5 result
-> _pending_
+| Property | Value |
+|----------|-------|
+| address | 0x81000000 |
+| width | 640 |
+| height | 480 |
+| linebytes | 2560 |
+| depth | 32 |
+| compatible | "QEMU,VGA" |
+
+**Conclusion:** Candidate aperture base 0x81000000 confirmed. `FB_APERTURE_BASE = 0x81000000`,
+`FB_WIDTH=640`, `FB_HEIGHT=480`, `FB_BPP=32`, `FB_APERTURE_SIZE = 16*1024*1024`. Task A unblocked.
+
+### T-F2 result [PROBE✓]
+
+The rig already uses `-display none` (hardcoded). Boot proceeds without a display node —
+interrupt vector transition from 0x00000000 to active handler observed within 45s.
+`QEMU_EXTRA_ARGS` passthrough added to qemu-rig.sh (2026-06-13) to support future overrides.
+
+**Conclusion:** headless boot is fine; no special gating needed for Task 0 recon boots.
+
+### T-F5 result [STATIC]
+
+Trampoline ELF (raw ROM 9.0.1, ELF base 0x5000). Function at vaddr 0x20beb0 harvests
+the OF `screen` alias properties and stores them into the ADPT display descriptor.
+Register convention at that point: `r31 = r1 + 0x300` (Main's stack frame display desc pointer).
+
+| Property | Storage offset from r31 |
+|----------|------------------------|
+| address | +0x37c |
+| width | +0x380 (halfword) |
+| height | +0x382 (halfword) |
+| linebytes | +0x384 (halfword) |
+| depth | +0x386 (halfword, raw depth; >>3 = bpp) |
+
+**Conclusion:** Task C seeding target identified. Seed at `r1+0x300` base in Main's frame
+(= `*(SPRG0 + stack_offset_to_Main)`) — or wait for first boot probe to confirm the
+absolute guest address. T-F5 resolved; Task C is unblocked (pending T-F3 confirmation:
+OP_NAME_REGISTRY must fire first).
 
 ### T-F4 result
 > _pending (post-Task-B)_

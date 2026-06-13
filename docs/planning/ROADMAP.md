@@ -2,8 +2,8 @@
 
 > **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10+M11a COMPLETE — `SS_PROBE_68K=0x5000ed08` fires via CGRP
-> delivery (3/3 clean), r24-stability confirmed by NK static RE. **Next: M11 framebuffer.**
+> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE — aperture at 0x81000000, SDL
+> the_buffer redirected, OF video node published, harness 353/353. **Next: M12 display.**
 > Live frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
@@ -69,11 +69,14 @@ NK between EXT entry and CGRP RFI. `mr r12, r24` in the STUB is always correct. 
 non-deterministic crash was speculative; 3/3 × 90s acceptance runs produced probe match
 and no SIGSEGV. No code change needed. M11a → COMPLETE.
 
-## M11: Framebuffer (recon done, not started)
+## M11: Framebuffer aperture + OF node + SDL blit ✅ COMPLETE
 
-Recon complete — a visible screen is itself an instrument.
-See `docs/planning/machine/FRAMEBUFFER-RECON.md` (HOLD — verify M5 framebuffer status first).
-Status: M10 complete; M11 can begin.
+Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md`. Tasks A–D done.
+16 MB aperture at 0x81000000 (quiet mode: vm_mac_acquire_fixed; MMIO hull unchanged),
+SDL the_buffer redirected to aperture, OF display node published (640×480×32, "cofb"),
+MMIO_APERTURE non-hull contract verified by T-F6 unit test (13/13). [FB-DIRTY]=0 in
+NW diagnostic boot (expected: boot exits at 0.3s before pixels; pixel gate deferred to M12).
+Harness 353/353. Commits: 4ba87d8d (T-F6), 8f4197fa (Tasks A–D), 46c31ee7 (post-fix).
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

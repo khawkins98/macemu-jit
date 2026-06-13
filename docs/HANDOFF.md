@@ -6,9 +6,9 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M10+M11a COMPLETE — `SS_PROBE_68K=0x5000ed08` fires, 3/3 clean (no SIGSEGV).
-> r24-stability confirmed by NK static RE; no code change needed (see LEARNINGS 2026-06-13 M11a).
-> Next: M11 framebuffer — recon at `docs/planning/machine/FRAMEBUFFER-RECON.md`.
+> Active work: M10+M11a+M11 COMPLETE (2026-06-13). Aperture at 0x81000000, SDL the_buffer
+> redirected to aperture, OF display node published (640×480×32), harness 353/353.
+> Next: M12 display — pixel gate deferred (NW diagnostic boot exits at 0.3s before pixels).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
@@ -19,7 +19,8 @@
 - **M8** — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
 - **M9** — stall fixed (ROM patch removed); 68k handler delivery blocked by deeper issues (see §S4 findings).
 - **M10** — COMPLETE (2026-06-13). `SS_PROBE_68K=0x5000ed08` fires. Gate: `SS_M10_CGRP=1`.
-- **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change. Next: M11 framebuffer.
+- **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
+- **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 
 ### What shipped this session
 

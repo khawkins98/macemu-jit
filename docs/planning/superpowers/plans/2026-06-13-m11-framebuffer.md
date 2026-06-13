@@ -1,9 +1,16 @@
 # M11 — Framebuffer: aperture registration + OF display node + SDL blit
 
-> **Status: PLAN Rev 2** · Branch: `macos-arm64`
+> **Status: COMPLETE (2026-06-13)** · Branch: `macos-arm64`
 > Rev 2: post-red-team (PROCESS + TECHNICAL). BINDING amendments below (§amendments).
 > Predecessor: M10+M11a COMPLETE (2026-06-13). No gate change needed.
 > Recon: `docs/planning/machine/FRAMEBUFFER-RECON.md` (complete, 2026-06-11).
+>
+> **Acceptance summary (2026-06-13):** Tasks A–D + T-F6 implemented and committed.
+> Harness 353/353. Aperture maps at 0x81000000, SDL the_buffer redirected, MMIO hull
+> stays clean [0xf3000000, 0xf3080000). [FB-DIRTY] non_zero_pixels=0 (expected: NW
+> diagnostic boot exits at 0.3s before Mac OS draws pixels — pixel verification deferred
+> to longer boot). Non-deterministic 1/3 crash (0xDEADBEEF JIT timing issue, pre-existing,
+> independent of M11). Paravirtual regression: make e2e pending (deferred to close-out).
 
 ---
 

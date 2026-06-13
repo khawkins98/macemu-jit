@@ -9,6 +9,31 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-13 (session 6 — NewWorld coherence tooling)
+
+### [SheepShaver] `make nw-northstar` boot-progress signal + discrete `[NW-PROG]` readout
+
+Closes the NewWorld integration blind spot: nothing previously exercised the all-NW-gates-on
+stack end to end, so an earlier machine-layer milestone could be silently regressed by a later
+one. The per-opcode harness validates codegen; paravirtual `make e2e` validates "didn't break
+8.6"; neither watches the NewWorld boot frontier.
+
+- **`[NW-PROG]` readout** (`main_unix.cpp`, replaces the single `[PROGRESS]` line): discrete,
+  self-documenting per-signal lines (config/nk-stage/dr68k/sched/irq), each greppable with a
+  score word + inline threshold context. Raw `key=val` tokens preserved. Spec:
+  `SheepShaver/docs/DIAGNOSTICS.md` "[NW-PROG] readout".
+- **`make nw-northstar`** (`tools/nw-northstar.sh`): boots the all-on cluster via the slot
+  protocol, classifies a `[NW-PROG verdict]`. Report-only by default (`--gate` enforces,
+  `--history` trends). Verdict keys on **durable in-boot markers** (`[DR68K] first instruction`,
+  `EXT delivered #1`), not crash presence — the boot is ~50/50 non-deterministic between a clean
+  park and a known post-EXT frontier crash, so a bare SIGSEGV is NOT a regression (LEARNINGS
+  2026-06-13).
+- **QEMU rig device-tree capture** (`tools/qemu-rig.sh`): auto-dumps `info qtree` + `info mtree`
+  to `device-tree.txt` — the topology/wiring/NVRAM oracle (NOT an address oracle).
+
+Gates: build clean · harness 353/353 · machine suite ALL PASS · paravirtual `make e2e` PASS
+(the `[NW-PROG]` reformat is paravirtual-reachable; no consumer greps the old `[PROGRESS]` line).
+
 ## 2026-06-13 (session 5 — M10 CGRP delivery)
 
 ### [SheepShaver] M10 CGRP init + 68k EXT delivery: `SS_PROBE_68K=0x5000ed08` fires

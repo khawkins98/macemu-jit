@@ -278,6 +278,10 @@ static uint32_t s_probe68k_prev = 0;     // previous r24 seen at the hook (edge 
 // M10: one-shot flag — write CGRP+0x20 on first DR dispatch (bpc >= 0x5046e000)
 static bool s_m10_cgrp_armed = false;
 
+// True once the DR has dispatched its first 68k instruction. s_probe68k_state is
+// -1 until that moment, then set to 0 UNCONDITIONALLY (see ~line 330, before
+// SS_PROBE_68K is even parsed) — so this is env-independent and equivalent to the
+// durable "[DR68K] first instruction" log line, NOT gated on a probe being armed.
 extern "C" int SheepDR68KStarted(void) { return s_probe68k_state >= 0 ? 1 : 0; }
 
 static void probe68k_check(powerpc_registers *r, uint32_t bpc) {

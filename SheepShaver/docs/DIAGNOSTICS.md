@@ -33,6 +33,49 @@ Implementation: `src/kpx_cpu/src/cpu/jit/aarch64/jit-heartbeat.hpp`, called from
 existing 5s heartbeat sites in `ppc-cpu.cpp`. Test vectors (`SS_TEST_HEX`) exit in
 milliseconds and never produce HB lines.
 
+## NewWorld boot-progress readout (`[NW-PROG]`)
+
+Emitted once at **atexit** (so it fires on clean exit AND on `SS_TERM_DUMP=1`
+SIGTERM; on a SIGSEGV the handler's atexit path also reaches it *if* the crash is
+late enough). Replaces the former single `[PROGRESS]` line (renamed 2026-06-13).
+Each signal is on its **own greppable line** — tag is the stable key, value is
+third-column-scored, context is inline so the line is self-documenting:
+
+```
+[NW-PROG config]   profile=newworld  opt-in: PIC=1 CONSUME=1 CGRP=1  (newworld cluster defaults implied)
+[NW-PROG nk-stage] program_max=8  OK    highest NK PROGRAM# delivered (j2i Start68k path)
+[NW-PROG dr68k]    dr68k=1  OK    68k DR emulator entered; 0=never started
+[NW-PROG sched]    dec_expiries=5  PARK  scheduler liveness: 5-6=long-park, >=40=baseline-healthy, >=200=milestone-done
+[NW-PROG irq]      irq_fired=0  NONE  interrupts delivered to 68k world; 0=none yet, >=1=delivery live
+```
+
+| Line | Key | Score vocabulary | Source |
+|---|---|---|---|
+| `config`   | profile + opt-in gate env | — | `MachineProfileIsNewWorld()` + `getenv` |
+| `nk-stage` | `program_max=N` | `OK` (≥8) / `LOW` | `SheepExcMaxProgramSlot()` |
+| `dr68k`    | `dr68k=N` | `OK` / `NONE` | `SheepDR68KStarted()` |
+| `sched`    | `dec_expiries=N` | `DONE` (≥200) / `OK` (≥40) / `PARK` | `g_virt_clock.dec_expiries` |
+| `irq`      | `irq_fired=N` | `OK` (≥1) / `NONE` | `g_exc_consume_stats.fired` |
+
+Raw `key=val` tokens are preserved so existing greps and the plans' "`dec_expiries≥200`"
+phrasing still match. Emitter: `main_unix.cpp` atexit lambda (alongside `[FB-DIRTY]`).
+
+**Standing signal — `make nw-northstar`** (`SheepShaver/tools/nw-northstar.sh`): boots
+the all-on cluster via the slot protocol, captures this readout, and appends a
+`[NW-PROG verdict]` line. **Report-only by default** (always exits 0 — wire it into
+review/gates as an *observe* line, never a failing gate); `--gate` makes it assert the
+frontier checkpoint, `--history FILE` appends a trend TSV.
+
+> **The boot is non-deterministic — a bare SIGSEGV is NOT a regression.** ~half of all-on
+> runs take a *post-EXT frontier crash* (SIGSEGV at a variable `ea`, after `EXT delivered
+> #1`, often before this readout prints); the rest park clean. The crashing branch made
+> *more* progress. `nw-northstar` therefore classifies by **durable in-boot markers**
+> (`[DR68K] first instruction`, `EXT delivered #1`), not by SIGSEGV presence or the
+> maybe-absent atexit readout: a crash at/after the frontier → `ok(post-frontier-wall@ea)`,
+> a crash with DR never starting → `REGRESSED`. Full rationale: LEARNINGS 2026-06-13
+> "NW frontier boot is non-deterministic". Advance the durable frontier marker as later
+> milestones move it forward.
+
 ## Warning matrix (anomaly detection)
 
 Each heartbeat evaluates these rules. Findings append to the line as

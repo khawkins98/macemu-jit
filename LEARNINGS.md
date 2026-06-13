@@ -5,6 +5,36 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-13 — NW frontier boot is non-deterministic; a bare SIGSEGV is NOT a regression
+
+Building a NewWorld boot-progress signal (`make nw-northstar`) surfaced that the
+all-on diagnostic boot (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_M10_CGRP=1`) is **~50/50
+non-deterministic between two branches at the SAME frontier**, by timing alone:
+
+- **Park branch** — reaches atexit, `program_max=8 dr68k=1 ext=1 segv=0`, parks at the
+  DEC long-park.
+- **Post-EXT crash branch** — after `EXT delivered #1` and the CGRP STUB handoff, the
+  68k world runs off into a wild-execution wall and SIGSEGVs at a **variable** `ea`
+  (observed `0x100000`, `0x55590000`, `0x0c29411a`), often **before the atexit readout
+  prints** (so `program_max` reads 0 from the log even though the boot got *further*
+  than the park branch).
+
+**Consequences for any NW regression signal:**
+1. **SIGSEGV-presence is useless as a pass/fail** — the crashing branch made *more*
+   progress than the clean one. A naive `grep SIGSEGV → fail` cries wolf on ~half of
+   all runs and gets ignored within a week (this is the "0xDEADBEEF noise" the M11 retro
+   flagged).
+2. **The crash `ea` is not a stable signature** (wild execution → varies) — don't
+   allowlist addresses.
+3. **Classify by DURABLE in-boot markers**, not the maybe-absent atexit readout:
+   `[DR68K] first instruction` (68k DR started) and `EXT delivered #1` print *during*
+   boot and survive the crash. A crash at/after those = known frontier wall (`ok`); a
+   crash with DR never starting = a real regression below the frontier.
+
+`nw-northstar`'s verdict encodes exactly this. The underlying crash is the M10/M11 open
+tail (interrupted-PC handoff after CGRP RFI) and is a real future correctness item — but
+it is *known frontier noise today*, not a per-run regression.
+
 ## 2026-06-13 — CGRP+0x20 is zero throughout entire Mac OS 8.6 paravirtual boot
 
 Watch on guest addr 0x68ffc1e0 (= CGRP base 0x68ffc1c0 + 0x20) through a full 8.6 boot

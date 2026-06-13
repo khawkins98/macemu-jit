@@ -71,13 +71,34 @@ Replaced with:                 fe 79  4e 73  4e 71  4e 71
 - Therefore: the 8 replaced bytes must be **read as data** by PPC boot code before the DEC
   scheduler goes idle — the NK is likely scanning ROM for a known pattern
 
-### [PROGRESS] signatures
+### [NW-PROG] signatures (was `[PROGRESS]`, renamed 2026-06-13)
 
-Every `ss-slot-boot.sh` run (which sets `SS_TERM_DUMP=1`) now ends with:
+Every `ss-slot-boot.sh` run (which sets `SS_TERM_DUMP=1`) ends with a discrete,
+self-documenting readout — each signal on its own greppable line with a score word
+and inline threshold context (format spec: `SheepShaver/docs/DIAGNOSTICS.md`
+"[NW-PROG] readout"). The raw `key=val` tokens are preserved, so the values below
+still match `grep`:
 
 ```
-[PROGRESS] program_max=N dr68k=N dec_expiries=N irq_fired=N
+[NW-PROG config]   profile=newworld  opt-in: PIC=N CONSUME=N CGRP=N
+[NW-PROG nk-stage] program_max=N  <score>  ...
+[NW-PROG dr68k]    dr68k=N  <score>  ...
+[NW-PROG sched]    dec_expiries=N  <score>  ...
+[NW-PROG irq]      irq_fired=N  <score>  ...
 ```
+
+**Standing signal:** `cd SheepShaver && make nw-northstar` boots the all-on cluster
+and prints this readout + a `[NW-PROG verdict]` line (report-only; `--gate` to
+enforce). The single "how far did the NewWorld boot get?" snapshot — use it as a
+review observe line, not a failing gate.
+
+**Boot is non-deterministic (2026-06-13):** ~half of all-on runs take a *post-EXT
+frontier crash* (SIGSEGV at a variable `ea` — `0x100000`/`0x55590000`/… — after
+`EXT delivered #1`, often before the atexit readout fires); the rest *park* clean.
+BOTH are "at frontier." A bare SIGSEGV is therefore NOT a regression — `nw-northstar`
+classifies by durable in-boot markers (`[DR68K] first instruction`, `EXT delivered
+#1`), so only a crash *below* the frontier flags `REGRESSED`. See LEARNINGS
+2026-06-13 "NW frontier boot is non-deterministic".
 
 | State | Expected |
 |-------|----------|

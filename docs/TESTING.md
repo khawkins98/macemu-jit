@@ -44,6 +44,7 @@ Two caveats:
 | Single opcode vector (JIT path) | `SS_TEST_HEX=<hex> SS_TEST_JIT=1 make test-opcodes` | — |
 | **Differential op-sweep + auto-referee** (AltiVec/FP, interp-vs-JIT via the real emulator) | `cd SheepShaver && python3 tools/jit-diff-sweep.py` | FAIL=0 (run-stamped JSONL + repros under `$SS_RUN_DIR`) |
 | ROM harness (headless JIT exerciser) | `cd SheepShaver && make test-rom` | no failures |
+| **NewWorld boot-progress signal** (machine-layer integration) | `cd SheepShaver && make nw-northstar` | observe-only — `[NW-PROG verdict]` should read `ok(...)`, not `REGRESSED(...)` |
 | Build | `cd SheepShaver && make build-ss` | clean |
 
 > **MODE MATTERS — the default does NOT test the JIT.** The same vectors run
@@ -61,6 +62,24 @@ Two caveats:
 
 These are the fast correctness tier for codegen changes (use `test-jit`). **But
 note their blind spots** (below) — passing them is necessary, not sufficient.
+
+### NewWorld boot-progress signal (machine-layer integration)
+
+`make nw-northstar` is **not** a codegen gate — it is the standing *integration* signal
+for the NewWorld machine-layer path. It boots the all-on gate cluster
+(`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_M10_CGRP=1`) via the slot protocol and prints the
+`[NW-PROG]` readout plus a classified `[NW-PROG verdict]`. It closes a real gap: the
+per-opcode harness and paravirtual `make e2e` validate codegen and "didn't break 8.6"
+respectively, but **nothing else exercises the all-NW-gates-on stack end to end** — this
+is the only signal that catches an earlier NewWorld milestone being silently regressed by
+a later one.
+
+- **Report-only by default** (exits 0). Use as a review/observe line, never a blocking
+  gate — `--gate` enforces, `--history FILE` appends a trend TSV.
+- **The boot is non-deterministic**: a bare SIGSEGV is NOT a regression (the verdict
+  classifies by durable in-boot markers, not crash presence). Only `REGRESSED(...)` —
+  a crash *below* the frontier — warrants investigation. Full rationale: `SheepShaver/docs/DIAGNOSTICS.md`
+  "[NW-PROG] readout" + LEARNINGS 2026-06-13 "NW frontier boot is non-deterministic".
 
 ### Known coverage gaps in the automated harness
 

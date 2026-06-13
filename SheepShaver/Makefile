@@ -192,6 +192,15 @@ test-nw-init: build-ss
 	fi
 	@rm -f /tmp/test_nw_init.prefs /tmp/test_nw_init.log
 
+# nw-northstar: the standing NewWorld boot-progress SIGNAL (supersedes test-nw-init).
+# Boots the all-on gate cluster via the slot protocol and captures the
+# [NW-PROG …] readout — the single "how far did the NewWorld boot get?" number.
+# REPORT-ONLY (always exits 0): wire into gates.sh as an observe line, never a
+# failing gate, so it surfaces regressions without blocking flow. Add --gate to
+# assert the frontier checkpoint. See SheepShaver/tools/nw-northstar.sh + docs/TESTING.md.
+nw-northstar: build-ss
+	@bash tools/nw-northstar.sh $(NS_ARGS)
+
 # --- End-to-end VNC harness (ROADMAP A5) -------------------------------------
 #   make e2e         boot -> clean-shutdown smoke (the system-level regression gate)
 #   make e2e-bench   boot Mac OS 9 + Speedometer, drive the suite over VNC, capture results

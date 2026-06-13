@@ -51,6 +51,14 @@ Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md` (write pen
   **Probes cannot count** — land a counter (the `exc=` tuple idiom) for counts; or
   `SS_PROBE_LINEAR=1` (+`SS_PROBE_CAP=N`, default 32) fires probes on EVERY visit up
   to the cap so short sequences become readable.
+- **`[NW-PROG …]` boot-progress readout** (atexit; was `[PROGRESS]`, renamed 2026-06-13) —
+  discrete per-signal lines (`config`/`nk-stage`/`dr68k`/`sched`/`irq`), each greppable
+  with a score word + inline threshold context (spec: DIAGNOSTICS.md "[NW-PROG] readout").
+  The standing signal `make nw-northstar` wraps it (all-on boot → `[NW-PROG verdict]`,
+  report-only). **CAVEAT (load-bearing): the all-on boot is ~50/50 non-deterministic
+  between a clean park and a post-EXT frontier crash (variable `ea`, often before atexit)
+  — a bare SIGSEGV is NOT a regression.** Classify by durable markers (`[DR68K] first
+  instruction`, `EXT delivered #1`), never by crash presence. See LEARNINGS 2026-06-13.
 - Crash-boot ring reach: `SS_RING_WINDOW=0xN` overrides the SS_JIT_TRACE_RING capacity
   (default 0x40000; 0x200000 is the smallest that retains the DSAT ~3.39M window at the
   ~4.48M crash, 108 B/record) and `SS_RING_DUMP_FROM=0xSTART[:0xEND]` clips the dump to
@@ -103,6 +111,12 @@ Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md` (write pen
   property of QEMU's model, not of Mac OS in general — `dev_via6522` may still need to
   present the correct IFR bit via the Cuda protocol.
   Oracle scope: valid from NK entry onward (OpenBIOS ≠ Apple OF pre-NK).
+  **Device-tree oracle (2026-06-13): the rig now auto-captures `info qtree` + `info mtree`
+  to `<rundir>/device-tree.txt`** — every device + gpio-in/out wiring + MMIO size, and the
+  live memory map incl. the escc-legacy alias table + NVRAM placement. Use it for the
+  topology/wiring/NVRAM questions the milestones otherwise re-derive from QEMU C source.
+  Same caveat (1): the addresses are QEMU-assigned (MacIO BAR0 0x80000000) — wiring oracle,
+  NEVER our reference addresses.
   Pitfalls: `LEARNINGS.md` "2026-06-12". First-session findings: `docs/archive/2026-06/machine/VIA-IFR-RECON.md`.
 - ROM dumps — canonical location: **`/Users/Shared/macemu/dumps/`** with `MANIFEST.txt`
   (filename + md5 + provenance). `rom901_inventory.bin` = RAW (md5 7b1378be…, 16
@@ -173,6 +187,11 @@ the standalone `SS_NW_IRQ_CONSUME`; full disposition in MACHINE-LAYER-PLAN re-sc
 - **Per-commit (inner)**: `make build-ss` + `SS_HARNESS_BATCH=1 make test-jit` (353/353)
   + `make -C src/machine test` (ALL PASS). ~1 minute warm.
 - **Per-task (final commit)**: + plain `make test-jit` (authoritative) + `make e2e-test`.
+- **NewWorld observe line (report-only)**: `make nw-northstar` — the standing "how far did
+  the NewWorld boot get?" signal (all-on cluster boot → `[NW-PROG verdict]`). Run at task
+  close on any newworld-path change; quote the verdict. NOT a failing gate (boot is
+  non-deterministic — bare SIGSEGV ≠ regression; the verdict classifies by durable markers).
+  A `REGRESSED(...)` = real below-frontier break.
 - **Risk-based**: paravirtual `make e2e` — REQUIRED when the change touches code
   reachable on paravirtual (shared functions, non-gated lines); SUBSTITUTABLE by the
   structural-inertness argument + the gated-off byte-identical A/B boot when every new

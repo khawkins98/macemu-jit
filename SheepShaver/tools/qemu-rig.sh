@@ -280,6 +280,28 @@ run_probe_stage() {
     } | tee -a "$PROBE_OUTPUT"
 }
 
+# One-time device-tree + memory-map capture. Topology is static during boot, so
+# this runs ONCE (not per ladder stage). `info qtree` exposes every device + its
+# gpio-in/out wiring + MMIO size; `info mtree` the live memory map incl. the
+# escc-legacy alias table and NVRAM placement. These answer the device-tree /
+# NVRAM / OpenPIC-input questions the machine-layer milestones otherwise re-derive
+# from QEMU C source — a STANDING behavioral oracle. CAVEAT (load-bearing): these
+# are QEMU-assigned addresses (MacIO BAR0 0x80000000), NEVER reference values for
+# our machine layer (ours is 0xF3000000). Use for topology/wiring, not addresses.
+DEVTREE_DONE=0
+capture_device_tree() {
+    local sock="$1"
+    local out="$RUNDIR/device-tree.txt"
+    {
+        echo "=== QEMU device tree (info qtree) — topology/wiring oracle (NOT addresses) ==="
+        python3 "$MON" --sock "$sock" "info qtree" 2>/dev/null || echo "(info qtree failed)"
+        echo ""
+        echo "=== QEMU memory map (info mtree) — alias table / NVRAM placement (NOT our addresses) ==="
+        python3 "$MON" --sock "$sock" "info mtree" 2>/dev/null || echo "(info mtree failed)"
+    } > "$out"
+    echo "device tree + memory map captured → $out"
+}
+
 # Build sorted ladder from LADDER_ARG, filtering points past TIMEOUT.
 IFS=',' read -ra RAW_LADDER <<< "$LADDER_ARG"
 LADDER=()
@@ -301,6 +323,10 @@ for STAGE in "${LADDER[@]}"; do
     fi
     PREV="$STAGE"
     if [[ -S "$RUNDIR/mon.sock" ]]; then
+        if [[ "$DEVTREE_DONE" == "0" ]]; then
+            capture_device_tree "$RUNDIR/mon.sock"
+            DEVTREE_DONE=1
+        fi
         run_probe_stage "$STAGE" "$RUNDIR/mon.sock"
     else
         echo "(monitor not ready at ${STAGE}s)" | tee -a "$PROBE_OUTPUT"

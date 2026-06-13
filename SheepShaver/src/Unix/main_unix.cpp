@@ -1607,12 +1607,34 @@ int main(int argc, char **argv)
 			fprintf(stderr, "[FB-DIRTY] non_zero_pixels=%llu\n",
 			        (unsigned long long)non_zero);
 		}
+		// [NW-PROG …] — discrete, self-documenting boot-progress readout (replaces
+		// the former single [PROGRESS] line). Each signal on its own greppable line
+		// with a coarse score word + inline threshold context, so a snapshot is
+		// readable without consulting DIAGNOSTICS.md. The raw key=val tokens
+		// (program_max= / dr68k= / dec_expiries= / irq_fired=) are preserved so
+		// existing key-greps and the plans' "dec_expiries≥200" phrasing still match.
+		// Format reference: SheepShaver/docs/DIAGNOSTICS.md "[NW-PROG] readout".
+		auto env_on = [](const char *k) {
+			const char *v = getenv(k);
+			return (v && v[0] && v[0] != '0') ? 1 : 0;
+		};
+		uint32_t nw_prog = SheepExcMaxProgramSlot();
+		int      nw_dr   = SheepDR68KStarted();
+		uint64_t nw_dexp = g_virt_clock.dec_expiries;
+		uint32_t nw_irq  = g_exc_consume_stats.fired;
 		fprintf(stderr,
-		        "[PROGRESS] program_max=%u dr68k=%d dec_expiries=%llu irq_fired=%u\n",
-		        SheepExcMaxProgramSlot(),
-		        SheepDR68KStarted(),
-		        (unsigned long long)g_virt_clock.dec_expiries,
-		        g_exc_consume_stats.fired);
+		    "[NW-PROG config]   profile=%s  opt-in: PIC=%d CONSUME=%d CGRP=%d  "
+		        "(newworld cluster defaults implied)\n"
+		    "[NW-PROG nk-stage] program_max=%u  %-4s  highest NK PROGRAM# delivered (j2i Start68k path)\n"
+		    "[NW-PROG dr68k]    dr68k=%d  %-4s  68k DR emulator entered; 0=never started\n"
+		    "[NW-PROG sched]    dec_expiries=%llu  %-4s  scheduler liveness: 5-6=long-park, >=40=baseline-healthy, >=200=milestone-done\n"
+		    "[NW-PROG irq]      irq_fired=%u  %-4s  interrupts delivered to 68k world; 0=none yet, >=1=delivery live\n",
+		    MachineProfileIsNewWorld() ? "newworld" : "paravirtual",
+		    env_on("SS_NW_PIC"), env_on("SS_NW_IRQ_CONSUME"), env_on("SS_M10_CGRP"),
+		    nw_prog,                (nw_prog >= 8)  ? "OK"   : "LOW",
+		    nw_dr,                  nw_dr           ? "OK"   : "NONE",
+		    (unsigned long long)nw_dexp, (nw_dexp >= 200) ? "DONE" : (nw_dexp >= 40) ? "OK" : "PARK",
+		    nw_irq,                 (nw_irq >= 1)   ? "OK"   : "NONE");
 	});
 
 	char str[256];

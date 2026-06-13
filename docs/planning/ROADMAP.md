@@ -83,6 +83,20 @@ Harness 353/353. Commits: 4ba87d8d (T-F6), 8f4197fa (Tasks A–D), 46c31ee7 (pos
 ~3-4 milestone-class efforts remaining to Mac OS 9.2.x Finder. Measure the wall count
 with the QEMU rig before scoping (the QEMU wall census — unblocked).
 
+## NewWorld coherence tooling (infrastructure, 2026-06-13)
+
+Closing the integration blind spot — the per-opcode harness + paravirtual e2e never
+exercised the all-NW-gates-on stack, so an earlier milestone could be silently regressed
+by a later one. Landed:
+- **`make nw-northstar`** — the standing all-on boot-progress signal (`[NW-PROG]` readout
+  + classified verdict, report-only). Spec: DIAGNOSTICS.md "[NW-PROG] readout".
+- **Discrete `[NW-PROG]` readout** (was `[PROGRESS]`) + the **boot-non-determinism finding**
+  (LEARNINGS 2026-06-13): a bare SIGSEGV is NOT a regression; classify by durable markers.
+- **QEMU rig device-tree capture** (`info qtree`/`info mtree` → `device-tree.txt`) — the
+  topology/wiring/NVRAM oracle, standing.
+- Process-health: falsification tally + QEMU-oracle-first rule (MILESTONE-WORKFLOW §6c);
+  load-bearing-caveat append-only rule (CONTRIBUTING archive pass).
+
 ---
 
 # Track A — Correctness & verification

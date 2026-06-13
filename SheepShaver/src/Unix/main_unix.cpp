@@ -245,7 +245,7 @@ static bool dr_cache_area_mapped = false;	// Flag: Mac DR Cache mmap()ped
 static bool dr_emulator_area_mapped = false;// Flag: Mac DR Emulator mmap()ped
 static bool fb_aperture_mapped = false;		// Flag: M11 framebuffer aperture mmap()ped
 bool ss_m11_fb = false;						// Gate: SS_M11_FB=1 framebuffer aperture active
-uint32 fb_aperture_base = 0;				// Guest base of framebuffer aperture (0x81000000)
+uint32_t fb_aperture_base = 0;				// Guest base of framebuffer aperture (0x81000000)
 static KernelData *kernel_data;				// Pointer to Kernel Data
 static EmulatorData *emulator_data;
 
@@ -2215,6 +2215,45 @@ int main(int argc, char **argv)
 					fprintf(stderr, "[SCC-INJECT] warning: SS_SCC_RX_INJECT format must be DELAY_S:HEXBYTES (got '%s')\n",
 					        inject_env);
 				}
+			}
+		}
+
+		// M11: register framebuffer aperture (non-hull) and optional loud-stub (T-F4).
+		// The aperture entry goes in the MMIOAperture registry; it does NOT extend the
+		// trap hull.  The loud-stub (SS_M11_FB_LOUD=1) adds a one-shot MMIO_TRAPPED
+		// handler that logs [FB-TOUCH] at the first guest write to the aperture.
+		// Remove the loud-stub before the milestone acceptance run.
+		if (ss_m11_fb) {
+			const uint32 fb_aperture_size = 16 * 1024 * 1024;
+			static const MMIODevice fb_aperture_dev = { "fb-aperture", 0,
+				[](void *, uint32_t, unsigned) -> uint64_t { return 0; },
+				[](void *, uint32_t, unsigned, uint64_t) {},
+				nullptr };
+			if (!MMIOBusRegister(fb_aperture_base, fb_aperture_size,
+			                     MMIO_APERTURE, &fb_aperture_dev))
+				fprintf(stderr, "[M11-FB] warning: aperture registry full\n");
+			else
+				fprintf(stderr, "[M11-FB] aperture registered: 0x%08x+0x%x (non-hull)\n",
+				        fb_aperture_base, fb_aperture_size);
+
+			const char *loud_env = getenv("SS_M11_FB_LOUD");
+			if (loud_env && loud_env[0] && loud_env[0] != '0') {
+				static const MMIODevice fb_loud_dev = { "fb-loud-stub", 0,
+					[](void *, uint32_t addr, unsigned) -> uint64_t {
+						fprintf(stderr, "[FB-TOUCH] read  addr=0x%08x\n", addr);
+						return 0;
+					},
+					[](void *, uint32_t addr, unsigned, uint64_t val) {
+						fprintf(stderr, "[FB-TOUCH] write addr=0x%08x val=0x%llx\n",
+						        addr, (unsigned long long)val);
+					},
+					nullptr };
+				if (!MMIOBusRegister(fb_aperture_base, fb_aperture_size,
+				                     MMIO_TRAPPED, &fb_loud_dev))
+					fprintf(stderr, "[M11-FB] warning: loud-stub registration failed\n");
+				else
+					fprintf(stderr, "[M11-FB] loud-stub armed at 0x%08x+0x%x (T-F4)\n",
+					        fb_aperture_base, fb_aperture_size);
 			}
 		}
 

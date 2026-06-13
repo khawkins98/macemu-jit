@@ -16,7 +16,7 @@
 
 enum MMIORegionKind {
 	MMIO_TRAPPED  = 0,   // unmapped, fault-dispatched device registers
-	MMIO_APERTURE = 1    // real memory, direct access (future Metal framebuffer); M1: registry-only
+	MMIO_APERTURE = 1    // real memory, direct access (framebuffer); separate registry, never in hull
 };
 
 struct MMIODevice {
@@ -31,6 +31,7 @@ struct MMIODevice {
 };
 
 #define MMIO_MAX_REGIONS    16
+#define MMIO_MAX_APERTURES   8
 #define MMIO_IDLE_THRESHOLD 256
 #define MMIO_IDLE_SLEEP_US  200
 
@@ -78,6 +79,11 @@ extern void MMIOBusDumpStats(FILE *f);
 // Fault-path bookkeeping (called by mmio_machfault.cpp):
 extern void MMIOBusCountJITFault(uint32_t addr);
 extern void MMIOBusCountBackpatch(uint32_t addr);
+
+// Aperture registry (MMIO_APERTURE regions): separate from the trap hull.
+// MMIOBusRegister with kind=MMIO_APERTURE records the entry here without extending
+// mmio_bus_lo/hi or adding to the dispatch table.
+extern bool MMIOApertureInRange(uint32_t addr);
 
 // Mach-fault dispatch entry (implemented in mmio_machfault.cpp; declared here so
 // sheepshaver_glue.cpp needs only this header). regs = ARM_THREAD_STATE64 __x base,

@@ -53,6 +53,6 @@ extern bool MachineUsesMMIOBusParse(MachineProfile p, const char *env_mmio_bus);
 // ss_m11_fb: SS_M11_FB=1 gate is active.
 // fb_aperture_base: guest base address (0x81000000 when ss_m11_fb is true, 0 otherwise).
 extern bool ss_m11_fb;
-extern uint32 fb_aperture_base;
+extern uint32_t fb_aperture_base;
 
 #endif // MACHINE_PROFILE_H

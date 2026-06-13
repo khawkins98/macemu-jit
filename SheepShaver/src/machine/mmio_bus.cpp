@@ -24,9 +24,30 @@ static int n_regions = 0;
 bool mmio_bus_active = false;
 uint32_t mmio_bus_lo = 0, mmio_bus_hi = 0;
 
+struct MMIOAperture { uint32_t base, size; const char *label; };
+static MMIOAperture apertures[MMIO_MAX_APERTURES];
+static int n_apertures = 0;
+
+bool MMIOApertureInRange(uint32_t addr)
+{
+	for (int i = 0; i < n_apertures; i++)
+		if (addr - apertures[i].base < apertures[i].size) return true;
+	return false;
+}
+
 bool MMIOBusRegister(uint32_t base, uint32_t size, MMIORegionKind kind, const MMIODevice *dev)
 {
-	if (n_regions >= MMIO_MAX_REGIONS || size == 0 || !dev || !dev->read || !dev->write)
+	if (size == 0 || !dev) return false;
+
+	// MMIO_APERTURE: real guest RAM — record in a separate registry only.
+	// Must NOT enter the trap hull (mmio_bus_lo/hi) or the dispatch table.
+	if (kind == MMIO_APERTURE) {
+		if (n_apertures >= MMIO_MAX_APERTURES) return false;
+		apertures[n_apertures++] = { base, size, dev->name };
+		return true;
+	}
+
+	if (n_regions >= MMIO_MAX_REGIONS || !dev->read || !dev->write)
 		return false;
 	for (int i = 0; i < n_regions; i++) {
 		uint32_t b = regions[i].base, e = b + regions[i].size;

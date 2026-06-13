@@ -2,8 +2,8 @@
 
 > **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE — aperture at 0x81000000, SDL
-> the_buffer redirected, OF video node published, harness 353/353. **Next: M12 display.**
+> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL (Wave0+Wave1 stable,
+> irq_fired=0, pixel gate fails — A-trap wall). **Next: M13 A-trap bootstrapping.**
 > Live frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
@@ -77,6 +77,29 @@ SDL the_buffer redirected to aperture, OF display node published (640×480×32, 
 MMIO_APERTURE non-hull contract verified by T-F6 unit test (13/13). [FB-DIRTY]=0 in
 NW diagnostic boot (expected: boot exits at 0.3s before pixels; pixel gate deferred to M12).
 Harness 353/353. Commits: 4ba87d8d (T-F6), 8f4197fa (Tasks A–D), 46c31ee7 (post-fix).
+
+## M12: Display pixels — Wave0+Wave1 stable, pixel gate FAIL ⏸ PARTIAL (2026-06-13)
+
+Plan: `docs/planning/superpowers/plans/2026-06-13-m12-display-pixels.md`.
+- **Task A (Wave0)** ✅: NW lowmem extended 1MB → 32MB; fixes crash at ea=0x010020c8. Commit `ddbd8d79`.
+- **Task B (VideoDriverStub)** ✅: VideoDriverStub verified; kOpenCommand path confirmed.
+- **Task C (pixel gate)** ❌ FAIL: Boot stable 30+ seconds (dec_expiries=2000+) but irq_fired=0.
+  CGRP (SS_M10_CGRP=1) routes EXT → ROM+0xED08, which immediately hits A-trap 0xA9A8 before
+  the Mac OS Trap Dispatch Table is loaded. `bra.s *` stop stub → boot parks. **M13 input.**
+- **Task D (Wave1)** ✅: Anonymous zero at 0xFF000000–0xFFFFFFFF fixes ea=0xFFFFEFD0 crash. Commit `348544cd`.
+
+Harness: 353/353. Gates: machine tests ALL PASS, e2e-test 122 passed, make e2e PASS. `[FB-DIRTY]=0`.
+
+## M13: A-trap bootstrapping → CGRP interrupt delivery → QuickDraw init 🔜 NEXT
+
+**Goal:** irq_fired≥1 and [FB-DIRTY] non_zero_pixels>0 after 180s boot.
+**Blocker:** ROM interrupt handler at 0x5000ED08 hits A-traps (0xA9A8 at ED06) before Mac OS
+Trap Dispatch Table is populated. Three candidate approaches:
+1. Populate minimal trap table entries for 0xA9A8 + the other A-traps in 0x5000ED00–0xEF00
+2. Delay CGRP interrupt delivery until after System init (gate on trap-table sentinel)
+3. Identify alternative QuickDraw init path not requiring the interrupt handler
+
+Requires Task-0 recon per MILESTONE-WORKFLOW.md.
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

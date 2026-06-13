@@ -6,11 +6,12 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M10+M11a+M11 COMPLETE + nw-northstar tooling (2026-06-13). Aperture at
-> 0x81000000, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), harness 353/353.
-> `make nw-northstar` is the standing NW boot-progress signal (report-only; ~50/50
-> non-deterministic — post-EXT SIGSEGV is NOT a regression, classify by durable markers).
-> Next: M12 — get Mac OS to write pixels to the aperture (display driver init path).
+> Active work: M12 PARTIAL (Tasks A/B complete; Task C FAIL at trap-table bootstrapping).
+> M12 fixes: Wave0 (NW lowmem 32MB), Wave1 (0xFF000000-0xFFFFFFFF 24-bit DR alias).
+> Boot is stable 30+ seconds (dec_expiries=2000+) but `irq_fired=0` and `[FB-DIRTY]=0`.
+> Next: M13 — fix A-trap bootstrapping for CGRP interrupt delivery → QuickDraw init.
+> Key blocker: ROM interrupt handler at 0x5000ED08 hits A-traps (0xA9A8 at ED06) before
+> the Mac OS Trap Dispatch Table is set up. See M12 Task C FAIL section below.
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 

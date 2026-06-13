@@ -17,7 +17,14 @@ ring-walk.py, ss-slot-boot.sh.
 
 ---
 
-## Status: TASK-0 RECON PHASE (do not implement until blocking answers are in)
+## Status: PARTIAL COMPLETE / CLOSED (2026-06-13 session 7)
+
+**Tasks A (Wave0) and B (VideoDriverStub) COMPLETE. Task C (pixel gate) FAIL. Task D (Wave1) COMPLETE.**
+- Wave0 (`ddbd8d79`): NW lowmem 1MB→32MB — fixes ea=0x010020c8.
+- Wave1 (`348544cd`): 0xFF000000–0xFFFFFFFF anonymous zero — fixes ea=0xFFFFEFD0.
+- `irq_fired=0`, `[FB-DIRTY]=0`. Blocker: CGRP routes EXT → ROM+0xED08 which hits A-trap 0xA9A8
+  before the Mac OS Trap Dispatch Table is loaded. **M13 input.**
+- All harness/machine/e2e gates pass (353/353, machine ALL PASS, e2e-test 122, make e2e PASS).
 
 > **Rev 2:** post-red-team (PROCESS + TECHNICAL). BINDING amendments in §amendments below.
 > **Process:** `docs/MILESTONE-WORKFLOW.md`. Read `docs/AGENT-CONTEXT.md` at task start.

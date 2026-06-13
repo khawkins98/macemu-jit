@@ -4,15 +4,28 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-13, post-M11)
+## Current frontier (2026-06-13, post-M12-partial)
 
 **M10 CGRP init + 68k EXT delivery — COMPLETE (2026-06-13).** Gate: `SS_M10_CGRP=1`.
 **M11a frame-PC stability — COMPLETE (2026-06-13).** No code change.
 **M11 Framebuffer aperture + OF node + SDL blit — COMPLETE (2026-06-13).** Gate: `SS_M11_FB=1`.
 - 16 MB aperture at 0x81000000 (`vm_mac_acquire_fixed`), SDL `the_buffer` → aperture.
 - OF display node published (640×480×32, "cofb"). MMIO hull unchanged (T-F6 green).
-- `[FB-DIRTY] non_zero_pixels=0` expected (NW diagnostic boot exits at 0.3s before pixels).
-- Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md`. Harness 353/353.
+
+**M12 PARTIAL — Wave0+Wave1 landed; pixel gate FAIL; frontier captured.**
+- **Wave0** (`ddbd8d79`): NW lowmem extended 1MB → 32MB; fixes ea=0x010020c8 crash.
+- **Wave1** (`348544cd`): Anonymous zero at 0xFF000000–0xFFFFFFFF; fixes ea=0xFFFFEFD0.
+  The DR sign-extends 16-bit negative 68k EAs (0xEFD0 → 0xFFFFEFD0). Probe confirmed
+  0x00FFEFD0 = 0 at boot; both forms return zero — no behavioral difference.
+- **Boot stable** 30+ seconds (dec_expiries=2000+) but `irq_fired=0`, `[FB-DIRTY]=0`.
+- **A-trap wall**: CGRP routes EXT → ROM+0xED08, which hits A-trap 0xA9A8 at ROM+0xED06
+  before Mac OS Trap Dispatch Table is loaded. The A-line vector is `bra.s *` → parks.
+- Gate: `SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1` (NOT SS_M10_CGRP — it kills the boot).
+- Harness 353/353. Machine tests ALL PASS. e2e-test 122 passed. make e2e PASS.
+
+**Next: M13** — A-trap bootstrapping fix → CGRP interrupt delivery → QuickDraw init.
+Key question: how to either populate the trap table early, delay CGRP until after System
+init, or bypass the 0x5000ED08 handler for the QuickDraw pixel-write path.
 
 **Tooling added (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress
 snapshot. Boots all-on cluster, emits `[NW-PROG verdict]`. Report-only by default.
@@ -20,8 +33,6 @@ snapshot. Boots all-on cluster, emits `[NW-PROG verdict]`. Report-only by defaul
 a regression — it's the known frontier wall. Classify by durable markers (`[DR68K] first
 instruction`, `EXT delivered #1`), not SIGSEGV presence. Full rationale: LEARNINGS
 2026-06-13 "NW frontier boot is non-deterministic".
-
-**Next: M12** — get Mac OS to write pixels to the aperture (display driver init path).
 
 ## Boot recipes
 

@@ -5,6 +5,38 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-13 — M12 session 7: Wave1 fix + A-trap bootstrapping wall (CGRP frontier)
+
+**Wave1: 24-bit DR alias mapping (committed `348544cd`)**
+
+The DR emulator runs in 32-bit mode but the early 68k ROM code at 0x5000ED00–0xEF00 uses
+16-bit signed offsets into ROM with an implicit 24-bit address mask. The DR sign-extends
+0xEFD0 → 0xFFFFEFD0 (valid in 32-bit mode) rather than masking to 0x00FFEFD0 (the 24-bit
+result). Probe on guest 0x00FFEFD0 showed the value is zero at boot. Fix: map
+0xFF000000–0xFFFFFFFF as anonymous zero (vm_mac_acquire_fixed) so both sign-extended and
+24-bit-masked accesses get zero — no behavioral difference, no crash.
+
+Result: eliminates SIGSEGV at ea=0xFFFFEFD0; 2/3 boots now run 30+ seconds
+(dec_expiries=2000+). 1/3 boots still crash at ea=0x64A05014 (non-deterministic timing, same
+DR 24-bit region, not blocking M12 gate).
+
+**A-trap bootstrapping wall (M12 Task C FAIL — M13 input)**
+
+Enabling CGRP interrupt delivery (SS_M10_CGRP=1) routes EXT interrupts to the ROM handler
+at 0x5000ED08. That handler's preamble at ROM+0xED06 immediately executes A-trap 0xA9A8
+(`_GetMasterPointerCount` or equivalent). The Mac OS Trap Dispatch Table lives at low mem
+0x0E00–0x0FFF and is populated by the System file during startup — which hasn't loaded yet
+at this point in the boot. The A-line exception vector (0x50429C10 set by the trampoline)
+is a `bra.s *` stop stub, so ANY A-trap at this stage parks/exits the emulator.
+
+**Rule:** Don't enable CGRP until the Mac OS Trap Dispatch Table is initialized (or the ROM
+interrupt handler is bypassed). The M13 task is to either: (a) populate minimal trap entries
+for the A-traps at 0x5000ED00–0xEF00 (0xA9A8, 0xA9A3, 0xA9A4, 0xA02E, 0xA198, 0xA05D),
+(b) delay CGRP delivery until after System init, or (c) find the QuickDraw init path that
+doesn't require the interrupt handler.
+
+---
+
 ## 2026-06-13 — NW frontier boot is non-deterministic; a bare SIGSEGV is NOT a regression
 
 Building a NewWorld boot-progress signal (`make nw-northstar`) surfaced that the

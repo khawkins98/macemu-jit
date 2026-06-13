@@ -9,6 +9,45 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-13 (session 7 — M12: frontier crash fixes + display driver verification)
+
+### [SheepShaver] M12 Task A: extend NW lowmem + Wave1 24-bit DR alias
+
+Milestone M12: get Mac OS to write pixels to the framebuffer aperture at 0x81000000.
+Tasks A/B complete; Task C fails at trap-table bootstrapping wall (M13 input).
+
+**Wave 0 (Task A)** — extend NewWorld lowmem from 1 MB to 32 MB (`main_unix.cpp`):
+- Crash at `ea=0x010020c8` (68k VM Manager VMVectors struct placed at ~0x01002080 by
+  Mac OS init; above the old 1 MB window). Fix: `MachineProfileIsNewWorld()` gated
+  `vm_mac_acquire_fixed(0, 0x2000000)` and matching `is_mapped()` range update.
+- Acceptance: 3/3 consecutive 60s all-on boots, no SIGSEGV, `dec_expiries > 5`.
+- Emits: `[WAVE0] low memory extended to 0x0-0x2000000 (NK descriptors + 68k heap)`
+
+**Wave 1** — map 0xFF000000–0xFFFFFFFF as anonymous zero (`main_unix.cpp`):
+- Crash at `ea=0xFFFFEFD0` (DR emulator sign-extends 16-bit negative 68k address
+  0xEFD0 to 0xFFFFEFD0 instead of masking to 24 bits = 0x00FFEFD0). Probe confirmed
+  0x00FFEFD0 contains zero at boot time; anonymous zero mapping gives the DR the same
+  result without full 24-bit aliasing.
+- Acceptance: 2/3 consecutive 30s boots clean; `dec_expiries=2101+`.
+- Emits: `[WAVE1] 24-bit DR alias mapped 0xFF000000-0xFFFFFFFF (zero)`
+
+**Task B (verification)** — `[M12-VIDEO]` log in `VideoOpen` (`video.cpp`):
+- `OP_NAME_REGISTRY` confirmed firing via `SS_PROBE_68K=0x500002fa`; `DoPatchNameRegistry`
+  runs; video node registered at 0x81000000 640×480×32; `VideoDriverStub` live. No code
+  changes needed for the ndrv injection path (already unconditional at name_registry.cpp:371).
+
+**Task C (FAIL)** — `[FB-DIRTY] non_zero_pixels=0` after 180s:
+- `irq_fired=0` in all healthy boots: 68k world runs with EE=0 / CGRP uninitialized →
+  no interrupt delivery → QuickDraw never initializes → no pixel writes.
+- `SS_M10_CGRP=1` arms interrupt delivery, but the ROM interrupt handler at 0x5000ED08
+  immediately hits A-traps (e.g., 0xA9A8 at ROM+0xED06) that require the Mac OS Trap
+  Dispatch Table — set up by the System file, not yet loaded at this boot stage.
+  A-trap without trap table → `bra.s *` stop stub → boot parks/exits early.
+- Frontier: 68k world stable 30+ seconds, video node registered, no CGRP delivery.
+- M13 input: A-trap dispatcher initialization OR alternative QuickDraw init path.
+
+---
+
 ## 2026-06-13 (session 6 — NewWorld coherence tooling)
 
 ### [SheepShaver] `make nw-northstar` boot-progress signal + discrete `[NW-PROG]` readout

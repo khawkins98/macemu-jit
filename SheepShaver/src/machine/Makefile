@@ -3,11 +3,12 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic
 
 test: $(TESTS)
 	./test_machine_profile
 	./test_mmio_bus
+	./test_mmio_aperture
 	./test_dev_scc8530
 	./test_dev_via6522
 	./test_a64_mmio_decode
@@ -25,6 +26,10 @@ test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/ma
 
 test_mmio_bus: test_mmio_bus.cpp mmio_bus.cpp ../include/mmio_bus.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_mmio_bus.cpp mmio_bus.cpp
+
+# T-F6: aperture must not extend the trap hull (fails before Task B, passes after)
+test_mmio_aperture: test_mmio_aperture.cpp mmio_bus.cpp ../include/mmio_bus.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_mmio_aperture.cpp mmio_bus.cpp
 
 test_dev_scc8530: test_dev_scc8530.cpp dev_scc8530.cpp mmio_bus.cpp ../include/dev_scc8530.h ../include/mmio_bus.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_scc8530.cpp dev_scc8530.cpp

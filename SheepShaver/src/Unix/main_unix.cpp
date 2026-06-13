@@ -243,6 +243,9 @@ static bool rom_area_mapped = false;		// Flag: Mac ROM mmap()ped
 static bool ram_area_mapped = false;		// Flag: Mac RAM mmap()ped
 static bool dr_cache_area_mapped = false;	// Flag: Mac DR Cache mmap()ped
 static bool dr_emulator_area_mapped = false;// Flag: Mac DR Emulator mmap()ped
+static bool fb_aperture_mapped = false;		// Flag: M11 framebuffer aperture mmap()ped
+bool ss_m11_fb = false;						// Gate: SS_M11_FB=1 framebuffer aperture active
+uint32 fb_aperture_base = 0;				// Guest base of framebuffer aperture (0x81000000)
 static KernelData *kernel_data;				// Pointer to Kernel Data
 static EmulatorData *emulator_data;
 
@@ -1958,6 +1961,26 @@ int main(int argc, char **argv)
 	rom_area_mapped = true;
 	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
 
+	// M11: framebuffer aperture — 16 MB fixed guest RAM at 0x81000000 (Core99 PCI
+	// video base, confirmed by QEMU mac99 display node T-F1 probe 2026-06-13).
+	// NewWorld profile only; gate SS_M11_FB=1 (default OFF).
+	{
+		const char *env = getenv("SS_M11_FB");
+		if (env && env[0] && env[0] != '0' && MachineProfileIsNewWorld()) {
+			ss_m11_fb = true;
+			fb_aperture_base = 0x81000000;
+			const uint32 fb_aperture_size = 16 * 1024 * 1024;
+			if (vm_mac_acquire_fixed(fb_aperture_base, fb_aperture_size) < 0) {
+				fprintf(stderr, "[M11-FB] FATAL: cannot map framebuffer aperture at 0x%08x (%s)\n",
+				        fb_aperture_base, strerror(errno));
+				goto quit;
+			}
+			fb_aperture_mapped = true;
+			fprintf(stderr, "[M11-FB] aperture mapped: guest 0x%08x + 0x%x (16 MB)\n",
+			        fb_aperture_base, fb_aperture_size);
+		}
+	}
+
 	// M2: event scheduler + pump. Needed by the VIA timers (any bus config) and by
 	// the DEC eager-expiry (newworld). Paravirtual default: none of this starts.
 	if (MachineUsesMMIOBus() || MachineProfileIsNewWorld()) {
@@ -2430,6 +2453,8 @@ static void Quit(void)
 		vm_mac_release(DR_EMULATOR_BASE, DR_EMULATOR_SIZE);
 	if (dr_cache_area_mapped)
 		vm_mac_release(DR_CACHE_BASE, DR_CACHE_SIZE);
+	if (fb_aperture_mapped)
+		vm_mac_release(fb_aperture_base, 16 * 1024 * 1024);
 
 	// Delete Low Memory area
 	if (lm_area_mapped)

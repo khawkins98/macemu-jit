@@ -1013,6 +1013,11 @@ static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
 		// + 68k VM Manager VMVectors struct (placed at ~0x01002080 by Mac OS init,
 		// above the original 1MB window; 32MB covers the full 68k System Heap range).
 		if (addr < 0x2000000 && end <= 0x2000000) return true;
+		// Wave 1: 24-bit alias region (0xFF000000-0xFFFFFFFF) — the DR emulator
+		// sign-extends 16-bit negative 68k addresses (e.g. 0xEFD0 → 0xFFFFEFD0)
+		// instead of masking to 24 bits (0x00FFEFD0). The data there is zero in
+		// both cases (probe confirmed). Mapping as anonymous zero lets DR continue.
+		if (addr >= 0xFF000000 && end <= 0x100000000ULL) return true;
 		const uint32_t kdp = KernelDataAddr;
 		const uint32_t sub_kdp_size = 0x8000;
 		const uint32_t shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64
@@ -1938,8 +1943,17 @@ int main(int argc, char **argv)
 			goto quit;
 		}
 		lm_area_mapped = true;
-		if (MachineProfileIsNewWorld())
+		if (MachineProfileIsNewWorld()) {
 			fprintf(stderr, "[WAVE0] low memory extended to 0x0-0x2000000 (NK descriptors + 68k heap)\n");
+			// M12: map 0xFF000000-0xFFFFFFFF so the DR emulator's sign-extended 16-bit
+			// negative EAs (e.g. 0xFFFFEFD0 from 68k offset 0xEFD0) resolve to zero
+			// instead of faulting. The 24-bit equivalent (0x00FFEFD0) is also zero at
+			// boot time; this mapping gives the DR the same result without 24-bit aliasing.
+			if (vm_mac_acquire_fixed(0xFF000000, 0x1000000) < 0)
+				fprintf(stderr, "[WAVE1] WARNING: 24-bit alias map failed: %s\n", strerror(errno));
+			else
+				fprintf(stderr, "[WAVE1] 24-bit DR alias mapped 0xFF000000-0xFFFFFFFF (zero)\n");
+		};
 #endif
 #if REAL_ADDRESSING
 		// Allocate RAM at any address. Since ROM must be higher than RAM, allocate the RAM

@@ -1,10 +1,10 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** ⏸ PAUSED 2026-06-12 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
+> **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M7 interrupt injection DEFAULT-ON; M8 slot-4 consumption
-> SHIPPED GATED-OFF-GREEN (`SS_NW_IRQ_CONSUME`). **Active critical path: M9 VIA-IFR** —
-> the 68k handler rte's source-less. Live frontier: `docs/AGENT-CONTEXT.md`.
+> JIT (stable). Machine Layer: M10 COMPLETE — `SS_PROBE_68K=0x5000ed08` fires via CGRP
+> delivery (`SS_M10_CGRP=1`). **Next: M11 framebuffer** (recon complete) or frame-PC
+> stability. Live frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
 

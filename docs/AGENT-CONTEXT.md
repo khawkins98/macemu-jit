@@ -4,7 +4,7 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-13, post-M10)
+## Current frontier (2026-06-13, post-M10+M11a)
 
 **M8** — shipped gated-off-green (`SS_NW_IRQ_CONSUME`). Acceptance recipe: `SS_NW_PIC=1
 SS_NW_IRQ_CONSUME=1`. The 68k level-1 handler runs at 60 Hz under that cluster.
@@ -13,70 +13,17 @@ SS_NW_IRQ_CONSUME=1`. The 68k level-1 handler runs at 60 Hz under that cluster.
 criterion deferred to M10.
 
 **M10 CGRP init + 68k EXT delivery — COMPLETE (2026-06-13).** Gate: `SS_M10_CGRP=1`.
-- ✅ `SS_PROBE_68K=0x5000ed08` fires — confirmed match=1/5, clean run (60s SIGTERM).
+- ✅ `SS_PROBE_68K=0x5000ed08` fires — confirmed match=1/5, clean run.
 - ✅ Harness 353/353.
-- ⚠️ Frame-PC non-determinism: interrupted-PC read from live r24 at STUB entry; some timing
-  runs crash after probe fires. M11 correctness item.
 
-**Next task: M11 framebuffer** (recon complete in `docs/planning/machine/FRAMEBUFFER-RECON.md`).
-Or: fix M10 frame-PC stability (find where NK saves r24 at EXT exception time).
+**M11a frame-PC stability — COMPLETE (2026-06-13, same session).** No code change.
+- Static RE confirmed: r24 at STUB entry is always the interrupted 68k PC (never clobbered
+  by NK on the CGRP→RFI delivery path). `mr r12, r24` is correct.
+- Acceptance: 3/3 × 90s slot runs, probe fires, no SIGSEGV.
+- See LEARNINGS 2026-06-13 "M11a" for the full RE chain.
 
-**Root cause chain for 68k handler never firing:**
-
-**Layer 1 — NK EXT handler PR-bit gate (0x50314880):**
-```
-bl 0x50313d40                        ← save context (r11 = saved MSR)
-rlwinm. r9, r11, 0, 0x10, 0x10      ← extract bit 16 = PR (user-mode flag)
-beq 0x50313ab0                       ← if PR=0 (kernel mode) → fallback, skip CGRP
-```
-In our boot r11=0x0000000a → PR=0 → ALWAYS takes fallback. The DR emulator runs in
-**kernel mode** (SS_M6A_USER_MSR=0 by default, quarantined — zero-page slide crash).
-Every external interrupt fired during 68k emulation takes the fallback branch; the CGRP
-68k-delivery path is **never reached**, regardless of CGRP state.
-
-**Layer 2 — CGRP uninitialized:**
-CGRP base = `*(KDP-0x338)` = 0x68ffc1c0. Fields as of any current boot:
-- `+0x20` = 0x00000001 — a **function pointer** (NOT a counter), should be `NK_base+0x3da0
-  = 0x503143a0`; value 1 means NK cold-start never ran `init_503115f8` for this CGRP instance.
-  The `cmpwi r9, 2; blt` guard at 0x50314894 is a null-pointer check (≥2 = non-null).
-- `+0x38` = 0x00000000 — guard (must be non-zero for delivery)
-- `+0x3c` = 0x00000000 — TABLE_BASE (array of context descriptor pointers)
-- `+0x40` = 0x00000000 — STACK_TABLE (array of stack pointers per interrupt group)
-- `+0x44` = 0x00000000 — COUNT (must be ≥10; NK EXT posts source index 9)
-Mac OS normally populates CGRP via NK interrupt-registration services during System
-startup — our boot stalls before that point (Mac OS never reaches the Toolbox).
-
-**Named next task: M10 — user-mode DR + CGRP initialization.**
-
-M10 prerequisites:
-1. **User-mode DR** — fix SS_M6A_USER_MSR (quarantined: zero-page slide crash) or provide
-   an equivalent mechanism so the DR emulator's MSR PR=1 at interrupt time.  This makes NK
-   EXT handler take the CGRP path (r11.bit16=1) instead of the fallback.
-2. **CGRP initialization** — once PR=1 works, populate CGRP before Mac OS boot:
-   - `+0x20` = `NK_base + 0x3da0` = 0x503143a0 (valid function pointer)
-   - `+0x38` = non-zero guard value
-   - `+0x3c` = TABLE_BASE: array of pointers, each pointing to a 2-word descriptor
-     `[RFI_target, r2]`; entry[9] must point to the 68k interrupt-injection entry in the
-     DR emulator (TBD from RE of NK EXT handler completion path at 0x503148e0)
-   - `+0x40` = STACK_TABLE: array of stack pointers (one per interrupt group)
-   - `+0x44` = COUNT ≥ 10
-
-Verify criterion (unchanged): `SS_PROBE_68K=0x5000ed08:5` fires.
-
-**Historical context (do NOT treat as current claims):**
-"the handler rte's source-less" / "btst d6,(a4) @0x5000ee9a" / "source-table-ptr NIL"
-describe the M8-era frontier BEFORE session-4 RE. The real question is now upstream of
-source dispatch — it's whether the handler is ever invoked at all.
-
-**Tooling lesson (load-bearing):** `SS_PROBE_68K=0xPC:N` for 68k code paths, NOT
-`SS_PROBE_PC`. SS_PROBE_PC is PPC block-entry only — probe-blind to 68k addresses.
-`SS_PROBE_68K` can arm but never fire if the target is structurally unreachable (e.g.,
-the PR-bit gate above). Rule out structural delivery blockers before concluding the probe
-is wrong.
-
-Do not treat "the post is never polled" / "PROGRAM#4 never fires" / "the slot-4/0x3244e8
-livelock" / "Ticks never moves" / "EE has never risen" / "delivered_ext stays 0 on live
-boots" / "SysError 12" as current claims — they are historical.
+**Next task: M11 framebuffer.** Recon in `docs/planning/machine/FRAMEBUFFER-RECON.md`.
+Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md` (write pending).
 
 ## Boot recipes
 
@@ -245,10 +192,10 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: M9 VIA-IFR surface.** Probe recipe and open questions: `docs/HANDOFF.md`.
-Active planning: `docs/archive/2026-06/machine/VIA-IFR-RECON.md` (boot stall detail, §7–§8; archived — probe recipe is in HANDOFF.md).
+**Next task: M11 framebuffer.** Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md`.
+Recon (complete): `docs/planning/machine/FRAMEBUFFER-RECON.md`.
 Keep-active machine docs: `CORE99-MACHINE-DESCRIPTION.md`, `M1-DEVICE-CONFORMANCE.md`,
-`ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md` (HOLD).
+`ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md`.
 Archived milestone recon: `docs/archive/2026-06/machine/`.
 Archived plans: `docs/archive/2026-06/superpowers/plans/`.
 Knob reference: `SheepShaver/docs/DIAGNOSTICS.md`. Process: `docs/MILESTONE-WORKFLOW.md`.

@@ -658,6 +658,31 @@ to `SS_PROBE_PC` (zero PPC block-entry hits) — the written bit pattern is the 
 evidence of which handshake engine (Cuda vs Egret polarity) is live. `38,28,30` is the
 canonical sync choreography (idle → TACK assert → TACK negate).
 
+### M10 CGRP delivery — `SS_M10_CGRP=1` (default OFF)
+
+The M10 milestone (2026-06-13) initializes the CGRP struct so the NK's EXT delivery
+path routes interrupts to the 68k level-1 handler at 0x5000ed08 via the CGRP mechanism.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `SS_M10_CGRP=1` | OFF (explicit-"1" opt-in) | Initialize CGRP TABLE/STACK/DESC/STUB in guest RAM at 0x68ffc210–68; arm CGRP+0x20 and *(KDP-0x338) at first DR68K dispatch; re-sync CGRP fields on every EXT delivery. |
+
+**Acceptance recipe:** `SS_M10_CGRP=1 SS_PROBE_68K=0x5000ed08:5` — slot boot produces
+`[PROBE68K 0x5000ed08 match=1/5]` in the log with no crash (60s SIGTERM run).
+
+CGRP layout (9.0.1 ROM, KDP=0x68ffe000, CGRP_BASE=0x68ffc1c0):
+- `+0x20` = 0x503143a0 (NK delivery function); `+0x38` = non-zero guard
+- `+0x3c` = TABLE_BASE (→ guest RAM 0x68ffc210); `+0x40` = STACK_TABLE; `+0x44` = count
+- `+0x4c` = *(KDP-0x1c) (live-mirrored each delivery)
+
+STUB (16 words at 0x68ffc268): A7 guard (bltlr if KDP+4 < 32KB) → `mr r12, r24`
+(save interrupted 68k PC from live r24) → push 6-byte 68k exception frame (SR=0, PC=r12)
+onto 68k stack (r1 = old_A7-6) → set r24=0x5000ed08, update r16+0x1c4 → bctr to DR_WARM.
+
+**Known limitation:** `mr r12, r24` is the best available source for the interrupted PC
+without NK RE; non-deterministic crash can occur in some timing runs (NK may modify r24
+during CGRP delivery setup). The probe fires in all tested runs. M11 item.
+
 ### `SS_TERM_DUMP=1` — atexit dumps on timeout-killed boots
 
 `timeout(1)`-killed diagnostic boots die by SIGTERM, which skips the atexit telemetry

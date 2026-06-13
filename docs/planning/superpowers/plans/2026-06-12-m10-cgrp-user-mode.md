@@ -1,11 +1,11 @@
 # M10 — User-mode DR + CGRP initialization → 68k interrupt handler fires
 
-> **Status: PLAN Rev 3 (Task-0 addendum — major re-scope)** · Branch: `macos-arm64`
+> **Status: ✅ COMPLETE 2026-06-13** · Branch: `macos-arm64`
 > Rev 2: post-red-team (PROCESS + TECHNICAL). Rev 3: Task-0 boot findings.
 > **Task A (user_msr) ELIMINATED — EE-bit, not PR-bit, gates CGRP; EE=1 in 68k execution context.**
-> Only Task B (CGRP init) remains. See Task-0 addendum below.
-> Predecessor: M9 partial-complete (stall fixed, probe criterion deferred).
-> Acceptance: `SS_PROBE_68K=0x5000ed08:5` fires.
+> Only Task B (CGRP init) remained. Acceptance criterion met: commit `2856ae52` chain.
+> Gate: `SS_M10_CGRP=1`. Result: `SS_PROBE_68K=0x5000ed08` match=1/5, clean run.
+> Open tail: frame-PC non-determinism (r24 reliability at STUB entry) → M11.
 
 ---
 

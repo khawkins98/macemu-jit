@@ -5,6 +5,18 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-13 — CGRP+0x20 is zero throughout entire Mac OS 8.6 paravirtual boot
+
+Watch on guest addr 0x68ffc1e0 (= CGRP base 0x68ffc1c0 + 0x20) through a full 8.6 boot
+to Finder idle (~141s, 1.4 billion records): value never leaves 0x00000000. Mac OS 8.6 /
+OldWorld 1.1 ROM NK does not use or initialize this CGRP struct. The paravirtual interrupt
+path that drives the working 8.6 boot is independent of the CGRP mechanism entirely.
+
+**Rule:** CGRP at 0x68ffc1c0 is NewWorld-only (9.0.1 ROM NK). `SS_M10_CGRP` is correctly
+gated on `MachineProfileIsNewWorld()`. M10/M11a changes carry zero risk to the 8.6 path.
+
+---
+
 ## 2026-06-13 — M10 CGRP delivery: key findings
 
 **CGRP field layout confirmed** (9.0.1 ROM, KDP=0x68ffe000):

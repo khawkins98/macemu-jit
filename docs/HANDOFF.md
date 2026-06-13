@@ -6,9 +6,11 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M10+M11a+M11 COMPLETE (2026-06-13). Aperture at 0x81000000, SDL the_buffer
-> redirected to aperture, OF display node published (640×480×32), harness 353/353.
-> Next: M12 display — pixel gate deferred (NW diagnostic boot exits at 0.3s before pixels).
+> Active work: M10+M11a+M11 COMPLETE + nw-northstar tooling (2026-06-13). Aperture at
+> 0x81000000, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), harness 353/353.
+> `make nw-northstar` is the standing NW boot-progress signal (report-only; ~50/50
+> non-deterministic — post-EXT SIGSEGV is NOT a regression, classify by durable markers).
+> Next: M12 — get Mac OS to write pixels to the aperture (display driver init path).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 

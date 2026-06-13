@@ -4,26 +4,24 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-13, post-M10+M11a)
-
-**M8** — shipped gated-off-green (`SS_NW_IRQ_CONSUME`). Acceptance recipe: `SS_NW_PIC=1
-SS_NW_IRQ_CONSUME=1`. The 68k level-1 handler runs at 60 Hz under that cluster.
-
-**M9 VIA-IFR — PARTIALLY COMPLETE (2026-06-12 session 4).** ✅ Stall fixed; probe
-criterion deferred to M10.
+## Current frontier (2026-06-13, post-M11)
 
 **M10 CGRP init + 68k EXT delivery — COMPLETE (2026-06-13).** Gate: `SS_M10_CGRP=1`.
-- ✅ `SS_PROBE_68K=0x5000ed08` fires — confirmed match=1/5, clean run.
-- ✅ Harness 353/353.
+**M11a frame-PC stability — COMPLETE (2026-06-13).** No code change.
+**M11 Framebuffer aperture + OF node + SDL blit — COMPLETE (2026-06-13).** Gate: `SS_M11_FB=1`.
+- 16 MB aperture at 0x81000000 (`vm_mac_acquire_fixed`), SDL `the_buffer` → aperture.
+- OF display node published (640×480×32, "cofb"). MMIO hull unchanged (T-F6 green).
+- `[FB-DIRTY] non_zero_pixels=0` expected (NW diagnostic boot exits at 0.3s before pixels).
+- Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md`. Harness 353/353.
 
-**M11a frame-PC stability — COMPLETE (2026-06-13, same session).** No code change.
-- Static RE confirmed: r24 at STUB entry is always the interrupted 68k PC (never clobbered
-  by NK on the CGRP→RFI delivery path). `mr r12, r24` is correct.
-- Acceptance: 3/3 × 90s slot runs, probe fires, no SIGSEGV.
-- See LEARNINGS 2026-06-13 "M11a" for the full RE chain.
+**Tooling added (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress
+snapshot. Boots all-on cluster, emits `[NW-PROG verdict]`. Report-only by default.
+**CRITICAL CAVEAT:** All-on boot is ~50/50 non-deterministic. A post-EXT SIGSEGV is NOT
+a regression — it's the known frontier wall. Classify by durable markers (`[DR68K] first
+instruction`, `EXT delivered #1`), not SIGSEGV presence. Full rationale: LEARNINGS
+2026-06-13 "NW frontier boot is non-deterministic".
 
-**Next task: M11 framebuffer.** Recon in `docs/planning/machine/FRAMEBUFFER-RECON.md`.
-Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md` (write pending).
+**Next: M12** — get Mac OS to write pixels to the aperture (display driver init path).
 
 ## Boot recipes
 

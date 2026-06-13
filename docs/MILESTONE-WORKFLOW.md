@@ -177,6 +177,13 @@ before construction streams hit them).
   reachable on paravirtual; when every new line is structurally inside
   newworld/env gates, the inertness argument + the gated-off byte-identical A/B boot
   substitute (state which in the commit message). Doc-only commits: no gates.
+- **NewWorld observe line (report-only, never blocks)**: `cd SheepShaver && make
+  nw-northstar` boots the all-on cluster and prints a `[NW-PROG verdict]` — the single
+  "how far did the NewWorld boot get?" signal. Run it at task close on any milestone
+  that touches the newworld path; quote the verdict line in the close-out. It is an
+  **observe** line, NOT a failing gate (the boot is non-deterministic — a bare SIGSEGV
+  is not a regression; the verdict already classifies by durable markers). A
+  `REGRESSED(...)` verdict means a real below-frontier break — investigate before commit.
 
 The flat "full set on every commit" of the first sessions was correct for trust-building
 and is still available on demand; the tiers preserve the authoritative gates at task
@@ -213,6 +220,27 @@ the post-mortem's token accounting:
   exit-status-bearing). **Agents stop reading full gate/log output** — the raw
   logs stay on disk (gate tmpdir, slot rundir) and are read only when a verdict
   is FAIL and the printed tail isn't enough.
+
+## 6c. Process-health signals (added 2026-06-13)
+
+Two cheap signals that watch the process itself — both matter more now that
+implementation dispatches run on a cheaper model tier (§6b), since a weaker tier
+degrades *subtle RE* (disassembly judgement, "is this slot dead?") far more than
+mechanical plumbing — exactly where the historical falsifications cluster.
+
+- **Falsification tally in the close-out.** Each milestone close-out states one line:
+  `FALSIFICATIONS: <n> (re-pins <n>); tasks: <which>; tier: <strong|cheap>`. The
+  one-iteration rule (§2) already forces a dated addendum per falsified contract — this
+  just sums them. Watch the trend, *especially the tier column*: a rising count on
+  cheap-tier recon/RE tasks is the leading indicator that the cheap tier has crept into
+  subtle-RE territory (re-tier those task classes back to strong). Append each milestone's
+  line to a running list in `LEARNINGS.md`.
+- **QEMU oracle before static RE.** When a Task-0 question is "what does a working boot
+  do at address/stage X?", run the QEMU rig (`tools/qemu-rig.sh`; `info qtree`/`info
+  mtree` for device-tree/wiring/NVRAM, `x`/`--disasm` for behavior) BEFORE static RE —
+  it answers by observation in seconds. Tag findings `[QEMU-BEHAVIORAL]`. **Load-bearing
+  caveat: never cite a QEMU MMIO address as a reference value** (QEMU MacIO is at
+  `0x80000000`, ours at `0xF3000000`) — topology/wiring/behavior only, not addresses.
 
 ## 7. Why this works (the evidence)
 

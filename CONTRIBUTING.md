@@ -102,6 +102,7 @@ checklists below say *which* gates a given change touches; this table is the men
 | **E2E smoke (live)** | `make e2e` (`SheepShaver/`) | System-level: boot ISO → shutdown → clean exit. Needs a GUI session + assets (isolated config) | System-level changes (boot, shutdown, prefs) | `SheepShaver/e2e/README.md` |
 | **Microbench** | `make bench` (`SheepShaver/rom-harness/`) | ns/insn for codegen kernels — boot-free A/B (`--save-baseline` / `--compare`) | Codegen perf changes | See **Benchmarking** below; `SheepShaver/rom-harness/README.md` |
 | **ROM harness** | `make test-rom` (`SheepShaver/`) | Standalone headless JIT exerciser against a real OldWorld ROM | Broad JIT coverage check | `SheepShaver/rom-harness/README.md` |
+| **NewWorld boot-progress** | `make nw-northstar` (`SheepShaver/`) | All-on NewWorld boot → `[NW-PROG verdict]`. The integration signal: catches an earlier machine-layer milestone being regressed by a later one. **Report-only** (observe, not gate); boot is non-deterministic so a bare SIGSEGV ≠ regression | At task close on any newworld-path change | `SheepShaver/docs/DIAGNOSTICS.md` "[NW-PROG] readout" |
 
 Run the SheepShaver gates from `SheepShaver/` — the repo-root `make test` / `make test-jit`
 target the **BasiliskII** harness (which doesn't build on macOS arm64 today).
@@ -224,6 +225,7 @@ sweep date in the commit message so the next trigger is checkable via `git log`.
 2. **Update references before moving.** Broken paths in CLAUDE.md and AGENT-CONTEXT.md misdirect every future agent session — fix them atomically with the moves.
 3. **Extract before archiving.** If a doc is referenced many times, extract the still-active pickup recipe into HANDOFF.md or AGENT-CONTEXT.md first, then archive and update refs.
 4. **Slim the survivors.** Target sizes: HANDOFF.md ≤80 lines, ROADMAP.md ≤300, AGENT-CONTEXT.md ≤200, LEARNINGS.md ≤400. Don't trim content that prevents re-deriving an expensive lesson.
+   - **Load-bearing caveats and LEARNINGS entries are append-only (rule earned 2026-06-13).** A slim pass may **relocate or reword** an instrument caveat (anything the docs mark "load-bearing") or a LEARNINGS lesson, but may **not delete one** without citing the LEARNINGS incident that retired it — mirror the "relocate, never delete" rule for status narratives (§ above). This guards against a cheaper-tier slim pass silently trimming a caveat that earned its place by an expensive mistake (session-5 retraction, the 0x40-vs-0x10 typo). When in doubt, keep it.
 5. **Delete true zero-reference files** (auto-generated reports, one-off spike notes) rather than archiving them — they have no reference value even in the archive.
 
 **Archive banner** (prepend to every archived file):

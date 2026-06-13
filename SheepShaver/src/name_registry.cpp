@@ -370,6 +370,42 @@ void DoPatchNameRegistry(void)
 			Host2Mac_memcpy(the_video_driver.addr(), video_driver, sizeof(video_driver));
 			RegistryPropertyCreate(video.addr(), "driver,AAPL,MacOS,PowerPC", the_video_driver.addr(), sizeof(video_driver));
 			RegistryPropertyCreateStr(video.addr(), "model", "SheepShaver Video");
+
+			// M11 (SS_M11_FB): publish the five OF display-node harvest properties
+			// that the Trampoline reads via the "screen" alias.  Values from T-F1
+			// (QEMU mac99 display node, 2026-06-13).  `compatible = "cofb"` lets a
+			// future display ndrv match this node (M12 territory; don't add
+			// driver,AAPL,MacOS,PowerPC here — that blocks OS overlay).
+			if (ss_m11_fb) {
+				struct { uint32 address; uint16 width, height, linebytes, depth; } fb_props;
+				fb_props.address   = fb_aperture_base;   // 0x81000000
+				fb_props.width     = 640;
+				fb_props.height    = 480;
+				fb_props.linebytes = 640 * 4;            // 32bpp XRGB
+				fb_props.depth     = 32;
+				SheepVar32 addr_prop; addr_prop.set_value(fb_props.address);
+				RegistryPropertyCreate(video.addr(), "address",   addr_prop.addr(), 4);
+				SheepVar32 w_prop;  w_prop.set_value(fb_props.width);
+				RegistryPropertyCreate(video.addr(), "width",     w_prop.addr(),    4);
+				SheepVar32 h_prop;  h_prop.set_value(fb_props.height);
+				RegistryPropertyCreate(video.addr(), "height",    h_prop.addr(),    4);
+				SheepVar32 lb_prop; lb_prop.set_value(fb_props.linebytes);
+				RegistryPropertyCreate(video.addr(), "linebytes", lb_prop.addr(),   4);
+				SheepVar32 d_prop;  d_prop.set_value(fb_props.depth);
+				RegistryPropertyCreate(video.addr(), "depth",     d_prop.addr(),    4);
+				RegistryPropertyCreateStr(video.addr(), "compatible", "cofb");
+				fprintf(stderr, "[M11-FB] name registry: video node address=0x%08x 640x480x32\n",
+				        fb_aperture_base);
+			}
+		}
+
+		// M11: "screen" alias → "Devices:device-tree:video" so OF finddevice("screen")
+		// resolves to the video node.
+		if (ss_m11_fb) {
+			SheepRegEntryID screen_alias;
+			if (!RegistryCStrEntryCreate(device_tree.addr(), "aliases", screen_alias.addr()))
+				RegistryPropertyCreateStr(screen_alias.addr(), "screen",
+				                          "Devices:device-tree:video");
 		}
 
 		// Create "ethernet"

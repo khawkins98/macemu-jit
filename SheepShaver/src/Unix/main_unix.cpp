@@ -1964,20 +1964,31 @@ int main(int argc, char **argv)
 	// M11: framebuffer aperture — 16 MB fixed guest RAM at 0x81000000 (Core99 PCI
 	// video base, confirmed by QEMU mac99 display node T-F1 probe 2026-06-13).
 	// NewWorld profile only; gate SS_M11_FB=1 (default OFF).
+	//
+	// Loud mode (SS_M11_FB_LOUD=1): skip vm_mac_acquire_fixed so the aperture
+	// stays unmapped.  Guest accesses then fault into the MMIO_TRAPPED loud-stub
+	// (registered in the MachineUsesMMIOBus block below) which logs [FB-TOUCH].
+	// Quiet mode (SS_M11_FB alone): real RAM mapped here; SDL reads fb_host_ptr.
 	{
 		const char *env = getenv("SS_M11_FB");
 		if (env && env[0] && env[0] != '0' && MachineProfileIsNewWorld()) {
 			ss_m11_fb = true;
 			fb_aperture_base = 0x81000000;
-			const uint32 fb_aperture_size = 16 * 1024 * 1024;
-			if (vm_mac_acquire_fixed(fb_aperture_base, fb_aperture_size) < 0) {
-				fprintf(stderr, "[M11-FB] FATAL: cannot map framebuffer aperture at 0x%08x (%s)\n",
-				        fb_aperture_base, strerror(errno));
-				goto quit;
+			const char *loud_env = getenv("SS_M11_FB_LOUD");
+			bool loud = loud_env && loud_env[0] && loud_env[0] != '0';
+			if (!loud) {
+				const uint32 fb_aperture_size = 16 * 1024 * 1024;
+				if (vm_mac_acquire_fixed(fb_aperture_base, fb_aperture_size) < 0) {
+					fprintf(stderr, "[M11-FB] FATAL: cannot map framebuffer aperture at 0x%08x (%s)\n",
+					        fb_aperture_base, strerror(errno));
+					goto quit;
+				}
+				fb_aperture_mapped = true;
+				fprintf(stderr, "[M11-FB] aperture mapped: guest 0x%08x + 0x%x (16 MB, quiet)\n",
+				        fb_aperture_base, fb_aperture_size);
+			} else {
+				fprintf(stderr, "[M11-FB] aperture NOT mapped (loud mode: faults -> [FB-TOUCH])\n");
 			}
-			fb_aperture_mapped = true;
-			fprintf(stderr, "[M11-FB] aperture mapped: guest 0x%08x + 0x%x (16 MB)\n",
-			        fb_aperture_base, fb_aperture_size);
 		}
 	}
 

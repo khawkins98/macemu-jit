@@ -7,7 +7,8 @@
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
 > Active work: M10 complete — `SS_PROBE_68K=0x5000ed08` fires (CGRP init + STUB delivery).
-> Next: M11 framebuffer OR fix M10 frame-PC stability (interrupted-PC non-determinism).
+> Next option A: M11a frame-PC stability — plan at `docs/planning/superpowers/plans/2026-06-13-m11-frame-pc-stability.md`.
+> Next option B: M11b framebuffer — recon at `docs/planning/machine/FRAMEBUFFER-RECON.md`.
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 

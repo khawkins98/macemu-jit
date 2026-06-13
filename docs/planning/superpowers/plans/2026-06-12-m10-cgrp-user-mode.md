@@ -1,8 +1,9 @@
 # M10 — User-mode DR + CGRP initialization → 68k interrupt handler fires
 
-> **Status: PLAN Rev 2 (post-red-team)** · Branch: `macos-arm64`
-> Red-team: PROCESS reviewer (APPROVE WITH AMENDMENTS) + TECHNICAL reviewer (REJECT → resolved).
-> Rev 2 folds all BLOCKING findings as BINDING amendments; ADVISORY items folded or noted.
+> **Status: PLAN Rev 3 (Task-0 addendum — major re-scope)** · Branch: `macos-arm64`
+> Rev 2: post-red-team (PROCESS + TECHNICAL). Rev 3: Task-0 boot findings.
+> **Task A (user_msr) ELIMINATED — EE-bit, not PR-bit, gates CGRP; EE=1 in 68k execution context.**
+> Only Task B (CGRP init) remains. See Task-0 addendum below.
 > Predecessor: M9 partial-complete (stall fixed, probe criterion deferred).
 > Acceptance: `SS_PROBE_68K=0x5000ed08:5` fires.
 
@@ -206,11 +207,53 @@ PC as a no-op), gate it in, capture what actually happens post-rfi, and file as 
 
 ---
 
-### Task 0 addendum (fill in during recon)
+### Task 0 addendum (2026-06-12)
 
-> *Results go here as dated sub-sections. Template:*
-> **[DATE] Q1 answer:** ...evidence... `[PROBE✓]` / `[STATIC]`
-> **Binding contract update:** ...
+**CRITICAL CORRECTION: The session-4 "PR-bit gate" analysis was wrong.**
+
+The NK EXT handler check at 0x50314884 is:
+```
+rlwinm. r9, r11, 0, 0x10, 0x10  → mask = 2^(31-16) = 0x8000 = EE bit (not PR bit)
+```
+Session 4 called this "PR bit" but it's bit 16 = EE (External Interrupt Enable). With the M7 cluster
+active (SS_NW_EE_RISER = default-ON), the DR emulator runs with EE=1. Boot probe Q5:
+`[EXC] EXT delivered #1: restart=50494370 srr1=00009040 msr=00001000 -> entry=50314880`
+`0x9040 & 0x8000 = 0x8000` → check PASSES → CGRP path IS reachable today, no user_msr needed.
+
+**Q1 answer (2026-06-12):** `SS_M6A_USER_MSR=1 SS_NW_MM_SWITCH=0` boots without crash.
+`[EXC] EXT delivered #1: restart=5046e244 srr1=0000d032 msr=00001000 -> entry=50314880`
+R-2 residue resolved (tm_task patch fix `2ff7765f` eliminated the slide). No SIGSEGV.
+PROGRESS: `dec_expiries=25 irq_fired=0` (25s boot, low activity due to MM_SWITCH=0).
+**Binding contract: Task A (user_msr) is ELIMINATED. EE check passes without it.** `[PROBE✓]`
+
+**Q2 answer (2026-06-12):** ROM dump audit 0x429c00–0x429e00: ALL ZERO (512B available).
+Combined footprint (user_msr extension + CGRP data) = ~140B ≪ 512B. Safe. `[STATIC]`
+**Binding contract: CGRP data can be placed starting at 0x429da0 without collision.**
+
+**Q3 answer (2026-06-12):** `[STATIC]` from DR emulator mirror (ROM offset 0x36E964).
+DR dispatch warm-entry: `0x5046e9d8` (`lha r27, 0(r24)` — main fetch loop).
+Registers surviving NK context save: r24 (68k PC), r29 (dispatch table 0x50480000),
+r30 (mirror 0x50460000), r31 (ECB 0x68fff000) — NK save only saves r0, r6-r13.
+RFI_target minimal stub (3 words at 0x50429da0):
+```
+0x3F005000  // lis  r24, 0x5000         → r24 = 0x5000xxxx
+0x6318ED08  // ori  r24, r24, 0xed08    → r24 = 0x5000ed08 (68k interrupt handler)
+0x480?????  // b    0x5046e9d8          → DR dispatch warm-entry (compute offset at write time)
+```
+**Binding contract: RFI_target = trampoline stub at 0x50429da0; r29 survives intact.**
+
+**Q3a answer (2026-06-12):** Warm-entry = `0x5046e9d8`. Confirmed from ROM mirror disassembly.
+Cold-start (0x5046e964) zeroes all 68k registers — don't use it. `[STATIC]`
+
+**Q5 answer (2026-06-12):** r19 (SRR1 for rfi) derived from `[r1-0x964]` where r1=KDP.
+The NK context save writes SRR1 to KDP+4 (`mfspr r6, SPRG1; stw r6, 4(r1)` at 0x50313d4c).
+The delivery function at 0x5031499c reads from `r1-0x964` — a different KDP-relative location.
+From boot log: EXT fires with srr1=0x9040. The masked r19 will be 0x9040 with some bits cleared
+by `rlwinm r19, r19, 0, 0x12, 0xf`. The result passes to SRR1 for the rfi — the interrupt
+handler at 0x5000ed08 will receive a kernel-mode MSR (PR=0, EE=0 after NK delivery masking).
+This is acceptable for M10 (first fire test); MSR semantics are M11+ work. `[PROBE✓]`
+
+**Summary: Task A DROPPED. Task B is the only implementation task. Gate unchanged.**
 
 ---
 

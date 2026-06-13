@@ -1274,6 +1274,67 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		// shims (no SS_EXC_BARE gate: two register writes, no guest memory).
 		sprg_reg(1) = gpr(1);
 		sprg_reg(2) = lr();
+		// M10: re-sync CGRP+0x4c = *(KDP-0x1c) before entry so the NK delivery
+		// function's beq at 0x5031496c is taken (the NK updates *(KDP-0x1c)
+		// after cold-init, so it may diverge from what we set at first DR dispatch).
+		if (getenv("SS_M10_CGRP") && strcmp(getenv("SS_M10_CGRP"), "0") != 0) {
+			uint32_t kdp = sprg_reg(0);
+			if (kdp) {
+				uint32_t cgrp_base = ReadMacInt32(kdp - 0x338);
+				if (cgrp_base) {
+					// Re-sync CGRP+0x4c = *(KDP-0x1c) (NK updates it after cold-init).
+					uint32_t kdp_m1c = ReadMacInt32(kdp - 0x1c);
+					WriteMacInt32(cgrp_base + 0x4c, kdp_m1c);
+					// Re-write CGRP structural fields + TABLE + DESC + STUB each time.
+					// NK cold-init AND periodic NK operation overwrites CGRP+0x3c (TABLE_BASE)
+					// back to the ROM address; must unconditionally restore to RAM address.
+					// Layout: TABLE(40B)+STACK(40B)+DESC(8B)+STUB(56B) at 0x68ffc210.
+					const uint32_t TABLE_BASE_EXT = 0x68ffc210u;
+					const uint32_t STUB_ADDR_EXT  = 0x68ffc268u;
+					WriteMacInt32(cgrp_base + 0x3c, TABLE_BASE_EXT);  // TABLE_BASE restored
+					WriteMacInt32(cgrp_base + 0x40, 0x68ffc238u);     // STACK_TABLE restored
+					WriteMacInt32(cgrp_base + 0x44, 10);              // count
+					{
+						uint32_t table_base = TABLE_BASE_EXT;
+						uint32_t desc_addr = table_base + 80;  // after TABLE(40B) + STACK(40B)
+						for (int i = 0; i < 10; i++)
+							WriteMacInt32(table_base + i*4, desc_addr);
+						WriteMacInt32(desc_addr,     STUB_ADDR_EXT);
+						WriteMacInt32(desc_addr + 4, 0);
+						// Restore STUB code (16 words; A7 guard + exception frame push + CTR branch).
+						// r5  = scratch (holds old A7 from KDP+4).
+						// r12 = scratch (holds interrupted PC from live r24 — DR's 68k PC reg).
+						// r1  = new 68k A7 (old_A7 - 6).
+						// A7 guard: if KDP+4 < 32KB, return to NK (68k stack not ready).
+						//
+						// r24 at STUB entry = the DR emulator's 68k PC at interrupt time (NK
+						// saves/restores all GPRs including r24 across the exception delivery).
+						// Reading from r16+0x1c4 is UNRELIABLE — different NK context blocks
+						// have garbage there. Use live r24 instead.
+						//
+						// Exception frame layout at (old_A7 - 6):
+						//   +0: SR = 0 (16-bit, big-endian)
+						//   +2: PC = interrupted 68k PC (32-bit, big-endian)
+						WriteMacInt32(STUB_ADDR_EXT,      0x3CA06900u);  // lis    r5, 0x6900
+						WriteMacInt32(STUB_ADDR_EXT +  4, 0x80A5E004u);  // lwz    r5, -0x1ffc(r5) → *(0x68FFE004)=KDP+4=A7
+						WriteMacInt32(STUB_ADDR_EXT +  8, 0x28058000u);  // cmplwi r5, 0x8000
+						WriteMacInt32(STUB_ADDR_EXT + 12, 0x4D800020u);  // bltlr  (A7<32KB → return to NK)
+						WriteMacInt32(STUB_ADDR_EXT + 16, 0x7F0CC378u);  // mr     r12, r24  → r12 = interrupted 68k PC
+						WriteMacInt32(STUB_ADDR_EXT + 20, 0x3825FFFAu);  // addi   r1, r5, -6  → r1 = old_A7-6 (new A7)
+						WriteMacInt32(STUB_ADDR_EXT + 24, 0x91810002u);  // stw    r12, 2(r1) → frame PC at r1+2
+						WriteMacInt32(STUB_ADDR_EXT + 28, 0x39800000u);  // li     r12, 0 (SR=0)
+						WriteMacInt32(STUB_ADDR_EXT + 32, 0xB1810000u);  // sth    r12, 0(r1) → frame SR=0 at r1+0
+						WriteMacInt32(STUB_ADDR_EXT + 36, 0x3F005000u);  // lis    r24, 0x5000
+						WriteMacInt32(STUB_ADDR_EXT + 40, 0x6318ED08u);  // ori    r24, r24, 0xed08 → r24=0x5000ed08
+						WriteMacInt32(STUB_ADDR_EXT + 44, 0x931001C4u);  // stw    r24, 0x1c4(r16) → update context
+						WriteMacInt32(STUB_ADDR_EXT + 48, 0x3C005046u);  // lis    r0, 0x5046
+						WriteMacInt32(STUB_ADDR_EXT + 52, 0x6000E9D8u);  // ori    r0, r0, 0xe9d8  → DR_WARM
+						WriteMacInt32(STUB_ADDR_EXT + 56, 0x7C0903A6u);  // mtctr  r0
+						WriteMacInt32(STUB_ADDR_EXT + 60, 0x4E800420u);  // bctr
+					}
+				}
+			}
+		}
 		// SRR1.EE=1 mandatory (the NK EXT body's punch-through guard PANICS on
 		// EE=0): structurally guaranteed — the EE gate above admits only EE=1
 		// MSRs and ExcEnter keeps the low 16 bits (test_exc_chain pins it).

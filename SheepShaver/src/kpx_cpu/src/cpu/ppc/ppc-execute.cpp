@@ -149,7 +149,7 @@ extern "C" void ss_stub_trace_dump(void)
 void powerpc_cpu::execute_illegal(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
-	if (ss_stub_on()) {
+if (ss_stub_on()) {
 		uint32 primary = opcode >> 26;
 		if (primary == 31) ss_stub_ill31[ss_stub_phase][(opcode >> 1) & 0x3ff]++;
 		else ss_stub_ill_other[ss_stub_phase]++;
@@ -1764,7 +1764,7 @@ void powerpc_cpu::execute_rfi(uint32 opcode)
 		ExcRfi(regs().srr0, regs().srr1, old_msr, &new_pc, &new_msr);
 		regs().msr = new_msr;
 		pc()       = new_pc;
-		/* W2-0: edge predicate extracted to exc_core (ExcEdgeReRaise) —
+/* W2-0: edge predicate extracted to exc_core (ExcEdgeReRaise) —
 		 * behavior-identical to the inline old/new EE-bit composition. */
 		if (ss_vclk_active() &&
 		    ExcEdgeReRaise(old_msr, new_msr,   /* W2-3: + the level-held EXT source */

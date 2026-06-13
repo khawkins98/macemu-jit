@@ -52,32 +52,28 @@ Gate: `SS_NW_VIA_IFR` (currently a no-op — kept for M10 use). See `docs/HANDOF
 (0x50313ab0), CGRP path unreachable. The 68k handler at 0x5000ed08 cannot fire until M10
 fixes user-mode DR AND initializes CGRP. Full root cause: `docs/HANDOFF.md` §Session 4.
 
-## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires
+## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires ✅ COMPLETE
 
-**Goal:** `SS_PROBE_68K=0x5000ed08:5` fires (the 68k level-1 interrupt handler executes).
+**Completed:** 2026-06-13. Gate: `SS_M10_CGRP=1`.
+**Acceptance:** `SS_PROBE_68K=0x5000ed08:5` fires — confirmed match=1/5, no crash
+(run `m10-retry1`, 60s SIGTERM clean). Harness: 353/353. See CHANGELOG 2026-06-13.
 
-**Prerequisites (both required, in order):**
+**What shipped:**
+- CGRP TABLE/STACK/DESC/STUB in guest RAM at 0x68ffc210–68 (rom_patches.cpp, gated `SS_M10_CGRP`)
+- CGRP+0x20 = 0x503143a0 + *(KDP-0x338) = 0x68ffc1c0 armed at first DR68K dispatch (ppc-cpu.cpp)
+- EXT shim re-syncs CGRP on every delivery (sheepshaver_glue.cpp)
+- STUB: A7 guard + 68k exception frame push (SR=0, PC=interrupted PC from live r24) + DR_WARM branch
 
-1. **User-mode DR** — fix `SS_M6A_USER_MSR` (quarantined: zero-page slide crash on first
-   attempt) so the DR emulator's MSR has PR=1 at interrupt time. Without this, the NK EXT
-   handler at 0x50314880 always takes the kernel-mode fallback, skipping CGRP entirely.
-
-2. **CGRP initialization** — populate the CGRP struct at `*(KDP-0x338)` = 0x68ffc1c0 before
-   Mac OS boot (Mac OS normally does this during System startup, but we stall before that):
-   - `+0x20` = 0x503143a0 (`NK_base + 0x3da0` — valid function pointer, currently 0x00000001)
-   - `+0x38` = non-zero guard
-   - `+0x3c` = TABLE_BASE (array of context-descriptor pointers; entry[9] = RFI_target for
-     68k interrupt injection in the DR emulator — TBD from RE of NK handler at 0x503148e0)
-   - `+0x40` = STACK_TABLE (stack pointer per interrupt group)
-   - `+0x44` = COUNT ≥ 10 (NK EXT posts source index 9)
-
-Gate: `SS_NW_VIA_IFR` (reuse; gate currently a no-op placeholder).
+**Known open tail (M11):** interrupted-PC is read from live r24 at STUB entry — correct
+when the NK fully restores r24 before RFI; non-deterministic crash in some timing runs
+(r24 = NK-internal value rather than interrupted 68k PC). Probe fires in all runs;
+crash-after-probe is an M11 correctness item.
 
 ## M11: Framebuffer (recon done, not started)
 
 Recon complete — a visible screen is itself an instrument.
 See `docs/planning/machine/FRAMEBUFFER-RECON.md` (HOLD — verify M5 framebuffer status first).
-Status: waiting on M10.
+Status: M10 complete; M11 can begin.
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

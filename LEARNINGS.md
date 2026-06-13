@@ -5,6 +5,25 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-13 — M10 CGRP delivery: key findings
+
+**CGRP field layout confirmed** (9.0.1 ROM, KDP=0x68ffe000):
+- CGRP base: *(KDP-0x338) = 0x68ffc1c0
+- CGRP+0x20 = NK delivery function (0x503143a0); +0x38 = non-zero guard; +0x3c = TABLE_BASE
+- +0x40 = STACK_TABLE; +0x44 = count ≥ 10 (src_idx=9 for EXT); +0x4c = *(KDP-0x1c) (live-mirrored)
+- TABLE (40B) + STACK (40B) + DESC (8B) + STUB (64B) must be in guest RAM (NK re-syncs these from ROM tables between deliveries; must restore on every EXT call)
+
+**STUB register state at entry (NK CGRP RFI)**:
+- r1 = 2 (NK-internal value, NOT old_A7); must load A7 from KDP+4 (= *(0x68ffe004) = saved SPRG1)
+- r16 = *(KDP-0x14) at delivery time (context block; the NK may have nested further by STUB time)
+- r24 = interrupted 68k PC (when NK fully restores from saved state before CGRP RFI)
+
+**r16+0x1c4 is UNRELIABLE for frame PC**: different NK context blocks (r16 value varies by nesting level) have garbage at +0x1c4. `mr r12, r24` (live r24 at STUB) is the best available source for the interrupted PC without deep NK RE. Non-deterministic crash remains when NK modifies r24 before CGRP delivery RFI.
+
+**EXT fires only once in diagnostic boot**: The NW diagnostic config (9.0.1 ROM, nogui, newworld) generates 1 host-IRQ edge per 60s+ window. The 68k handler at 0x5000ed08 acknowledges the VIA interrupt; without full Mac OS 8.6 initialization (60Hz VIA reprogramming), no further EXT fires occur. "5 matches" in `SS_PROBE_68K=0x5000ed08:5` is the collection cap, not a requirement count — one match proves the criterion.
+
+**`mr r12, r24` encoding** (may-need-verify): `or r12, r24, r24` = 0x7F0CC378. Verify if ever suspecting a STUB encoding bug.
+
 ## AltiVec bottom line (⭐ read first)
 
 Real-app AltiVec WORKS end-to-end as of 2026-06-07. The AArch64 JIT always compiles

@@ -9,6 +9,36 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-13 (session 5 — M10 CGRP delivery)
+
+### [SheepShaver] M10 CGRP init + 68k EXT delivery: `SS_PROBE_68K=0x5000ed08` fires
+
+Implemented CGRP initialization for NewWorld NK interrupt delivery to the 68k level-1
+handler. Gate: `SS_M10_CGRP=1`. Acceptance: `SS_PROBE_68K=0x5000ed08:5` fires — confirmed
+match=1/5, no crash, clean SIGTERM at 60s (run `m10-retry1`).
+
+Key design decisions:
+
+- CGRP TABLE (40B) + STACK (40B) + DESC (8B) + STUB (64B) in guest RAM at 0x68ffc210–68.
+  *(KDP-0x338) and CGRP+0x20 are armed at first DR68K dispatch in ppc-cpu.cpp.
+- EXT shim in `sheepshaver_glue.cpp` re-syncs CGRP on every EXT delivery (NK overwrites
+  TABLE_BASE between deliveries).
+- STUB (16 words at 0x68ffc268):
+  1. Load old_A7 from KDP+4; guard bltlr if A7 < 32KB (68k stack not initialized)
+  2. `mr r12, r24` — save live r24 (interrupted 68k PC, NK-restored at CGRP RFI time)
+  3. Push 6-byte 68k exception frame: SR=0 at r1+0, PC=r12 at r1+2 (r1 = old_A7-6)
+  4. Set r24=0x5000ed08, update r16+0x1c4, branch to DR_WARM via CTR
+- Rationale for `mr r12, r24`: r16+0x1c4 is unreliable — different NK context blocks
+  (r16 varies by nesting level) have garbage there. Live r24 at STUB entry is the
+  NK-restored interrupted DR PC, correct when the NK fully restores register state.
+- Removed all M10-debug fprintf stubs (M10-RFI, M10-EXT-DELIVERY, M10-EXT-KDP,
+  M10-CGRP, M10-ILLEGAL-RFI).
+
+Known limitation (M11): `mr r12, r24` is correct when the NK fully restores r24 before
+RFI to STUB. Non-deterministic crash can occur if r24 at STUB entry is not the
+interrupted 68k PC (NK may modify r24 during CGRP delivery setup in some timing
+scenarios). The probe fires in all tested runs; the crash-after-probe is an M11 item.
+
 ## 2026-06-12 (session 4 — VIA-IFR baseline fix)
 
 ### [SheepShaver] M9 VIA-IFR: fix baseline regression + correct shadow address

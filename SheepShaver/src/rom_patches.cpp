@@ -3983,33 +3983,139 @@ static bool patch_68k(void)
 	// symptom; removing the patch restores dec_expiries to baseline levels.
 	//
 	// M9 finding (session-4 probe campaign): the 68k handler at 0x5000ed08 does NOT
-	// fire in the current boot, even in baseline.  Root cause chain:
-	//   1. NK EXT handler (0x50314880) checks r11.bit16 (PR = user-mode bit).
-	//      In our boot the DR emulator runs in kernel mode (SS_M6A_USER_MSR=0),
-	//      so r11.bit16=0 → EXT always takes the fallback (0x50314660), never reaches
-	//      the CGRP delivery path.
+	// fire in the current boot, even in baseline.  Root cause chain (CORRECTED M10):
+	//   1. NK EXT handler (0x50314880) checks r11.bit16 = EE bit (0x8000 mask), NOT PR.
+	//      With M7 EE_RISER active, EE=1 during 68k execution → CGRP path IS reachable.
+	//      (Session-4 PR-bit analysis was incorrect; Task A / SS_M6A_USER_MSR not needed.)
 	//   2. CGRP+0x20 = 1 (a function pointer, never initialized by NK cold-start to a
-	//      valid address) — even if the PR check passed, CGRP delivery would bail.
+	//      valid address) — CGRP delivery bails immediately.  This is the sole blocker.
 	//
-	// SS_NW_VIA_IFR=1 is now a no-op (gate kept for future use).
+	// SS_NW_VIA_IFR=1 is now a no-op (gate kept; SS_M10_CGRP=1 is the M10 gate).
 	//
-	// M10 prerequisites: (a) fix SS_M6A_USER_MSR or provide an equivalent user-mode
-	// path for the DR emulator so PR=1 at EXT time; (b) initialize CGRP+0x20/+0x38/
-	// +0x3c/+0x40/+0x44 with valid NK function pointers and descriptor tables so the
-	// NK can route the EE interrupt to the 68k handler at 0x5000ed08.
-	//
-	// Analysis: docs/archive/2026-06/machine/VIA-IFR-RECON.md; docs/HANDOFF.md §Session 4.
+	// Analysis: docs/archive/2026-06/machine/VIA-IFR-RECON.md; docs/HANDOFF.md §Session 4+5.
 	if (ROMType == ROMTYPE_NEWWORLD && getenv("SS_NW_VIA_IFR") &&
 	    strcmp(getenv("SS_NW_VIA_IFR"), "0") != 0) {
 		fprintf(stderr,
 		        "[VIA-IFR] SS_NW_VIA_IFR=1 — gate is currently a NO-OP.\n"
-		        "[VIA-IFR]   What it does: nothing (no ROM patch applied).\n"
-		        "[VIA-IFR]   Why: the previous ROM patch at 0x5000ed08 caused a\n"
-		        "[VIA-IFR]   dec_expiries=5 stall by corrupting bytes the NK reads\n"
-		        "[VIA-IFR]   as data during boot.  Patch removed; gate kept for M10.\n"
-		        "[VIA-IFR]   The 68k interrupt handler does NOT fire in any current\n"
-		        "[VIA-IFR]   boot: NK EXT handler requires PR=1 (user-mode) + valid\n"
-		        "[VIA-IFR]   CGRP — neither is true yet.  See: docs/HANDOFF.md §S4.\n");
+		        "[VIA-IFR]   M10 gate is SS_M10_CGRP=1 (CGRP initialization).\n"
+		        "[VIA-IFR]   See: docs/HANDOFF.md §Session 4+5.\n");
+	}
+
+	// SS_M10_CGRP: M10 gate — CGRP initialization for 68k interrupt delivery.
+	//
+	// The NK EXT handler (0x50314880) routes timer interrupts to the 68k via a CGRP
+	// struct at *(KDP-0x338) = 0x68ffc1c0.  Mac OS normally initializes CGRP during
+	// System startup, but we stall before that point.  This patch:
+	//   1. Writes a 3-instruction RFI_target stub into trampoline space (0x429da0):
+	//        lis  r24, 0x5000
+	//        ori  r24, r24, 0xed08    → r24 = 0x5000ed08 (68k handler PC)
+	//        b    0x5046e9d8          → DR warm-entry (resumes 68k dispatch from r24)
+	//   2. Builds a TABLE_BASE array (10 entries) and a descriptor struct pointing to
+	//      the stub; entry[9] is used (NK EXT posts source_index=9 for timer).
+	//   3. Builds a STACK_TABLE (10 entries), each pointing to a sentinel word so
+	//      the NK's stack-switch leaves a breadcrumb but the DR ignores it.
+	//   4. Writes five CGRP fields via WriteMacInt32 into guest RAM.
+	//
+	// Layout in trampoline space (all zero before this patch):
+	//   0x50429da0  NW-DR-R0 writes its 3-word r0-invariant stub here (in PatchROM,
+	//               AFTER patch_68k returns).  Do NOT use this address.
+	//   0x50429dac  TABLE_BASE array   (10 words = 40 bytes)
+	//   0x50429dd4  STACK_TABLE array  (10 words = 40 bytes)
+	//   0x50429dfc  descriptor struct  (2 words:  {RFI_target, 0})
+	//   0x50429e04  sentinel stack     (1 word)
+	//   0x50429e08  RFI_target stub    (3 words = 12 bytes) — safely past NW-DR-R0
+	//
+	// Gate: SS_M10_CGRP=1 (default OFF).
+	// Acceptance: SS_PROBE_68K=0x5000ed08:5 fires within 30s of boot.
+	// Analysis: docs/planning/superpowers/plans/2026-06-12-m10-cgrp-user-mode.md §Task-0.
+	if (ROMType == ROMTYPE_NEWWORLD && getenv("SS_M10_CGRP") &&
+	    strcmp(getenv("SS_M10_CGRP"), "0") != 0) {
+
+		// All structures in guest RAM (CGRP inline extension).
+		// NK cold-init zeroes these; the EXT shim restores them before each delivery.
+		// Inline layout (CGRP base = 0x68ffc1c0):
+		//   CGRP+0x50 = 0x68ffc210  TABLE_BASE  (10 × 4 = 40 bytes)
+		//   CGRP+0x78 = 0x68ffc238  STACK_TABLE (10 × 4 = 40 bytes)
+		//   CGRP+0xa0 = 0x68ffc260  descriptor  (2 × 4 =  8 bytes)
+		//   CGRP+0xa8 = 0x68ffc268  RFI_target STUB (13 words, indirect CTR branch)
+		//
+		// STUB uses `lis/ori r0,DR_WARM; mtctr; bctr` to avoid the ±32MB
+		// direct-branch limit from RAM (0x68ffc268) to DR (0x5046e9d8, ~413MB away).
+		//
+		// CGRP+0x20 NOT written here — deferred to first [DR68K] dispatch in
+		// probe68k_check() so NK cold-init completes before 68k regs are live.
+		const uint32 CGRP_BASE  = 0x68ffc1c0;
+		const uint32 TABLE_ADDR = CGRP_BASE + 0x50;  // 0x68ffc210
+		const uint32 STACK_ADDR = CGRP_BASE + 0x78;  // 0x68ffc238
+		const uint32 DESC_ADDR  = CGRP_BASE + 0xa0;  // 0x68ffc260
+		const uint32 STUB_ADDR  = CGRP_BASE + 0xa8;  // 0x68ffc268
+		const uint32 DR_WARM    = 0x5046e9d8;
+
+		// 1. TABLE_BASE: 10 entries → DESC_ADDR.
+		const uint32 STACK_PLACEHOLDER = 0x17ffe000;
+		for (int i = 0; i < 10; i++)
+			WriteMacInt32(TABLE_ADDR + i*4, DESC_ADDR);
+
+		// 2. STACK_TABLE: placeholder (STUB overwrites r1 anyway).
+		for (int i = 0; i < 10; i++)
+			WriteMacInt32(STACK_ADDR + i*4, STACK_PLACEHOLDER);
+
+		// 3. Descriptor: {STUB_ADDR, 0}
+		WriteMacInt32(DESC_ADDR,     STUB_ADDR);
+		WriteMacInt32(DESC_ADDR + 4, 0);
+
+		// 4. Padding word at 0x429e04
+		WriteMacInt32(ROMBase + 0x429e04, 0);
+
+		// 5. RFI_target STUB at STUB_ADDR=0x68ffc268 (guest RAM, 16 words = 64 bytes):
+		//
+		//   After rfi, we are in PPC user mode.  r16 = context_block (set by the
+		//   delivery function at 0x503143a0; r6 = *(SPRG0-0x14)).
+		//   NK sets r1=2 (NK-internal value) on RFI, not the old 68k A7.
+		//
+		//   STUB: load old_A7 = KDP+4 (SPRG1 save = pre-interrupt r1 = 68k A7).
+		//   Guard: if A7 < 32KB, stack not yet initialized — return to NK.
+		//   Then: read interrupted PC from r16+0x1c4, push 6-byte 68k exception
+		//   frame on the 68k stack (SR=0, PC=interrupted_PC), update r16+0x1c4 to
+		//   the handler address, set r24=0x5000ed08 and r1=new_A7, then branch to
+		//   DR_WARM so the DR emulator picks up the handler with the frame in place.
+		//
+		//   r5  = scratch (old A7 / new A7 base)
+		//   r12 = scratch (interrupted PC from live r24 — DR's 68k PC register)
+		//   r1  = new 68k A7 (old_A7 - 6) — DR_WARM uses live r1 as 68k A7
+		//
+		//   r24 at STUB entry = interrupted 68k PC (NK saves/restores all GPRs
+		//   including r24 across the exception delivery).  Reading r16+0x1c4 is
+		//   UNRELIABLE — different NK context blocks have garbage there.
+		WriteMacInt32(STUB_ADDR,      0x3CA06900u);  // lis    r5, 0x6900
+		WriteMacInt32(STUB_ADDR +  4, 0x80A5E004u);  // lwz    r5, -0x1ffc(r5) → *(0x68FFE004)=KDP+4=A7
+		WriteMacInt32(STUB_ADDR +  8, 0x28058000u);  // cmplwi r5, 0x8000 (32KB threshold)
+		WriteMacInt32(STUB_ADDR + 12, 0x4D800020u);  // bltlr  (A7<32KB → return to NK)
+		WriteMacInt32(STUB_ADDR + 16, 0x7F0CC378u);  // mr     r12, r24  → r12 = interrupted 68k PC
+		WriteMacInt32(STUB_ADDR + 20, 0x3825FFFAu);  // addi   r1, r5, -6  → r1 = old_A7-6 (new A7)
+		WriteMacInt32(STUB_ADDR + 24, 0x91810002u);  // stw    r12, 2(r1) → frame PC at r1+2
+		WriteMacInt32(STUB_ADDR + 28, 0x39800000u);  // li     r12, 0 (SR=0)
+		WriteMacInt32(STUB_ADDR + 32, 0xB1810000u);  // sth    r12, 0(r1) → frame SR=0 at r1+0
+		WriteMacInt32(STUB_ADDR + 36, 0x3F005000u);  // lis    r24, 0x5000
+		WriteMacInt32(STUB_ADDR + 40, 0x6318ED08u);  // ori    r24, r24, 0xed08 → r24=0x5000ed08
+		WriteMacInt32(STUB_ADDR + 44, 0x931001C4u);  // stw    r24, 0x1c4(r16) → update context
+		WriteMacInt32(STUB_ADDR + 48, 0x3C005046u);  // lis    r0, 0x5046
+		WriteMacInt32(STUB_ADDR + 52, 0x6000E9D8u);  // ori    r0, r0, 0xe9d8  → DR_WARM
+		WriteMacInt32(STUB_ADDR + 56, 0x7C0903A6u);  // mtctr  r0
+		WriteMacInt32(STUB_ADDR + 60, 0x4E800420u);  // bctr
+
+		// 6. CGRP structural fields in guest RAM (inline extension at CGRP+0x38..+0x4c).
+		//    IMPORTANT: *(KDP-0x338) (the CGRP base pointer at 0x68ffdcc8) is
+		//    intentionally left as 0 here.  Both *(KDP-0x338) and CGRP+0x20 are
+		//    written together at first [DR68K] dispatch in ppc-cpu.cpp.
+		WriteMacInt32(CGRP_BASE + 0x38, 1);           // non-zero guard
+		WriteMacInt32(CGRP_BASE + 0x3c, TABLE_ADDR);  // TABLE_BASE ptr (0x68ffc210)
+		WriteMacInt32(CGRP_BASE + 0x40, STACK_ADDR);  // STACK_TABLE ptr (0x68ffc238)
+		WriteMacInt32(CGRP_BASE + 0x44, 10);          // count; src_idx 9 < 10
+		// +0x4c must equal *(SPRG0-0x1c) at delivery time.  Pre-fill with the
+		// value that works at NK cold-init; the EXT shim re-syncs before each delivery.
+		WriteMacInt32(CGRP_BASE + 0x4c, 0x68ffc0e0);
+
 	}
 
 	// Patch ZeroScrap() for clipboard exchange with host OS

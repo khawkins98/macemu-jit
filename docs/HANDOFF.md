@@ -1,22 +1,23 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-12** · Resume: read this doc, then `docs/AGENT-CONTEXT.md`.
+> **Status: PAUSED 2026-06-13** · Resume: read this doc, then `docs/AGENT-CONTEXT.md`.
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md`.
 
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M9 VIA-IFR — stall fixed (ROM patch removed); 68k handler delivery is M10 work
-> (needs user-mode DR + CGRP init; see §Session 4 findings below).
+> Active work: M10 complete — `SS_PROBE_68K=0x5000ed08` fires (CGRP init + STUB delivery).
+> Next: M11 framebuffer OR fix M10 frame-PC stability (interrupted-PC non-determinism).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
 ---
 
-## Current state (2026-06-12 end-of-session)
+## Current state (2026-06-13 end-of-session)
 
 - **M8** — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
 - **M9** — stall fixed (ROM patch removed); 68k handler delivery blocked by deeper issues (see §S4 findings).
+- **M10** — COMPLETE (2026-06-13). `SS_PROBE_68K=0x5000ed08` fires (match=1/5, clean run). Gate: `SS_M10_CGRP=1`. Open tail: frame-PC non-determinism (see LEARNINGS 2026-06-13 + CHANGELOG 2026-06-13).
 
 ### What shipped this session
 

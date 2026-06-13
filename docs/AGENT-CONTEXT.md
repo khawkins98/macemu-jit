@@ -4,18 +4,22 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-12, post-M9-partial)
+## Current frontier (2026-06-13, post-M10)
 
 **M8** — shipped gated-off-green (`SS_NW_IRQ_CONSUME`). Acceptance recipe: `SS_NW_PIC=1
 SS_NW_IRQ_CONSUME=1`. The 68k level-1 handler runs at 60 Hz under that cluster.
 
-**M9 VIA-IFR — PARTIALLY COMPLETE (2026-06-12 session 4).**
+**M9 VIA-IFR — PARTIALLY COMPLETE (2026-06-12 session 4).** ✅ Stall fixed; probe
+criterion deferred to M10.
 
-- ✅ Stall fixed: the ROM patch at 0x5000ed08 (`OP_IRQ_NW+rte`) was corrupting bytes the
-  NK reads as DATA during boot (pattern scan), causing `dec_expiries=5`. Patch removed.
-  `SS_NW_VIA_IFR=1` is now a **no-op**. Baseline: `dec_expiries≈1577, irq_fired≈376`.
-- ✅ Harness 353/353 unchanged.
-- ❌ `SS_PROBE_68K=0x5000ed08` never fires — the 68k handler is structurally unreachable.
+**M10 CGRP init + 68k EXT delivery — COMPLETE (2026-06-13).** Gate: `SS_M10_CGRP=1`.
+- ✅ `SS_PROBE_68K=0x5000ed08` fires — confirmed match=1/5, clean run (60s SIGTERM).
+- ✅ Harness 353/353.
+- ⚠️ Frame-PC non-determinism: interrupted-PC read from live r24 at STUB entry; some timing
+  runs crash after probe fires. M11 correctness item.
+
+**Next task: M11 framebuffer** (recon complete in `docs/planning/machine/FRAMEBUFFER-RECON.md`).
+Or: fix M10 frame-PC stability (find where NK saves r24 at EXT exception time).
 
 **Root cause chain for 68k handler never firing:**
 

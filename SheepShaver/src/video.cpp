@@ -163,6 +163,8 @@ static int16 VideoOpen(uint32 pb, VidLocals *csSave)
 
 	// Set up VidLocals
 	csSave->saveBaseAddr = screen_base;
+	fprintf(stderr, "[M12-VIDEO] VideoOpen: saveBaseAddr=0x%08x (screen_base)\n",
+	        (unsigned)screen_base);
 	csSave->saveData = VModes[cur_mode].viAppleID;// First mode ...
 	csSave->saveMode = VModes[cur_mode].viAppleMode;
 	csSave->savePage = 0;

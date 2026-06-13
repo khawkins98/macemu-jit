@@ -1009,8 +1009,10 @@ static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
 	if (addr >= KERNEL_DATA2_BASE && end <= KERNEL_DATA2_BASE + KERNEL_AREA_SIZE) return true;
 	// New World Trampoline regions
 	if (MachineProfileIsNewWorld()) {
-		// Wave 0: extended Low Memory (0x0-0x100000) — NK low-physical descriptors
-		if (addr < 0x100000 && end <= 0x100000) return true;
+		// Wave 0: extended Low Memory (0x0-0x2000000) — NK low-physical descriptors
+		// + 68k VM Manager VMVectors struct (placed at ~0x01002080 by Mac OS init,
+		// above the original 1MB window; 32MB covers the full 68k System Heap range).
+		if (addr < 0x2000000 && end <= 0x2000000) return true;
 		const uint32_t kdp = KernelDataAddr;
 		const uint32_t sub_kdp_size = 0x8000;
 		const uint32_t shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64
@@ -1925,7 +1927,11 @@ int main(int argc, char **argv)
 		// of DRAM. Paravirtual keeps the historical 0x3000 (ignoresegv ate these
 		// accesses there; mapping them would change behavior). Single acquire:
 		// page-aligned start, page-size-agnostic, no Mach overlap hazard.
-		const uint32 lowmem_size = MachineProfileIsNewWorld() ? 0x100000 : 0x3000;
+		// M12: extend NW lowmem from 1MB to 32MB to cover the 68k VM Manager VMVectors
+		// struct (placed at ~0x01002080 by Mac OS init; deref of [0xcf0]+0x48 crashes
+		// with ea=0x010020c8 when the range is unmapped).  32MB stays well below
+		// RAMBase (which vm_mac_acquire places at 0x2000000+ on this path).
+		const uint32 lowmem_size = MachineProfileIsNewWorld() ? 0x2000000 : 0x3000;
 		if (vm_mac_acquire_fixed(0, lowmem_size) < 0) {
 			sprintf(str, GetString(STR_LOW_MEM_MMAP_ERR), strerror(errno));
 			ErrorAlert(str);
@@ -1933,7 +1939,7 @@ int main(int argc, char **argv)
 		}
 		lm_area_mapped = true;
 		if (MachineProfileIsNewWorld())
-			fprintf(stderr, "[WAVE0] low memory extended to 0x0-0x100000 (NK low-physical descriptors)\n");
+			fprintf(stderr, "[WAVE0] low memory extended to 0x0-0x2000000 (NK descriptors + 68k heap)\n");
 #endif
 #if REAL_ADDRESSING
 		// Allocate RAM at any address. Since ROM must be higher than RAM, allocate the RAM

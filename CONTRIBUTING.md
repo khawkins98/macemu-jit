@@ -14,6 +14,8 @@ works on macOS arm64 today:
   `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`.
 
 Current pass/fail and boot status lives in `JIT-STATUS.md`; what's next lives in `docs/planning/ROADMAP.md`.
+**Resuming a prior session? `docs/HANDOFF.md` is the entry point** — its `▶ RIGHT NOW` box gives aim /
+state / next action in one screen; follow the resume chain from there (see *Documentation Lifecycle §0b*).
 To build and run SheepShaver, follow the **Build** section in `README.md` (autogen → configure → `make build`).
 The rest of this guide is *how to work here* — gates, conventions, and where the deep docs are.
 
@@ -209,7 +211,44 @@ Method: one read-only sweep agent (or session) checks each row, fixes current-st
 drift in docs only (dated historical sections stay), and commits per-group. Record the
 sweep date in the commit message so the next trigger is checkable via `git log`.
 
+### 0b. Handoff discipline — the resume chain (rules earned 2026-06-14)
 
+A new session starts cold: the agent has **no memory of the last session and the
+in-session TaskList does NOT persist.** The only state that survives is git-committed
+docs. So the handoff is a *contract*, and these rules keep it followable.
+
+**The resume chain (the fixed read order a fresh agent follows).** Keep all of these
+mutually consistent — a fresh agent reads them top to bottom and must arrive at one
+unambiguous next action:
+1. `docs/HANDOFF.md` — the resume entry point.
+2. `docs/AGENT-CONTEXT.md` — standing facts/constants/frontier.
+3. `docs/planning/ROADMAP.md` header + the active charter/plan's status section.
+4. The active **program/plan's STATUS table** — the per-stage done-vs-todo board.
+5. The findings/evidence docs the next action depends on.
+
+**The rules:**
+- **HANDOFF opens with a `▶ RIGHT NOW` box** (≤5 lines: aim · current state · the one
+  next action · "history below is context"). It sits *above* the accreted milestone
+  history so orientation costs one screen, not a scroll through ▶/▶▶/▶▶▶ tiers.
+- **State the next action ONCE, identically, everywhere it appears.** The 2026-06-14
+  near-miss: the HANDOFF *banner* was updated each step but the "Resume prompt",
+  "Current state", and AGENT-CONTEXT "Where things are" blocks were left pointing at an
+  already-completed Task-0 — a fresh agent would have re-run finished work. **After any
+  milestone step, grep the resume-chain docs for the OLD next-action string and flip
+  every hit**, not just the banner. (`grep -rn "open .* gating Task-0" docs/HANDOFF.md docs/AGENT-CONTEXT.md …`)
+- **The in-session TaskList is scratch, never the system of record.** Per-program
+  done-vs-todo lives in the **plan's STATUS table** (rows = stages + workstreams; cols =
+  Status / Next gate / Blocked-by). Update it as items move — that table is what a
+  cross-session pickup reads to know what's left.
+- **Any tool a runbook depends on must be version-controlled.** A `/tmp/…` script a plan
+  tells the next agent to run is unrecoverable on a fresh clone — commit it into
+  `tools/` or `SheepShaver/tools/` and cite the repo path in the runbook. (2026-06-14:
+  `gdbcli.py` lived only in `/tmp` while S1's runbook depended on it.)
+- **Trigger the §0 doc-sync sweep after any heavy multi-milestone session**, not only
+  every ~3 — a session that flips the frontier several times is exactly when the
+  execution blocks drift out from under the banner. A cheap finish-line check:
+  spawn a cold-start reviewer ("orient from the docs alone; what's the next action?")
+  and a tech-writer ("do any two resume-chain docs disagree on status?").
 
 ### 3. When docs get too heavy: the archive pass
 

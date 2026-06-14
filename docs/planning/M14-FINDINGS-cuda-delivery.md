@@ -267,6 +267,45 @@ One boot. If `packets > 0`, the timer model is confirmed correct.
 
 **Gate:** run the timer smoke test before building the proper gated implementation.
 
+### Smoke H — timer-delayed delivery with IER-wait reschedule (2026-06-14)
+
+**Hack:** `CudaBindTimerDelivery` wired CudaDevice → EventScheduler + VIA back-pointer.
+Each `sr_int_pending=1` scheduled a one-shot ~20µs later. Callback ran under the bus
+lock via `locked_call`; if `ier & 0x04` (IER.SR) was not yet enabled, reschedule for
+another 20µs (loop until IER.SR on, then latch `ifr_latched |= IFR_SR` + `via_update_irq`).
+Added `VIALatchIFRBits(VIA6522*, uint8_t)` to expose the latch+irq_update from outside
+the VIA read/write path.
+
+**Result:**
+- `sr_timer=1` (one successful delivery), `packets=0`
+- Timer DID fire correctly: `ifr=0x20 ier=0x04 irq_out=0` → `ifr=0x24 irq_out=1`
+  (IFR_SR latched, IRQ summary transitioned 0→1)
+- `nw_via_irq_edge` fired → PIC edge → NK EXT delivery:
+  `[EXC] EXT delivered #1: restart=504dfe40 srr1=00009040 msr=00001040 -> entry=50314880`
+- `host-irq: edges=1 consumed=1` — the full pipeline worked mechanically
+- But `irq_fired=0`, `packets=0` — the NK EXT handler (`0x50314880`) dispatched
+  but the Cuda protocol never advanced
+
+**Diagnosis:** The timer delivers the interrupt correctly through the full VIA→PIC→NK
+pipeline. The block is DOWNSTREAM: the NK's fallback external interrupt handler at
+`[KDP+0x5b0]` (0x50325f00) doesn't know how to service VIA/Cuda interrupts and route
+them to the 68k interrupt handler that would drive the Cuda byte exchange. This is the
+registered-handler table gap (W2L-1 in the sheepshaver_glue comments): the NK has no
+registered handler for IRQ source 0x19 (OPENPIC_IRQ_VIA_CUDA).
+
+**Verdict: PARTIAL SUCCESS.** Timer-delayed delivery is the correct VIA-layer fix —
+it delivers IFR_SR at the right time (after IER.SR enables). But packets=0 because
+the interrupt routing from NK to 68k VIA handler is missing (a separate milestone's
+scope — the NK registered-handler table / interrupt dispatch chain, not the Cuda
+device model).
+
+**Next:** The Cuda timer delivery is validated at the VIA/PIC layer. The remaining
+blocker is NK→68k interrupt routing for the VIA source. Either:
+(a) wire the NK registered-handler table entry for IRQ 0x19 (VIA/Cuda), or
+(b) identify how Mac OS 9's Nanokernel Interrupt Manager (ENIM/IHT) registers
+    the VIA handler during boot (it may need the Cuda protocol to be working
+    first — a chicken-and-egg).
+
 ## §5 — Bug found during investigation
 
 ### `SS_NW_TRAMPOLINE=0` still activates newworld

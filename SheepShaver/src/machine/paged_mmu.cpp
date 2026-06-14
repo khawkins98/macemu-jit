@@ -105,8 +105,18 @@ bool paged_mmu_translate(const uint32_t sr[16], const uint32_t bat[16],
 {
 	uint32_t pa = 0;
 
-	// (1) BAT match first — scan the 4 DBAT pairs (bat[8..15]). BAT translation
-	//     applies regardless of MSR[DR] (block translation is independent).
+	// (1) Real addressing mode (MSR[DR]=0): translation is OFF entirely — BOTH the
+	//     BATs AND the page table are bypassed, PA == EA (PEM §7.4.1). This MUST be
+	//     checked BEFORE the BAT scan: a DBAT that would otherwise match must NOT
+	//     translate under DR=0 (early boot + exception vectors run real-mode and
+	//     require strict EA=PA identity). [fix: paged_mmu adversary Finding 1,
+	//     2026-06-15 — the prior "BAT applies regardless of MSR[DR]" was wrong.]
+	if (!msr_dr) {
+		*out_pa = ea;
+		return true;
+	}
+
+	// (2) BAT match — scan the 4 DBAT pairs (bat[8..15]). (Data path: DBAT/MSR[DR].)
 	for (int p = 0; p < 4; p++) {
 		uint32_t batu = bat[8 + p * 2];
 		uint32_t batl = bat[8 + p * 2 + 1];
@@ -114,12 +124,6 @@ bool paged_mmu_translate(const uint32_t sr[16], const uint32_t bat[16],
 			*out_pa = pa;
 			return true;
 		}
-	}
-
-	// (2) Translation disabled => real mode, PA == EA.
-	if (!msr_dr) {
-		*out_pa = ea;
-		return true;
 	}
 
 	// (3) Segment + hashed-PTE walk.

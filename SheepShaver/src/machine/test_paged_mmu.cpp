@@ -72,6 +72,11 @@ static bool oracle_translate(const uint32_t sr[16], const uint32_t bat[16],
                              uint32_t sdr1, uint32_t ea, uint32_t msr_dr,
                              uint32_t *out_pa)
 {
+	// Real addressing mode (MSR[DR]=0): translation OFF, BATs AND page table
+	// bypassed, PA == EA (PEM §7.4.1). MUST precede the BAT scan. [paged_mmu
+	// adversary Finding 1 — both impl and oracle previously had BAT-before-DR.]
+	if (!msr_dr) { *out_pa = ea; return true; }
+
 	// --- BAT: explicit block-range containment (vs the impl's mask compare) ---
 	for (int p = 0; p < 4; p++) {
 		uint32_t u = bat[8 + p * 2];
@@ -88,8 +93,6 @@ static bool oracle_translate(const uint32_t sr[16], const uint32_t bat[16],
 			return true;
 		}
 	}
-
-	if (!msr_dr) { *out_pa = ea; return true; }
 
 	// --- Page walk: rebuild the VA fields step by step ---
 	uint32_t seg = sr[ea >> 28];
@@ -211,9 +214,11 @@ int main()
 	// Block low edge and high edge.
 	check_row("dbat-low", sr, bat, SDR1, 0x90000000u, /*dr=*/1, 0x30000000u, true);
 	check_row("dbat-high", sr, bat, SDR1, 0x9FFFF000u, /*dr=*/1, 0x3FFFF000u, true);
-	// BAT wins even with DR=0 (block translation independent of page translation).
-	check_row("dbat-dr0", sr, bat, SDR1, BEA, /*dr=*/0, 0x30001000u, true);
-	// Just outside the block -> no BAT; DR=0 falls to real-mode identity.
+	// Real mode (DR=0): translation OFF — a DBAT that WOULD match an EA must NOT
+	// translate; PA == EA identity. This row actively proves Finding-1's fix
+	// (BEA=0x90001000 is inside DBAT0's block, yet under DR=0 must stay identity).
+	check_row("dbat-dr0-identity", sr, bat, SDR1, BEA, /*dr=*/0, BEA, true);
+	// Just outside the block -> also real-mode identity under DR=0.
 	check_row("dbat-miss-rm", sr, bat, SDR1, 0xA0000000u, /*dr=*/0, 0xA0000000u, true);
 
 	printf("\ntest_paged_mmu: ALL %d CHECKS PASSED\n", n_pass);

@@ -2,6 +2,9 @@
 
 **Status:** COMPLETE (2026-06-14) — **Route A decided**; Q0-A/B/C/D/E/F all CLOSED · spec `docs/superpowers/specs/2026-06-14-newsheep-trampoline-re-design.md`
 **Method:** two instruments (static tbxi+capstone / dynamic QEMU gdbstub), gated on agreement; both on 9.2.
+**▶ UPDATE 2026-06-14 — SS_M18 gating Task-0 COMPLETE (see last section): Route A GO but MONTHS** (original
+weeks-sketch falsified — Q1 no-handoff-boundary + Q2 requires-paged-MMU + Q3 CGRP built by disk IM-init,
+not the NK parcel). **Q0-F inference CORRECTED → M16 was right** (CGRP builder is disk/CFM, not ROM/NK).
 
 ## Blocking-answer table
 | # | Question | Static finding | Dynamic finding | Agree? | Status |
@@ -306,3 +309,79 @@ applies. But they decide whether Route A is weeks or months.
 ## Scope-guard verification
 `git log --stat newsheep-baseline..HEAD` shows **docs-only** (no source files) — RE-only milestone
 respected. The SS integration is the NEXT, code-writing milestone (sketched above, not implemented here).
+
+---
+
+# SS_M18 gating Task-0 — COMPLETE (2026-06-14) → Route A GO but **MONTHS** (original weeks-sketch FALSIFIED)
+
+**Process:** the milestone machine front-end run BEFORE any code (the cheap-recon-first pattern that
+caught M16/M17). Plan rev-2: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`
+(2 parallel red-teamers, both GO-WITH-FIXES; 9 BINDING amendments folded). Two boot-disjoint recon
+agents: **P1** [STATIC] (Q1+Q2, NanoKernel-v02.27 parcel disasm) + **P2** [QEMU-BEHAVIORAL] (Q3, live
+mac99 boot). **Provenance (coordinator-serialized gate, amendment A5):** ROM md5
+`66210b4f71df8a580eb175f52b9d0f88` ✓; NanoKernel-v02.27 parcel `…/dump-9.0.1/Parcels.src/MacROM.src/
+NanoKernel-v02.27`, 105280 B, md5 `61c176e90b6365e84e5c660d703e56af`; verified **raw PPC-BE**, run base
+**0x50310000** (cross-checked: parcel offset 0x4880 == the `0x50314880` EXT dispatcher).
+
+## Verdict: **Route A is GO (viable, still the right route) but is a MONTHS effort, not weeks.**
+The original SS-integration sketch ("run the Trampoline, re-inject the one Execute68k pair, keep the
+M0–M13 scaffolding") is **falsified**. Three INDEPENDENT month-forcing findings, each alone sufficient
+per the plan's PASS-criterion #5 (Q1=fight OR Q2=paged-MMU ⇒ months):
+
+### Q1 — emulator-host ownership = **FIGHT, no handoff boundary** (HEADLINE) [STATIC, PINNED]
+The real NanoKernel-v02.27 is a **permanently-resident paged supervisor**, not an init routine that
+yields. Its entry (`0x50310000`) `mfmsr`→tests MSR[DR]→`mtspr SRR0/SRR1`→**`rfi` at `0x5031003c`** into
+translated supervisor execution; it owns all 16 exception-vector `rfi` return sites (EXT/SC/DEC/PROGRAM);
+its DEC handler (`0x50313200`, `mtspr DEC,r8` @ `0x50313234`) reschedules forever. **There is no
+instruction sequence where NK init "completes" and yields a steady state in which SS's
+`execute_68k`/`ExcEnter`/scheduler is the live emulator** — so the sketch's "re-inject post-handoff" is
+**fiction**. All 5 ledger surfaces (Execute68k pair / exception path / MixedMode excursion / scheduler-DEC
+/ entry-vector synthesis) = **FIGHT**: two supervisors contend for the same live state. Corroborating: the
+parcel contains **no `[KDP+0x1074/0x1078]` reference and no `0x50360000`-class EmulatorCode store** — the
+SS Execute68k pair (`[KDP+0x1074]=0x50480000`/`[KDP+0x1078]=0x50460000`, glue `src/kpx_cpu/
+sheepshaver_glue.cpp:1504-1505/3140-3141`) is an **SS synthetic**, not a real-NK structure; the real NK
+reaches 68k via its own ECB/exception path.
+
+### Q2 — MMU / V=P = **requires-paged-MMU** [STATIC, PINNED] (amendment A3 asymmetric rule satisfied)
+Translation is **consumed**, not merely installed (install+readback alone would be a false-clean):
+- SDR1/HTABORG computed from RAM size + installed (`mtspr SDR1,r12` @ `0x50310604`); SRs programmed
+  `mtsr 0,r12 … SR15` @ `0x503104b4+`.
+- **POSITIVE consumption #1 — per-context SR reload** (`0x50315290`: `lwzu`/`mtsrin` loop from a
+  per-context table) — meaningful only if the same VA → different PA per context (genuine translation
+  dependence, not identity).
+- **POSITIVE consumption #2 — MMIO via live segment swap + MSR[DR] toggle** (`0x50325894 mfsrin` save →
+  `0x5032589c mtsrin` install I/O segment → `0x503258a4 mtmsr` DR-on → translated load/store → `mtsrin`
+  restore): the access target depends entirely on the swapped SR.
+- 13 `tlbie` + `tlbsync` → assumes a hardware-walked hashed page table. SS has **no walker/htab**
+  (V=P structural), so the NK's requirement collides with the deliberately-deferred machine-layer M5.
+
+### Q3 — CGRP builder = **disk/CFM IM-init, NOT the NK parcel** [QEMU-BEHAVIORAL, PINNED]
+Direct QEMU observation **RESOLVES the Q0-F-inference-vs-M16-RE contradiction in M16's favor.** In a
+working mac99 boot, CGRP @ `*(KDP-0x338)` is **fully populated** (+0x04='CGRP', +0x38/+0x3c/+0x40 →
+handler/ptr/stack arrays, +0x44 = 18 entries) — and every handler + the arrays live in **low disk-loaded
+RAM `0x0045xxxx`–`0x0046xxxx`** sharing a single **CFM/PEF-fragment TOC** (`0x00466ba0`), the signature
+of disk-loaded driver code. The NK parcel hosts **none** of it (the parcel region isn't even where the
+builder runs). KDP-relative layout is **identical** to SS (KDP−0x338) even though absolute bases differ
+(QEMU KDP=`0x1f7fe000` vs SS `0x68ffe000`) — structure parity confirmed, builder location disjoint.
+**Mechanism contract pinned; property values/shapes DEFERRED to the Core99 DT (amendment A6).** Writer
+instruction PC + live DT read order = explicit residue (builder writes the descriptor **physically/
+real-mode**, defeating virtual gdbstub watchpoints — 3 boots, table built with watchpoint silent; the
+location is pinned by 3 independent signals regardless). **Implication: Route A must run the disk
+System/Enabler IM-init in the loop to produce CGRP at all — it cannot come from the ROM/NK parcel.**
+
+## What this means for SS_M18 (decision-worthy — see HANDOFF)
+Route A stays the **decided, highest-fidelity route** (NOT NO-GO; NOT relitigated). But "run the producer"
+at full fidelity now means, concretely: **(1)** a real **paged MMU** for the NewWorld profile (un-defer
+machine-layer M5); **(2)** resolving the **two-supervisor collision** — the real NK owns the 68k/exception/
+scheduler regime SS currently owns, with no yield point (architectural, not a re-bind); **(3)** the **disk
+System/Enabler IM-init in the loop** for CGRP. Per-surface effort bands (amendment A7): Trampoline
+loader+CHRP entry / OF-CI callback / Core99 DT model = plausibly weeks each; **/mmu paged-MMU, the
+two-supervisor reconciliation, and disk-IM-init-in-loop = months** → roll-up = **months**. This is a
+GOOD Task-0 outcome: it priced the milestone honestly before a line of code, and confirms the M-series
+lesson — the producer is a *whole supervisor*, so hosting it is a supervisor-integration project, not a
+seed.
+
+## Scope-guard (this Task-0)
+Docs-only; no `SheepShaver/src/**` written. Tooling: P2 extended the throwaway `/tmp/newsheep/gdbcli.py`
+(added watchpoint driver; new md5 `f468451974d179919ddc09b1d3d09d30`) — /tmp scratch, not repo source.
+FALSIFICATIONS: 0 (re-pins 0); tasks: P1/P2; tier: strong.

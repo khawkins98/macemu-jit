@@ -159,7 +159,11 @@ EOF
 **Files:**
 - Modify: `docs/planning/M15-FINDINGS-consumption-recon.md` (Boot-C evidence section)
 
-The binary gate: does *anyone* write the NK routing structs when consumption is on? Under native delivery they stayed all-zero for 30s. A single write event flips the verdict toward "real."
+The binary gate: does *anyone* write the NK routing structs when consumption is on? Under native delivery they stayed all-zero for 30s. A single struct-populating write event flips the verdict toward "real."
+
+**This is a WRITE-TRAP, not an end-of-boot sample (binding).** `SS_JIT_WATCH_ADDR` fires `[WATCH]` on any detected change *as it happens* from any JIT/interpreter path, so "frozen-zero when we looked" becomes "provably no struct-populating writer fired from any guest path." Honest residual to document: the watch is blind to value-identical writes (zero-over-zero) and to pure host-accessor (`WriteMacInt`) writes outside the ring's coverage — but the verdict-relevant event (guest IM init writing a *non-zero* pointer/bits/mask into a NIL/zero struct) is exactly what it traps. Pair `[WATCH]` change lines with `[WATCH-SAMPLE]` logarithmic frozen-vs-moving lines.
+
+**Bonus (non-perturbing): capture the misroute "why."** The struct watch needs `SS_JIT_TRACE_RING=1`; the EXT→`0x50325fd0`-fallback-vs-`0x50314660`-slot-4 routing decision is recoverable by POST-HOC `ring-walk` analysis of that SAME ring dump (no extra live probe, no extra watch slot, no incremental perturbation — verified independent). Capture it as a head-start for the forge milestone's design.
 
 - [ ] **Step 1: Build the watch set from the LIVE hnfo base (Task 0)**
 
@@ -202,6 +206,8 @@ EOF
 - [ ] **Step 1: Apply the binary decision rule**
 
 In the findings doc Verdict section, apply: consumption reaches the 68k handler (Task 1) AND any struct field begins populating (Task 3) → **REAL (option 1)**; consumption stalls before the handler OR all struct fields stay frozen-zero → **FORGE (option 2)**. State the verdict with a one-paragraph evidence summary citing the Task 1/2/3 record numbers.
+
+**State the FORGE case (if it holds) as TWO independent pillars, explicitly (binding):** (1) the `SC#1=0x0d` divergence that blocked M8's default flip is an *artifact of an unreachable config* (PIC-off, where consumption can't happen); (2) the Task-1 stall is a *routing gap decoupled from the selector stream* (EXT edge routes into CGRP fallback `0x50325fd0`, not slot-4 service `0x50314660`; 68k handler `0x5000ec50` ring-absent). These are separate, load-bearing findings — the verdict must not read as resting on a single chain.
 
 - [ ] **Step 2: Write the next-milestone handoff**
 

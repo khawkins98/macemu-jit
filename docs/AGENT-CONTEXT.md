@@ -6,33 +6,32 @@
 
 ## Current frontier (2026-06-14)
 
-**M10 / M11a / M11 — COMPLETE (2026-06-13)** (detail: ROADMAP + CHANGELOG). Gates `SS_M10_CGRP=1` /
-`SS_M11_FB=1`. **Load-bearing:** M10's `0x5000ed08` probe-match was the CGRP-STUB→DR_WARM injection now
-**FALSIFIED** (crashes the DR) — a negative result, NOT a working delivery (see M13-FINDINGS). M11 = 16 MB
-aperture at 0x81000000 + OF display node ("cofb"); M11a = r24 never NK-clobbered (no code change).
+**M13 — COMPLETE (2026-06-14). The load-bearing fact: NewWorld 68k interrupt delivery WORKS** — the
+M9→M13 keystone ("`0x5000ED08` never runs / interrupts never delivered") was a **probe-granularity
+artifact** (see "load-bearing negatives" below). M13's deliverable is that retraction plus the revert
+of the two dead delivery mechanisms (`SS_NW_DR_AUTOVEC`, `SS_M10_CGRP`). Canonical:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` (retraction banner + §C-pin.7/8).
 
-**M12 PARTIAL — Wave0+Wave1 landed; pixel gate FAIL; frontier captured.** Wave0 (`ddbd8d79`): NW lowmem
-1MB→32MB. Wave1 (`348544cd`): anon-zero 0xFF000000–0xFFFFFFFF (sign-extended 68k EAs). Boot stable 30s+
-(dec_expiries=2000+) but `irq_fired=0`, `[FB-DIRTY]=0`. Gate: `SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`
-(NOT `SS_M10_CGRP` — it kills the boot). Harness 353/353; machine tests + e2e PASS.
+**M10 / M11a / M11 — COMPLETE (2026-06-13)** (detail: ROADMAP + CHANGELOG). M11 = 16 MB aperture at
+0x81000000 + OF display node ("cofb") (gate `SS_M11_FB=1`); M11a = r24 never NK-clobbered. M10's
+`SS_M10_CGRP` forged table is **reverted (2026-06-14)** — it targeted the non-problem and crashed.
 
-**M13 — STRATEGY DECIDED (2026-06-13), plan REDRAFTED (2026-06-14). The canonical docs are authoritative
-over this summary:** `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` ("COMPLETE OUR OWN"),
-`docs/planning/M13-FINDINGS-interrupt-delivery.md` (verified 3-stage diagnosis),
-`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md` (plan Rev 2).
-- **Model:** keep SheepShaver + Apple's NanoKernel; the gap is unwired interrupt delivery + the
-  unmodeled EXT-fallback→DR-autovector handoff at `0x50325f00` (set DR `cr2lt`) — wiring + RE, not silicon.
-  Do NOT fork the NK / switch base (DingusPPC = wrong OldWorld path) / borrow device models (we have them).
-- **Load-bearing negatives (do NOT retry):** host-side 68k injection falsified 5×; forging the CGRP table
-  = M10 crash (warnings in the STUB code). NewWorld is **paravirtual** (software int struct at `*(0x68ffefd0)`,
-  NOT VIA IFR/IER; the DR's trigger is register/context state, no pokable memory latch).
-  `irq_fired` is MISLEADING (NK-level consume, not 68k delivery).
-- **Plan Rev 2 (step-0 RESOLVED 2026-06-14):** wall = idle spin `0x50468ae4` (NOT MMU fly-by `0x50326050`);
-  **eager delivery FALSIFIED** (EXT already saturates fallback `0x50325f00` ≥10000×; 7× more EXT does not
-  advance the boot, `0x5000ED08` never runs). **Task A demoted to a thin EXT precondition (`SS_NW_PIC` leg);
-  Task C is the sole lever** = HLE the NK→DR handoff at `0x50325f00` (`SS_NW_DR_AUTOVEC`, set DR `cr2lt`).
-  B = QEMU oracle (handler→DR signal). Keystone test: does running `0x5000ED08` advance to where
-  registration (`0x5031b290`, kcall sel 1) self-sustains? Flip-last.
+**M12 PARTIAL — Wave0+Wave1 landed.** Wave0 (`ddbd8d79`): NW lowmem 1MB→32MB. Wave1 (`348544cd`):
+anon-zero 0xFF000000–0xFFFFFFFF (sign-extended 68k EAs). Boot stable 30s+. Its "pixel gate FAIL =
+`irq_fired=0`" framing is subsumed by the M13 retraction (delivery was never the blocker).
+
+**NEW FRONTIER (M14): the model-rejection / pre-System gate.** Native delivery, the 68k handler, and the
+scheduler are all healthy; the boot parks ~15 s in at the `[ALARM]` model-rejection / pre-System gate
+(Gestalt/machine-ID or System-file boot gate rejecting this machine/ROM combo; `jDR` 68k-block counter
+FREEZES ~10 s in while the NK spins). This is a **ROM/OS-version** issue, not an interrupt one.
+- **Leverage (already-RE'd, gate-bypass-TOOLED territory):** `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md`
+  (`boot` id=3 anatomy, DSAT format, gate-bypass) + the archived 4-byte System-file bypass in
+  `docs/archive/2026-06/planning/UPGRADE-CARD-PATH.md`.
+- **Approach (per lead):** characterize the gate FIRST (pin the last 68k subroutine before `jDR` freezes;
+  identify the device/gate it polls). Use ONE early cross-version boot as a cheap version-locked check
+  (a single boot of a different rev — staged 9.2.1/9.0.4/1.1 ROM at `/Users/Shared/macemu/`, or QEMU
+  9.2.1 oracle — same `[ALARM]` or different?). The full ROM/OS-version route-around sweep is PROMOTED
+  only if that check shows the gate is version-locked. Do NOT jump to the sweep before characterizing.
 
 **Tooling (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress snapshot (all-on
 cluster → `[NW-PROG verdict]`, report-only). Its load-bearing non-determinism caveat (post-EXT SIGSEGV
@@ -56,7 +55,11 @@ cluster → `[NW-PROG verdict]`, report-only). Its load-bearing non-determinism 
   sampling: visits 1,10,100…). Fields: rN, [0xADDR], [rN:SIZE]. **68k PCs are
   probe-blind for SS_PROBE_PC** — use `SS_PROBE_68K=0x68KPC[:N]` (68k regfile + PPC
   context at the DR dispatch hook, first N matches linear, edge-triggered; r24 word+2:
-  to catch word X probe X+2) or `SS_DR_R24_RING=1` (ring is 2M entries, last-4 dedup —
+  to catch word X probe X+2 — **this is load-bearing: the M9→M13 "`0x5000ED08` never runs"
+  keystone was a FALSE NEGATIVE from probing `ed08` instead of the post-`lhau` `ed0a`;
+  five milestones built on it. A "never fires" from this exact-match probe is UNPROVEN until
+  ring-confirmed — see LEARNINGS 2026-06-14 + M13-FINDINGS §C-pin.8**) or
+  `SS_DR_R24_RING=1` (ring is 2M entries, last-4 dedup —
   dedup now COUNTS: dump prints `PC*N` for suppressed repeats; flushed on SIGSEGV
   directly+early in the crash handler since 2026-06-12 — mid-run watch/stall trace dumps
   no longer eat the crash once-shot; SIGTRAP deaths still produce NO dump).
@@ -216,9 +219,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: M13 NewWorld interrupt delivery (redrafted).** Plan / Strategy / Findings:
-`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`,
-`docs/planning/NANOKERNEL-STRATEGY-DECISION.md`, `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
+**Next task: M14 — characterize the model-rejection / pre-System gate** (see Current frontier above).
+Leverage: `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md`,
+`docs/archive/2026-06/planning/UPGRADE-CARD-PATH.md`. M13 close-out / retraction:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
+(`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.
 Keep-active machine docs (`docs/planning/machine/`): `CORE99-MACHINE-DESCRIPTION.md`,
 `M1-DEVICE-CONFORMANCE.md`, `ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md` (prior recon, complete).
 Archived: `docs/archive/2026-06/{machine,superpowers/plans}/`; session log

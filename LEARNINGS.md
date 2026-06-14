@@ -5,7 +5,39 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-14 — A load-bearing "never" from an EXACT-MATCH probe is the highest-risk claim in the project
+
+**This is the SECOND five-milestone misdirection caused by a measurement artifact** (cf. the
+session-5 HOT-PC "deadlock" retraction). M13's close-out due-diligence overturned the keystone of
+M9→M13: "the 68k handler `0x5000ED08` never runs / interrupts are never delivered." It was never
+true. `SS_PROBE_68K=0x5000ed08` is exact-match/edge-triggered, but the DR's first `lhau` advances
+r24 `ed08→ed0a` *before* the dispatch-hook samples — so the probe was structurally blind to handler
+entry. Re-targeting to `ed0a` matched **8/8 in plain baseline** (HLE OFF) with a genuine DR-built
+`$64` level-1 autovector frame (saved `SR=0x2000` = IPL 0, legitimate delivery). Five milestones of
+delivery work — Task A injection, M10 CGRP forging, the CGRP-registration thesis, Task C
+`SS_NW_DR_AUTOVEC` — were aimed at a non-problem. Full evidence: `docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.7/8.
+
+**The aggravating fact: the caveat was ALREADY DOCUMENTED and still missed.** `docs/AGENT-CONTEXT.md`
+literally says for `SS_PROBE_68K`: *"r24 word+2: to catch word X probe X+2."* The `0x5000ED08` probe
+never applied it. A documented instrument caveat is worthless if it is not applied to the
+load-bearing claim that rests on the instrument.
+
+**THE RULE (binding):** a load-bearing **NEGATIVE** result — "X never runs / never fires" — that
+rests on an **exact-match / point probe** MUST be cross-checked **before anything is built on it**,
+by one of: (a) apply the word+2 rule to the probe target, (b) confirm against the ring
+(`SS_DR_R24_RING=1` / `tools/ring-walk.py`), or (c) a frame/state read at the suspected entry.
+Negative results from exact-match instruments are the project's highest-risk claims — treat a
+"never" from a point-probe as **unproven until ring-confirmed.** Five milestones rode on an
+unverified "never."
+
+---
+
 ## 2026-06-13 — M13 Task A: the DR is a recompiler — you cannot hand-inject 68k interrupts
+
+> ⚠️ **Superseded framing (2026-06-14):** this entry's premise — that delivery to `0x5000ED08` was
+> the blocker worth solving — was the retracted artifact (see the 2026-06-14 entry above). The
+> RE facts below about the DR being a recompiler remain accurate; the *motivation* (injecting
+> interrupts) was chasing a non-problem. Native delivery already works.
 
 Three-approach bake-off (parallel worktrees) on "deliver a 68k interrupt to the ROM handler at
 0x5000ED08 without the intermittent 0xDEADBEEF SIGTRAP." Two approaches falsified by RE, one

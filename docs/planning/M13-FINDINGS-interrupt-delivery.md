@@ -5,6 +5,32 @@ Durable distillation of a multi-agent investigation; the process trail is archiv
 
 ---
 
+> ## ⚠️ RETRACTION (2026-06-14) — read §C-pin.8 FIRST, before this body
+>
+> **The core thesis of everything below — that `0x5000ED08` never runs and 68k interrupts are
+> never delivered — is a MEASUREMENT ARTIFACT.** Native NewWorld interrupt delivery **WORKS**.
+> The "3-stage chain: stage 1 works, stages 2–3 never happen" diagnosis was the **ed08-vs-ed0a
+> probe blind spot**: `SS_PROBE_68K=0x5000ed08` is exact-match/edge-triggered, but the DR's first
+> `lhau` advances r24 `ed08→ed0a` *before* the dispatch hook samples — so the probe was
+> structurally blind to handler entry. Re-targeting to `SS_PROBE_68K=0x5000ed0a` matched **8/8 in
+> plain baseline** (interrupt HLE OFF), with a genuine DR-built `$64` level-1 autovector frame
+> (`[a7+6]=0x0064`, saved `SR=0x2000` → S=1 / **IPL 0**, saved PC `0x50034cae`), the handler
+> region entered ~207×, full level-dispatch + VBL/deferred pass running, scheduler healthy.
+>
+> **Consequence:** every M9→M13 delivery effort — Task A host-injection, the M10 CGRP forged
+> table (`SS_M10_CGRP`), the CGRP-registration "circular" thesis, and the M13 Task C
+> `SS_NW_DR_AUTOVEC` HLE — targeted a **non-problem**. Both code mechanisms
+> (`SS_NW_DR_AUTOVEC`, `SS_M10_CGRP`) were **reverted in the M13 close-out (2026-06-14)**.
+> The real blocker is downstream and was visible all along (diagnostic #1's `[ALARM]`): a
+> **model-rejection / pre-System gate** (~15 s, Gestalt/machine-type rejection) — a
+> ROM/OS-version issue, not an interrupt one. M13 is **COMPLETE** as the milestone that produced
+> this correction. Next frontier (M14): characterize that gate.
+>
+> The original body is preserved below as the investigation record — **do not build on its
+> "never delivered" parts.** Read §C-pin.7 and §C-pin.8 for the corrected picture.
+
+---
+
 ## TL;DR
 
 Getting the NewWorld 9.0.1 diagnostic boot past its ~15s pre-System dead-end (and on to pixels)

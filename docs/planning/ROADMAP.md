@@ -1,11 +1,12 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
+> **Status:** ⏸ PAUSED 2026-06-14 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL. **M13 STRATEGY DECIDED (2026-06-13):**
-> complete our own — keep SheepShaver + Apple's NanoKernel; gap = unwired eager interrupt delivery +
-> the EXT-fallback→DR-autovector handoff (`0x50325f00`). Host injection falsified 5× (ruled out).
-> Plan: `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`. Frontier: `docs/AGENT-CONTEXT.md`.
+> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL; **M13 COMPLETE (2026-06-14)**.
+> **M13 RESULT:** NewWorld 68k interrupt delivery WORKS — the M9→M13 "`0x5000ED08` never runs" thesis
+> was a probe-granularity artifact (ed08-vs-ed0a). Dead `SS_NW_DR_AUTOVEC`/`SS_M10_CGRP` reverted.
+> **Next = M14:** the model-rejection / pre-System gate (a ROM/OS-version issue, NOT interrupts).
+> Findings: `docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.8. Frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
 
@@ -31,7 +32,7 @@ fidelity (interpreter-only; GPLv3 reuse feasible — cite per backport hygiene; 
 | **A** | Correctness & verification | 🔜 active | `docs/TESTING.md` |
 | **B** | JIT perf optimization | 🟡 levers open | `docs/planning/OPTIMIZATION-PLAN.md` |
 | **C** | Desktop integration (Silicon Sheep) | ⏸ deferred | `docs/planning/DESKTOP_INTEGRATION_PLAN.md` |
-| **D** | Machine Layer / platform breadth | 🟡 active (M13) | `docs/planning/MACHINE-LAYER-PLAN.md` |
+| **D** | Machine Layer / platform breadth | 🟡 active (M14) | `docs/planning/MACHINE-LAYER-PLAN.md` |
 
 ---
 
@@ -53,11 +54,12 @@ Gate: `SS_NW_VIA_IFR` (currently a no-op — kept for M10 use). See `docs/HANDOF
 (0x50313ab0), CGRP path unreachable. The 68k handler at 0x5000ed08 cannot fire until M10
 fixes user-mode DR AND initializes CGRP. Full root cause: `docs/HANDOFF.md` §Session 4.
 
-## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires ✅ COMPLETE (reframed by M13)
+## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires ✅ COMPLETE (REVERTED by M13)
 
-> ⚠️ **M13 reframing (2026-06-13):** M10's "handler fires" was the CGRP-STUB→DR_WARM injection now
-> FALSIFIED (→ 0xDEADBEEF crash; the DR re-entry is incoherent). Retained as a negative result, not a
-> working delivery path. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
+> ⚠️ **M13 close-out (2026-06-14):** M10's `SS_M10_CGRP` forged-CGRP-table mechanism was **reverted**.
+> It targeted the M9→M13 non-problem (native interrupt delivery already works — the "handler never
+> fires" claim was a probe-granularity artifact) and crashed the DR (0xDEADBEEF). Retained only as a
+> negative-result record. See `docs/planning/M13-FINDINGS-interrupt-delivery.md` retraction banner.
 
 **Completed:** 2026-06-13. Gate: `SS_M10_CGRP=1`.
 **Acceptance:** `SS_PROBE_68K=0x5000ed08:5` fires — confirmed match=1/5, no crash
@@ -85,6 +87,11 @@ Harness 353/353. Commits: 4ba87d8d (T-F6), 8f4197fa (Tasks A–D), 46c31ee7 (pos
 
 ## M12: Display pixels — Wave0+Wave1 stable, pixel gate FAIL ⏸ PARTIAL (2026-06-13)
 
+> ⚠️ **M13 close-out (2026-06-14):** the Task C diagnosis below ("pixel gate FAIL because `irq_fired=0`
+> / interrupt never reaches the 68k handler") is subsumed by the M13 retraction — interrupt delivery
+> was never the blocker (the "never reaches" was the ed08-vs-ed0a probe artifact). The real wall is the
+> downstream model-rejection gate (M14). Wave0/Wave1 memory-map fixes remain valid.
+
 Plan: `docs/archive/2026-06/superpowers/plans/2026-06-13-m12-display-pixels.md`.
 - **Task A (Wave0)** ✅: NW lowmem extended 1MB → 32MB; fixes crash at ea=0x010020c8. Commit `ddbd8d79`.
 - **Task B (VideoDriverStub)** ✅: VideoDriverStub verified; kOpenCommand path confirmed.
@@ -95,38 +102,48 @@ Plan: `docs/archive/2026-06/superpowers/plans/2026-06-13-m12-display-pixels.md`.
 
 Harness: 353/353. Gates: machine tests ALL PASS, e2e-test 122 passed, make e2e PASS. `[FB-DIRTY]=0`.
 
-## M13: NewWorld 68k interrupt delivery — STRATEGY DECIDED, redrafted (2026-06-14) 🔬
+## M13: NewWorld 68k interrupt delivery — ✅ COMPLETE (2026-06-14): the artifact retraction
 
-**Plan:** `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md` (house template).
-**Strategy (settled):** `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` → "COMPLETE OUR OWN".
-**Findings:** `docs/planning/M13-FINDINGS-interrupt-delivery.md` (the verified 3-stage diagnosis).
+**Result (the deliverable):** the milestone overturned its own premise. **Native NewWorld 68k
+interrupt delivery WORKS.** The M9→M13 load-bearing thesis — "`0x5000ED08` never runs / interrupts
+never delivered" — was a **probe-granularity artifact**: `SS_PROBE_68K=0x5000ed08` is exact-match,
+but the DR's first `lhau` advances r24 `ed08→ed0a` before the dispatch hook samples. Re-targeting to
+`ed0a` matched **8/8 in plain baseline** (HLE OFF), a genuine DR-built `$64` level-1 autovector frame
+(`[a7+6]=0x0064`, saved `SR=0x2000` = IPL 0 → legitimate; saved PC `0x50034cae`); handler region
+entered ~207×, full level-dispatch + VBL pass, scheduler healthy. Evidence:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.7/8 (retraction banner at top).
 
-**Goal:** a periodic hardware-modeled interrupt reaches the 68k world the way a healthy boot does →
-the NK's CGRP registration self-sustains (kcall selector 1 at `0x5031b290` fires naturally) → the 68k
-handler `0x5000ED08` runs → boot advances past the wall → `[FB-DIRTY]>0`.
+**Close-out actions:** reverted both dead delivery mechanisms — `SS_NW_DR_AUTOVEC` (Task C HLE) and
+`SS_M10_CGRP` (forged CGRP table). Every M9→M13 delivery effort (Task A injection, M10 CGRP forging,
+the CGRP-registration "circular" thesis, Task C autovector HLE) targeted a non-problem.
 
-**Decided model (do NOT relitigate):** keep SheepShaver + Apple's NanoKernel. Do NOT fork the NK,
-switch base (DingusPPC = wrong OldWorld path), or borrow device models (we already model
-SCC/VIA/Cuda/OpenPIC). The gap is **unwired eager interrupt delivery** + the **unmodeled
-EXT-fallback→DR-autovector handoff** — wiring + RE, not silicon.
+**Meta-lesson banked (LEARNINGS 2026-06-14):** a load-bearing NEGATIVE ("X never runs") that rests on
+an exact-match probe must be ring-confirmed (or word+2-corrected) before anything is built on it —
+the SECOND five-milestone misdirection from a measurement artifact (cf. session-5 HOT-PC).
 
-**Three tasks (mirror the strategy doc's three steps):**
-- **Task 0 / step-0** — ✅ RESOLVED (2026-06-14): wall = **idle spin `0x50468ae4`** (not the MMU
-  fly-by `0x50326050`); **eager delivery FALSIFIED** — EXT already saturates the fallback `0x50325f00`
-  ≥10000× in baseline; forcing 7× more EXT does NOT advance the boot. Gap = the NK→DR handoff, not the
-  EXT source. (See plan Rev 2 + M13-FINDINGS "Step-0 recon".)
-- **Task A** (`SS_NW_EAGER_TICK`) — **DEMOTED to a thin EXT precondition** (just ensure the `SS_NW_PIC`
-  leg delivers EXT to the NK; the eager-VIA/dec timer lever is dropped, falsified by step-0).
-- **Task B** (QEMU mac99 oracle, read-only): characterize the registered-handler→DR signal.
-- **Task C** (`SS_NW_DR_AUTOVEC`): HLE that signal at the coherent EXT fallback `0x50325f00` (set the
-  DR `cr2lt` autovector trigger). Acceptance ladder: advance past wall → driver-load → registration
-  self-sustains → ticks → `0x5000ed08` runs → pixels. Flip-last, revert-on-red.
+> The M13 strategy/plan docs (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical —
+> they designed the non-problem. Do NOT re-chase interrupt delivery / CGRP registration / 68k injection.
 
-**Ruled out — do NOT retry:** host-side 68k injection (5× falsified — CGRP-STUB→DR_WARM crash,
-any-DR-PC incoherent, resume-prologue, DR save-vectors, DR_WARM ROM-patch, "pending-IPL latch") and
-forging the CGRP table (= M10's crash). `irq_fired` is MISLEADING (NK-level consume, not 68k
-delivery). NewWorld is paravirtual (software interrupt struct at `*(0x68ffefd0)`, not VIA IFR/IER).
-Route-around held in reserve (ROM/OS-version sweep) only if step-0 shows eager delivery insufficient.
+## M14: Model-rejection / pre-System gate — 🔬 NEW FRONTIER (2026-06-14)
+
+**The wall moved downstream.** Native delivery, the 68k handler, and the scheduler are all healthy;
+the boot still parks ~15 s in at the `[ALARM]` **model-rejection / pre-System gate** — a
+Gestalt/machine-ID or System-file boot gate rejecting this machine/ROM combo (`jDR` 68k-block counter
+FREEZES ~10 s in while the NK spins on). This is a **ROM/OS-version** issue, not an interrupt one.
+
+**Leverage (already-RE'd, gate-bypass-TOOLED — MORE tractable than NK internals):**
+`docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` (`boot` id=3 anatomy, DSAT format, error
+catalog, gate-bypass) + the archived 4-byte System-file bypass in
+`docs/archive/2026-06/planning/UPGRADE-CARD-PATH.md`.
+
+**Approach (per lead — characterize FIRST, do not act before understanding):**
+1. Pin the gate: capture the last 68k subroutine the DR runs before `jDR` freezes (r24
+   instruction-boundary trail in the final 1–2 s) and identify the device/gate it polls.
+2. ONE early cross-version boot as a cheap version-locked check: a single boot of a different rev
+   (staged 9.2.1 / 9.0.4 / 1.1 ROM at `/Users/Shared/macemu/`, or the QEMU 9.2.1 oracle) — same
+   `[ALARM]` or different?
+3. The full ROM/OS-version route-around sweep is **PROMOTED only if** that check shows the gate is
+   version-locked. Held in reserve until then — do NOT jump to the sweep before characterizing.
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

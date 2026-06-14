@@ -9,6 +9,33 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-14 (M13 close-out — interrupt-delivery artifact retraction)
+
+### [SheepShaver] M13 COMPLETE: native NewWorld interrupt delivery confirmed WORKING
+
+The M13 milestone overturned its own premise. **Native NewWorld 68k interrupt delivery WORKS** — the
+load-bearing thesis of M9→M13 ("the 68k interrupt handler `0x5000ED08` never runs / interrupts are
+never delivered") was a **probe-granularity artifact**. `SS_PROBE_68K=0x5000ed08` is exact-match, but
+the DR's first `lhau` advances r24 `ed08→ed0a` before the dispatch hook samples, so the probe was
+blind to handler entry. Re-targeting to `ed0a` matched **8/8 in plain baseline** (interrupt HLE OFF),
+with a genuine DR-built `$64` level-1 autovector frame (`[a7+6]=0x0064`, saved `SR=0x2000` = IPL 0 →
+legitimate delivery, not forced; saved PC `0x50034cae`); handler region entered ~207×, full
+level-dispatch + VBL/deferred pass running, scheduler healthy. Evidence:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.7/8.
+
+- **Reverted** the two dead delivery mechanisms — `SS_NW_DR_AUTOVEC` (the M13 Task C HLE that set the
+  DR `cr2lt`) and `SS_M10_CGRP` (the M10 forged CGRP table). Both targeted a non-problem and the
+  latter crashed the DR (0xDEADBEEF). Retained only as negative-result records in the findings doc.
+- **New frontier (M14):** the real blocker is downstream — the `[ALARM]` model-rejection / pre-System
+  gate (~15 s; Gestalt/machine-ID or System-file boot gate), a ROM/OS-version issue, not an interrupt
+  one. Leverage: `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` + the archived System-file
+  gate-bypass work. See ROADMAP M14.
+- **Meta-lesson** (LEARNINGS 2026-06-14): a load-bearing NEGATIVE result resting on an exact-match
+  probe must be ring-confirmed before anything is built on it — the second five-milestone misdirection
+  from a measurement artifact in this project (cf. the session-5 HOT-PC retraction).
+
+Docs-only close-out (the source reverts are tracked separately). No harness/gate change.
+
 ## 2026-06-13 (session 7 — M12: frontier crash fixes + display driver verification)
 
 ### [SheepShaver] M12 Task A: extend NW lowmem + Wave1 24-bit DR alias

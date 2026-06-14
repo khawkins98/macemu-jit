@@ -30,6 +30,8 @@ struct of_prop {
 	const void *data;
 	int len;            /* getproplen value */
 	bool nonfinal;      /* Q-S2a.3 provisional (interrupt-map / -mask) */
+	bool owned;         /* data was malloc'd here (setprop) — free on teardown */
+	bool owned_name;    /* name was strdup'd here (setprop new prop) */
 	struct of_prop *next;
 };
 
@@ -121,7 +123,13 @@ static void node_free(struct of_node *n)
 {
 	if (!n) return;
 	struct of_prop *p = n->props;
-	while (p) { struct of_prop *q = p->next; free(p); p = q; }
+	while (p) {
+		struct of_prop *q = p->next;
+		if (p->owned) free((void *)p->data);
+		if (p->owned_name) free((void *)p->name);
+		free(p);
+		p = q;
+	}
 	struct of_node *c = n->child;
 	while (c) { struct of_node *s = c->sibling; node_free(c); c = s; }
 	free(n);
@@ -267,6 +275,16 @@ of_ci_context *of_ci_create_core99(void)
 	node_add_str(eth, "name", "ethernet");
 	node_add_str(eth, "device_type", "network");
 
+	/* ADV-1 unit-address-sensitivity scaffolding (S2a-impl adversary fix #2):
+	 * two same-name siblings differing ONLY by unit address. An addressed query
+	 * (disk@1) must resolve the RIGHT sibling; an omit query (disk) the first. */
+	struct of_node *scratch = node_add_child(root, node_new(ctx, "scratch"));
+	node_add_str(scratch, "name", "scratch");
+	struct of_node *disk0 = node_add_child(scratch, node_new(ctx, "disk@0"));
+	node_add_str(disk0, "name", "disk");
+	struct of_node *disk1 = node_add_child(scratch, node_new(ctx, "disk@1"));
+	node_add_str(disk1, "name", "disk");
+
 	return ctx;
 }
 
@@ -313,7 +331,20 @@ static bool comp_match(const char *node_name, const char *comp, size_t comp_len)
 		return strlen(nu) == culen && strncmp(nu, cu, culen) == 0;
 	}
 	size_t nbase = name_base_len(node_name);
-	return nbase == cbase && strncmp(node_name, comp, cbase) == 0;
+	if (!(nbase == cbase && strncmp(node_name, comp, cbase) == 0))
+		return false;
+	/* ADV-1: the base name matches. If the QUERY carries a unit address, the
+	 * node's unit address must also match (unit-address-INSENSITIVE applies
+	 * ONLY when the query OMITS the address — handled by the cbase==0 / no-'@'
+	 * paths). Without this, mac-io@99 would wrongly match node mac-io@c. */
+	const char *cat = (const char *)memchr(comp, '@', comp_len);
+	if (cat) {
+		const char *cu = cat + 1;
+		size_t culen = comp_len - (cbase + 1);
+		const char *nu = unit_addr(node_name);
+		return strlen(nu) == culen && strncmp(nu, cu, culen) == 0;
+	}
+	return true;
 }
 
 of_phandle of_dt_finddevice(of_ci_context *ctx, const char *path)
@@ -419,11 +450,20 @@ static bool is_direct_service(const char *name)
 	return false;
 }
 
+/* S2b OWING (adversary Finding 5, pre-wiring): this cell model is host-native —
+ * of_cell is a 64-bit host value and cell_str/cell_ptr reinterpret a cell as a
+ * raw HOST pointer (the unit test passes host const char* / buffers). The real
+ * MacOS.elf producer writes 32-bit BIG-ENDIAN cells at [r2-0xc] carrying
+ * GUEST-PHYSICAL string/buffer pointers. Before S2b wires the real producer,
+ * a 32-bit-BE-cell decode + guest->host pointer translation shim MUST replace
+ * these two casts (and the of_cell width / array packing in of_ci_callback). */
 static inline const char *cell_str(of_cell c) { return (const char *)(uintptr_t)c; }
 static inline void *cell_ptr(of_cell c)       { return (void *)(uintptr_t)c; }
 
 /* nextprop: write the name AFTER `prev` (NULL/"" -> first) into `buf`.
- * returns 1 (next exists), 0 (no more), -1 (bad node). */
+ * returns 1 (next exists), 0 (no more / `prev` was the last), -1 (bad node OR
+ * `prev` is a non-empty name that is not a property of the node — IEEE-1275
+ * "invalid previous"). */
 static int do_nextprop(of_ci_context *ctx, of_phandle ph,
                        const char *prev, char *buf)
 {
@@ -431,8 +471,10 @@ static int do_nextprop(of_ci_context *ctx, of_phandle ph,
 	if (!n) return -1;
 	struct of_prop *p = n->props;
 	if (prev && prev[0]) {
+		bool matched = false;
 		for (; p; p = p->next)
-			if (strcmp(p->name, prev) == 0) { p = p->next; break; }
+			if (strcmp(p->name, prev) == 0) { p = p->next; matched = true; break; }
+		if (!matched) { if (buf) buf[0] = '\0'; return -1; } /* unknown previous */
 	}
 	if (!p) { if (buf) buf[0] = '\0'; return 0; }
 	if (buf) strcpy(buf, p->name);
@@ -511,6 +553,36 @@ int of_ci_callback(of_ci_context *ctx, of_cell *array)
 			}
 		}
 		if (n_rets >= 1) rets[0] = (of_cell)len;
+	} else if (strcmp(service, "setprop") == 0) {
+		/* Adversary fix #1: setprop MUST mutate the node (the Trampoline writes
+		 * AAPL,toolbox-parcels / AAPL,reserved-memory-space|-io-space). The model
+		 * stores const void* blobs, so store an OWNED malloc'd copy that lives for
+		 * the DT's lifetime (freed in node_free). Returns the new length. */
+		of_phandle ph = (of_phandle)args[0];
+		const char *name = cell_str(args[1]);
+		const void *src = cell_ptr(args[2]);
+		int len = (int)args[3];
+		struct of_node *n = node_by_phandle(ctx->root, ph);
+		int result = -1;
+		if (n && name) {
+			void *copy = NULL;
+			if (len > 0 && src) { copy = malloc((size_t)len); memcpy(copy, src, (size_t)len); }
+			struct of_prop *p = prop_find(n, name);
+			if (p) {
+				if (p->owned) free((void *)p->data);
+				p->data = copy;
+				p->len = len;
+				p->owned = (copy != NULL);
+			} else {
+				char *namecopy = strdup(name);
+				node_add_prop(n, namecopy, copy, len, false);
+				struct of_prop *np = prop_find(n, namecopy);
+				np->owned = (copy != NULL);
+				np->owned_name = true;
+			}
+			result = len;
+		}
+		if (n_rets >= 1) rets[0] = (of_cell)result;
 	} else if (strcmp(service, "getproplen") == 0) {
 		int len = of_dt_getproplen(ctx, (of_phandle)args[0], cell_str(args[1]));
 		if (n_rets >= 1) rets[0] = (of_cell)len;
@@ -549,10 +621,15 @@ int of_ci_callback(of_ci_context *ctx, of_cell *array)
 	           strcmp(service, "package-to-path") == 0 ||
 	           strcmp(service, "instance-to-path") == 0) {
 		/* normalize / stringify a path: minimal — echo arg back when a buffer
-		 * is supplied. Resolution (service exists) is what the gate checks. */
+		 * is supplied. Resolution (service exists) is what the gate checks.
+		 * S2b OWING (adversary Finding 3): canon is a no-op and /aliases is empty
+		 * — consistent with binding ADV-1 (finddevice does component matching,
+		 * NOT alias lookup). S2b MUST confirm against the real trace whether the
+		 * producer consumes the canon OUTPUT BUFFER or a /aliases getprop; if so,
+		 * canon must write a real canonical path and /aliases must be populated. */
 		if (n_rets >= 1) rets[0] = 0;
 	} else {
-		/* close, setprop, seek, exit, read, write, test, quiesce, claim:
+		/* close, seek, exit, read, write, test, quiesce, claim:
 		 * benign accepted handlers (seam exists; real semantics out of S2a
 		 * scope). They RESOLVE, so the gate stays satisfied. */
 		if (n_rets >= 1) rets[0] = 0;

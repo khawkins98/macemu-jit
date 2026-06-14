@@ -341,6 +341,72 @@ int main()
 		CHECK(nodes >= 18);   /* the full Core99 + scaffolding node set */
 	}
 
+	/* =================================================================
+	 * C. S2a-impl adversary regression rows (each FAILS before its fix).
+	 * ================================================================= */
+
+	/* C1 — setprop must actually mutate (write-then-read-back). Before the fix
+	 * setprop fell into the generic accept-else and reported success while
+	 * storing nothing, so getprop returned stale/absent data. */
+	{
+		of_phandle macos = of_dt_finddevice(ctx, "/rom/macos");
+		CHECK(macos != OF_INVALID_PHANDLE);
+		/* (a) overwrite an EXISTING property and read the new value back */
+		const unsigned char newval[4] = { 0xDE, 0xAD, 0xBE, 0xEF };
+		int rc;
+		of_cell wlen = ci(ctx, "setprop", 4, 1, macos,
+		                  P("AAPL,toolbox-parcels"), P(newval), 4, &rc);
+		CHECK(rc == OF_CI_OK);
+		CHECK((int64_t)wlen == 4);            /* IEEE-1275 returns the new length */
+		unsigned char rbuf[16]; memset(rbuf, 0, sizeof(rbuf));
+		of_cell rlen = ci(ctx, "getprop", 4, 1, macos,
+		                  P("AAPL,toolbox-parcels"), P(rbuf), sizeof(rbuf), &rc);
+		CHECK(rc == OF_CI_OK);
+		CHECK((int64_t)rlen == 4);
+		CHECK(memcmp(rbuf, newval, 4) == 0);  /* the blind spot: read-back */
+		/* (b) create a BRAND-NEW property name and read it back */
+		const unsigned char rsv[8] = { 1,2,3,4,5,6,7,8 };
+		CHECK(of_dt_getproplen(ctx, macos, "AAPL,reserved-memory-space") == -1);
+		ci(ctx, "setprop", 4, 1, macos,
+		   P("AAPL,reserved-memory-space"), P(rsv), 8, &rc);
+		CHECK(rc == OF_CI_OK);
+		CHECK(of_dt_getproplen(ctx, macos, "AAPL,reserved-memory-space") == 8);
+		unsigned char rbuf2[16]; memset(rbuf2, 0, sizeof(rbuf2));
+		ci(ctx, "getprop", 4, 1, macos,
+		   P("AAPL,reserved-memory-space"), P(rbuf2), sizeof(rbuf2), &rc);
+		CHECK(memcmp(rbuf2, rsv, 8) == 0);
+	}
+
+	/* C2 — finddevice must honor the query's @unit-address (ADV-1). Two
+	 * same-name siblings (disk@0 / disk@1) under /scratch: the addressed query
+	 * must resolve the RIGHT one (before the fix both resolved disk@0), the
+	 * omit query resolves the first. */
+	{
+		of_phandle d0 = of_dt_finddevice(ctx, "/scratch/disk@0");
+		of_phandle d1 = of_dt_finddevice(ctx, "/scratch/disk@1");
+		of_phandle dom = of_dt_finddevice(ctx, "/scratch/disk");
+		CHECK(d0 != OF_INVALID_PHANDLE);
+		CHECK(d1 != OF_INVALID_PHANDLE);
+		CHECK(d0 != d1);          /* the addressed queries resolve DISTINCT nodes */
+		CHECK(dom == d0);         /* ADV-1: omit query resolves the first sibling */
+	}
+
+	/* C3 — nextprop returns -1 (invalid previous), not 0 (end), for an unknown
+	 * non-empty `previous`. */
+	{
+		of_phandle macio = of_dt_finddevice(ctx, "/pci/mac-io");
+		CHECK(macio != OF_INVALID_PHANDLE);
+		char buf[64];
+		int rc;
+		of_cell r = ci(ctx, "nextprop", 3, 1,
+		               macio, P("nonexistent-prop"), P(buf), 0, &rc);
+		CHECK(rc == OF_CI_OK);
+		CHECK((int64_t)r == -1);  /* invalid previous (was 0 before the fix) */
+		/* the normal "" -> first walk still works */
+		of_cell r0 = ci(ctx, "nextprop", 3, 1, macio, P(""), P(buf), 0, &rc);
+		CHECK((int64_t)r0 == 1);
+	}
+
 	of_ci_destroy(ctx);
 
 	printf("test_openfirmware_ci: RESULT: ALL PASS (%d checks)\n", n_pass);

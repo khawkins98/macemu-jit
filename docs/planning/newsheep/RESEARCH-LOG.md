@@ -76,4 +76,17 @@
   gate" framing (fixed in charter §6, AGENT-CONTEXT, DECISIONS). Q0-A…E→Q0-A…F normalized; dangling
   `[[machine-layer-pivot]]` link fixed; R2 corrected (we hold the 9.2-era ROM; gap is system software).
 
+## 2026-06-14 — Task-0 execution (Trampoline RE)
+
+- **T0.0 — tbxi up, ROM identity + reframe CLOSED (Q0-D) [STATIC].** Installed `tbxi 0.13` +
+  capstone + pyelftools into `/tmp/newsheep/venv`. `tbxi dump -o` of both 9.2-era candidates
+  (`9.0.1` md5 `66210b4f…`, `8.4` md5 `f97d4382…`) → identical top-level layout (`Bootscript`,
+  `MacOS.elf`=Trampoline, `Parcels.src/MacROM.src/`). **Reframe confirmed:** the ROM file carries a
+  ROM-*file* version, NOT a Mac OS system version (that's on disk). Canonical RE binary = the
+  `66210b4f…` 9.0.1 ROM (byte-identical to our active project ROM); NanoKernel **v02.27**; Dec-2001 =
+  9.2.2 era. Configfile-1 gives the component map (NanoKernel @BASE+0x310000, EmulatorCode
+  @0x360000, OpcodeTable @0x380000). No 8.4→9.0.1 parcels-layout break (R4 doesn't bite this binary).
+  Two NanoKernel parcels in the dump (v02.27 active per Configfile, v02.24 alternate); CGRP-builder
+  disasm target (Q0-F) = `NanoKernel-v02.27`. FINDINGS Q0-D row + evidence block filled.
+
 <!-- next entry below -->

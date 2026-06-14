@@ -441,6 +441,67 @@ Independent of delivery, the heartbeat pins where progress actually stops [PROBE
 
 ---
 
+## §C-pin.8 — keystone retest: VERDICT = **KEYSTONE-ARTIFACT** (delivery was happening all along)
+
+Close-out due-diligence: one bounded baseline boot (`SS_NW_PIC=1`, **autovector HLE OFF**) re-targeting
+the keystone probe to the post-`lhau` PC, plus one lldb read of the DR-built 68k exception frame.
+Evidence: slot rundir `/tmp/ss-slots/slot0/runs/20260614-094617.59580`; lldb script `/tmp/lldb_ks.txt`.
+Tags: [PROBE✓] = live boot of our engine; [STATIC] = `rom901.bin` disasm.
+
+### C-pin.8.1 The probe matches at the corrected target — the dispatch hook DOES see the entry
+`SS_PROBE_68K=0x5000ed0a:8` hit its cap (**8/8 matches**) in plain baseline, with a stable
+`a7=0x17ffeaee` across deliveries. The earlier `SS_PROBE_68K=0x5000ed08` "never matched" purely because
+the DR's first `lhau` advances r24 `0x5000ed08→0x5000ed0a` **before** the dispatch-hook samples — an
+exact-match/edge-trigger granularity blind spot, not an absence of delivery. [PROBE✓]
+
+### C-pin.8.2 It is a genuine `$64` level-1 autovector — frame proven
+At entry `a7=0x17ffeaee` is the exception-frame SSP. A single lldb read of host `0x4000_17ff_eaee`
+(lldb `--size 2` byte-swaps the guest big-endian words; values below are the corrected guest BE words):
+- `[a7+0]` (word) = **`0x2000`** = saved **SR**: S=1 (supervisor), **IPL = 0** (bits 10–8 = 0) — the
+  interrupted 68k was **NOT masked**; this was a legitimate, deliverable autovector, not a forced one.
+- `[a7+2]` (long) = **`0x50034cae`** = saved 68k PC (ROM).
+- `[a7+6]` (word) = **`0x0064`** = format/vector word = **`$64`** = the level-1 autovector offset. ✓
+[PROBE✓]
+
+Cross-check against the ROM dispatcher (low-ROM == static, C-pin.7.1): `0x5000ed08` is the level-1
+vector entry — `movem.l d0-d3/a0-a3,-(a7); moveq #1,d3` (d3 = level) `→ 0x5000ed36`, which increments an
+interrupt counter, loads the paravirtual source struct `movea.l 0x68ffefd0,a2`, and reads the pending
+bits `move.l 0x28(a2),d0` / source table `movea.l 0x14(a2),a0` — the documented `*(0x68ffefd0)+0x28/
++0x14` paravirtual mechanism. (Our ROM dispatcher does **not** do the QEMU heap-handler's
+`cmpi.w #$64,$6(a7)` validation — that handler was behavior-matched only, B.1.4; the `$64` proof here is
+the DR-built frame word, which the native delivery path produced unaided.) [STATIC + PROBE✓]
+
+### C-pin.8.3 Reconciliation with C-pin.6's "IPL 7" reading
+No contradiction: C-pin.6 measured IPL 7 **at the NK DEC/EXT hook** (`gpr(25)&7==7`) — the seam where
+the DR has *ceded to the NK and is masked*. The native autovector deliveries (this section) happen at a
+**different point** — the DR's own between-instruction boundary, where the saved SR shows **IPL 0**. The
+`SS_NW_DR_AUTOVEC` HLE only fired at the masked NK seam and so correctly skipped; meanwhile the **native
+NK→DR path was delivering all along at IPL-0 boundaries**. The HLE was solving a non-problem at the wrong
+seam.
+
+### C-pin.8.4 VERDICT — KEYSTONE-ARTIFACT; M13's delivery-falsified narrative needs reframing
+**The M9–M13 "the 68k interrupt handler `0x5000ED08` never runs / interrupts are never delivered"
+keystone was a measurement artifact.** In plain baseline, genuine `$64` level-1 autovectors are
+delivered (≥8 probe matches; ring showed ~207 entries in C-pin.7), the handler runs the full
+level-dispatch + deferred-task/VBL pass, the saved SR proves the delivery was legitimate (IPL 0), and the
+scheduler is healthy (`dec_expiries=3406`). **Interrupt delivery is NOT the blocker** — it works natively.
+The real wedge is downstream: the 68k DR halts (`jDR` frozen, C-pin.7.3) into the `[ALARM]` **model-
+rejection / pre-System gate** (Gestalt/machine-type rejection), which is a **ROM/OS-version** issue, not
+an interrupt one.
+
+**Close-out consequence:** every M9→M13 artifact framed around "deliver the 68k interrupt" (Task A
+injection, Task C `SS_NW_DR_AUTOVEC`, the CGRP-handler-registration thesis) was aimed at a problem the
+native path already solves. The forward direction is the **route-around** (the next milestone): pin and
+clear the pre-System model-rejection gate the `[ALARM]` names — **not** any further interrupt-delivery
+mechanism. (Per the lead's scope, that gate is the next milestone's recon, not investigated here.)
+
+### C-pin.8.5 Residue
+The saved PC `0x50034cae` (what the 68k was doing when the autovector preempted it) and the precise
+model/Gestalt gate are not pinned — explicitly deferred to the next milestone. The `$64`/SR/handler
+evidence is direct; the "207×" count is from the C-pin.7 ring (this boot capped the probe at 8).
+
+---
+
 ## Provenance (archived process trail — `docs/archive/2026-06/planning/`)
 
 - `2026-06-13-m13-atrap-bootstrap.md` — original M13 plan (Task A as injection) + Task-0 recon addenda.

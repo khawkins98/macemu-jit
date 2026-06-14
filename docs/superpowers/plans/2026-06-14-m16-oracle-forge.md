@@ -1,5 +1,14 @@
 # M16 — NewWorld CGRP Handler-Table Synthesis Implementation Plan
 
+> **CLOSED — DoD-3 NO-GO (2026-06-14). DO NOT EXECUTE.** A pre-implementation red-team round
+> (SHA `df627fe0`) fired the pre-authorized early NO-GO: the descriptor FORMAT is RE-tractable but
+> the synthesis target value (`[entry+0]` SRR0 chaining to `0x5000ec50`) is **ROM-absent**
+> (0 ROM refs to `0x5000ec50`; `"CGRP"` tag ROM-absent → runtime/disk-built), scratch ownership
+> needs an occupancy-map extension, and a populated table re-opens the M10 DR-reentry crash class.
+> Verdict + evidence: `docs/planning/M16-FINDINGS-oracle-forge.md` Q7. Milestone closed; frontier
+> pivoted to compatibility-payoff. The host-owned EXT-handler-stub route (the only surviving path)
+> is documented in FINDINGS as the re-entry point if NewWorld 9.x becomes a hard requirement.
+
 > **Rev 4 (2026-06-14) — RE-SCOPE to CGRP-table synthesis (user decision, go/no-go = B).**
 > The rev-3 RE (committed `41041d72`→`9a3cdd28`, findings Q5/Q6) proved the minimal one-word
 > forge (`*(r8-0x338)+0x20 ≥ 2`) is **SAFE but INERT**: the CGRP handler table it gates is

@@ -17,20 +17,27 @@ refusal was gated on an unreachable config. **Verdict pivot:** NK routing struct
 (`hnfo+0x00/0x14/0x28`, `KDP+0x674`) stay **frozen-zero across obs=1e9** — zero
 struct-populating guest writes. The verdict does NOT rest on a single chain. Canonical:
 `docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)".
-**M16 — Task-0 RE COMPLETE (2026-06-14). Minimal forge NO-GO; re-scope to CGRP-table
-synthesis.** The misroute-why diagnostic (M15 addendum) found EXT delivery is correct
-(reaches `0x50314880`); the misroute is downstream. M16 Task-0 RE then pinned it to ONE
-field, live: SPRG0=KDP=`0x68ffe000`; the EXT body reads `*(KDP-0x338)=0x68ffc1c0` (the
-**"CGRP"** interrupt-group descriptor, `[+0x04]='CGRP'`) and gates on `[0x68ffc1e0]=1`
-(`50314894 cmpwi 2; blt 0x50314660` → 1<2 → early-return → EXT unserviced = M15's 0/510).
-The `r11`/SRR1 `0x8000` gate is **already satisfied** (srr1=0x9040), NOT a blocker. The CGRP
-handler table is **empty** (`+0x38`=0 guard, `+0x3c`=0 base, `+0x44`=0 count); the service
-routine `0x503148e0` **self-guards** (`beqlr`/`bgelr`) on it. ⇒ forging `[0x68ffc1e0]≥2` is
-SAFE but **inert** (empty table → no dispatch to `0x5000ec50`). The real fix must populate
-the full CGRP handler table (M10-class work); correct contents need IM-init RE and/or a QEMU
-oracle (format only — QEMU rig is 512MB/9.2.1, weak for literal values).
-- **Next = fresh planning pass to re-scope M16 to CGRP-table synthesis.** Findings (Q1–Q6):
-  `docs/planning/M16-FINDINGS-oracle-forge.md`; plan/spec: `docs/superpowers/{plans,specs}/2026-06-14-m16-oracle-forge*`.
+**M16 — COMPLETE (2026-06-14). DoD-3 NO-GO. NewWorld 9.x interrupt routing banked as
+forge-class; frontier pivots to COMPATIBILITY-PAYOFF.** Task-0 RE pinned the dead-end to the
+empty **"CGRP"** interrupt-group descriptor (`*(KDP-0x338)=0x68ffc1c0`, `[+0x04]='CGRP'`): the
+gate `[0x68ffc1e0]=1` needs ≥2 (`50314894 cmpwi 2; blt`), but the handler table is empty
+(`+0x38/+0x3c/+0x44`=0) and the service routine `0x503148e0` self-guards, so the one-word forge
+is SAFE but INERT. Re-scoped to **CGRP handler-table synthesis** (plan rev-4/spec rev-2), then a
+pre-implementation red-team round (SHA `df627fe0`) fired the **pre-authorized early NO-GO**:
+- FORMAT is RE-tractable — entry layout `[entry+0]`=SRR0, `[entry+4]`=r2/TOC, SRR1 from r19
+  (`mtspr 0x1b,r19`); `[CGRP+0x3c]`=pointer array (index source#·4), `[CGRP+0x40]`=parallel
+  stack-ptr array indexed DIFFERENTLY (`[r23-0x116]·4`).
+- But the **synthesis target value is ROM-absent**: `0x5000ec50` has **0 word-refs** in the 4 MB
+  ROM (it is 68k code `4ef9 5000ef20`, reached only via the DR emulator, never a PPC `rfi` target);
+  the `"CGRP"` tag (`0x43475250`) is **0×** in ROM → built at runtime by disk/CFM IM-init that
+  never runs. Static RE can't produce the handler PC; QEMU-as-literal can't transfer it.
+- Scratch `0x68ff5000` is **provably live** (sub-KDP occupancy map, `M6A-ONGOING-ENTRY-DESIGN.md:690`);
+  a populated table re-opens the **M10 DR-reentry `0xDEADBEEF` crash class**; CGRP is the **first of N**
+  frozen structs (M15). The only surviving path — a host-owned NK-EXT-handler PPC stub — is much
+  larger; documented as the re-entry point if 9.x becomes a hard requirement.
+- **RE banked (Q1–Q7): `docs/planning/M16-FINDINGS-oracle-forge.md`.** Plan/spec CLOSED.
+  **Next = COMPATIBILITY-PAYOFF** (make 8.6–9.0.4 usable: CopyBits HLE, idle-skip, perf, app
+  compat, Silicon Sheep) — start with a fresh brainstorming/planning pass. Does NOT reopen FORGE verdict.
 - **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
   `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
 - **STANDING FACT (probe):** `SS_PROBE_PC` DID fire at the EXT vector-entry PC `0x50314880`
@@ -251,9 +258,12 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: M14 — characterize the model-rejection / pre-System gate** (see Current frontier above).
-Leverage: `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md`,
-`docs/archive/2026-06/planning/UPGRADE-CARD-PATH.md`. M13 close-out / retraction:
+**Next task: COMPATIBILITY-PAYOFF** (M16 closed NO-GO; NewWorld 9.x banked as forge-class — see
+Current frontier above). Make the already-booting 8.6–9.0.4 usable: CopyBits HLE, idle-skip, perf,
+app compat, Silicon Sheep. Start with a fresh brainstorming/planning pass; see
+`docs/planning/ROADMAP.md` (COMPATIBILITY-PAYOFF track) + memory `project_macemu_jit`.
+The NewWorld-9.x re-entry point (host-owned EXT-handler stub) is documented in
+`docs/planning/M16-FINDINGS-oracle-forge.md` Q7. M13 close-out / retraction:
 `docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
 (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.
 Keep-active machine docs (`docs/planning/machine/`): `CORE99-MACHINE-DESCRIPTION.md`,

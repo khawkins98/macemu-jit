@@ -1,5 +1,10 @@
 # M16 — NewWorld CGRP Handler-Table Synthesis: Design Spec
 
+> **CLOSED — DoD-3 NO-GO (2026-06-14). DO NOT EXECUTE.** Red-team fired the early NO-GO: the
+> synthesis target (`[entry+0]` SRR0 → `0x5000ec50`) is ROM-absent/runtime-built; the only
+> surviving path is a larger host-owned EXT-handler stub that re-opens the M10 crash class. Verdict:
+> `docs/planning/M16-FINDINGS-oracle-forge.md` Q7. Frontier pivoted to compatibility-payoff.
+
 **Status:** rev 2 (RE-SCOPED) · 2026-06-14
 **Parent strategy:** `docs/planning/MACHINE-LAYER-PLAN.md`
 **Predecessors:** `docs/planning/M14-FINDINGS-cuda-delivery.md` §7 · `docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)" + "Addendum — misroute-why diagnostic" · `docs/planning/M16-FINDINGS-oracle-forge.md` Q5/Q6 (the Task-0 RE that re-scopes this milestone).

@@ -1,7 +1,9 @@
-# M16 — Oracle-First NK Routing-Struct Forge: Findings
+# M16 — NewWorld NK Interrupt-Routing Forge: Findings
 
-**Status:** Task 0 IN PROGRESS · 2026-06-14
-**Plan:** `docs/superpowers/plans/2026-06-14-m16-oracle-forge.md` · **Spec:** `docs/superpowers/specs/2026-06-14-m16-oracle-forge-design.md`
+**Status:** COMPLETE — DoD-3 NO-GO (2026-06-14). CGRP-table synthesis is not reachable from
+static RE of our ROM; keeping it alive requires a larger host-owned EXT-handler stub that re-opens
+the M10 crash class. RE banked (Q1–Q7); milestone closed; frontier pivots to compatibility-payoff.
+**Plan:** `docs/superpowers/plans/2026-06-14-m16-oracle-forge.md` (rev-4, CLOSED) · **Spec:** `docs/superpowers/specs/2026-06-14-m16-oracle-forge-design.md` (rev-2, CLOSED)
 **Predecessor:** `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic".
 
 ## Task 0 — blocking-answer table
@@ -74,8 +76,55 @@ The `0x68ffc1c0` struct is the **"CGRP" interrupt-group descriptor** (`[+0x04]=0
 ### Implication for the milestone
 The minimal-forge hope is closed. M16 should re-scope to **CGRP-table synthesis**, with its own Task 0 = "obtain the correct CGRP handler-descriptor format + the source→handler mapping that lands on `0x5000ec50`" via IM-init RE and/or the QEMU oracle (format/semantics, not literal addresses). This is a larger effort than a one-word seed; recommend a fresh planning pass before implementation. The gate-field forge (`[0x68ffc1e0]=2`) remains useful as a *probe* to confirm the service routine reaches its self-guard (cheap validation that the RE is right), but not as a fix.
 
-## Strategic fork (open — needs decision before spending QEMU budget)
+## Strategic fork — RESOLVED (2026-06-14): route B chosen, then closed by red-team
 
-The red-team weakened the QEMU oracle (512MB/9.2.1 ≠ our 256MB/9.0.1). Meanwhile Step 4 shows the deciding field is local (`*(r8-0x338)+0x20`), our trampoline already stages NK/PIC structs, and the seed path works. Two routes:
-- **(A) QEMU-oracle-first** (plan as written): boot QEMU, read format/CR-mask, synthesize. Cost: ~3 QEMU boots; weak transfer confidence.
-- **(B) Static-RE-first** (emergent): resolve `r8-0x338` + the `0x503238ac` service path by RE of `rom901.bin` + targeted live probes; determine what the NK expects in that struct directly from OUR ROM. QEMU only as a tiebreaker. Aligns with "proper RE / solid foundations." Likely higher-confidence since it reads the exact 9.0.1 code that runs.
+The user chose **(B) Static-RE-first** and the milestone was re-scoped (plan rev-4 / spec rev-2) to
+**CGRP handler-table synthesis**. A pre-implementation red-team round (3 adversarial reviewers,
+SHA `df627fe0`) then fired the pre-authorized early NO-GO. Historical routes, for the record:
+- **(A) QEMU-oracle-first**: weak (512MB/9.2.1 ≠ our 256MB/9.0.1; literal values don't transfer).
+- **(B) Static-RE-first** (chosen): RE `0x503148e0` + the service path from OUR ROM. Closed by Q7 below.
+
+## Q7 — CGRP-table-synthesis viability (red-team verdict) — NO-GO
+
+**Q7a — Is the handler-descriptor FORMAT pinnable from static RE?** **YES.** `0x503148e0` fully
+disassembles. Entry layout confirmed: `[entry+0]`=SRR0 (handler PC, `503149bc mtspr 0x1a,r18`),
+`[entry+4]`=r2/TOC (`503149c8 lwz r2,4(r20)`), SRR1 from `r19` (`503149c0 mtspr 0x1b,r19`, sourced
+`5031499c lwz r19,-0x964(r1)` then masked). `[CGRP+0x3c]` is a **pointer array** indexed by
+source#·4 (`503148ec slwi r20,r3,2`; `503149b0 lwzx r20,r8,r20`; `503149b4 lwz r18,0(r20)`);
+`[CGRP+0x40]` is a **parallel stack-pointer array indexed by a DIFFERENT index** (`r16` from
+`[r23-0x116]·4`, `503149c4 lwzx r1,r9,r16`). So a synthesizer needs two arrays + per-source stacks.
+
+**Q7b — Is the synthesis TARGET VALUE (`[entry+0]` SRR0 that chains to `0x5000ec50`) obtainable?**
+**NO — and this is the milestone-killer.** Confirmed by ROM scan (`rom901.bin`, 4 MB):
+- `0x5000ec50` appears as a word **0 times** anywhere in the ROM — no PPC code references it.
+- `0x5000ec50` itself is **68k code** (`4ef9 5000ef20` = `JMP $5000EF20`), reachable only after the
+  DR/68k emulator reads a pending-interrupt flag — never a PPC `rfi` target.
+- The `"CGRP"` tag (`0x43475250`) appears **0 times** in the ROM → the descriptor is materialized at
+  runtime by disk/CFM-loaded IM-init (the code M15 proved never runs), not by inline ROM code.
+- No inline ROM builder stores to `[base+0x38/+0x3c/+0x44]` off `*(KDP-0x338)` (only unrelated
+  BAT/SPRG context-save collisions at `0x5031a088`/`0x50318664`).
+⇒ The handler PC the entry must point at is runtime-registered and ROM-absent. Static RE of our ROM
+cannot produce it, and QEMU (format-only; literal values don't transfer) cannot either.
+
+**Q7c — Scratch ownership.** The plan's candidate `0x68ff5000` is **provably live** — the
+authoritative sub-KDP occupancy map (`docs/archive/2026-06/machine/M6A-ONGOING-ENTRY-DESIGN.md:690`)
+records ROM machine-detect overwriting it each cold cycle; the identical "free gap" claim was already
+falsified once (lines 701–703). Safe gaps exist (`0x68ff6084..0x68ff7000` etc.) but require an
+occupancy-map extension + a watchpoint-quiescence gate — additional work the re-scope under-budgeted.
+
+**Q7d — Crash class.** Q6's self-guard proof covers only the *empty* table. A *populated* table
+fires the `rfi`, re-opening: a valid guest stack w/ sane `[r1+0x648]`, a correct rfi MSR from
+uncontrolled NK state (`[KDP-0x964]` masked), and the **M10 DR-reentry `0xDEADBEEF` crash that hit
+~1/3 of boots** (the class M13 reverted M10 to escape).
+
+### VERDICT — DoD-3 (NO-GO), milestone closed
+Route B (static-RE-first) is closed: the format is RE-tractable but the one value that matters
+(`[entry+0]` SRR0) is unobtainable from our ROM or QEMU-as-literal. The only surviving path —
+synthesizing a **host-owned NK-EXT-handler PPC stub** (manufacture the DR pending-flag + valid stack
++ correct MSR, survive the M10 DR-reentry crash class) — is materially larger than the re-scope
+assumed, and CGRP is per M15 only the **first of N** frozen structs (success would buy "advance to
+the next wall," not Finder). Per the project's COMPATIBILITY-PAYOFF focus and the pre-authorized
+early-NO-GO rule, the milestone is **closed**; the RE is banked here (Q1–Q7); the frontier pivots to
+making the already-booting 8.6–9.0.4 usable. The gate-field probe (`[0x68ffc1e0]=2`, safe/inert)
+remains the residual RE-confirmation artifact. The host-stub route stays documented above as the
+re-entry point should NewWorld 9.x become a hard requirement.

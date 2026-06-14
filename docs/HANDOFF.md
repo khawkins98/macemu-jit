@@ -10,17 +10,24 @@
 > the published NK EXT entry `0x50314880`; the misroute is DOWNSTREAM, in the NK dispatcher.
 > See `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic".
 >
-> **M16 Task-0 RE COMPLETE (2026-06-14) — minimal forge is NO-GO; re-scope to CGRP-table
-> synthesis.** Pinned the dead-end to one field, live: SPRG0=KDP=`0x68ffe000`; the EXT body
-> reads `*(KDP-0x338)=0x68ffc1c0` (the **"CGRP"** interrupt-group descriptor) and gates on
-> `[0x68ffc1e0]=1` (`cmpwi 2; blt` → 1<2 → early-return → EXT unserviced; THIS is M15's 0/510).
-> The `r11`/SRR1 `0x8000` gate is already satisfied (srr1=0x9040) — not a blocker. **But the
-> CGRP handler table is empty** (`+0x38`=0 guard, `+0x3c`=0 base, `+0x44`=0 count), and the
-> service routine `0x503148e0` self-guards (`beqlr`/`bgelr`) on it. So forging `[0x68ffc1e0]≥2`
-> is SAFE but INERT — the real fix must populate the full CGRP handler table (the M10-class
-> work), whose correct contents need IM-init RE and/or a QEMU oracle (format only). **Next:
-> fresh planning pass to re-scope M16 to CGRP-table synthesis.** Full RE + verdict:
-> `docs/planning/M16-FINDINGS-oracle-forge.md` (Q5/Q6). Plan/spec: `docs/superpowers/{plans,specs}/2026-06-14-m16-oracle-forge*`. Does NOT reopen the FORGE verdict.
+> **M16 COMPLETE (2026-06-14) — DoD-3 NO-GO. NewWorld 9.x interrupt routing banked as
+> forge-class; frontier pivots to COMPATIBILITY-PAYOFF.** Task-0 RE pinned the dead-end to the
+> empty "CGRP" interrupt-group descriptor (`*(KDP-0x338)=0x68ffc1c0`): gate `[0x68ffc1e0]=1` needs
+> ≥2, but the handler table is empty (`+0x38/+0x3c/+0x44`=0) and the service routine `0x503148e0`
+> self-guards, so the one-word forge is SAFE but INERT. The milestone was re-scoped to **CGRP
+> handler-table synthesis** (plan rev-4 / spec rev-2), then a pre-implementation red-team round
+> (SHA `df627fe0`, 3 reviewers) fired the **pre-authorized early NO-GO**: the descriptor FORMAT is
+> RE-tractable (`[entry+0]`=SRR0, `[entry+4]`=TOC, SRR1 from r19) but the **synthesis target value
+> is ROM-absent** — `0x5000ec50` has **0 word-refs** in the 4 MB ROM (it is 68k code reached only
+> via the DR emulator), and the `"CGRP"` tag is ROM-absent (runtime/disk-built by the IM-init that
+> never runs). Scratch `0x68ff5000` is provably live (occupancy map); a populated table re-opens the
+> M10 DR-reentry `0xDEADBEEF` crash class; CGRP is only the **first of N** frozen structs. The only
+> surviving path — a host-owned NK-EXT-handler PPC stub — is materially larger and documented as the
+> re-entry point if 9.x becomes a hard requirement. **RE banked (Q1–Q7):
+> `docs/planning/M16-FINDINGS-oracle-forge.md`.** Plan/spec CLOSED (do-not-execute banners).
+> **Next: compatibility-payoff** — make the already-booting 8.6–9.0.4 usable (CopyBits HLE,
+> idle-skip, perf, app compat, Silicon Sheep); start with a fresh brainstorming/planning pass.
+> Does NOT reopen the M15 FORGE verdict.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

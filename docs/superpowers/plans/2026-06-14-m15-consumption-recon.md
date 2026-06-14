@@ -38,7 +38,7 @@ Task 0 exists because two facts are load-bearing and must be resolved live, not 
 Read the archived M8 plan and the consumption code:
 ```bash
 sed -n '1,200p' docs/archive/2026-06/superpowers/plans/2026-06-12-slot4-consumption.md
-grep -rn "SS_NW_IRQ_CONSUME\|0x68fff070\|slot.4\|slot-4\|leg 7\|staging\|drain" SheepShaver/src/SheepShaver/sheepshaver_glue.cpp SheepShaver/src/machine/*.cpp 2>/dev/null | head -40
+grep -rn "SS_NW_IRQ_CONSUME\|0x68fff070\|slot.4\|slot-4\|leg 7\|staging\|drain" SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp SheepShaver/src/machine/*.cpp 2>/dev/null | head -40
 ```
 Record in the findings doc's blocking-answer table: the post-latch address (expected `0x68fff070`), the slot-4 `twi` PC, the 68k level-1 handler entry, and the env vars that arm the path.
 

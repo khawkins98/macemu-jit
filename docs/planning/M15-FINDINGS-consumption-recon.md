@@ -88,3 +88,79 @@ exception-vector entry PCs; use the `[EXC] … delivered` log lines (always-on) 
 evidence and `SS_JIT_WATCH_ADDR` (needs `SS_JIT_TRACE_RING=1`) for the `hnfo`/post struct
 writes. The live `hnfo` base is taken from the always-on `[NW-TRAMP]` trampoline log, which is
 authoritative for `[KDP+0xfd0]`.
+
+---
+
+## Boot A — consumption-path stall point
+
+**RUNDIR:** `/tmp/ss-slots/slot0/runs/20260614-145702.43261`
+(arm: `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1 SS_TERM_DUMP=1`, timeout 45s,
+exit 133 / SIGTRAP — non-deterministic, NOT a regression per M15 ground rules).
+
+### ⚠️ Wrapper env-split correction (affects every M15 boot)
+`ss-slot-boot.sh --env` splits its argument on **whitespace**, not on `;` (line 70:
+`read -r -a _kv <<<"$2"`; help text line 15 says "space-separated"). A semicolon-joined
+`--env 'SS_NW_PIC=1;SS_NW_IRQ_CONSUME=1;...'` is taken as a **single** token: it sets
+`SS_NW_PIC` to the garbage value `1;SS_NW_IRQ_CONSUME=1;...` (still truthy → PIC arms) and
+**never sets** `SS_NW_IRQ_CONSUME` or `SS_DR_R24_RING`. The first attempt this way printed
+`[NW-PROG config] PIC=1 CONSUME=0` and produced no ring. **Use space-separated `--env` for
+all remaining M15 boots.** The numbers below are from the corrected (space-separated) boot.
+
+### Delivery evidence (durable `[EXC]` / `[IRQ-CONSUME]` log lines, verbatim)
+```
+[EXC] EXT pending ASSERTED (host-irq latch, edge #1)
+[PIC-HOST] lowmem level byte [0x3f3f]=1 survived to edge #1 (trampoline staging intact)
+[EXC] EXT pending ASSERTED (edge #1)
+[IRQ-CONSUME] EE edge deferred at pc=50318014 (stub 50318000-5031801c)
+[IRQ-CONSUME] deferred edge fired at pc=504a8608 (held=0)
+[EXC] EXT delivered #1: restart=504a8608 srr1=00009040 msr=00001040 -> entry=50314880
+[EXC] EXT pending deasserted (edge #2)
+[EXC] PROGRAM delivered #5: srr0=5046e8d0 word=0fff0004 slot=4 r1=17ffe70c lr=5046c4f4 -> entry=50314700
+[IRQ-CONSUME] EE edge deferred at pc=50318014 (stub 50318000-5031801c)   (x3)
+[IRQ-CONSUME] deferred edge fired at pc=50325fd0 (held=0)                (x3)
+[EXC] host-irq: edges=1 consumed=1 deasserts=0 pending=0
+```
+`[DR68K] first instruction: r24=0x00000000 ppc_block=0x50310000 — 68k DR emulator started`
+(68k DR started at PC 0, i.e. cold reset entry only).
+
+### Waypoint reach table
+| Waypoint | PC | Reached? | Evidence |
+|---|---|---|---|
+| post latch | `0x68fff070` | (data addr; n/a in ring) | — |
+| EE-defer stub | `0x50318000–1c` | **YES** | `[IRQ-CONSUME] EE edge deferred at pc=50318014` |
+| NK EXT handler | `0x50314880` | **YES** | `[EXC] EXT delivered #1 -> entry=50314880` (log; vector-dispatch, not in ring) |
+| deferred-edge fire (1st) | `0x504a8608` | **YES** | `[IRQ-CONSUME] deferred edge fired at pc=504a8608` |
+| slot-4 `twi` | `0x5046e8d0` | **YES** | `[EXC] PROGRAM delivered #5: srr0=5046e8d0 ... slot=4` |
+| FE1F PROGRAM surface | `0x50314700` | **YES** | PROGRAM#5 `-> entry=50314700` |
+| deferred-edge fire (post-twi) | `0x50325fd0` (CGRP fallback `0x50325f00` region) | **YES** | `[IRQ-CONSUME] deferred edge fired at pc=50325fd0` (x3) |
+| **NK slot-4 service** | `0x50314660` | **NO** | absent from log; never appears |
+| **68k L1 handler (via_int 0xef2c)** | `0x5000ec50` | **NO — ring-confirmed** | `--find-pc 5000ec50: 0 hits` (1.13M-entry r24 ring); only early 68k PCs `5000002a/2c/b6` present |
+
+### Pinned stall point
+- **LAST waypoint reached:** the slot-4 `twi` at **`0x5046e8d0`** (delivered as PROGRAM#5,
+  `slot=4`, log-confirmed) and the NK EXT handler `0x50314880` (EXT delivered #1). After the
+  twi, the deferred EXT edges re-fire at **`0x50325fd0`** — inside the **CGRP fallback region
+  `0x50325f00`**, NOT the intended NK slot-4 service.
+- **FIRST waypoint NOT reached:** the **NK slot-4 service `0x50314660`** — and consequently the
+  **68k level-1 handler `0x5000ec50`** (via_int `0xef2c`). The consumed edge is routed into the
+  CGRP fallback (`0x50325fd0`) instead of the slot-4 service path, so it never crosses into the
+  68k world.
+- **68k L1 handler `0x5000ec50` reached? NO** — ring-confirmed (0 hits across 1,130,134 r24-ring
+  entries; the only 68k PCs in the ring are the cold-reset `5000002a/2c/b6`, not the L1 handler).
+- **`EXT delivered` present? YES** (`#1 -> entry=50314880`). **`host-irq: edges=1 consumed=1
+  deasserts=0 pending=0`** — exactly one edge, consumed once at the NK EXT level.
+- **`irq_fired`:** no `[NW-PROG irq]` summary line in this run (SIGTRAP/133 did not invoke the
+  SS_TERM_DUMP→exit atexit summary), but the ring-confirmed absence of `0x5000ec50` is the
+  stronger, direct evidence that the interrupt was **never delivered into the 68k Interrupt
+  Manager** (`irq_fired` would be 0).
+
+### Confidence
+The "NOT reached" verdict for the 68k L1 handler `0x5000ec50` is **ring-confirmed**
+(`--find-pc` over the full 1.13M-entry r24 ring), not probe-absent-only. The NK-side
+waypoints that DID fire are **log-confirmed** via always-on `[EXC]`/`[IRQ-CONSUME]` lines
+(they are vector-dispatch entries and correctly do not appear in the block-entry ring, per
+the Task-0 instrument caveat). Net: the Cuda EXT interrupt is consumed at the NK EXT level
+and even drives the slot-4 `twi`, but the deferred edge lands in the CGRP fallback
+(`0x50325fd0`) rather than the NK slot-4 service (`0x50314660`), so it never reaches the
+68k level-1 handler — the consumption path is **stalled between the slot-4 `twi`
+(`0x5046e8d0`) and the NK slot-4 service (`0x50314660`)**.

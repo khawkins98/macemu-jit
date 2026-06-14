@@ -232,3 +232,81 @@ divergence is not "one fixable SC-selector divergence short of completing Interr
 init" — it is a structural routing miss in the same dead-end class as the native path
 (the consumed edge never crosses into the 68k world). The `SC#1=0x0d` lead is closed as a
 PIC-off artifact and should not be carried as a real-fix prerequisite.
+
+---
+
+## Boot C — struct-population write-trap (VERDICT PIVOT) + misroute analysis
+
+**RUNDIR:** `/tmp/ss-slots/slot0/runs/20260614-150716.45851` (slot 0, label
+`m15-bootC-structwatch`, timeout 45s, EXIT=1 at SIGTERM — expected; ring/watch evidence
+intact). Regime: `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_JIT_TRACE_RING=1
+SS_JIT_WATCH_ADDR=68ff4f00,68ff4f14:8,68ff4f28,68fff674 SS_JIT_WATCH_DUMPS=0`. Live hnfo
+base `0x68ff4f00` (Task 0). Watch ran clean: `[WATCH] span 68ff4f14:8 -> 2 word slot(s)`
+expanded the span to the two word watchers `68ff4f14` and `68ff4f18`.
+
+### Per-field write-vs-frozen table (the binary gate)
+
+| Watch target | Field | First obs (#1) | Last obs (#1,000,000,000) | `[WATCH]` change events | Verdict |
+|---|---|---|---|---|---|
+| `68ff4f00` (hnfo+0x00) | word | `00000000` | `00000000` | **0** | frozen-zero |
+| `68ff4f14` (hnfo+0x14, span lo) | word | `00000000` | `00000000` | **0** | frozen-zero |
+| `68ff4f18` (hnfo+0x18, span hi) | word | `f3040000` | `f3040000` | **0** | frozen-CONSTANT (static from #1, never written) |
+| `68ff4f28` (hnfo+0x28) | word | `00000000` | `00000000` | **0** | frozen-zero |
+| `68fff674` (KDP+0x674, CR mask) | word | `00000000` | `00000000` | **0** | frozen-zero |
+
+**ZERO `[WATCH]` change events fired for any of the 5 word watchers** across the entire
+boot (logarithmic `[WATCH-SAMPLE]` ladder traversed all the way to **obs=1,000,000,000 /
+record #1000000066**). The span's high word `68ff4f18` holds a *constant* `f3040000`
+present already at record #1 (pc=50310000) and never changing — this is a pre-existing
+static value (an MMIO-base-shaped constant), NOT a struct-populating write: no change event,
+identical first-to-last. The three zero struct fields and the CR mask never move off zero.
+
+Verbatim sample ladder (one representative line per decade; full ladder in `boot.log`):
+```
+[WATCH-SAMPLE addr=68ff4f00 value=00000000 obs=1 record=#1 pc=50310000]
+[WATCH-SAMPLE addr=68ff4f18 value=f3040000 obs=1 record=#1 pc=50310000]
+[WATCH-SAMPLE addr=68fff674 value=00000000 obs=1 record=#1 pc=50310000]
+[WATCH-SAMPLE addr=68ff4f00 value=00000000 obs=1000 record=#1000 pc=503267f0]
+[WATCH-SAMPLE addr=68ff4f28 value=00000000 obs=10000 record=#10000 pc=504a8e60]
+[WATCH-SAMPLE addr=68fff674 value=00000000 obs=1000000 record=#1000004 pc=504a8e40]
+[WATCH-SAMPLE addr=68ff4f00 value=00000000 obs=1000000000 record=#1000000066 pc=50135a38]
+[WATCH-SAMPLE addr=68fff674 value=00000000 obs=1000000000 record=#1000000066 pc=50135a38]
+```
+
+### Verdict: STRUCT EVIDENCE SEALS **FORGE**
+All three NK routing struct fields plus the CR mask remain **frozen-zero** under the real
+consumption regime, with no guest IM-init write ever populating a NIL/zero struct with a
+non-zero pointer/bits/mask. The single event that would have flipped toward REAL — a
+struct-populating non-zero write — never occurred over a billion ring records. Combined
+with Task-1/2 (68k level-1 handler `0x5000ec50` never reached; EXT edge consumed but
+re-fires into CGRP fallback `0x50325fd0`), the consumption path is **not one fixable gap
+short of completing guest Interrupt Manager init**. The guest never begins populating the
+NK routing structures, so there is nothing for a "real" fix to complete — the structures
+must be **host-forged**. **M15 verdict: FORGE.**
+
+Corroboration from `jit_diag.log`: the PIC counters hold at `pic=out:0/r:4/i:0` for the
+whole run — 4 EXT edges received, **0 injected (i:0)** into the guest — consistent with the
+consumed edge never crossing into the 68k world, and `[DR68K] first instruction:
+r24=0x00000000` with no further DR progress (jDR frozen at 2161390).
+
+### Residual caveat
+`SS_JIT_WATCH_ADDR` is a CHANGE detector living in the ring recorder. It is blind to (a)
+value-identical writes (zero-over-zero) and (b) pure host-accessor (`WriteMacInt`) writes
+outside ring coverage. The verdict-relevant event, however — *guest* IM init writing a
+NON-zero pointer/bits/mask into a NIL/zero struct via JIT-executed PPC stores — is exactly
+what the trap covers, and it never fired. The frozen-zero evidence is therefore positive
+evidence for FORGE, not merely absence of a signal.
+
+### Misroute "why" (SECONDARY — not recovered this boot)
+The post-hoc misroute decision-point analysis (why the deferred EXT edge selects CGRP
+fallback `0x50325fd0` over NK slot-4 service `0x50314660`) **could not be run in this boot**:
+(1) the ring-dump tool `ring-walk.py` referenced in the task is **not present** in
+`SheepShaver/tools/` (only `jit-analyze.py` / `jit-diff-sweep.py` exist), and (2)
+`SS_JIT_WATCH_DUMPS=0` (report-only, chosen for trap-fidelity/speed) suppressed per-hit
+trace-ring dumps, so no ring record file was produced to walk. This is bounded as a
+head-start gap for the forge milestone, not a verdict input — the FORGE verdict rests
+entirely on the struct-watch result above, which is conclusive. The established Task-1/2
+characterization of the misroute (EXT edge consumed at NK EXT level, drives slot-4 twi
+`0x5046e8d0`, then re-fires into CGRP fallback `0x50325fd0` rather than `0x50314660`;
+`pic i:0` confirms 0 injections) stands as the routing-gap description the forge design
+should target.

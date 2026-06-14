@@ -323,3 +323,37 @@ different wall a fail).
 months, hot path is the JIT not the interpreter) + B5 (honest sequential roll-up = quarters). B4 is the
 one piece of good news (S3 toggles an existing gate). Each stage still opens with its own Task-0 + red-team
 per the machine before any of its code.
+
+---
+
+## Rev-3 amendments (2026-06-14 — lateral-moves + iterative-test ladder; user-directed)
+
+Prior repo research already scouted most lateral moves. Three veins mined (`MMU-WITHOUT-GUTTING-FLATMEM.md`;
+the archived Path A supervisor/MMU work; `M3-PIC-CUDA-DONOR-STUDY.md` + emulator-research-leads). Folded:
+
+### C1 — Per-stage donor map (port vs. oracle; cite file+SHA per backport hygiene)
+| Stage | Donor | Use | Specifics |
+|---|---|---|---|
+| **S1 MMU** | **Dolphin** `Source/Core/Core/PowerPC/JitArm64/Memmap.cpp` (`UpdateDBATMappings`) | **PRODUCTION PORT** | "Dynamic BAT" shadow-arena = the host-page-aliasing path (B1). Remap NATMEM at the rare `mtspr` BAT/SDR1/SR; **80 `LDR/STR` sites stay bit-identical**. Apple-Silicon-proven (PR #9441 W^X). GPLv2. |
+| S1 correctness | PearPC / QEMU softmmu PPC MMU | **ORACLE ONLY** (never port) | per-access walker = the slow #5 anti-pattern; use one as a reference translator to diff our shadow-arena PA outputs in a unit test. DingusPPC is NOT a usable S1 oracle (no KeyLargo/OpenPIC). |
+| **S2 OF-CI+DT** | **QEMU** OpenBIOS / `hw/misc/macio/macio.c` / `hw/intc/openpic.c` (SHA `de5d8bfd…`) | **ORACLE + reimplement-to-spec** | OpenPIC region map pinned in M3-DONOR-STUDY (`0x40000`, sub-regions glb/src/cpu). ~200–400 lines vs spec, QEMU as conformance oracle. GPLv2. |
+| **S4 device** (next wall = Cuda IFR/IER) | **DingusPPC** `devices/common/viacuda.cpp` (SHA `92bb6d10…`) | **EXTRACT-PROTOCOL** (Option B; do NOT wrap) | Reimplement the Cuda state machine in our style; Dingus+QEMU as behavioral oracles. Dingus has PRAM (QEMU lacks). GPLv3 → our dist GPLv3; cite SHA; **never PR upstream (AI ban)**. |
+
+### C2 — Differential-oracle test ladder (each stage's ITERATIVE-SUCCESS contract; most steps need NO boot)
+The unifying principle: every stage has a falsifiable oracle that proves a step in isolation before integration.
+`make test-jit` (353) + `SS_JIT_VERIFY` (interp-vs-JIT) stay green throughout as the regression net.
+- **S1:** (1) **Discriminator-A probe FIRST** — QEMU rig: is the NK mapping *coarse* (segment/BAT, 256 MB → shadow-arena 16 KB-host-safe) or *fine* (4 KB mixed-perm → softmmu, fast path lost)? This IS the walker-vs-window decision (B1/Q-S1.2), decided before any code; NK `mtsrin` use is promising-coarse. (2) **Standalone MMU unit test** (no boot): drive our shadow-arena + a reference translator (PearPC/QEMU oracle) on identical `(SR/BAT/SDR1, EA)` → assert equal PA — **must exercise the JIT path** (G1.a, anti-false-clean). (3) **`make bench`** ns/insn memory kernels = fast path unchanged. (4) gated-off paravirtual e2e A/B + soak (B8).
+- **S2:** unit test drives all 21 services + `call-method` + 3-word interpret vs the DT → gate = 0 unresolved (no boot, S2a); the captured QEMU Trampoline trace = expected-sequence oracle.
+- **S3:** QEMU oracle ("NK reaches DEC reschedule 0x50313200?"); `nw-northstar` markers; the already-gated supervisor arm (`ppc-cpu.cpp:1986`) makes A/B clean.
+- **S4:** QEMU shows the populated CGRP (18 entries) as target end-state; a CGRP-field watchpoint — **now observable because S1's paged MMU exposes the writer's virtual addr** (it ran real-mode at gating-Task-0 time, defeating the watchpoint) — catches the disk-IM-init writer PC; gate = CGRP guest-built, not a forge.
+
+### C3 — Path A / earlier-attempts reuse map (we are NOT starting from zero)
+Path A already drove the real NK through init to its idle loop and hit the S1/S3 walls; parked, not deleted.
+- **S1 reuse:** supervisor state already stored — `sprg[4]/sdr1/bat[16]/sr[16]/srr0/srr1/msr` (`ppc-registers.hpp:258`) + full `mtspr/mtsr/mtsrin` handlers (`ppc-execute.cpp:1403`); "honor-the-write" is largely Wave-0-done. NATMEM/`vm_alloc` reservation layer (`main_unix.cpp` ~:2079) is the shadow-remap hook point. Discriminator-A evidence: 9.0.4 trace showed coarse/zero (but partly by ROM-patch construction — re-run on the NK path).
+- **S3 reuse:** `exc_core.cpp` (PEM-mask math for DEC/EXT/SC/PROGRAM), `deliver_pending_dec_exception()`, the **already-newworld-gated** `check_spcflags` arm (`ppc-cpu.cpp:1986`), machine-layer M0–M13 device models (SCC/VIA/OpenPIC/`mmio_bus.cpp`/`virt_clock.cpp`), and the SegMap/PMDT "write-just-before-consumer" spike pattern. The `sc` double-increment / syscall-delivery gap is a known S3 sub-wall.
+- **Dead-ends NOT to repeat:** paravirtual-shim-at-patch-time (runtime NK overwrites it → honor-the-write); `vm_remap` from `MAP_JIT` (Apple-Silicon `KERN_PROTECTION_FAILURE`; irrelevant to the RW data shadow); per-access softmmu (perf-fatal); HV.framework (virtualizes host ISA, no PPC guest).
+
+### C4 — Elevate 3 zero-dependency parallel workstreams (start at kickoff, OFF the S1 critical path)
+1. **S2a** (OF-CI callback + Core99 DT) — boot-disjoint, unit-testable. 2. **9.2.x ISO sourcing** (S4 hard-block; `ASSETS-AND-TOOLING.md` R2). 3. **Donor read-only studies** (extract Dolphin `UpdateDBATMappings` shape + Dingus `viacuda` protocol) so S1/S4 start warm. Build hygiene: ccache (~12× warm) + `make -j`.
+
+**Net:** the Dolphin port + parked Path A scaffolding materially de-risk S1 (bounded map-change hook, not a from-scratch MMU) and S3 (toggle an existing arm + reuse exc_core). Critical path stays S1→S3→S4 sequential, but S1's UNKNOWN-months now has a concrete probe-first resolution path. **Disposition: rev-3 folded; the cheapest decisive next step is the Discriminator-A coarse-vs-fine probe.**

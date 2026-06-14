@@ -5,6 +5,36 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-15 — A standing independent ADVERSARY reviewer catches both directions of error (SS_M18 S1 night)
+
+During the autonomous SS_M18 S1 build, a third **Adversary** reviewer (mandate: distrust banked
+findings, re-derive from primary parcel bytes, try to FALSIFY) ran on every deliverable alongside the
+spec + technical reviewers. In one night it produced four catches the other two reviewers (often
+UPHOLD/CLAIMS-HOLD) missed — and crucially in **both** error directions:
+
+- **False-NEGATIVE averted (the classic):** the `paged_mmu.cpp` translation core's only test was a
+  *same-author* spec-derived oracle. Both impl and oracle shared one mental-model bug — BAT scanned
+  *before* the `MSR[DR]=0` real-mode check, so a DBAT match translated in real mode instead of
+  returning EA=PA identity (PEM §7.4.1: real mode bypasses BATs too). The self-referential test passed
+  green. The independent adversary, checking against the *architecture* not the test, found it. **A
+  same-author differential test is blind exactly where author and oracle agree — an external oracle is
+  OWED, not optional, before such code is wired.**
+- **False-POSITIVE averted (the mirror, rarer):** a *prior* adversary had re-banded S1 partly on "the
+  NK programs high BATs SPR 560–575 the oracle can't model." The next adversary re-derived and showed
+  those writes are **feature-gated dead code** (gate bit `0x20` set for no presentable PVR) — chasing
+  a ghost. Over-weighting an unverified premise as decisive is the *mirror* of the M8→M17
+  false-negative; the adversary guards against it too.
+- **Over-claim trimmed:** a "WINDOW-SAFE-BY-ANALYSIS" recon had *asserted* DBAT coverage of RAM/ROM
+  while only *showing* IBAT loads (IBAT/DBAT use independent descriptors; the JIT does *data* access,
+  so DBAT is the load-bearing one). Verdict corrected to SAFE-BY-MECHANISM / owed-to-G1.e.
+
+**Rule earned:** for RE-heavy work, run the independent Adversary on *every* load-bearing deliverable —
+especially "good news that unlocks risky work" and any claim validated only by a same-author oracle.
+It is cheap relative to a five-milestone misdirection, and it catches the errors that consensus
+reviewers rationalize past. (See `[[feedback_autonomous_overnight]]` for the standing policy.)
+
+---
+
 ## 2026-06-14 — A load-bearing "never" from an EXACT-MATCH probe is the highest-risk claim in the project
 
 **This is the SECOND five-milestone misdirection caused by a measurement artifact** (cf. the

@@ -1,8 +1,12 @@
 # M17 — Host-Owned NK Interrupt-Handler Stub: Implementation Plan
 
-> **STATUS: DRAFT — pre-red-team (2026-06-14). DO NOT EXECUTE.** A pre-implementation red-team
-> round follows this draft; findings fold as rev-2 BINDING amendments. 9.2 NewWorld is now a HARD
-> requirement, re-opening the surviving path documented in `M16-FINDINGS-oracle-forge.md` Q7.
+> **STATUS: BLOCKED — red-team round 1 complete (2026-06-14). DO NOT EXECUTE pending a strategic
+> decision.** The round surfaced two independent likely-fatal findings (Q0-B: the EXT regime is
+> MODE_68K, so the "re-use the sanctioned cross" de-risk is falsified; Q0-A: the real dispatch
+> target `Lvl1DT[0]`@`$192` holds a ROM-absent handler PC — a second M16-class wall), both reducing
+> to M16's root cause (the guest IM-init never runs). See the Red-team record at the bottom. The
+> coordinator/user must pick a direction (per-wall full host-simulation vs. attack the IM-init root
+> cause) before any rev-2 fold or Task 0. 9.2 NewWorld is a HARD requirement.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
@@ -342,6 +346,48 @@ single all-or-nothing gate to Finder, per M15's first-of-N reality.
    missing IM-init would have wired, via the already-sanctioned `Execute68k` path. Red team to
    confirm this is not the proscribed HLE.
 
-## Red-team record
+## Red-team record (round 1 — SHA 132a1f19, 2026-06-14)
 
-*(empty — a red-team round follows this draft; findings fold as rev-2 markers)*
+> **VERDICT: BLOCKED pending a strategic decision — two independent likely-fatal findings, both
+> the SAME root cause as M16 (the guest IM-init that builds these contexts/values never runs).**
+> The series tripwire (stop-rule 6) effectively fired on wall 1. DO NOT start Task 0 until the
+> coordinator/user picks a direction (per-wall full-simulation vs. attack the IM-init root cause).
+
+**Finding 1 — Q0-B: the "re-use the sanctioned cross" de-risk is FALSIFIED (reviewers 1 + 3, independent).**
+The NK EXT-edge regime is `MODE_68K` (`XLM_RUN_MODE [0x2810] = 0`) — `[PROBE✓]` banked
+(`INTERRUPT-INJECTION-RECON.md` Q4 watchpoint: 151 sets/151 clears, final 0, "cold 68k world runs
+with [0x2810]=0"; `M3A-ENTRY-TABLE.md:51`) and an in-tree comment (`glue.cpp:3484-3485` "XLM_RUN_MODE
+stays MODE_68K on newworld"). The sanctioned cross (`HandleInterrupt` EMUL_OP arm, glue:3508) requires
+`MODE_EMUL_OP` (==2) + a valid 68k stack on gpr(1); `execute_68k` asserts it (glue:1469). At the EXT
+edge (option-b site glue:1254/1258) run-mode is 0 and gpr(1) is the NK PPC stack. ⇒ option (b) would
+**invent** a new cross (Execute68k from MODE_68K), re-opening the M10/wild-jump class — NOT re-use the
+proven one. This is the M14 §7 chicken-and-egg. Plan line numbers/fence are otherwise accurate.
+
+**Finding 2 — Q0-A: a hidden second "ROM-absent" + path misattribution (reviewer 3, disasm-proven).**
+`0x5000ec50` = `JMP $5000EF20`; the `ef20` (via_int) path reads lowmem `$1d4` and dispatches via
+`Lvl1DT[0] = *(lowmem $192)` then `jmp (a0)` — it does **NOT** read `$68ffefd0` (+0x28 pending /
++0x14 source table); those reads live on the sibling `0x5000ec58..→ec7e` path. So Q0-A's manufacture
+targets were the wrong addresses. The real load-bearing field, `Lvl1DT[0]` @ `$192`, holds a
+runtime-registered handler PC that is **ROM-absent (same as M16 Q7b)**; `jmp (0)` if zero. To proceed,
+the bar must drop from "dispatch a real level-1 interrupt" to "point `Lvl1DT` at a host clean-return
+stub" = **HLE the handler**, colliding with the spec OUT clause + tension #4.
+
+**Finding 3 — R6 (EOI): GO-passable but plan recipe wrong (reviewer 2).** The defer mechanism already
+exists (M7 host-irq latch, `exc_host_irq_consume()` glue:1308, proven in M15: edges=1/consumed=1, no
+runaway). But (a) the smoke recipe omits `SS_NW_HOST_IRQ` (bare PIC level is livelock-prone /
+non-asserting); (b) the hook must reach glue:1308 before `return true`, else it bypasses the consume;
+(c) `EXC_EXT_RUNAWAY_N` is a DETECTOR not a limiter (both docs overstate it). Cheap to fix — moot if 1+2 stand.
+
+**Cheap corrections to fold IF M17 proceeds** (captured so they are not lost): D1 — Q0-A targets →
+`Lvl1DT[0]`@`$192`, lowmem `$1d4`, autovector `$64`; reclassify `$68ffefd0` as the sibling-path state.
+D2 — state Q0-A's success bar explicitly (real dispatch = DoD-3; host clean-return stub = bounded HLE).
+D3 — Task-2 crash bar = "0× 0xDEADBEEF/SIGSEGV across N≥5–8 boots" (M14 §7: the M10 flake is ~1/3, a
+single green smoke can't clear it). D4 — "advanced a wall" must be ring-absent-at-baseline +
+`--r24-flow` sustained, NOT a lone HOT-PC sample (sampling-artifact gotcha). D5 — fix the §"surviving
+path" `$1d4`/d0=2 wording. R6 recipe → add `SS_NW_HOST_IRQ`; runaway-guard text → "detector".
+
+**Strategic implication (for the decision):** both fatal findings reduce to M16's root cause — the
+missing IM-init. The per-wall host-stub hits it on wall 1; pushing through requires staging an
+EMUL_OP cross from scratch AND HLE-ing a ROM-absent handler PC — progressively more host-side
+simulation, re-opening the M10 crash class. The cleaner alternative the tripwire points to: attack
+the **IM-init root cause** (why it runs downstream of Cuda init / make it run), the M14-deferred work.

@@ -1,67 +1,52 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-14** · M14 RECON: timer delivery works at VIA layer; **M13 stage-2-MISSING confirmed correct** (ed0a 8/8 retraction was capped-probe artifact — uncapped: all DEC, Cuda EXT adds zero). CGRP handler not registered → NK fallback doesn't forward EXT to DR → hnfo+0x28 empty. Chicken-and-egg: boot stalls at Cuda init before CGRP registration ·
-> Next = host-side HLE bypass (set cr2lt + hnfo from host on Cuda EXT), OR poll-driven Cuda, OR CGRP forge ·
-> Resume: read this doc, then `docs/planning/M14-FINDINGS-cuda-delivery.md` §4/§4a, then `docs/AGENT-CONTEXT.md`.
+> **Status: PIVOTING 2026-06-14** · M14 COMPLETE: NewWorld 9.x Cuda bootstrap is a
+> **precisely-characterized hard wall** (all paths collapse to crash-prone forge class).
+> **DEC does NOT signal the DR** — ed0a entries come from HandleInterrupt MODE_EMUL_OP,
+> not the NK DEC handler. KDP+0x674=0, hnfo+0x14=NIL, hnfo+0x28=0, all because IM init
+> runs downstream of Cuda init. **PARKED** with precise resume experiment in §7.
+> Next = **COMPATIBILITY-PAYOFF**: make the already-booting 8.6–9.0.4 genuinely usable.
+> Resume NewWorld 9.x: `docs/planning/M14-FINDINGS-cuda-delivery.md` §7 (forge smoke test).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
 
 ## HEADLINE — the M13 correction + M14 reconciliation
 
-> **DEC delivery to 68k WORKS. EXT (Cuda) delivery to 68k does NOT.**
+> **DEC does NOT signal the DR. EXT (Cuda) delivery to 68k does NOT.**
+> **ed0a entries are from HandleInterrupt MODE_EMUL_OP, not the NK DEC handler.**
 >
-> The M9→M13 thesis — "the 68k handler never runs" — was a probe artifact (ed08 exact-match
-> blind to ed0a). But the M13 retraction overcorrected: ed0a "8/8" was a **capped-probe
-> artifact** (default cap=8). M14 uncapped probe (`:64`) shows 64/64 in baseline = ALL DEC
-> autovector. Smoke H (timer-based Cuda delivery) adds ZERO ed0a entries.
+> The ed0a entries were **misattributed to DEC autovector.** Full DEC handler RE (§7)
+> proves: the NK DEC handler at 0x50313200 services timers, restores CR fully
+> (`mtcrf 0xff, r13`), and returns via rfi — it NEVER dispatches to the DR. The 64/64
+> ed0a entries come from `HandleInterrupt` `MODE_EMUL_OP` `Execute68k` (the host-side
+> VBL path that runs during EMUL_OP callbacks). In `MODE_68K` (where Cuda init runs),
+> HandleInterrupt only bumps Ticks — no CR injection, no autovector.
 >
-> **M13 stage-2-MISSING was correct:** the CGRP handler is not registered, so the NK EXT
-> fallback at 0x50325f00 consumes the PIC source and returns without forwarding to the DR.
-> Cuda EXT reaches the NK but never the 68k world. Hnfo+0x28 (pending bits) is zero — the
-> 68k handler's interrupt-source struct is empty. Both the M13 reverted mechanisms
-> (`SS_NW_DR_AUTOVEC`, `SS_M10_CGRP`) targeted the right problem with wrong implementations.
+> **The chicken-and-egg, precisely located:**
+> - `KDP+0x674` (CR mask) = **0** — never initialized (probed live)
+> - `hnfo+0x14` (source table) = **NIL** — never populated
+> - `hnfo+0x28` (pending bits) = **0** — never written
+> - All three are populated by the Interrupt Manager init, which runs DOWNSTREAM of
+>   Cuda init. Every viable fix path collapses to the M10-forge class (host-seeding
+>   NK data structures). See M14-FINDINGS §7 for the precise resume experiment.
 >
 > **Standing corrections:**
 > - The ed08→ed0a probe-granularity fix IS correct (always probe ed0a, never ed08)
-> - DEC delivery to 68k IS healthy (published DEC handler, not CGRP-dependent)
-> - The "DO NOT re-chase" blanket prohibition was too broad — the stage-2 gap is real, but
->   the specific failed approaches (host-side register pokes, forged CGRP tables) should not
->   be repeated. Any new approach must follow M13 B.1–B.4 contract analysis.
-> - Evidence: M14-FINDINGS §4a (Smoke H + uncapped probe + watchpoints + direct Hnfo probe)
+> - DEC does NOT deliver to 68k via the NK handler — ed0a entries are MODE_EMUL_OP only
+> - All paths (HLE, CR injection, CGRP forge, Execute68k) collapse to forge-class
+> - Evidence: M14-FINDINGS §4a (smoke tests) + §7 (DEC RE + collapse analysis)
 
-## Resume prompt (M14 — Cuda delivery + NK interrupt routing)
+## Resume prompt (COMPATIBILITY-PAYOFF — making 8.6–9.0.4 usable)
 
-> Read `docs/HANDOFF.md` (this HEADLINE), then `docs/planning/M14-FINDINGS-cuda-delivery.md`
-> (full root cause + 9 smoke tests in §4, Smoke H timer result in §4a), then
-> `docs/AGENT-CONTEXT.md` (frontier + constants).
+> Read `docs/HANDOFF.md` (this HEADLINE), then `docs/AGENT-CONTEXT.md`.
 >
-> **M14 recon + 9 smoke tests + watchpoint + uncapped-probe validation.** Timer-delayed
-> Cuda SR delivery is correct at the VIA layer. The M13 **retraction was itself an
-> artifact** — ed0a "8/8" was a capped-probe result (default cap=8); uncapped (`:64`)
-> shows 64/64 baseline = all DEC autovector, Smoke H adds zero. The M13 stage-2-MISSING
-> diagnosis was correct:
+> **NewWorld 9.x is PARKED.** The chicken-and-egg is precisely characterized (M14 §7)
+> and the resume experiment is written down verbatim. Don't re-derive — read §7 if
+> picking it up.
 >
-> 1. **CGRP handler not registered** → NK EXT routes to fallback at 0x50325f00 →
->    fallback reads PIC, clears source, returns — never sets cr2lt for the DR.
->    Cuda EXT reaches NK but NOT the 68k world.
->
-> 2. **Hnfo pending bits (hnfo+0x28) empty** — watchpoints: all zeros for entire boot.
->    Direct probe at EXT entry: hnfo+0x14 (source table) = NIL, hnfo+0x28 = 0.
->    Even if EXT reached the 68k handler, it would find nothing to service.
->
-> 3. **Chicken-and-egg**: boot stalls at Cuda init (packets=0) BEFORE reaching the
->    Interrupt Manager init that would register the CGRP handler. DEC reaches 68k
->    (published DEC handler, not CGRP-dependent). Cuda init may be poll-driven but
->    the guest polls IER (65,539×) instead of IFR (2×).
->
-> **Next:**
-> (a) **Host-side HLE — the only viable path.** On Cuda EXT delivery, set cr2lt +
->     populate hnfo+0x28 from the host. M13 B.1–B.4 has the exact contract. Gate behind
->     a smoke test before building the real implementation.
-> (b) ~~Poll-driven Cuda~~ — **ELIMINATED.** IER/IFR timeline (§4b) shows the guest
->     relies on interrupt-driven SR delivery, not polling. No IFR reads after SR is
->     enabled in IER. The 65,539 IER reads are a T1 timer calibration loop.
-> (c) **CGRP forge — fallback.** Only if (a) fails.
-> (d) Fix §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
+> **Current focus: COMPATIBILITY-PAYOFF** — make the already-booting Mac OS 8.6–9.0.4
+> genuinely usable. The project boots to Finder with full native JIT on arm64. The
+> highest-value work is: CopyBits HLE, idle-skip, perf optimization, app compatibility,
+> and the Silicon Sheep launcher (Track C).
 >
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked. Never global pkill —
 > slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
@@ -79,12 +64,13 @@
 - **M13** — COMPLETE (2026-06-14). Produced the **artifact retraction**: native interrupt delivery
   confirmed working (ed0a 8/8 baseline, genuine vector-$64 frame); the dead `SS_NW_DR_AUTOVEC` and
   `SS_M10_CGRP` mechanisms reverted. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
-- **M14** — RECON IN PROGRESS (2026-06-14). 9 smoke tests + watchpoint + uncapped probe.
-  Timer delivery correct at VIA layer. **M13 stage-2-MISSING confirmed correct** — the
-  M13 retraction was a capped-probe artifact (ed0a "8/8" = DEC only; uncapped 64/64).
-  CGRP handler not registered → NK fallback consumes EXT, never forwards to DR → hnfo
-  pending bits empty. Chicken-and-egg: boot stalls before CGRP registration. Three fix
-  paths: host-side HLE (M13 B.1–B.4 contract), poll-driven Cuda, or CGRP forge.
+- **M14** — COMPLETE, PARKED (2026-06-14). 9 smoke tests + watchpoint + uncapped probe +
+  DEC handler RE + ed0a misattribution discovery. Timer delivery correct at VIA layer.
+  **DEC does NOT signal the DR** — ed0a entries come from HandleInterrupt MODE_EMUL_OP
+  Execute68k, not the NK DEC handler (which restores CR fully and returns without
+  dispatching to the DR). KDP+0x674=0, hnfo+0x14=NIL, hnfo+0x28=0 — all because IM init
+  runs downstream of Cuda init. All viable paths collapse to the M10-forge class (seed
+  uninitialized NK routing infra from host). Parked with precise resume experiment in §7.
   See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.

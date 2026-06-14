@@ -367,9 +367,9 @@ correct source bit (data-layer). Both are the registered CGRP handler's job.
 
 **Chicken-and-egg status:** The CGRP handler is installed by Mac OS's Interrupt Manager
 during boot. The boot stalls at Cuda init (packets=0) BEFORE reaching Interrupt Manager
-init. But DEC interrupts reach the 68k world via the published DEC handler path (not
-CGRP-dependent) — so if the Cuda protocol can be driven poll-driven (without requiring
-EXT→68k delivery), the boot might advance past CGRP registration.
+init. **DEC does NOT signal the DR** (see §7) — the ed0a entries attributed to "DEC
+autovector" actually come from HandleInterrupt MODE_EMUL_OP Execute68k, not from the NK
+DEC handler at all.
 
 ### §4b — IER/IFR timeline (path (b) precondition, 2026-06-14)
 
@@ -405,16 +405,9 @@ Temporary IER/IFR read/write diagnostics in `dev_via6522.cpp` (reverted after ca
 **Verdict on path (b): RED HERRING.** The guest does not poll IFR for Cuda responses.
 It relies on interrupt-driven delivery. Path (b) cannot break the chicken-and-egg.
 
-**Next steps (revised priority):**
-
-(a) **Host-side HLE (set cr2lt + hnfo+0x28) — the only viable path.** Gate behind a
-    smoke test: at the NK fallback point, set cr2lt + the pending bit → does the Cuda
-    EXT reach ed08 and Cuda init complete? The M13 B.1–B.4 analysis provides the exact
-    contract. This is an untested hypothesis (the reverted Task-C SS_NW_DR_AUTOVEC used
-    a different mechanism) — smoke-test before building the gated implementation.
-
-(c) **CGRP forge — fallback.** M10 attempted (SS_M10_CGRP, crashed). Only pursue if
-    (a) fails.
+**Status: PARKED (2026-06-14).** All viable paths collapse to the same crash-prone
+forge class (seed KDP+0x674 + hnfo source tables from host). See §7 for the complete
+analysis and the precise resume experiment.
 
 ## §5 — Bug found during investigation
 
@@ -445,3 +438,79 @@ env override mechanism itself is correct; macOS is last-wins for duplicate env k
   existence check — `SS_NW_TRAMPOLINE=0` still activates newworld.
 - **Ring analysis:** use `tools/ring-walk.py` for r24 ring analysis (the prescribed tool
   per LEARNINGS ring-confirm rule).
+
+## §7 — DEC handler RE + ed0a misattribution + collapse to forge (2026-06-14)
+
+### DEC handler does NOT signal the DR
+
+The NK DEC published handler at `0x50313200` was fully disassembled. Its flow:
+1. Save prologue (`bl 0x50313d40`) — sets `r7 = [KDP-0x10]` (NK context flags)
+2. Timer body (`bl 0x50322eac`) — services NK timer queue, updates DEC
+3. Return via `0x50312cb0` — checks `r7 & 0x30`; if set, dispatches to DR via `0x50312ab4`
+4. Fast return via `0x503242a8` — restores CR fully (`mtcrf 0xff, r13`), rfi
+
+**Probe result:** `r7 = 0x00a80000` at `0x50312cb0` → `r7 & 0x30 = 0` → the DR dispatch
+path at `0x50312ab4` never fires. Confirmed: zero probe hits at `0x50312ab4`. The DEC
+handler services timers and returns without signaling the DR.
+
+### ed0a entries come from HandleInterrupt MODE_EMUL_OP
+
+The 64/64 ed0a entries attributed to "DEC autovector" actually come from
+`HandleInterrupt()` in `MODE_EMUL_OP` (sheepshaver_glue.cpp:3503–3522). When a VBL timer
+fires during an EMUL_OP callback (host-side trap), `Execute68k()` runs a 68k proc that
+jumps to vector `$64` (the level-1 autovector). These are synchronous nested 68k
+executions, not NK interrupt dispatches.
+
+Key evidence:
+- **KDP+0x674 (CR mask) = 0** on NewWorld (probed at `0x68fff674`). The OldWorld CR
+  injection mechanism (`r->cr |= cr_mask`) is not just fenced — it's empty.
+- **HandleInterrupt MODE_68K** for NewWorld only bumps Ticks (line 3453). CR injection
+  is fenced (line 3441: `if (!MachineProfileIsNewWorld())`). No cr2lt, no autovector.
+- **DEC handler restores CR fully** (`mtcrf 0xff, r13` at `0x503244dc`) — no DR signaling.
+- **MODE_EMUL_OP fires** during host trap callbacks (GetResource, InitGraf, etc.),
+  producing the ed0a entries. MODE_EMUL_OP is safe for Execute68k (saves/restores all
+  PPC state); MODE_68K is NOT (clobbers XLM_RUN_MODE).
+
+### Guest is NOT in a tight wait loop
+
+r24 ring (`SS_DR_R24_RING=1`, 30s diagnostic boot): 1,507,519 transitions, ending at
+normal 68k initialization activity — vector table setup (`0x5000e0ee` loop), InsTime
+calls (`0x50066e24: dc.w $a024`), A-line handler entry (`0x5000dfa2`). The DR is actively
+running 68k init code when SIGTERM fires, not stuck in a spin loop.
+
+The Cuda stall manifests as `syncs=1, packets=0` — the attention handshake started but
+the SR response was never processed by the 68k Cuda interrupt handler. Other init code
+continues running while Cuda-dependent paths (ADB, input) never complete.
+
+### All paths collapse to the forge class
+
+| Path | Mechanism | Why it fails |
+|------|-----------|-------------|
+| (c') Fix XLM_RUN_MODE + Execute68k($64) | Make Execute68k safe from MODE_68K | Handler reads hnfo+0x28=0, +0x14=NIL → no-ops |
+| (b') Seed KDP+0x674 CR mask | Un-fence MODE_68K injection | KDP+0x674=0 (never initialized); seeding it = forge |
+| (a') Host-side Cuda HLE | Bypass NK→DR chain | Guest is interrupt-driven (zero IFR reads after SR enable); no poll fallback to satisfy |
+| Un-retire cuda_init patch | NOP the 68k Cuda init | Pattern misses 9.0.1 ROM (0x9be2 outside 0xa000..0x12000) |
+
+Every path that could make the interrupt fire requires seeding the uninitialized NK
+routing infrastructure from the host: KDP+0x674 (CR mask), hnfo+0x28 (pending bits),
+hnfo+0x14 (source table). This is the M10-CGRP forge class (0xDEADBEEF crash).
+
+### PARKED — resume experiment (if NewWorld 9.x becomes a committed target)
+
+The forge is now well-informed (unlike the blind M10 attempt). The precise smoke test:
+
+1. **Seed three locations at NW-trampoline-end** (via `SS_SEED_MEM` or host code):
+   - `KDP+0x674` (0x68fff674) = cr2lt bit pattern (the CR mask HandleInterrupt injects)
+   - `hnfo+0x28` (0x68ff4f28) = pending source bit for Cuda/VIA
+   - `hnfo+0x14` (0x68ff4f14) = pointer to a minimal source handler table
+2. **Un-fence MODE_68K CR injection** for NewWorld (remove the
+   `if (!MachineProfileIsNewWorld())` guard at sheepshaver_glue.cpp:3441)
+3. **Boot with Smoke-H timer delivery** (the proven VIA-layer fix)
+4. **Gate:** `packets > 0` AND no 0xDEADBEEF crash
+5. **If step 4 fails:** the forge values are wrong. RE the hnfo source table format
+   from a working paravirtual boot (where IM init runs) to get correct values.
+
+This is genuinely different from M10's blind forge — it targets three precisely-located
+addresses with a clear causal chain, and the VIA-layer delivery (Smoke H) is already
+proven correct. But it's still forge-class (writing NK data structures the host doesn't
+own), so the crash risk is real.

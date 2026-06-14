@@ -36,11 +36,20 @@ load-bearing claim that rests on the instrument.
    without asking "are these DEC ticks or Cuda EXT entries?" — the answer (all DEC, zero
    Cuda) inverted the conclusion.
 
-Both rules instantiate the same principle: **a probe result is load-bearing only for what
-it discriminates.** Exact-match discriminates address but is blind to word+2. Capped/aggregate
-discriminates "runs at all" but is blind to source. The meta-trap: positives feel trustworthy
-("it works!") so nobody applies cap-scrutiny to them — the retraction that banked rule 1
-was itself a rule-2 violation.
+3. A load-bearing **ATTRIBUTION** — "these entries come from source X" — must be verified
+   against the actual mechanism, not inferred from timing or co-occurrence. The 64/64 ed0a
+   entries were attributed to "DEC autovector" because they tracked DEC timing. Full RE of
+   the DEC handler (M14 §7) proved the NK DEC handler does NOT signal the DR — it restores
+   CR fully and returns. The ed0a entries come from `HandleInterrupt` `MODE_EMUL_OP`
+   `Execute68k` (a completely different mechanism). Attribution by timing correlation ≠
+   attribution by mechanism trace.
+
+All three rules instantiate the same principle: **a probe result is load-bearing only for
+what it discriminates.** Exact-match discriminates address but is blind to word+2.
+Capped/aggregate discriminates "runs at all" but is blind to source. Timing correlation
+discriminates "happens around the same time" but is blind to causation. The meta-trap:
+positives feel trustworthy ("it works!") so nobody applies cap-scrutiny or mechanism-scrutiny
+to them.
 
 ---
 
@@ -49,7 +58,9 @@ was itself a rule-2 violation.
 > ⚠️ **Superseded framing (2026-06-14):** this entry's premise — that delivery to `0x5000ED08` was
 > the blocker worth solving — was the retracted artifact (see the 2026-06-14 entry above). The
 > RE facts below about the DR being a recompiler remain accurate; the *motivation* (injecting
-> interrupts) was chasing a non-problem. Native delivery already works.
+> interrupts) was chasing a non-problem. **Further correction (2026-06-14 session 2):** "native
+> delivery already works" was also wrong — DEC does NOT signal the DR at all (see rule 3 above
+> and M14-FINDINGS §7). The ed0a entries come from HandleInterrupt MODE_EMUL_OP Execute68k.
 
 Three-approach bake-off (parallel worktrees) on "deliver a 68k interrupt to the ROM handler at
 0x5000ED08 without the intermittent 0xDEADBEEF SIGTRAP." Two approaches falsified by RE, one

@@ -1,6 +1,21 @@
 # SS_M18 Stage 1 — NewWorld paged MMU: S1 SOFTMMU-FIRST — the interpreter-chokepoint walker + map harvest — IMPLEMENTATION milestone
 
-> **Status:** rev-1 (2026-06-15), pre-red-team. NEW CRITICAL PATH. Created by the coordinator
+> **Status:** rev-2 (2026-06-15) — **DEFERRED / RE-SCOPED by the 3-reviewer red-team.** The
+> softmmu-as-live-harvest-vehicle is **FALSIFIED**: SheepShaver does not run the NK MMU-install, so
+> there is **no live map to harvest** (ADVERSARY, from primary code). PROCESS GO-WITH-FIXES · TECHNICAL
+> GO-WITH-FIXES (V1 NO-GO-without-a-TLS-interp-context-guard) · ADVERSARY **WRONG-VEHICLE + premise
+> FALSE**. Convergent reasons + the constructive re-scope are in the **Red-team record** at the bottom.
+> **Do not build the softmmu as a live translator now.** The genuinely-completable S1 work is the STATIC
+> derivation of the NK MMU constants from the md5-verified parcel + oracle validation (live retirement
+> owed to G1.e/Route A — the program's standing position). The live paged MMU (window OR softmmu) is
+> **inseparable from S3** (running the real NK install). See HANDOFF / program STATUS.
+>
+> ---
+>
+> *(original rev-1 body retained below; the chokepoint/regs-provider/endianness analysis is reusable for
+> the eventual Route-A-era live softmmu, once a guest actually programs SR/BAT/SDR1.)*
+>
+> NEW CRITICAL PATH. Created by the coordinator
 > disposition that DEFERRED the `vm_remap` window (`2026-06-15-ss-m18-s1-taskB-window-build.md` rev-2
 > Red-team record: ADVERSARY WRONG-BUILD-ORDER · TECHNICAL V4 NO-GO-without-spike · PROCESS
 > GO-WITH-FIXES). The window's `VM_FLAGS_OVERWRITE`-on-live-NATMEM primitive is unproven +
@@ -194,5 +209,48 @@ of the same answer ⇒ STOP, re-plan.
    (newworld-gated); confirm no test/caller perturbed.
 8. **G-paravirtual** — inertness-substitute sufficient or real `make e2e` owed (shared runtime path)?
 
-## Red-team record
-*(empty — to be filled by the three-reviewer red-team: PROCESS + TECHNICAL + ADVERSARY. Voting list V1–V10 submitted alongside.)*
+## Red-team record (rev-2 — DEFERRED / RE-SCOPED)
+
+The three reviewers converged: the milestone's *plumbing* is sound and low-risk, but its *harvest
+deliverable rests on a live NK map that does not exist in SheepShaver today.*
+
+**ADVERSARY — WRONG-VEHICLE, premise FALSIFIED (decisive; re-derived from primary code).**
+- **No live map exists.** SS runs the `SS_NW_TRAMPOLINE` *output-forge*, not the NK MMU-install:
+  SDR1 set in C (`sheepshaver_glue.cpp:2806`, zeroed 64 KB HTAB, HTABMASK=0), SRs reset to 0 and never
+  programmed (`:566`), the NK SR-unroll `@0x503104b4` + `mtsrin` loop `@0x50315290` NEVER execute. The
+  guest never runs `mtspr SDR1 @0x50310604`. The frontier `0x50314880` is reached with FORGED supervisor
+  state. → GREEN-PASS unreachable by construction; any "harvest" = the forged SDR1/SR=0 state, a
+  fabricated map (Stop-rule #3).
+- **Bootstrap-ordering boot-killer.** Boot MSR=0x7072 (DR=1) from instruction one; the forged HTAB is
+  empty + SR/BAT=0. An armed softmmu would `paged_mmu_translate(SR=0,BAT=0,…,dr=1)` → fault on every
+  access → kill the one working NewWorld boot.
+- **Constructive re-scope:** harvest the forge state via existing `SS_PROBE_PC` instrumentation (cheap,
+  no shared-path edit); derive the GENUINE constants STATICALLY from the md5-verified parcel
+  (Discriminator-A already pinned the mechanism + addresses; SDR1/HTABMASK computable from RAMSize) +
+  validate via the committed oracle test. Live retirement of the window's coverage predicate is owed to
+  a real NK boot (Route A / G1.e / S3) — already the program's standing position. **Defer any
+  softmmu-as-live-translator until S3 runs the real MMU-install.**
+
+**TECHNICAL — GO-WITH-FIXES (V1 NO-GO without an interp-context guard).** The chokepoint reaches EVERY
+interpreter access form (verified incl. `vm_memset`/`vm_memcpy` → `dcbz`/string/multiple) — BUT it is
+NOT interpreter-only: `Mac2HostAddr`/`ReadMacInt`/`WriteMacInt` (`cpu_emulation.h`) reach
+`vm_do_get_real_address` from the host-emulation layer AND non-cpu threads (ether/video/serial/SDL). So
+an env+newworld+provider gate would (a) contaminate the map with EmulOp/driver accesses and (b) create a
+cross-thread stale-regs race. Both need a TLS `in_interp_translate` guard. Also: live HTAB phys-reader
+must `bswap32` (BE guest memory); the `msr_pr` add is a compile-breaking signature change (update
+callers). [Reusable for the Route-A-era live softmmu.]
+
+**PROCESS — GO-WITH-FIXES.** M1: G-paravirtual owes real `make e2e` + gated-off A/B (inertness alone is
+self-grading — `vm_do_get_real_address` is on the paravirtual path too). M2: the G-harvest landmark must
+be an enumerated counter/probe, not a judgement call. M3: `vm_memcpy`/`vm_memset` translate the base
+once then walk contiguous host memory → wrong across a page boundary under paging (bound the "correctness
+reference" claim). Pin abort+diagnostic fault contract; the `gZeroPage` tension is moot on arm64
+(x86_64-only block).
+
+**Coordinator disposition (BINDING):** **DEFER the live softmmu; RE-SCOPE S1's completable-now work to:**
+(a) STATIC derivation of the NK MMU constants from the parcel + oracle validation (`paged_mmu_translate`
+already committed+tested), and (b) a cheap `SS_PROBE_PC` forge-state instrumentation pass (documents the
+forge, confirming M16). **The live paged MMU (window OR softmmu) is inseparable from S3** — it needs a
+guest that actually programs SR/BAT/SDR1, which only the real NK install (Route A / S3) provides. This is
+the original S1→S3 sequential structure, now confirmed from the code. The red-team again killed a
+months-of-misdirection build *on paper* before a line was written.

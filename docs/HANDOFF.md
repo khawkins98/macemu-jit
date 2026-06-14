@@ -3,7 +3,23 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-14):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION:** **S1 → SOFTMMU-FIRST** (build-order flipped by the Task-B plan red-team). Task A
+> - **▶ NEXT ACTION (re-banded 2026-06-15):** **S1's live paged MMU is INSEPARABLE FROM S3.** Both the
+>   window AND the softmmu-first milestones were drafted, 3-reviewer red-teamed, and **DEFERRED**: the
+>   window for WRONG-BUILD-ORDER (`vm_remap VM_FLAGS_OVERWRITE`-on-live-NATMEM unproven + topology-
+>   mismatched), the softmmu because the adversary **falsified its premise from code** — SheepShaver runs
+>   the `SS_NW_TRAMPOLINE` *output-forge*, NOT the NK MMU-install (SDR1 set in C @`sheepshaver_glue.cpp:2806`,
+>   SRs reset to 0 + never programmed @`:566`, the NK `mtsrin` install loop `0x50315290` NEVER executes),
+>   so **there is no live `(SR/BAT/SDR1)` map to harvest**, and arming a softmmu against the empty forged
+>   HTAB (boot MSR DR=1) would fault every access and kill the one working boot. **This confirms the
+>   original S1→S3 sequencing from the code: a live paged MMU needs a guest that actually programs
+>   SR/BAT/SDR1, which only the real NK install (Route A / S3 two-supervisor reconciliation) provides.**
+>   **The autonomously-completable S1 work is DONE-or-small:** Task A (`paged_mmu_translate()` + oracle
+>   test) is committed; the remaining low-risk step is the STATIC derivation of the genuine NK MMU
+>   constants from the md5-verified parcel + oracle validation (live retirement owed to G1.e/S3) + a cheap
+>   `SS_PROBE_PC` forge-state instrumentation pass (documents the forge, confirms M16). **After that, S1
+>   is at its honest ceiling until S3.** Plans: `…2026-06-15-ss-m18-s1-softmmu-first.md` rev-2 (DEFERRED,
+>   reasons) + `…s1-taskB-window-build.md` rev-2 (DEFERRED) + `…ss-m18-s1-impl-paged-mmu.md`.
+>   *(superseded softmmu-first next-action below):* Task A
 >   is DONE + committed (`fc3ca256` high-BAT insurance, `2bf1526b` translation core + test, `191fe67c`
 >   adversary real-mode/BAT fix; `make test-jit` score=100, `test_paged_mmu` 36/36). The window-build
 >   plan was drafted + 3-reviewer red-teamed → **DEFERRED (WRONG-BUILD-ORDER)**: its

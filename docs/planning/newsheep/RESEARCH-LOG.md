@@ -21,4 +21,19 @@
   disassemble; pin the OF-tree reads + nanokernel interrupt-setup writes; pin the gap vs our
   synthesized OF + `SS_NW_TRAMPOLINE`). Zero-cost, offline. Awaiting the milestone-machine pass.
 
+- **Round-1 charter feedback folded (2026-06-14).** External agent review: framing sound
+  ("not just a different forge"; route-ladder-with-shared-cheap-Task-0 is right). Load-bearing
+  points, now captured in `DECISIONS.md` (Q0-A…E) + charter §6/§9:
+  - **Q0-A is THE feasibility gate:** does Route A mean implementing OpenFirmware? (the Trampoline is
+    an OF client). Enumerate its OF calls FIRST; bounded→A viable, open-ended→ladder collapses to B/C.
+  - **Route C ≠ automatically distinct from the buried forge** (M16: handler PC is computed-at-runtime);
+    C viable only if writes are constants/relocations, not computed-from-OF-tree (Q0-B).
+  - **Route B must be honest re-binding, not value-hardcoding** (red-team enforces in DoD — Q0-C).
+  - **QEMU as a Trampoline TRACER** (Task-0 step, not backstop): trace OF calls + write values under
+    mac99 to answer Q0-A/B behaviorally before committing a route.
+  - **9.0.x findings may not transfer to 9.2** (parcels-layout change); source the 9.2 "Mac OS ROM"
+    file early, separate from the ISO (Q0-D).
+  - **Win condition = clear the IM-init class; expected next wall = M14 `[ALARM]` boot-gate, NOT
+    Finder.** R3 (non-IM wall) is the GOOD outcome (back on machine-layer mainline).
+
 <!-- next entry below -->

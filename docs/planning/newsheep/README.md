@@ -92,17 +92,40 @@ we take the cheapest that works.
   with the derivation cited from the disassembly (not guessed).
 - **All**: `make test-jit` = 100; gated-off byte-identical A/B; new frontier captured in `RESEARCH-LOG.md`.
 
+> **Live fork tracker:** `DECISIONS.md` holds the open questions (Q0-A…E) with status. The single
+> dominant one is **Q0-A**, below.
+
 ## 6. Key risks (carried into the first milestone's Task 0)
-- **R1 — OF-service depth (Route A):** running the Trampoline may pull in OF client-interface
-  callbacks. Bound this in Task-0 RE before committing to Route A.
+- **R1 / Q0-A — "Does Route A mean implementing OpenFirmware?" (the effort's FEASIBILITY GATE, not
+  a side risk):** the Trampoline is an OF *client* and calls OF client-interface services; SheepShaver
+  has no OF. Task-0's FIRST deliverable is a go/no-go: enumerate the OF calls the Trampoline makes →
+  **bounded-and-stubbable** (Route A viable) vs **open-ended** ("Route A" = "write an OpenFirmware",
+  ladder collapses toward B/C). **This gates everything else** (`DECISIONS.md` Q0-A).
+- **Route C is not automatically distinct from the buried forge:** M16 found the handler PC is
+  ROM-absent (computed at runtime). C is viable only if the interrupt-setup writes are
+  constants/relocations; if they're computed from a live OF tree, C collapses into A (`DECISIONS.md`
+  Q0-B). **Route B must be honest re-binding (relocation), not value-hardcoding** — else it's the
+  forge in a tbxi hat; the red-team enforces this in the DoD (Q0-C).
+- **R1b — OF-service depth (Route A):** even if bounded, the OF callbacks must be stubbed. Bound the
+  set in Task-0 before committing to Route A.
 - **R2 — 9.2 asset gap:** we have 9.0.1/9.0.4 ROMs; the `macos921.dsk` asset is actually 8.6. The
   Trampoline RE can *start* on 9.0.x, but the real 9.2 boot needs genuine 9.2.x media (an ISO, not a
   hardware ROM). Tracked in `ASSETS-AND-TOOLING.md`.
-- **R3 — producer-run reveals a non-IM wall:** possible, but that returns us to the machine-layer
-  plan's mainline (device models already staged), not a forge cul-de-sac.
-- **R4 — 9.2 is past upstream's NewWorld envelope:** upstream SheepShaver targets NewWorld 8.5–9.0.4;
-  9.1+ offloads *more* to the Trampoline (parcels-based tbxi). So 9.2 is the hardest case for the
-  exact thing we lack — and nobody's SheepShaver runs it. Plan for genuinely new ground.
+- **R3 — producer-run reveals a non-IM wall: this is the GOOD outcome.** It means the producer
+  approach worked and we're back on the machine-layer plan's mainline (device models already staged),
+  not a forge cul-de-sac.
+- **R4 — 9.2 is past upstream's NewWorld envelope, and 9.0.x findings may not transfer:** upstream
+  SheepShaver targets NewWorld 8.5–9.0.4; 9.1+ moved to a different parcels-based tbxi layout, so
+  Task-0 RE on the 9.0.x ROMs may characterize a *structurally different* Trampoline than 9.2's.
+  Starting on 9.0.x is fine for tooling/method, but **don't let a clean 9.0.x RE create false
+  confidence about 9.2** — prioritize sourcing the genuine **9.2 "Mac OS ROM" file** (a separate
+  artifact from the install ISO, possibly sourceable independently) and diff the layouts
+  (`DECISIONS.md` Q0-D).
+
+> **Win condition, stated plainly (so success isn't mis-sold):** NewSheep wins by **clearing the
+> IM-init frozen-struct class**. The expected *next* wall is the **M14 `[ALARM]` model-rejection /
+> pre-System boot gate** — a known, separate downstream frontier — NOT Finder. Reaching Finder is the
+> effort's north star but not this class's DoD.
 
 ## 7. How this fits the existing plan
 This is the `MACHINE-LAYER-PLAN.md` §2.7 principle ("LLE for boot, HLE for runtime") finally pointed
@@ -136,15 +159,21 @@ Task-0**. Run the full machine; do NOT jump to implementation:
   template, with a BINDING Task-0 blocking-answer table.
 - [ ] **4. Red-team** — pre-implementation adversarial round against the committed spec/plan SHA
   (the round that caught M16's ROM-absent and M17's MODE_68K problems early). Fold findings.
-- [ ] **5. Execute Task-0** (offline, startable today, no boots):
-  - `pip install tbxi`; `tbxi dump` the 9.0.1 + 9.0.4 Mac OS ROM files.
-  - Disassemble the **Trampoline ELF** parcel (capstone, PPC BE).
-  - Pin (a) what OF device-tree state it **reads**, (b) the nanokernel interrupt-setup it **writes**
-    (the CGRP/IM structures observed frozen in M15/M16), (c) the **gap** vs. our synthesized OF +
-    `SS_NW_TRAMPOLINE`.
-  - Cross-check the handoff shape against the QEMU-9.2 oracle (behavioral only — never address oracle).
-  - **Output:** the A/B/C route decision (run it / patch offline / informed host-reproduction),
-    recorded in `RESEARCH-LOG.md` + a `NEWSHEEP-FINDINGS-*.md` (or this folder).
+- [ ] **5. Execute Task-0 — framed as variance-reduction on the Q0-A feasibility gate** (offline-first,
+  no SheepShaver boots). Point it straight at the highest-variance unknown, not a general "disassemble
+  and see":
+  - `pip install tbxi`; `tbxi dump` the 9.0.1 + 9.0.4 Mac OS ROM files; disassemble the **Trampoline
+    ELF** parcel (capstone, PPC BE).
+  - **Q0-A (GATING): enumerate the OF client-interface calls the Trampoline makes** → bounded-and-
+    stubbable vs open-ended. This decides whether Route A is viable or secretly "write an OpenFirmware."
+  - **QEMU as a Trampoline TRACER (a step, not a backstop):** single-step the Trampoline under QEMU
+    mac99; capture which OF services it calls (→ Q0-A) and which guest addresses it writes with which
+    values (→ Q0-B: constants/relocations vs computed-from-OF-tree). Behavioral/structural only —
+    never our addresses.
+  - Pin (a) what OF state it **reads**, (b) the nanokernel interrupt-setup it **writes** (the frozen
+    CGRP/IM structures), (c) the **gap** vs. our synthesized OF + `SS_NW_TRAMPOLINE`.
+  - **Output:** close Q0-A/B/C in `DECISIONS.md` → the A/B/C route decision, recorded there +
+    `RESEARCH-LOG.md` + a `NEWSHEEP-FINDINGS-*.md`.
 
 **Parallel dependency**
 - [ ] Source a genuine **Mac OS 9.2.x install ISO** (`ASSETS-AND-TOOLING.md` R2). Task-0 RE starts on

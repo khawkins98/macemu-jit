@@ -452,6 +452,19 @@ single-UBFM candidates (`extrwi`/`extlwi`) deferred — lower frequency.
 > CR0 writes never consumed before overwrite; no cross-block lazy state needed). See
 > `docs/planning/sheepshaver-research/BASILISKII-CROSS-POLLINATION.md`.
 
+> **Upstream lead (rcarmo/macemu-jit, 2026-06-13):** upstream re-enabled this exact
+> mechanism — same "boot hang regression" disable we carry — in
+> [`39990411` "SheepShaver: re-enable lazy CR0 and guarded RA"](https://github.com/rcarmo/macemu-jit/commit/39990411d03bc3a5d62d28606ed5ae53a8bb9e9b).
+> Their fix is precisely the "deeper approach" our `lazy_update_cr0` disable comment asks
+> for: stash the CR0 source in a **callee-saved register** that survives RA pressure
+> (they use `RCR0`=x19) instead of re-CMP'ing a scratch reg the allocator may have evicted,
+> plus a conservative **RA gate** (`block_allows_register_allocation` /
+> `opcode_may_touch_guest_memory`) that enables register caching only for straight-line,
+> non-faultable blocks. **Caveat — not a copy-paste:** in our tree **x19 is already
+> `RMEMBASE`**, so their register choice collides; the *technique* transfers (use a free
+> callee-saved reg, x21–x28), the patch does not. The RA-gate opcode table is reusable
+> as-is and worth diffing against our (more advanced) RA's current gating.
+
 **Expected impact**: 5-15% on Rc=1-heavy code (andi., add., rlwinm., etc.)
 **Effort**: Low-medium (code exists, same "boot hang regression" disable as RA)
 **Risk**: Medium — and the risk is *real*, not nominal: lazy CR0 was disabled for

@@ -286,33 +286,52 @@ the VIA read/write path.
 - But `irq_fired=0`, `packets=0` — the NK EXT handler (`0x50314880`) dispatched
   but the Cuda protocol never advanced
 
-**Diagnosis (CORRECTED after M13-retraction ed0a validation):** The timer delivers the
-interrupt correctly through the full VIA→PIC→NK→68k pipeline. `SS_PROBE_68K=0x5000ed0a`
-confirms the 68k autovector handler fires **8/8** with Smoke H + `SS_NW_PIC=1` — AND
-fires 8/8 in **baseline** + `SS_NW_PIC=1` (no timer, no Smoke H). The interrupt reaches
-the 68k handler in both cases. `packets=0` is a **downstream 68k-side Cuda dispatch
-problem**: the 68k VIA interrupt handler runs, enters the dispatch path, but the
-Cuda-specific interrupt source bit in the software interrupt-source struct
-(`0x68ffefd0 + 0x28`) is apparently not set, so the dispatcher doesn't know to service
-the Cuda/VIA interrupt and the Cuda byte exchange never starts.
+**Diagnosis (CORRECTED + watchpoint evidence, 2026-06-14):**
 
-> **DO NOT re-investigate NK routing, registered-handler table, CGRP registration, or
-> 68k injection** — this was the M13 thesis, retracted as a probe artifact (ed08 vs ed0a).
-> The ed0a probe proves the 68k handler IS running. See HEADLINE in HANDOFF.md.
+Timer delivery is mechanically correct at the VIA layer (IFR_SR latched, irq_out 0→1,
+PIC edge). But the ed0a "8/8" result was misleading — `SS_PROBE_68K` has a default cap
+of 8 (edge-triggered, linear). Uncapped (`:64`), baseline+PIC saturates at **64/64 in
+30s** from DEC autovector alone. The count is identical with or without Smoke H, so the
+ed0a entries are all DEC — **Cuda EXT does NOT add handler entries at ed0a**.
 
-**Verdict: PARTIAL SUCCESS.** Timer-delayed delivery is the correct VIA-layer fix —
-it delivers IFR_SR at the right time (after IER.SR enables). `packets=0` is NOT a
-timer/PIC/NK routing problem — the 68k handler fires in both baseline and timer runs.
-The blocker is the 68k-side Cuda dispatch path: the interrupt-source struct that the
-68k dispatcher reads doesn't have the Cuda pending bit set.
+This is confirmed by M13's static analysis of the NK fallback handler at `0x50325f00`:
+it reads the PIC source, clears the pending bit, and returns to PPC — it **never sets
+`cr2lt`** to trigger the DR's exception/autovector path. So the Cuda EXT is consumed
+by the NK and never forwarded to the 68k world. This is a **per-source dispatch gap**
+(distinct from the retracted M13 "registered-handler table" thesis — the handler runs,
+it just doesn't forward EXT sources to the DR).
 
-**Next:** Characterize the 68k-side Cuda interrupt dispatch:
-(a) Probe the software interrupt-source struct at `0x68ffefd0` (`+0x28`) — is the
-    Cuda pending bit ever written? Who writes it (68k code? the Cuda model? NK?)?
-(b) If the struct is empty, trace what the 68k autovector handler at `ed0a` does
-    after entry — which memory it reads to decide "nothing to service."
-(c) Compare with QEMU's mac99 — does QEMU populate a software interrupt-source
-    struct, or does it use a different dispatch mechanism?
+Additionally, watchpoint evidence confirms the **interrupt-source struct is never
+populated**:
+- `*(0x68ffefd0)` settles to pointer `0x68ff4f00` (briefly `0x68ffef00` during NK init)
+- Both `0x68ff4f00` and `0x68ffef00` are **all zeros** for the entire 30s boot (watched
+  at `+0x00`, `+0x04`, `+0x28` — zero at 1B+ observations, zero `[WATCH]` change events)
+- Nobody writes to this struct: not the NK, not 68k ROM code, not any device model
+
+**Verdict: PARTIAL SUCCESS.** Timer-delayed delivery is the correct VIA-layer fix.
+Two remaining gaps:
+1. **NK fallback doesn't forward EXT to DR** — the `0x50325f00` handler consumes the
+   PIC source and returns; it never sets cr2lt/takes the DR exception path. The Cuda EXT
+   reaches the NK but NOT the 68k world.
+2. **Interrupt-source struct is unpopulated** — even if EXT reached ed0a, the struct at
+   `0x68ff4f00` is empty so the 68k dispatcher would find nothing to service.
+
+> **This is NOT the retracted M13 thesis.** M13 claimed "handler table not installed /
+> handler never runs." The handler at 0x50325f00 DOES run and correctly reads the PIC.
+> The gap is behavioral: it clears the source but doesn't forward to the DR. And the
+> struct gap is a data-layer problem (who populates it?), not a registration problem.
+
+**Next:**
+(a) Determine who is supposed to populate `*(0x68ffefd0)+0x28` — compare with QEMU's
+    mac99 behavioral oracle. Does the NK fallback write it? Does 68k ROM code write it
+    during boot init? Is it a different address on QEMU?
+(b) Determine what makes the NK fallback forward EXT to the DR (set cr2lt) — is there
+    a configuration step the boot hasn't reached yet, or does the fallback structurally
+    never forward?
+(c) The M13 analysis noted a stage-2-MISSING: the fallback "records the interrupt and
+    returns to PPC; it never touches any 68k/DR state." This may be the design — the
+    NK's registered-handler path (when fully initialized) does forward, but the fallback
+    intentionally doesn't. If so, the registered-handler init is the gate.
 
 ## §5 — Bug found during investigation
 

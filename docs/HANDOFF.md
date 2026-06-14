@@ -1,7 +1,7 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-14** · M14 RECON COMPLETE (9 smoke tests; timer delivery WORKS through full VIA→PIC→NK→68k pipeline — but packets=0 because 68k Cuda dispatch path doesn't find the Cuda pending bit in the interrupt-source struct) ·
-> Next = characterize the 68k-side Cuda interrupt dispatch at 0x68ffefd0 (+0x28) ·
+> **Status: PAUSED 2026-06-14** · M14 RECON: timer delivery works at VIA layer; TWO remaining gaps: (1) NK fallback consumes EXT but never forwards to DR/68k (cr2lt not set), (2) interrupt-source struct at *(0x68ffefd0) is all zeros (never populated) ·
+> Next = QEMU oracle comparison for struct population + NK fallback forwarding behavior ·
 > Resume: read this doc, then `docs/planning/M14-FINDINGS-cuda-delivery.md` §4/§4a (Smoke H), then `docs/AGENT-CONTEXT.md`.
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
 
@@ -25,26 +25,30 @@
 > (full root cause + 9 smoke tests in §4, Smoke H timer result in §4a), then
 > `docs/AGENT-CONTEXT.md` (frontier + constants).
 >
-> **M14 recon + 9 smoke tests COMPLETE.** Timer-delayed Cuda SR delivery is validated
-> through the full pipeline (Smoke H: IFR_SR latched after IER.SR enables, irq_out 0→1,
-> PIC edge, NK EXT delivered, **68k autovector handler at ed0a fires 8/8**). But
-> `packets=0` — the remaining blocker is the **68k-side Cuda dispatch path**:
-> - The 68k handler runs (ed0a fires 8/8 in BOTH baseline+PIC and Smoke-H+PIC).
-> - The interrupt reaches the 68k world. The problem is DOWNSTREAM: the Cuda-specific
->   pending bit in the software interrupt-source struct at `0x68ffefd0` (+0x28) is
->   apparently not set, so the 68k dispatcher doesn't know to service the Cuda/VIA
->   interrupt and the byte exchange never starts.
-> - **DO NOT** re-investigate NK routing / registered-handler table / CGRP — that is
->   the twice-retracted M13 thesis (probe artifact). The ed0a probe proves delivery works.
+> **M14 recon + 9 smoke tests + watchpoint validation.** Timer-delayed Cuda SR delivery
+> is correct at the VIA layer (Smoke H: IFR_SR latched, irq_out 0→1, PIC edge). Two
+> remaining gaps identified by uncapped probe + watchpoints:
 >
-> **Next:** characterize the 68k-side Cuda interrupt dispatch:
-> (a) Probe the interrupt-source struct at `0x68ffefd0` (+0x28) — is the Cuda pending
->     bit ever written? By whom?
-> (b) Trace what the 68k autovector handler at `ed0a` does after entry — which memory
->     it reads to decide there's nothing to service.
-> (c) Compare with QEMU mac99 for the dispatch mechanism.
+> 1. **NK fallback consumes EXT but doesn't forward to DR.** The fallback handler at
+>    `0x50325f00` reads the PIC source, clears the pending bit, and returns to PPC —
+>    it never sets `cr2lt` to trigger the DR's exception path. Cuda EXT reaches the NK
+>    but NOT the 68k world. (Uncapped `SS_PROBE_68K=0x5000ed0a:64` shows 64/64 baseline
+>    = all DEC autovector; Smoke H adds zero ed0a entries.)
 >
-> Also fix the §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
+> 2. **Interrupt-source struct never populated.** `*(0x68ffefd0)` → `0x68ff4f00`.
+>    Watchpoint on `+0x00`, `+0x04`, `+0x28`: all zeros for entire 30s boot (1B+ obs).
+>    Even if EXT reached ed0a, the 68k handler would find nothing to service.
+>
+> This is **NOT** the retracted M13 "handler table not installed" thesis — the NK
+> fallback handler RUNS and correctly reads the PIC. The gap is behavioral (doesn't
+> forward to DR) and data-layer (struct unpopulated). Distinct from registration.
+>
+> **Next:**
+> (a) QEMU oracle: what does `*(0x68ffefd0)` point to and what populates it? Does
+>     the NK fallback forward to the DR in QEMU, or does QEMU use a different path?
+> (b) Does the NK's non-fallback (registered) handler path forward EXT to DR? If so,
+>     what init step installs the registered handler?
+> (c) Fix §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
 >
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked. Never global pkill —
 > slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
@@ -62,13 +66,13 @@
 - **M13** — COMPLETE (2026-06-14). Produced the **artifact retraction**: native interrupt delivery
   confirmed working (ed0a 8/8 baseline, genuine vector-$64 frame); the dead `SS_NW_DR_AUTOVEC` and
   `SS_M10_CGRP` mechanisms reverted. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
-- **M14** — RECON COMPLETE (2026-06-14). 9 smoke tests. Timer-delayed Cuda SR delivery
-  validated through full VIA→PIC→NK→68k pipeline (Smoke H: IFR_SR latched, irq_out 0→1,
-  PIC edge, NK EXT delivered, **68k handler ed0a fires 8/8**). But `packets=0` — remaining
-  blocker is the **68k-side Cuda dispatch path**: the interrupt-source struct at 0x68ffefd0
-  (+0x28) doesn't have the Cuda pending bit set, so the 68k dispatcher doesn't service
-  the Cuda interrupt. DO NOT re-investigate NK routing (twice-retracted M13 thesis).
-  See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
+- **M14** — RECON IN PROGRESS (2026-06-14). 9 smoke tests + watchpoint validation.
+  Timer-delayed Cuda SR delivery correct at VIA layer. Two gaps: (1) NK fallback at
+  0x50325f00 consumes EXT but never forwards to DR (cr2lt not set — Cuda EXT never
+  reaches 68k), (2) interrupt-source struct at `*(0x68ffefd0)` = `0x68ff4f00` is all
+  zeros (never populated by anyone). Not the retracted M13 thesis (handler runs, reads
+  PIC correctly — gap is behavioral/data-layer). Next: QEMU oracle for struct population
+  and NK forwarding. See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 - **M12** — PARTIAL (2026-06-13). Wave0+Wave1 landed (`ddbd8d79`, `348544cd`); boot stable

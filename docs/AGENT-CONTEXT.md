@@ -38,64 +38,16 @@
 > `ASSETS-AND-TOOLING.md` R2). NEXT = open Stage 1's own deep Task-0 + red-team (now leaning tractable)
 > before any S1 code.
 
-**M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
-consumption path is NOT one fixable divergence short of completing the guest's Interrupt
-Manager (IM) init — it must be host-forged. Two **independent** load-bearing pillars: (1)
-**routing gap** — across **510 consumption boots** (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`) the
-68k level-1 handler `0x5000ec50` is reached **0/510**; the EXT edge re-fires into CGRP
-fallback `0x50325fd0` instead of NK slot-4 service `0x50314660`; (2) **`SC#1=0x0d` is a
-PIC-off artifact** — absent under the real (`SS_NW_PIC=1`) regime, so the M8 default-flip
-refusal was gated on an unreachable config. **Verdict pivot:** NK routing structs
-(`hnfo+0x00/0x14/0x28`, `KDP+0x674`) stay **frozen-zero across obs=1e9** — zero
-struct-populating guest writes. The verdict does NOT rest on a single chain. Canonical:
-`docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)".
-**M16 — COMPLETE (2026-06-14). DoD-3 NO-GO. NewWorld 9.x interrupt routing banked as
-forge-class.** Task-0 RE pinned the dead-end to the
-empty **"CGRP"** interrupt-group descriptor (`*(KDP-0x338)=0x68ffc1c0`, `[+0x04]='CGRP'`): the
-gate `[0x68ffc1e0]=1` needs ≥2 (`50314894 cmpwi 2; blt`), but the handler table is empty
-(`+0x38/+0x3c/+0x44`=0) and the service routine `0x503148e0` self-guards, so the one-word forge
-is SAFE but INERT. Re-scoped to **CGRP handler-table synthesis** (plan rev-4/spec rev-2), then a
-pre-implementation red-team round (SHA `df627fe0`) fired the **pre-authorized early NO-GO**:
-- FORMAT is RE-tractable — entry layout `[entry+0]`=SRR0, `[entry+4]`=r2/TOC, SRR1 from r19
-  (`mtspr 0x1b,r19`); `[CGRP+0x3c]`=pointer array (index source#·4), `[CGRP+0x40]`=parallel
-  stack-ptr array indexed DIFFERENTLY (`[r23-0x116]·4`).
-- But the **synthesis target value is ROM-absent**: `0x5000ec50` has **0 word-refs** in the 4 MB
-  ROM (it is 68k code `4ef9 5000ef20`, reached only via the DR emulator, never a PPC `rfi` target);
-  the `"CGRP"` tag (`0x43475250`) is **0×** in ROM → built at runtime by disk/CFM IM-init that
-  never runs. Static RE can't produce the handler PC; QEMU-as-literal can't transfer it.
-- Scratch `0x68ff5000` is **provably live** (sub-KDP occupancy map, `M6A-ONGOING-ENTRY-DESIGN.md:690`);
-  a populated table re-opens the **M10 DR-reentry `0xDEADBEEF` crash class**; CGRP is the **first of N**
-  frozen structs (M15). The only surviving path — a host-owned NK-EXT-handler PPC stub — is much
-  larger; documented as the re-entry point if 9.x becomes a hard requirement.
-- **RE banked (Q1–Q7): `docs/planning/M16-FINDINGS-oracle-forge.md`.** M16 plan/spec CLOSED.
-
-**M17 — CLOSED, red-team BLOCKED (`cc6fc422`).** The host-owned-stub de-risk did NOT survive contact:
-the EXT-edge regime is **MODE_68K** (run-mode `[0x2810]=0`), not the `MODE_EMUL_OP` the "sanctioned
-cross" (`Execute68k`) requires; and the level-1 handler PC is a second ROM-absent value. The **series
-tripwire fired on wall 1** → per-wall forging is structurally bankrupt (every wall is the same
-disease). Spec/plan CLOSED.
-
-**▶ CURRENT FRONTIER = OPERATION NEWSHEEP (research effort, opened 2026-06-14; 9.2 NewWorld HARD
-requirement).** Reframe: **run/reproduce the PRODUCER of the boot-time init — the Trampoline — not
-forge its outputs.** The Trampoline is an ELF parcel *inside the Mac OS ROM file we already hold*;
-on real HW it copies/modifies the OF device tree and **sets up the nanokernel's interrupts** — the
-exact frozen CGRP/IM structures the whole M8→M17 arc fought. Running/reproducing it clears the whole
-frozen-struct *class* at once (vs. one wall at a time), with real values. Three-route ladder (A run
-it / B patch offline via `tbxi`+`tbxi-patches` / C informed host-reproduction), chosen by a cheap
-**offline** Task-0 (`tbxi dump` + disassemble the Trampoline — startable today on the 9.0.x ROMs).
-QEMU mac99 booting real 9.2 is the existence proof.
-- **Charter + scope + risks + asset gaps: `docs/planning/newsheep/README.md`** (+ `RESEARCH-LOG.md`,
-  `ASSETS-AND-TOOLING.md` [9.2-ISO RESOLVED: genuine 9.2.1/9.2.2 ISOs in hand, ASSETS R2], `GLOSSARY.md`).
-  Baseline tag `newsheep-baseline`. First milestone (Trampoline RE Task-0) runs the normal machine.
-- Banked forge-era RE stays valid (canonical lineage + links: `docs/planning/newsheep/GLOSSARY.md`).
-  Does NOT reopen the M15 FORGE verdict — supersedes the forge *approach* with a producer-side one.
-- **Compatibility-payoff** (8.6–9.0.4 usability) remains a valid secondary track, not current focus.
-- **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
-  `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
-- **STANDING FACT (probe):** `SS_PROBE_PC` DID fire at the EXT vector-entry PC `0x50314880`
-  in M16 (the M15 "vector dispatch bypasses the block-entry hook" caveat did not bite) — the
-  block is genuinely JIT-entered. Treat the M15 "never fires at vector entry" caveat as
-  context-specific, not absolute; re-verify per use.
+**M15/M16/M17 — the forge arc (CLOSED/banked). Canonical per-milestone detail:
+`docs/planning/newsheep/GLOSSARY.md` "The M8→M17 lineage" — do NOT restate it here** (restating it
+caused the M14-wall contradiction). The live frontier is the top block (Operation NewSheep / SS_M18);
+the load-bearing arc survivors are in "How we got here" below. Banked FINDINGS:
+`M14/M15/M16-FINDINGS-*.md`. Two standing facts the arc earned:
+- **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root `tools/`,
+  NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
+- **STANDING FACT (probe):** `SS_PROBE_PC` DID fire at the EXT vector-entry PC `0x50314880` in M16 (the
+  M15 "vector dispatch bypasses the block-entry hook" caveat did not bite) — the block is genuinely
+  JIT-entered. Treat the M15 "never fires at vector entry" caveat as context-specific; re-verify per use.
 
 ### How we got here — the M8→M17 forge arc (CLOSED, banked NO-GO)
 

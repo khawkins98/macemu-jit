@@ -1,5 +1,14 @@
 # M13 (redraft) — NewWorld 68k interrupt delivery: un-gate eager delivery + HLE the registered-handler→DR signal at the coherent EXT fallback `0x50325f00`
 
+> # ✅ M13 CLOSED / KEYSTONE RETRACTED (2026-06-14) — DO NOT EXECUTE Tasks A/C as written.
+> The keystone was a **measurement artifact**: native interrupt delivery **already works**
+> (`SS_PROBE_68K=0x5000ed0a` matched 8/8 in plain baseline; a genuine DR-built vector-`$64`
+> level-1 autovector frame, saved `SR=0x2000`). The delivery work Tasks A/C describe targeted a
+> **non-problem**; the Task C `SS_NW_DR_AUTOVEC` HLE was built then **REVERTED** (`d786eaf8`), and
+> `SS_M10_CGRP` with it. The real wall is the downstream **`[ALARM]` model-rejection / pre-System
+> gate → M14.** Authoritative now: `docs/HANDOFF.md` HEADLINE + `docs/planning/M13-FINDINGS-interrupt-delivery.md`
+> §C-pin.7/8. Everything below is retained as the (retracted) process record only — do not act on it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL — use `superpowers:subagent-driven-development`
 > (recommended) or `superpowers:executing-plans` to run this task-by-task. Steps use checkbox
 > (`- [ ]`) syntax. **Tasks A and C both edit `sheepshaver_glue.cpp` (and A also `main_unix.cpp`);

@@ -120,10 +120,36 @@ interpretation bankrupt and handed us the exact producer to target.
   elliotnunn/newworld-rom, the 68kMLA "Picking apart the NewWorld ROM" thread, the E-Maculation
   "Using QEMU to explore the Mac OS Nanokernel" thread, Apple Wiki "New World ROM".
 
-## 9. Status / next
-- [x] Effort opened, baseline tag `newsheep-baseline`, charter written.
-- [ ] **First milestone (run the machine): Trampoline RE Task-0** — `tbxi dump` the 9.0.1/9.0.4 ROMs,
-  disassemble the Trampoline parcel, pin its OF-tree reads + nanokernel interrupt-setup writes, and
-  the gap vs. our synthesized environment. Output = the A/B/C route decision. Brainstorming → spec →
-  red-team → execute.
-- [ ] Source a genuine 9.2.x install ISO (`ASSETS-AND-TOOLING.md` R2).
+## 9. Status / next steps
+
+**Done**
+- [x] Effort opened; baseline tag `newsheep-baseline`; charter + log + assets + glossary written;
+  HANDOFF/AGENT-CONTEXT frontier flipped to NewSheep.
+
+**The process (BINDING — `docs/MILESTONE-WORKFLOW.md`).** The first milestone is the **Trampoline RE
+Task-0**. Run the full machine; do NOT jump to implementation:
+- [ ] **1. Brainstorm** — invoke the brainstorming skill to frame the Trampoline-RE milestone
+  (what we must learn, what "done" looks like, which route ladder rung each finding would unlock).
+- [ ] **2. Spec** — write the milestone spec under `docs/superpowers/specs/` (problem, DoD, scope,
+  method, risks), cross-linked from this charter and `RESEARCH-LOG.md`.
+- [ ] **3. Plan** — write the implementation plan under `docs/superpowers/plans/` on the house
+  template, with a BINDING Task-0 blocking-answer table.
+- [ ] **4. Red-team** — pre-implementation adversarial round against the committed spec/plan SHA
+  (the round that caught M16's ROM-absent and M17's MODE_68K problems early). Fold findings.
+- [ ] **5. Execute Task-0** (offline, startable today, no boots):
+  - `pip install tbxi`; `tbxi dump` the 9.0.1 + 9.0.4 Mac OS ROM files.
+  - Disassemble the **Trampoline ELF** parcel (capstone, PPC BE).
+  - Pin (a) what OF device-tree state it **reads**, (b) the nanokernel interrupt-setup it **writes**
+    (the CGRP/IM structures observed frozen in M15/M16), (c) the **gap** vs. our synthesized OF +
+    `SS_NW_TRAMPOLINE`.
+  - Cross-check the handoff shape against the QEMU-9.2 oracle (behavioral only — never address oracle).
+  - **Output:** the A/B/C route decision (run it / patch offline / informed host-reproduction),
+    recorded in `RESEARCH-LOG.md` + a `NEWSHEEP-FINDINGS-*.md` (or this folder).
+
+**Parallel dependency**
+- [ ] Source a genuine **Mac OS 9.2.x install ISO** (`ASSETS-AND-TOOLING.md` R2). Task-0 RE starts on
+  9.0.x without it; the actual 9.2 boot and any 9.2-only Trampoline behavior are blocked on it.
+
+**Standing rules for every milestone:** branch `macos-arm64`; never push unprompted; slot boots only
+(`ss-slot-boot.sh`, never global pkill); `make test-jit` = 100; all new code behind an env gate +
+`MachineProfileIsNewWorld()`, paravirtual byte-identical; `0xDEADBEEF` (M10 DR-reentry) = immediate stop.

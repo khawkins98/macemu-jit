@@ -6,6 +6,12 @@
 
 ## Current frontier (2026-06-14)
 
+> **MAIN AIM = Operation NewSheep** (run/reproduce the Trampoline producer; charter
+> `docs/planning/newsheep/README.md`). The full NewSheep frontier block is below, after the recent
+> milestone summaries. **Canonical M8→M17 lineage = `docs/planning/newsheep/GLOSSARY.md`** — the
+> M15/M16/M17 summaries here are the frontier doc's working context; the per-milestone table lives
+> once, there.
+
 **M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
 consumption path is NOT one fixable divergence short of completing the guest's Interrupt
 Manager (IM) init — it must be host-forged. Two **independent** load-bearing pillars: (1)
@@ -18,7 +24,7 @@ refusal was gated on an unreachable config. **Verdict pivot:** NK routing struct
 struct-populating guest writes. The verdict does NOT rest on a single chain. Canonical:
 `docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)".
 **M16 — COMPLETE (2026-06-14). DoD-3 NO-GO. NewWorld 9.x interrupt routing banked as
-forge-class; frontier pivots to COMPATIBILITY-PAYOFF.** Task-0 RE pinned the dead-end to the
+forge-class.** Task-0 RE pinned the dead-end to the
 empty **"CGRP"** interrupt-group descriptor (`*(KDP-0x338)=0x68ffc1c0`, `[+0x04]='CGRP'`): the
 gate `[0x68ffc1e0]=1` needs ≥2 (`50314894 cmpwi 2; blt`), but the handler table is empty
 (`+0x38/+0x3c/+0x44`=0) and the service routine `0x503148e0` self-guards, so the one-word forge
@@ -55,8 +61,8 @@ QEMU mac99 booting real 9.2 is the existence proof.
 - **Charter + scope + risks + asset gaps: `docs/planning/newsheep/README.md`** (+ `RESEARCH-LOG.md`,
   `ASSETS-AND-TOOLING.md` [⚠️ 9.2-ISO gap: our `macos921.dsk` is actually 8.6], `GLOSSARY.md`).
   Baseline tag `newsheep-baseline`. First milestone (Trampoline RE Task-0) runs the normal machine.
-- Banked forge-era RE stays valid: `docs/planning/M14/M15/M16-FINDINGS-*.md`. Does NOT reopen the
-  M15 FORGE verdict — supersedes the forge *approach* with a producer-side one.
+- Banked forge-era RE stays valid (canonical lineage + links: `docs/planning/newsheep/GLOSSARY.md`).
+  Does NOT reopen the M15 FORGE verdict — supersedes the forge *approach* with a producer-side one.
 - **Compatibility-payoff** (8.6–9.0.4 usability) remains a valid secondary track, not current focus.
 - **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
   `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
@@ -65,27 +71,23 @@ QEMU mac99 booting real 9.2 is the existence proof.
   block is genuinely JIT-entered. Treat the M15 "never fires at vector entry" caveat as
   context-specific, not absolute; re-verify per use.
 
-**M13 — COMPLETE (2026-06-14). The load-bearing fact: NewWorld 68k interrupt delivery WORKS** — the
-M9→M13 keystone ("`0x5000ED08` never runs / interrupts never delivered") was a **probe-granularity
-artifact** (see "load-bearing negatives" below). M13's deliverable is that retraction plus the revert
-of the two dead delivery mechanisms (`SS_NW_DR_AUTOVEC`, `SS_M10_CGRP`). Canonical:
-`docs/planning/M13-FINDINGS-interrupt-delivery.md` (retraction banner + §C-pin.7/8).
+### How we got here — the M8→M17 forge arc (CLOSED, banked NO-GO)
 
-**M10 / M11a / M11 — COMPLETE (2026-06-13)** (detail: ROADMAP + CHANGELOG). M11 = 16 MB aperture at
-0x81000000 + OF display node ("cofb") (gate `SS_M11_FB=1`); M11a = r24 never NK-clobbered. M10's
-`SS_M10_CGRP` forged table is **reverted (2026-06-14)** — it targeted the non-problem and crashed.
+> **CANONICAL lineage = `docs/planning/newsheep/GLOSSARY.md` "The M8→M17 lineage" table.** Don't
+> restate the per-milestone narrative here or in HANDOFF — point there. Below: only the load-bearing
+> standing facts that survive the arc.
 
-**M12 PARTIAL — Wave0+Wave1 landed.** Wave0 (`ddbd8d79`): NW lowmem 1MB→32MB. Wave1 (`348544cd`):
-anon-zero 0xFF000000–0xFFFFFFFF (sign-extended 68k EAs). Boot stable 30s+. Its "pixel gate FAIL =
-`irq_fired=0`" framing is subsumed by the M13 retraction (delivery was never the blocker).
-
-**HISTORICAL frontier note (M14) — RETRACTED framing, kept for context.** The boot parks ~15 s in at
-an `[ALARM]` stall. The original "model-rejection / pre-System gate" framing was **retracted by
-M14-FINDINGS' VERDICT**: it is a **Cuda device-model IFR/IER bug** (`sr_int_pending` never reaches VIA
-IFR because `CudaSettle()` runs only on IFR reads, and the NK polls IER — 65,539 IER reads vs 2 IFR).
-This is the most likely **post-NewSheep next wall**, NOT the live frontier. The live frontier is
-Operation NewSheep (see "Current frontier" above). The SYSTEM-BOOT-GATES / 4-byte-bypass leverage
-applies only if a real System-file gate later appears.
+- The arc proved forging the guest's interrupt/nanokernel structures is bankrupt; root cause = the
+  Trampoline never runs. FINDINGS: `M14-FINDINGS-cuda-delivery.md`, `M15-FINDINGS-consumption-recon.md`,
+  `M16-FINDINGS-oracle-forge.md` (all CLOSED/banked, valid RE).
+- **M13: NewWorld 68k interrupt DELIVERY works** — the "`0x5000ED08` never runs" keystone was a
+  probe-granularity artifact (see Instruments "load-bearing negatives"). **Do NOT re-chase delivery.**
+- **M10 / M11 / M11a COMPLETE** — 16 MB aperture @`0x81000000` + OF "cofb" display node (`SS_M11_FB=1`);
+  r24 never NK-clobbered. M10's `SS_M10_CGRP` forged table was reverted (targeted a non-problem, crashed).
+- **Expected post-NewSheep next wall = the Cuda device-model IFR/IER bug** (M14-FINDINGS VERDICT:
+  `sr_int_pending` never reaches VIA IFR; the NK polls IER, not IFR) — **NOT** a "model-rejection gate"
+  (that framing was retracted). SYSTEM-BOOT-GATES / 4-byte-bypass leverage applies only if a real
+  System-file gate later appears.
 
 **Tooling (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress snapshot (all-on
 cluster → `[NW-PROG verdict]`, report-only). Its load-bearing non-determinism caveat (post-EXT SIGSEGV
@@ -275,9 +277,9 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 **Next task: OPERATION NEWSHEEP — Trampoline RE Task-0** (9.2 NewWorld is a HARD requirement — see
 Current frontier above). Charter `docs/planning/newsheep/README.md`; first milestone = `tbxi dump`
-+ disassemble the Trampoline parcel from the 9.0.x ROMs (offline, today), output = the run/patch/
-reproduce route decision. M14–M17 RE banked (`docs/planning/M14/M15/M16-FINDINGS-*.md`; M17 spec/plan
-CLOSED). Compatibility-payoff (8.6–9.0.4 usability) is a secondary track. M13 close-out / retraction:
++ disassemble the Trampoline (`MacOS.elf`) from the in-hand 9.2-era ROM (offline, today), output =
+the run/patch/reproduce route decision. M14–M17 RE banked (canonical lineage + links:
+`docs/planning/newsheep/GLOSSARY.md`; M17 spec/plan CLOSED). Compatibility-payoff is a secondary track. M13 close-out / retraction:
 `docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
 (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.
 Keep-active machine docs (`docs/planning/machine/`): `CORE99-MACHINE-DESCRIPTION.md`,

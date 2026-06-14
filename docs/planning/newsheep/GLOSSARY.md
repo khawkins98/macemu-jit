@@ -38,22 +38,30 @@
 - **The producer-vs-product reframe** — forging *products* (CGRP table, handler PCs) is O(N walls),
   each guessed/blind. Running/reproducing the *producer* (Trampoline) is O(1) and yields real values.
 
-## The M8→M17 lineage (why we're here)
+## The M8→M17 lineage (why we're here) — CANONICAL
+
+> **This table is the SINGLE SOURCE OF TRUTH for the M8→M17 lineage.** HANDOFF, AGENT-CONTEXT, the
+> charter, and ROADMAP keep only a one-line frontier statement + a pointer here — do not restate the
+> per-milestone detail elsewhere (that drift caused the M14-wall contradiction). Update here first.
 
 | Milestone | Result | What it added to the picture |
 |---|---|---|
 | M8 | consumption rail green env-on; default flip refused (`SC#1=0x0d`) | the consume path exists but stalls |
-| M13 | retraction | NewWorld 68k interrupt **delivery WORKS**; the wall is downstream |
-| M14 | parked | DEC doesn't signal the DR; KDP+0x674/hnfo zero **because IM init runs downstream of Cuda init**; all fixes "collapse to forge" |
+| M13 | retraction | NewWorld 68k interrupt **delivery WORKS**; the wall is downstream (the "`0x5000ED08` never runs" keystone was a probe-granularity artifact) |
+| M14 | parked | DEC doesn't signal the DR; `KDP+0x674`/hnfo zero **because IM init runs downstream of Cuda init**; all fixes "collapse to forge". **VERDICT:** the `[ALARM]` stall is a **Cuda device-model IFR/IER bug** (`sr_int_pending` never reaches VIA IFR; NK polls IER) — NOT a "model-rejection gate". This is the expected **post-NewSheep next wall**. |
 | M15 | FORGE verdict (verified) | structs frozen-zero across obs=1e9; **CGRP is the first of N** |
-| M16 | DoD-3 NO-GO | one-word forge safe-but-inert (empty table self-guards); handler PC **ROM-absent** → built at runtime |
+| M16 | DoD-3 NO-GO | one-word forge safe-but-inert (empty table self-guards); handler PC `0x5000ec50` **ROM-absent** → built at runtime |
 | M17 | red-team BLOCKED | the "sanctioned cross" needs MODE_EMUL_OP but the EXT regime is **MODE_68K**; **series tripwire fired on wall 1** → per-wall forging is bankrupt |
 
-**Throughline:** six milestones, one disease — *the Trampoline never runs, so the structures it
+(Also COMPLETE, not interrupt-arc: **M10/M11/M11a** — 16 MB aperture @`0x81000000` + OF "cofb"
+display node; r24 never NK-clobbered. **M12 PARTIAL** — NW lowmem 1MB→32MB + anon-zero high EAs.)
+
+**Throughline:** the milestones are one disease — *the Trampoline never runs, so the structures it
 would build stay empty.* Operation NewSheep targets the producer.
 
 ## Pointers
 - Charter: `README.md` · Log: `RESEARCH-LOG.md` · Assets/tools: `ASSETS-AND-TOOLING.md`
-- Banked RE: `docs/planning/M14/M15/M16-FINDINGS-*.md`; strategy: `docs/planning/MACHINE-LAYER-PLAN.md`
+- Banked RE: `docs/planning/M14-FINDINGS-cuda-delivery.md`, `…/M15-FINDINGS-consumption-recon.md`,
+  `…/M16-FINDINGS-oracle-forge.md`; strategy: `docs/planning/MACHINE-LAYER-PLAN.md`
 - Externals: elliotnunn/{tbxi, tbxi-patches, newworld-rom}; 68kMLA "Picking apart the NewWorld ROM";
   E-Maculation "Using QEMU to explore the Mac OS Nanokernel"; Apple Wiki "New World ROM".

@@ -1,5 +1,11 @@
 # Project Handoff — resume entry point
 
+> ## ▶ RIGHT NOW (read this first)
+> - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
+> - **State (2026-06-14):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
+> - **▶ NEXT ACTION:** open **Stage 1's own deep Task-0 + red-team** (NewWorld paged MMU) — program plan `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` (per-stage STATUS table at top). Do NOT re-run the SS_M18 gating Task-0 (done). Do NOT relitigate Route A.
+> - The nested ▶/▶▶ history below is context; this box is the live state.
+
 > **Status: M15 COMPLETE 2026-06-14 — FORGE verdict verified** · The `SS_NW_IRQ_CONSUME`
 > consumption path dead-ends: across **510 consumption boots** the 68k level-1 handler
 > `0x5000ec50` is reached **0/510** (EXT edge re-fires into CGRP fallback `0x50325fd0`, not
@@ -53,7 +59,7 @@
 > `docs/planning/newsheep/FINDINGS-trampoline-re.md`**; forks closed in `…/DECISIONS.md`.
 >
 > **▶▶▶ SS_M18 gating Task-0 COMPLETE (2026-06-14) → Route A GO but MONTHS; original weeks-sketch
-> FALSIFIED. DECISION PENDING (user).** The cheap-recon-first front-end (plan rev-2 + 2 red-teamers + 2
+> FALSIFIED; staged program planned (rev-4).** The cheap-recon-first front-end (plan rev-2 + 2 red-teamers + 2
 > boot-disjoint recon agents) priced SS_M18 before any code and found three INDEPENDENT month-forcing
 > collisions: **Q1** — the real NanoKernel-v02.27 is a *permanently-resident paged supervisor* with **no
 > handoff boundary** (it never yields the live 68k/exception/scheduler regime back to SS; "re-inject
@@ -70,7 +76,7 @@
 > Gating-Task-0 plan: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
 >
 > **▶▶▶▶ STAGED PROGRAM PLANNED (2026-06-14, user-approved "plan the full months program now") →
-> `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` (rev-2, red-teamed).** Four staged
+> `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` (rev-4, red-teamed).** Four staged
 > milestones, each runnable through the machine: **S1** NewWorld-profile paged MMU (PREREQUISITE per Q2;
 > own deep Task-0) → **S2** Trampoline loader + OF-CI callback + Core99 DT (S2a parallel / S2b serialized
 > behind S1) → **S3** two-supervisor reconciliation (Q1; own deep Task-0; SS yields supervisor role to the
@@ -120,13 +126,18 @@
 > `docs/planning/newsheep/FINDINGS-trampoline-re.md`** + the closed forks in `…/DECISIONS.md`.
 > Baseline tag: `newsheep-baseline`.
 >
-> **Trampoline RE Task-0 is COMPLETE → Route A decided** (run the real Trampoline + NanoKernel against
-> a SheepShaver-synthesized OF client interface + Core99 device tree — see the banner). **Your job =
-> the NEXT milestone, `SS_M18_TRAMPOLINE_LLE` (code-writing).** Per the milestone machine, **open it
-> with its OWN gating Task-0 + red-team BEFORE writing any code**, on the two collisions Task-0
-> under-examined (emulator-host ownership + MMU/V=P) and a direct trace of the NanoKernel→CGRP step —
-> all in `FINDINGS-trampoline-re.md` "SS_M18 — gating risks". Do NOT relitigate the Route A decision
-> (settled, well-evidenced); do the architecture-conflict recon that decides HOW to build it.
+> **Trampoline RE Task-0 AND the SS_M18 gating Task-0 are BOTH COMPLETE; the SS_M18 implementation has
+> been planned as a staged program; kickoff recon is done.** Route A is decided AND its cost is now
+> known: **GO but MONTHS** (the gating Task-0 falsified the weeks-sketch — Q1 NK is a permanently-resident
+> supervisor w/ no handoff boundary, Q2 it needs a real paged MMU, Q3 CGRP is built by disk/CFM IM-init
+> not the NK parcel). The staged program (rev-4) is
+> `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`: **S1** paged MMU → **S2** loader
+> +OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP; critical path S1→S3→S4 ≈
+> quarters. Kickoff recon DONE: Discriminator-A=COARSE (S1 Dolphin shadow-arena indicated), donors
+> extracted (`DONOR-NOTES.md`), 9.2.x ISOs in hand. **▶ YOUR JOB = open Stage 1's OWN deep Task-0 +
+> red-team** (the NewWorld paged MMU; now leaning tractable) BEFORE any S1 code — gating questions
+> Q-S1.1/2/3 + the S1 MMU-oracle test in the program plan's Stage 1 section. Do NOT relitigate Route A;
+> do NOT re-run the SS_M18 gating Task-0 (done — `FINDINGS-trampoline-re.md` "SS_M18 gating Task-0").
 >
 > Compatibility-payoff (8.6–9.0.4 usability: CopyBits HLE, idle-skip, perf, app compat, Silicon
 > Sheep) remains a valid *secondary* track but is not the current focus.
@@ -138,10 +149,11 @@
 
 ## Current state (2026-06-14 end-of-session)
 
-- **Live aim:** Operation NewSheep. **Trampoline RE Task-0 COMPLETE (2026-06-14) → Route A decided**
-  (findings `docs/planning/newsheep/FINDINGS-trampoline-re.md`). **Next = `SS_M18_TRAMPOLINE_LLE`**
-  (code-writing; open it with its own gating Task-0 + red-team first). See the top banner +
-  `docs/planning/newsheep/README.md` §9.
+- **Live aim:** Operation NewSheep. Trampoline RE Task-0 + **SS_M18 gating Task-0 COMPLETE** → Route A
+  GO but MONTHS; **staged program planned (rev-4)** + kickoff recon done (Discriminator-A COARSE, donors,
+  9.2 ISOs). **▶ Next = open Stage 1's deep Task-0** (NewWorld paged MMU). See the top banner +
+  `docs/planning/newsheep/README.md` §9 + the program plan
+  `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` (per-stage STATUS table at top).
 - **Per-milestone M8→M17 history:** see the **canonical lineage table** in
   `docs/planning/newsheep/GLOSSARY.md` (do not restate it here). M10/M11/M11a COMPLETE; M12 PARTIAL;
   M13 = delivery-works retraction; M14–M17 = the forge arc, CLOSED/banked (FINDINGS docs per the table).

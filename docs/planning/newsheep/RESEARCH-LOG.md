@@ -135,4 +135,30 @@
   (deferred in machine-layer M5). Plus: trace the NanoKernel-v02.27 device-tree→CGRP construction
   directly under QEMU (Task-0 inferred it). These GATE SS_M18 coding, not Task-0 (which stands).
 
+- **SS_M18 gating Task-0 EXECUTED (2026-06-14): Route A GO but MONTHS.** Ran the cheap-recon-first
+  front-end before any code (plan → 2 red-teamers → 2 boot-disjoint recon agents P1 static / P2 QEMU).
+  Three independent month-forcing findings: **Q1** the real NanoKernel-v02.27 is a permanently-resident
+  paged supervisor with no handoff boundary (all 5 ledger surfaces FIGHT; the Execute68k pair is an SS
+  synthetic absent from the parcel); **Q2** it requires a real paged MMU (per-context `mtsrin`, MMIO
+  segment-swap, 13× `tlbie`) → un-defer machine-layer M5; **Q3** [QEMU-BEHAVIORAL] CGRP is built by
+  disk/CFM IM-init in low RAM, NOT the NK parcel — **corrects Q0-F, confirms M16**. Findings:
+  `FINDINGS-trampoline-re.md` "SS_M18 gating Task-0". FALSIFICATIONS: 0.
+- **SS_M18 staged program planned (2026-06-14; user-approved).** rev-4 plan
+  `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`: S1 paged MMU → S2 loader+OF-CI+DT
+  → S3 two-supervisor reconciliation → S4 disk IM-init→CGRP; critical path S1→S3→S4 strictly sequential ≈
+  multiple quarters. Red-teamed (2 reviewers, both GO-WITH-FIXES → rev-2) + tech-writer/dev-advocate
+  reviewed (→ rev-4 consolidated single-state). Lateral-moves pass folded donors + a differential-oracle
+  test ladder + the Path A reuse map. Each stage opens with its own Task-0 + red-team before code.
+- **Kickoff recon DONE (2026-06-14): the 3 zero-dependency workstreams.** **Discriminator-A = COARSE**
+  (`FINDINGS-discriminator-a.md`): static RE of the NK is conclusive (segment-granular `mtsrin`, BAT
+  blocks, SR-swap MMIO; HTAB is the residual pageable map) → Stage-1 path a (Dolphin Dynamic-BAT
+  shadow-arena), JIT fast path preserved; the live-QEMU fine-PTE falsifier was BLOCKED (boot stalled in
+  OF→OS handoff) → routed to S1's MMU-oracle unit test. **Donors extracted** (`DONOR-NOTES.md`: full SHAs;
+  `UpdateDBATMappings` in Dolphin `HW/Memmap.cpp`; Cuda IFR/IER crux `ViaCuda::update_irq`). **9.2.x ISOs
+  found** (9.2.1 `3f129e03…`, 9.2.2 `2cfb856b…`; S4 asset block cleared).
+- **Doc-sync sweep (2026-06-14).** Tech-writer + dev-advocate cross-doc review; fixed stale resume-chain
+  next-actions, added a HANDOFF RIGHT NOW box + a program-plan STATUS table, committed `gdbcli.py` into
+  the repo, and appended the missing DECISIONS/RESEARCH-LOG entries (this set). Resume chain verified
+  coherent for a cold start. **NEXT = open Stage 1's deep Task-0 (NewWorld paged MMU).**
+
 <!-- next entry below -->

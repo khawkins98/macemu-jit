@@ -82,7 +82,8 @@ we take the cheapest that works.
   `SS_NW_TRAMPOLINE` currently provide — the mechanism-level "why IM-init never runs."
 - The A/B/C route decision and its first implementation, all behind env gates +
   `MachineProfileIsNewWorld()`; paravirtual byte-identical; `make test-jit` stays 100.
-- Sourcing + integrating a genuine Mac OS 9.2.x install ISO (see `ASSETS-AND-TOOLING.md`).
+- Integrating a genuine Mac OS 9.2.x install ISO (✅ **found 2026-06-14** — 9.2.1 + 9.2.2 in hand; see
+  `ASSETS-AND-TOOLING.md` R2). Sourcing is done; copy into the asset area when Stage 4 opens.
 
 **OUT:**
 - Resuming any per-wall output-forge (M8→M17 proved it bankrupt).
@@ -117,9 +118,9 @@ we take the cheapest that works.
   set in Task-0 before committing to Route A.
 - **R2 — 9.2 asset gap is SYSTEM SOFTWARE, not the ROM:** we hold the full NewWorld ROM-file
   progression incl. the 9.2-era ROMs (`/Users/Shared/macemu/newworld-roms/`; our active "9.0.1" file is
-  the Dec-2001/9.2.2-era ROM). So the Trampoline RE runs on the in-hand 9.2-era ROM. The remaining gap
-  is genuine **Mac OS 9.2.x system software** for the eventual *boot* (the `macos921.dsk` asset is
-  actually 8.6) — NOT on Task-0's critical path. Tracked in `ASSETS-AND-TOOLING.md`.
+  the Dec-2001/9.2.2-era ROM). So the Trampoline RE runs on the in-hand 9.2-era ROM. The system-software
+  gap (genuine **Mac OS 9.2.x** install media for the eventual *boot* — `macos921.dsk` is actually 8.6)
+  is now **RESOLVED**: genuine 9.2.1 + 9.2.2 ISOs found 2026-06-14 (`ASSETS-AND-TOOLING.md` R2).
 - **R3 — producer-run reveals a non-IM wall: this is the GOOD outcome.** It means the producer
   approach worked and we're back on the machine-layer plan's mainline (device models already staged),
   not a forge cul-de-sac.

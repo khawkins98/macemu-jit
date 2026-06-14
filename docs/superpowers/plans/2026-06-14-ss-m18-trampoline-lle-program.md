@@ -13,6 +13,20 @@
 > (audit trail in Appendix A). Folds the gating-Task-0 amendments (A1–A9), the program red-team (B1–B10),
 > the lateral-moves pass (C1–C4), and the technical-writer + developer-advocate reviews.
 
+## STATUS (the single done-vs-todo board — update as stages move)
+
+| Item | Status | Next gate / action | Blocked by |
+|---|---|---|---|
+| SS_M18 gating Task-0 | ✅ DONE | — (Route A GO but MONTHS) | — |
+| Kickoff: Discriminator-A | ✅ DONE — COARSE → S1 path a | — | — |
+| Kickoff: donor studies (`DONOR-NOTES.md`) | ✅ DONE | — | — |
+| Kickoff: 9.2.x ISO | ✅ DONE — in hand (`ASSETS` R2) | copy into asset area at S4 | — |
+| **S1 — paged MMU** | **▶ NEXT — Task-0 not started** | **open S1 deep Task-0 + red-team** | — (unblocked) |
+| S2a — OF-CI + Core99 DT | available now (parallel) | S2a Task-0 (small) | — (unblocked) |
+| S2b — loader + /mmu + handoff | blocked | — | S1 |
+| S3 — two-supervisor reconciliation | blocked | S3 deep Task-0 | S1 + S2 |
+| S4 — disk IM-init → CGRP | blocked | S4 Task-0 (live trace) | S3 (ISO in hand) |
+
 ## Orientation
 
 - **Read first:** `docs/planning/newsheep/GLOSSARY.md` (terms) + `FINDINGS-trampoline-re.md` "SS_M18 gating
@@ -331,7 +345,8 @@ per C3 — this runbook avoids that confound by observing the genuine NK boot).
 
 **Procedure (≤4 QEMU boots, mirrors the gating-Task-0 Q3 method):**
 1. Boot the rig halted: `bash SheepShaver/tools/qemu-rig.sh --gdbstub --timeout 90` (the `--gdbstub` adds
-   `-s`; add `-S` to halt at reset). Drive it with `/tmp/newsheep/gdbcli.py` (the hand-written RSP client).
+   `-s`; add `-S` to halt at reset). Drive it with **`SheepShaver/tools/gdbcli.py`** (the hand-written RSP
+   client, now version-controlled — md5 `f468451…`; the `/tmp/newsheep/gdbcli.py` copy is ephemeral).
 2. Breakpoint the NK MMU-install cluster (Q2 pinned, re-verify): `mtspr SDR1` @0x50310604 and the SR
    program loop @0x503104b4+. Read SDR1 (HTABORG|HTABMASK) and SR0–15 at that point.
 3. **Decision rule:**
@@ -348,13 +363,17 @@ per C3 — this runbook avoids that confound by observing the genuine NK boot).
 ## Donor acquisition + citation ritual (devrel M-2)
 
 Donors are NOT vendored — clone read-only for study; we reimplement/port to our style, never import wholesale.
-- **Dolphin** (GPLv2): `github.com/dolphin-emu/dolphin` → `Source/Core/Core/PowerPC/JitArm64/Memmap.cpp`
-  (`UpdateDBATMappings`), PR #9441 (W^X on Apple Silicon).
-- **QEMU** (GPLv2): `github.com/qemu/qemu` → `hw/intc/openpic.c`, `hw/misc/macio/*`. SHAs in M3-DONOR-STUDY
-  (pin the full 40-char SHA at checkout time — `de5d8bfd…` is a prefix).
-- **DingusPPC** (GPLv3 → our dist becomes GPLv3): `github.com/dingusdev/dingusppc` →
-  `devices/common/viacuda.cpp` (pin full SHA; `92bb6d10…` is a prefix). **Never PR anything back upstream
-  (their AI-contribution ban).**
+**Full pinned SHAs + the exact donor functions are in `docs/planning/newsheep/DONOR-NOTES.md` (the
+authoritative donor doc; this list is the index).**
+- **Dolphin** (GPLv2, master `144d19433aa734c19c34e5978a1b817d2aa12663`): `github.com/dolphin-emu/dolphin`
+  → arena remap `MemoryManager::UpdateDBATMappings()` in **`Source/Core/Core/HW/Memmap.cpp`** + the 16K/4K
+  fork `CanCreateHostMappingForGuestPages()`; BAT-table rebuild `MMU::DBATUpdated()` in `MMU.cpp`. (NOT
+  `JitArm64/Memmap.cpp` — the JIT is deliberately uninvolved.) PR #9441 (W^X on Apple Silicon).
+- **QEMU** (GPLv2, `de5d8bfd6105d3dd3ae668df9762df244a6d1506`): `github.com/qemu/qemu` → `hw/intc/openpic.c`,
+  `hw/misc/macio/*`. Region map in M3-DONOR-STUDY.
+- **DingusPPC** (GPLv3 → our dist becomes GPLv3, master `b2660e29201730efc2179a43ec6a0a5fb22ad120`):
+  `github.com/dingusdev/dingusppc` → `devices/common/viacuda.cpp` (IFR/IER crux `ViaCuda::update_irq()`;
+  the `92bb6d10…` from M3-DONOR-STUDY is now STALE). **Never PR anything back upstream (their AI ban).**
 - **Citation ritual** (per the backport-hygiene memory): at the porting site in our source, cite the donor
   repo + file + **full pinned SHA** in a comment, and mark prospective/untested code "needs validation" in
   both the comment AND the CHANGELOG entry. License propagation: any Dingus-derived code makes the
@@ -363,11 +382,10 @@ Donors are NOT vendored — clone read-only for study; we reimplement/port to ou
 ## Parallel workstreams (start at kickoff; off the S1 critical path)
 
 Each names its deliverable artifact so two contributors don't collide:
-1. **S2a** — `src/openfirmware_ci.{cpp,h}` + unit test (boot-disjoint, weeks).
-2. **9.2.x ISO sourcing** — provenance recorded in `docs/planning/newsheep/ASSETS-AND-TOOLING.md` (R2;
-   the S4 hard-block; `macos921.dsk` is actually 8.6).
-3. **Donor read-only studies** — deliverable: `docs/planning/newsheep/DONOR-NOTES.md` (extract the Dolphin
-   `UpdateDBATMappings` shape + the Dingus `viacuda` protocol so S1/S4 start warm).
+1. **S2a** — `src/openfirmware_ci.{cpp,h}` + unit test (boot-disjoint, weeks). *Still available.*
+2. **9.2.x ISO sourcing** — ✅ **DONE** (genuine 9.2.1 + 9.2.2 ISOs in hand; `ASSETS-AND-TOOLING.md` R2).
+3. **Donor read-only studies** — ✅ **DONE** → `docs/planning/newsheep/DONOR-NOTES.md` (Dolphin
+   `UpdateDBATMappings` + Dingus `viacuda` extracted; S1/S4 start warm).
 - Build hygiene: ccache (~12× warm rebuild; see CLAUDE.md) + `make -j`.
 
 ## Acceptance discipline (per stage — uniform)

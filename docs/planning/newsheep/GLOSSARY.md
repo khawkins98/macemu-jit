@@ -59,8 +59,25 @@ display node; r24 never NK-clobbered. **M12 PARTIAL** — NW lowmem 1MB→32MB +
 **Throughline:** the milestones are one disease — *the Trampoline never runs, so the structures it
 would build stay empty.* Operation NewSheep targets the producer.
 
+## SS_M18 program-era terms (added 2026-06-14)
+- **Route A** — the decided NewSheep approach: *run* the real Trampoline + NanoKernel against a
+  SheepShaver-synthesized OpenFirmware client interface + Core99 device tree (vs. B patch-offline / C
+  host-reproduce). Settled; not relitigated.
+- **SS_M18 staged program** — Route A's implementation as four sequential stages
+  (`docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`): **S1** NewWorld paged MMU
+  (prerequisite) · **S2** Trampoline loader + OF-CI callback + Core99 DT (S2a parallel / S2b serial) ·
+  **S3** two-supervisor reconciliation · **S4** disk IM-init→CGRP. Critical path S1→S3→S4 ≈ quarters.
+- **paged MMU vs V=P** — SS runs **V=P** (virtual==physical; `DIRECT_ADDRESSING`, host =
+  `NATMEM_OFFSET + guest`). The real NK needs real translation (Q2) → S1 adds a **paged MMU** mode for the
+  newworld profile only (paravirtual stays V=P, byte-identical).
+- **shadow-arena / Dynamic BAT** — the S1 technique (donor: Dolphin): remap the host NATMEM arena at the
+  *rare* guest `mtspr` BAT/SDR1/SR change, keeping the JIT's access-time `LDR/STR` codegen unchanged.
+- **Discriminator-A** — coarse-vs-fine mapping question that decides shadow-arena viability; run
+  2026-06-14 → **COARSE** (`FINDINGS-discriminator-a.md`), so the shadow-arena is 16 KB-host-page-safe.
+
 ## Pointers
-- Charter: `README.md` · Log: `RESEARCH-LOG.md` · Assets/tools: `ASSETS-AND-TOOLING.md`
+- Charter: `README.md` · Log: `RESEARCH-LOG.md` · Assets/tools: `ASSETS-AND-TOOLING.md` ·
+  Program plan: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` · Donors: `DONOR-NOTES.md`
 - Banked RE: `docs/planning/M14-FINDINGS-cuda-delivery.md`, `…/M15-FINDINGS-consumption-recon.md`,
   `…/M16-FINDINGS-oracle-forge.md`; strategy: `docs/planning/MACHINE-LAYER-PLAN.md`
 - Externals: elliotnunn/{tbxi, tbxi-patches, newworld-rom}; 68kMLA "Picking apart the NewWorld ROM";

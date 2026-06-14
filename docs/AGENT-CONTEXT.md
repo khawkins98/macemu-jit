@@ -19,7 +19,7 @@
 > (B excluded, C≡A). OpenBIOS loads `MacOS.elf` at its ELF vaddr (PC=`0x20f078`, `r2=0x1001e8`).
 > Findings: `docs/planning/newsheep/FINDINGS-trampoline-re.md`; forks closed in `…/DECISIONS.md`.
 > **▶ SS_M18 gating Task-0 COMPLETE (2026-06-14) → Route A GO but MONTHS; weeks-sketch FALSIFIED;
-> DECISION PENDING (user).** Three independent month-forcing collisions: Q1 the real NanoKernel-v02.27
+> DECISION MADE — staged program planned (rev-4).** Three independent month-forcing collisions: Q1 the real NanoKernel-v02.27
 > is a permanently-resident paged supervisor with NO handoff boundary (FIGHT ×5; Execute68k pair is an
 > SS synthetic); Q2 requires a real paged MMU (un-defer machine-layer M5); Q3 [QEMU] CGRP is built by
 > disk/CFM IM-init NOT the NK parcel (Q0-F inference CORRECTED → M16 was right) → Route A needs disk
@@ -28,7 +28,7 @@
 > bands: FINDINGS-trampoline-re.md "SS_M18 gating Task-0". Gating-Task-0 plan:
 > `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
 > **▶ STAGED PROGRAM PLANNED (2026-06-14, user-approved) → `…/2026-06-14-ss-m18-trampoline-lle-program.md`
-> (rev-2, red-teamed).** S1 paged MMU (own Task-0; UNKNOWN-months — the JIT has NO translation chokepoint,
+> (rev-4, red-teamed).** S1 paged MMU (own Task-0; UNKNOWN-months — the JIT has NO translation chokepoint,
 > 80 inlined RMEMBASE sites → host-page aliasing in NATMEM/vm_alloc, NOT a per-access JIT walker) → S2
 > loader+OF-CI+DT (S2a parallel/S2b serial) → S3 two-supervisor reconciliation (own Task-0; toggles the
 > already-newworld-gated supervisor arm `ppc-cpu.cpp:1986`) → S4 disk IM-init→CGRP (HARD-BLOCKS on 9.2.x
@@ -85,7 +85,7 @@ it / B patch offline via `tbxi`+`tbxi-patches` / C informed host-reproduction), 
 **offline** Task-0 (`tbxi dump` + disassemble the Trampoline — startable today on the 9.0.x ROMs).
 QEMU mac99 booting real 9.2 is the existence proof.
 - **Charter + scope + risks + asset gaps: `docs/planning/newsheep/README.md`** (+ `RESEARCH-LOG.md`,
-  `ASSETS-AND-TOOLING.md` [⚠️ 9.2-ISO gap: our `macos921.dsk` is actually 8.6], `GLOSSARY.md`).
+  `ASSETS-AND-TOOLING.md` [9.2-ISO RESOLVED: genuine 9.2.1/9.2.2 ISOs in hand, ASSETS R2], `GLOSSARY.md`).
   Baseline tag `newsheep-baseline`. First milestone (Trampoline RE Task-0) runs the normal machine.
 - Banked forge-era RE stays valid (canonical lineage + links: `docs/planning/newsheep/GLOSSARY.md`).
   Does NOT reopen the M15 FORGE verdict — supersedes the forge *approach* with a producer-side one.
@@ -301,11 +301,15 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: OPERATION NEWSHEEP — `SS_M18_TRAMPOLINE_LLE`** (Trampoline RE Task-0 is COMPLETE → Route A
-decided; see Current frontier above). 9.2 NewWorld is a HARD requirement. Charter
-`docs/planning/newsheep/README.md` §9; Task-0 findings `…/FINDINGS-trampoline-re.md`. SS_M18 is
-code-writing — open it with its own gating Task-0 + red-team first (emulator-host ownership, MMU/V=P,
-direct NanoKernel→CGRP trace). Do not relitigate Route A. M14–M17 RE banked (canonical lineage + links:
+**Next task: OPERATION NEWSHEEP — `SS_M18` Stage 1 (NewWorld paged MMU): open its OWN deep Task-0 +
+red-team.** Both Task-0s are DONE (Trampoline RE + SS_M18 gating → Route A GO but MONTHS); the staged
+program is planned (rev-4 plan, per-stage STATUS table at its top); kickoff recon is done (Discriminator-A
+COARSE → S1 Dolphin shadow-arena; donors extracted; 9.2 ISOs in hand). **Do NOT re-run the SS_M18 gating
+Task-0 (done) — open Stage 1's paged-MMU Task-0** (Q-S1.1/2/3 + the MMU-oracle test in the program plan's
+Stage 1 section). 9.2 NewWorld is a HARD requirement. Charter `docs/planning/newsheep/README.md` §9;
+program plan `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`; findings
+`…/FINDINGS-trampoline-re.md` + `…/FINDINGS-discriminator-a.md` + `…/DONOR-NOTES.md`. Do not relitigate
+Route A. M14–M17 RE banked (canonical lineage + links:
 `docs/planning/newsheep/GLOSSARY.md`; M17 spec/plan CLOSED). Compatibility-payoff is a secondary track. M13 close-out / retraction:
 `docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
 (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.

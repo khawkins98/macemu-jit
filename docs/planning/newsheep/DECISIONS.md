@@ -38,6 +38,34 @@
 
 ## Decision Log (resolved — newest first)
 
+- **2026-06-14 — Doc-sync sweep (tech-writer + dev-advocate).** Cross-doc sync pass after the heavy
+  session; folded both reviews. Caught + fixed stale resume-chain next-actions (HANDOFF resume-prompt /
+  current-state + AGENT-CONTEXT "where things are" still said "open SS_M18's gating Task-0" — done),
+  added a RIGHT NOW box (HANDOFF) + a per-stage STATUS table (program plan), and committed `gdbcli.py`
+  into the repo (was /tmp-only). Resume chain now coherent for a cold start.
+- **2026-06-14 — Kickoff recon DONE (3 zero-dependency workstreams).** Discriminator-A = **COARSE**
+  (`FINDINGS-discriminator-a.md`) → Stage-1 path a (Dolphin Dynamic-BAT shadow-arena) indicated, JIT fast
+  path preserved (residual fine-PTE falsifier routed to S1's MMU-oracle test); donors extracted
+  (`DONOR-NOTES.md` — full SHAs; `UpdateDBATMappings` is in Dolphin `HW/Memmap.cpp`); **9.2.x ISOs found**
+  (9.2.1 `3f129e03…`, 9.2.2 `2cfb856b…`; S4 asset block CLEARED, `ASSETS-AND-TOOLING.md` R2).
+- **2026-06-14 — SS_M18 staged program planned (user-approved "plan the full months program now").**
+  rev-4 plan `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`: S1 paged MMU → S2
+  loader+OF-CI+DT → S3 two-supervisor reconciliation → S4 disk IM-init→CGRP; critical path S1→S3→S4 ≈
+  multiple quarters. Red-teamed (2 reviewers) + tech-writer/dev-advocate reviewed. Each stage opens with
+  its own Task-0 + red-team. NEXT = Stage 1's deep Task-0.
+- **2026-06-14 — SS_M18 gating Task-0 EXECUTED → Route A GO but MONTHS (weeks-sketch falsified).** Plan
+  → 2 red-teamers → 2 boot-disjoint recon agents. Three independent month-forcing findings: **Q1** the
+  real NanoKernel-v02.27 is a permanently-resident paged supervisor with NO handoff boundary (all 5
+  ledger surfaces FIGHT; Execute68k pair is an SS synthetic); **Q2** it requires a real paged MMU
+  (un-defer machine-layer M5); **Q3** [QEMU-BEHAVIORAL] **CGRP is built by disk/CFM IM-init, NOT the NK
+  parcel** — this CORRECTS Q0-F's inference (below) and confirms M16. Findings: `FINDINGS-trampoline-re.md`
+  "SS_M18 gating Task-0".
+- **2026-06-14 — Q0-F CORRECTION (supersedes the row above / the earlier "Trampoline+NanoKernel builds
+  CGRP" entry).** Direct QEMU observation in the SS_M18 gating Task-0 (Q3) found CGRP is materialized by
+  **disk/CFM-loaded IM-init in low RAM (0x0045xxxx–0x0046xxxx, shared CFM TOC)**, NOT by the
+  NanoKernel-v02.27 parcel. The earlier Q0-F *inference* ("NanoKernel builds CGRP from the DT downstream")
+  is **superseded** — M16's RE ("CGRP" tag 0× in ROM; no inline builder) was right. Route A therefore
+  must run the disk System/Enabler IM-init in the loop (program Stage 4).
 - **2026-06-14 — Task-0 EXECUTED → Route A decided; Q0-A/B/C/E/F all CLOSED.** Two instruments
   (static capstone disasm of `MacOS.elf` + dynamic QEMU mac99 gdbstub trace via a hand-written Python
   RSP client) on the same `66210b4f…` ROM. **Q0-A = BOUNDED** (3 OF gateways; 21 direct services +

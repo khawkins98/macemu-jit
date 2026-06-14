@@ -1265,6 +1265,24 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		// (0x50325f00, registered-handler table NOT installed — W2L-1);
 		// observe what it does, record honestly.
 		//
+		// M16 (2026-06-14) pinned WHY it dead-ends, live, at the EXT body
+		// 0x50314880 (SPRG0 = KDP = 0x68ffe000):
+		//   r9 = *(KDP-0x338) = 0x68ffc1c0   ; the "CGRP" interrupt-group desc
+		//                                    ; (+0x04 == 'CGRP', +0x00 == 0x00010001)
+		//   r9 = [r9+0x20]   = 1             ; 0x50314894 cmpwi r9,2 ; blt 0x50314660
+		//                                    ; 1 < 2 -> early-return -> EXT UNSERVICED
+		// Forging that gate field ([0x68ffc1e0] >= 2) is SAFE but INERT: the
+		// service routine 0x503148e0 self-guards on the CGRP handler table,
+		// which is entirely empty here -- [r22+0x38]=0 (guard) -> beqlr, and
+		// [r22+0x44]=0 (entry count) -> bgelr. So passing the gate just reaches
+		// a clean return, not a dispatch to the 68k L1 handler 0x5000ec50. To
+		// actually route, the CGRP handler table (guard/base/count + descriptor
+		// entries) must be populated -- the work IM init never does. Full RE +
+		// verdict: docs/planning/M16-FINDINGS-oracle-forge.md (Q5/Q6).
+		// NOTE: SS_PROBE_PC DID fire at the vector-entry PC 0x50314880 in M16
+		// (the M15 "vector dispatch bypasses the block-entry hook" caveat did
+		// not bite); the block is genuinely JIT-entered. Re-verify per use.
+		//
 		// The 2-SPR shim (Q-W2 verdict, EE-CHAIN-RECON §W2S-2; the sc/program
 		// precedent): the EXT body 0x50314880 opens with the SHARED save
 		// prologue 0x313d40, which consumes exactly SPRG1 := caller r1 and

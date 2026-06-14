@@ -14,7 +14,7 @@
 | Q3b | SS_SEED_MEM accepts the 3 targets (not MMIO-refused)? | **YES** — `0x68ff4f14`, `0x68ff4f28`, `0x68fff674` all `[SEED] … applied` | ✅ |
 | Q4 | `r11` bit `0x8000` — already set on EXT frame, or must be forced? | **already set** — prologue `0x50313d40` does `mfspr r11,0x1b` (r11=SRR1); our EXT frame `srr1=0x9040`, so SRR1 & 0x8000 ≠ 0 → `50314888 beq` NOT taken; dispatcher proceeds to the struct read. NOT the blocker. | ✅ |
 | Q5 | the real onward-route decider | **`*(KDP-0x338)+0x20 = [0x68ffc1e0] = 1`**, needs `≥ 2` (gates `50314898 blt 0x50314660`). SPRG0=KDP=`0x68ffe000`; ptr `[0x68ffdcc8]=0x68ffc1c0` (dynamic). Pinned to one field/value. | ✅ |
-| Q6 | meaning of `*(KDP-0x338)+0x20` (source-count vs init-gate) → safe forge value | **OPEN** — RE `0x503148e0` + the `0x68ffc1c0` struct. This is the GO/NO-GO pivot. | 🔶 next |
+| Q6 | meaning of the field → safe forge value? | **NO-GO for minimal forge.** The `0x68ffc1c0` struct is the **"CGRP"** interrupt-group descriptor; its handler table is EMPTY (`+0x38`=0 guard, `+0x3c`=0 base, `+0x44`=0 count). Forging `[0x68ffc1e0]≥2` is SAFE (service routine self-guards: `beqlr`/`bgelr`) but INERT (empty table → no dispatch). Real fix needs the FULL CGRP table populated. | ✅ |
 
 ## Evidence
 
@@ -49,8 +49,30 @@ SPRG0 = KDP = `0x68ffe000` (confirmed: SPRG3 = SPRG0+0x360 = the `[KDP+0x360]` v
 
 **Forge target (precise):** make `[0x68ffc1e0] ≥ 2`. (Address is `*(KDP-0x338)+0x20`; the `0x68ffc1c0` base is dynamic — resolve it at seed time from `[0x68ffdcc8]`, do NOT hardcode.) `[0x68ffc1e0]` accepts `SS_SEED_MEM` writes? — to verify (not in the original 3-target probe).
 
-### Remaining Task-0 GO/NO-GO (the semantic + safety question)
-What does `*(KDP-0x338)+0x20` MEAN? Candidates: (a) a count of registered/pending interrupt sources — bumping to 2 with no matching source entries makes the service path (`5031489c`→`0x503148e0`) walk garbage → M10-class crash; (b) an init-stage / runlevel / "interrupts-ready" gate — forging to 2 may be exactly the right "we're initialized" signal, low crash risk. **RE `0x503148e0` and what it indexes off the `0x68ffc1c0` struct (and `+0x20`) to decide which.** That RE result is the GO (safe forge value/structure) / NO-GO (forge needs a full synthesized source table; reconsider) pivot. QEMU only if this ROM RE is ambiguous.
+### Step 6 — the field's meaning + the GO/NO-GO verdict (RE of `0x503148e0` + struct probe, RUNDIR 165654)
+
+The `0x68ffc1c0` struct is the **"CGRP" interrupt-group descriptor** (`[+0x04]=0x43475250="CGRP"`, `[+0x00]=0x00010001` version/tag — the same CGRP as M15's "fallback `0x50325fd0`"). Live field dump at `0x50314880`:
+
+| off | value | role (from `0x503148e0` RE) |
+|---|---|---|
+| +0x00 | `0x00010001` | version/tag |
+| +0x04 | `"CGRP"` | identity |
+| +0x08/+0x0c | `0x68ffdcc8` | back-ptrs (= KDP-0x338) |
+| +0x1c | `0x68ffd56c` | ptr (compared at `50314968` for a slow-path call) |
+| **+0x20** | **`0x00000001`** | **gate field** — `50314894 cmpwi 2; blt` |
+| +0x38 | `0x00000000` | handler-table **guard** — `50314910 or.; beqlr` |
+| +0x3c | `0x00000000` | handler-table **base** (`lwzx r20,r8,idx`) |
+| +0x40 | `0x00000000` | stack-table base (`lwzx r1,r9,idx`) |
+| +0x44 | `0x00000000` | entry **count** — `50314914 cmplw idx; bgelr` |
+
+**Service routine `0x503148e0` semantics:** index by source #, then `if [r22+0x38]==0: beqlr` (no table → return), `if idx >= [r22+0x44]: bgelr` (out of range → return); else load handler descriptor from `[r22+0x3c]`, set SRR0=`[entry+0]`, SRR1, r1=stack, and `rfi` to the handler. **The routine self-guards** — an empty table returns cleanly, no crash.
+
+**VERDICT — NO-GO for the "change one word" forge.** Forging `[0x68ffc1e0]≥2` passes the gate *safely* (M10-crash risk retired for THIS write — service path self-guards on the empty table) but is **inert**: the empty CGRP table makes `0x503148e0` `beqlr` immediately, never dispatching to `0x5000ec50`. The boot does not advance.
+
+**What the real fix requires:** populate the CGRP handler table — `[r22+0x38]` (guard), `[r22+0x3c]` (descriptor-array base), `[r22+0x40]` (stack-array base), `[r22+0x44]` (count), and the descriptor entries themselves (`[entry+0]`=handler SRR0 → eventually the path to `0x5000ec50`, `[entry+4]`=TOC/r2). This is precisely the table that guest IM init builds and never does here, and writing a host-owned version that `rfi`'s correctly IS the M10-class forge. Its *correct contents* require either (a) RE of the guest IM-init code that registers CGRP sources, or (b) reading a populated CGRP from a boot where IM init runs (QEMU mac99 — now justified, format-only).
+
+### Implication for the milestone
+The minimal-forge hope is closed. M16 should re-scope to **CGRP-table synthesis**, with its own Task 0 = "obtain the correct CGRP handler-descriptor format + the source→handler mapping that lands on `0x5000ec50`" via IM-init RE and/or the QEMU oracle (format/semantics, not literal addresses). This is a larger effort than a one-word seed; recommend a fresh planning pass before implementation. The gate-field forge (`[0x68ffc1e0]=2`) remains useful as a *probe* to confirm the service routine reaches its self-guard (cheap validation that the RE is right), but not as a fix.
 
 ## Strategic fork (open — needs decision before spending QEMU budget)
 

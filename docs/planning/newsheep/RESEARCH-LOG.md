@@ -48,4 +48,21 @@
   M-series likely ran against a 9.2-era ROM all along. Remaining 9.2 gap = system software (not on
   the Task-0 RE path). Updates `ASSETS-AND-TOOLING.md` + `DECISIONS.md` Q0-D (🟢 mostly closed).
 
+- **Task-0 spec+plan red-team folded → rev 2 (2026-06-14).** 3 reviewers, all GO-WITH-FIXES; one
+  installed `tbxi 0.13` + dumped our ROM (empirical). Key:
+  - **Producer reframe (new fork Q0-F):** Trampoline = top-level `MacOS.elf` (ELF PPC BE, entry
+    0x20f078), NOT a parcel; `Parcels/` are PEF drivers; NanoKernel = `NanoKernel-vNN` parcel. `CGRP`
+    absent from `MacOS.elf` — Trampoline builds the OF device tree + page map; **NanoKernel builds CGRP
+    from it** → producer likely Trampoline+NanoKernel. "Find CGRP writes in the Trampoline" retired.
+  - **Agreement gate → mechanism-level** (services/write-classes/provenance, never literal
+    values/addresses/counts). Static & dynamic run the *same* ROM binary (md5 `66210b4f…` verified) but
+    dynamic runs it against **OpenBIOS ≠ Apple OF** → value/address/path divergence expected, not blocking;
+    Q0-B agreement is on provenance, not values.
+  - **Route A "bounded" ≠ "cheap":** stubbing OF = synthesizing the device tree the producer reads (the
+    `SS_NW_TRAMPOLINE` problem one level up). Q0-A split into call-surface-bounded + stub-data-tractable;
+    full 4-cell route table; per-route mechanical-feasibility check; DoD-negative is a costed first-class outcome.
+  - **Tracer:** no PPC `gdb` on this host → Python gdb-remote client; QEMU needs `-S` (halt at reset) or
+    the one-shot Trampoline is missed. tbxi: `tbxi dump -o <dir> <rom>`.
+  All folded into plan/spec rev-2 + charter §1 + DECISIONS (Q0-F).
+
 <!-- next entry below -->

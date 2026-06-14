@@ -1,6 +1,19 @@
 # Operation NewSheep — Trampoline RE (Task-0) Design Spec
 
-**Status:** rev 1 · 2026-06-14 · pre-red-team DRAFT
+**Status:** rev 2 · 2026-06-14 · red-team folded (3 reviewers, all GO-WITH-FIXES; one empirically dumped our ROM)
+
+> **REV-2 FOLD (2026-06-14).** (1) **Producer reframe (new fork Q0-F):** the Trampoline is the top-level
+> `MacOS.elf` (ELF PPC BE), NOT a parcel; `CGRP` is absent from it — the Trampoline builds the OF device
+> tree + page map, and the **NanoKernel** (the `NanoKernel-vNN` parcel) builds CGRP *from* that tree. So
+> the producer is likely **Trampoline + NanoKernel**; "find the CGRP writes in the Trampoline" is retired.
+> (2) **Agreement gate is mechanism-level** (services / write-classes / provenance), never literal
+> values/addresses/counts — static & dynamic run the *same* ROM binary (verified md5) but dynamic runs it
+> against **OpenBIOS ≠ Apple OF**, so value/address divergence is expected, not a gate failure; Q0-B
+> agreement is on *provenance*, not values. (3) **Route A "bounded" ≠ "cheap":** stubbing OF = synthesizing
+> the device tree the producer reads (the `SS_NW_TRAMPOLINE` problem one level up); the route decision must
+> enumerate-and-cost the `getprop` keys the computed writes consume. (4) **Tracer:** no PPC `gdb` on host →
+> Python gdb-remote client; QEMU needs `-S` (halt) or the one-shot Trampoline is missed. (5) tbxi:
+> `tbxi dump -o <dir> <rom>`. Full plan rev-2 carries the detail.
 **Effort:** Operation NewSheep (`docs/planning/newsheep/README.md`) · baseline tag `newsheep-baseline`
 **Live forks:** `docs/planning/newsheep/DECISIONS.md` (Q0-A…E)
 **Predecessors (banked):** M14/M15/M16-FINDINGS (forge-class NO-GO arc); M17 spec/plan CLOSED.

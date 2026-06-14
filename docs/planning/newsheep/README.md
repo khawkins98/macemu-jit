@@ -35,10 +35,17 @@ ELF bootloader (a *parcel inside the "Mac OS ROM" file*) that copies/modifies th
 synthesizes a partial hand-built substitute. The frozen CGRP/IM structures are exactly "the
 Trampoline never ran." (See `GLOSSARY.md` for the full lineage; sources in §8.)
 
-**The shift:** the Trampoline is the *single producer* of the whole frozen-struct class. Running or
-reproducing it clears **a class of walls at once, with real values computed by real guest code** —
-converting the unbounded "first of N" forge problem into a bounded "get one finite component to do
+**The shift:** the Trampoline is the *producer* of the boot-time init the frozen structs depend on.
+Running or reproducing it clears **a class of walls at once, with real values computed by real guest
+code** — converting the unbounded "first of N" forge problem into a bounded "get the producer to do
 its job" problem.
+
+> **Refinement (Task-0 red-team, 2026-06-14):** empirically, the Trampoline (`MacOS.elf`) builds the
+> **OF device tree + page map** and does NOT itself write the CGRP/interrupt structures — the
+> **NanoKernel** (a separate ROM parcel) builds CGRP *from* that device tree. So the "producer" is
+> likely **Trampoline + NanoKernel**, and the device tree is the hand-off between them. The effort's
+> shape is unchanged (run/reproduce the producer); what the producer *is* is sharpened. Pinning this
+> is Task-0's fork **Q0-F** (`DECISIONS.md`).
 
 ## 2. North star & definition of success
 

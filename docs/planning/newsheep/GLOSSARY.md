@@ -21,7 +21,10 @@
   nanokernel**, then hands off. *This is the producer Operation NewSheep targets.* We do not run it;
   `SS_NW_TRAMPOLINE` fakes a partial substitute.
 - **Nanokernel (NK)** — the low-level PowerPC kernel under the Toolbox; owns exceptions/interrupts,
-  the KDP, the vector tables. Staged into guest memory at `0x5031xxxx`.
+  the KDP, the vector tables. Staged into guest memory at `0x5031xxxx`. **It is a separate ROM parcel
+  (`NanoKernel-vNN`) from the Trampoline (`MacOS.elf`); per the Task-0 red-team it is the NanoKernel —
+  not the Trampoline — that builds CGRP, from the device tree the Trampoline produces** (so the
+  "producer" is likely Trampoline + NanoKernel; fork Q0-F).
 - **IM init (Interrupt Manager init)** — the guest code (driven off the Trampoline + Cuda init) that
   populates the NK interrupt-routing structures. **Runs downstream of Cuda init and never completes
   in our emulation** — the chicken-and-egg at the heart of M14→M17.

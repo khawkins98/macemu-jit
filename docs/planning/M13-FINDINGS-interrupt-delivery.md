@@ -115,6 +115,132 @@ boot passes the ~15s dead-end (blocks compile after 15s, dec keeps climbing, han
 
 ---
 
+## Task B — handler→DR signal spec (QEMU oracle + static cross-check), 2026-06-14
+
+Read-only RE. Pins the contract **Task C gates against**: which DR/PPC context state a healthy
+registered handler sets at the `0x50325f00`-equivalent point so the DR vectors `[0x64]→0x5000ED08`.
+Tags: [STATIC] = static RE of our ROM (`rom901.bin`, md5 `d1a267a9…`, base `0x50000000`);
+[QEMU-BEHAVIORAL] = QEMU mac99 9.0.1-ROM oracle (`tools/qemu-rig.sh`, rundir `/tmp/qemu-rigB`).
+**No QEMU MMIO address is cited as a reference value** (QEMU MacIO BAR0 = `0x80000000` ≠ our `0xF3000000`).
+
+### B.1 The signal spec — what a healthy delivery does (the Task C contract)
+
+A healthy registered CGRP handler, invoked from the NK EXT path that today falls through to
+`0x50325f00`, performs this sequence. Task C must reproduce the **net effect** (steps 2–4), not the
+handler's internals:
+
+1. **Pending-bitmask read / source identify (already happens today in the fallback).** [STATIC]
+   The `0x50325f00` body is the NK's hardware interrupt-source scanner, NOT a no-op:
+   - `lwz r20,-0x20(r1)` → KDP/per-CPU base; `lwz r22,0xf18(r20)` → the PIC/MMIO base it scans.
+   - It reads the controller (`lwbrx r26,r22,r26` at `0x50326068`), masks the source id
+     (`clrlwi r26,r26,0x14`), and looks the **source→level** up in a byte table at `0x3f00(r26)`
+     (`lbz r28,0x3f00(r26)` → `r28` = the interrupt **level**).
+   - It clears that source's pending bit in the per-source word table at `0xf28(r20)`
+     (`andc r24,r24,r28; stw r24,…` at `0x50325ff8–0x50326008`) and maintains a pending **count**
+     halfword at `0x910(r1)` (`sth r27,0x910(r1)`).
+   - The fallback then returns via `b 0x503254e0` (`0x50326104`) — the EXT restore/`rfi` epilogue.
+     **It records the interrupt and returns to PPC; it never touches any 68k/DR state.** This is
+     exactly stage-2-MISSING from the main diagnosis, now confirmed at the instruction level. [STATIC]
+   - The NK PIC descriptor pointer at `*(0x68ffefd0)` is live and valid in the oracle
+     (`0x68ffefd0 → 0x5fffef00`, the Hnfo record). [QEMU-BEHAVIORAL]
+2. **Set the DR's between-instruction take-exception state — the `cr2lt` analogue.** This is the
+   step the fallback omits. In register/field terms (our addresses): the DR checks `bgectr cr2` at
+   **every opcode-handler tail** (e.g. `0x50468ae8`); a *clear* `cr2lt` continues, a *set* `cr2lt`
+   diverts to the unified slow-path `0x5046d114`. Task C must arrange that at the next DR boundary
+   `cr2lt` is set **with an interrupt cause** (not a fault/trap cause). See B.2 for the lever. [STATIC]
+3. **DR builds the genuine 68k frame & vectors.** `0x5046d114`'s interrupt branch saves the 68k PC
+   (`addi r4,r24,-2; stw r4,0x6c(r31)`), builds a 68k exception frame on the 68k SSP (A7=`r1` in the
+   DR map) with **vector offset `$64`** in the format/vector word and the **saved SR/IPL**, then
+   vectors through `[0x64] = 0x5000ED08`. (`0x5046d114` is in the RAM-resident mirror-emulator region
+   `0x5046xxxx`, beyond the 4 MB ROM file — not statically disassemblable from `rom901.bin`; body
+   facts carry from the archived probe-dump RE in `2026-06-13-m13-rescope-dr-autovector.md`.) [STATIC]
+4. **The 68k handler validates the frame** — independently confirmed by the oracle. The live level-1
+   autovector handler reads its exception frame and asserts the vector and SR the DR must have built:
+   ```
+   cmpi.w  #$64, $6(a7)      ; format/vector word == $64  (autovector level-1 offset)
+   bne.b   ...
+   movem.l d0-d1/a0-a1,-(a7)
+   move.w  $10(a7), d0       ; saved SR (now +0x10 after the movem push)
+   andi.w  #$e700, d0        ; mask T1T0/S/IPL
+   ```
+   [QEMU-BEHAVIORAL — handler at QEMU heap `0x0047d0ba`; OUR equivalent is `0x5000ED08`, behavior-matched only]
+
+   **Net contract for Task C:** at the `0x50325f00`-equivalent point, after the NK records pending,
+   set the DR's saved take-exception context to "interrupt, level N (≥1), vector `$64`" so that at the
+   next DR between-instruction boundary the DR's own `0x5046d114` path builds a frame with format/vector
+   word `$64` and the saved SR, and vectors `[0x64]→0x5000ED08`. Do **not** build the frame in host code
+   (falsified 4×) — drive the DR's own builder.
+
+### B.2 The cr2-feed lever (Q-0c) — RESIDUE (register/context state, not a memory latch)
+
+**Verdict: residue, well-characterized — NOT statically pinnable to a byte offset, and this does NOT
+block Task C.** [STATIC]
+
+- For **faults/traps** `cr2lt` is set inline, opcode/fault-driven, inside `0x5046d114`
+  (`crmove`/`crset cr2lt`) — already established (archived RE).
+- For **interrupts** there is **no memory location the DR re-derives `cr2lt` from each check**. The
+  archived probe-dump RE settled the make-or-break question: the interrupt `cr2lt` is **PPC
+  register/context state** — the `cr2` bit in the DR's **saved CR**, set when the NK manipulates the
+  DR's saved PPC context on delivery. The DR's PPC-resume context lives in the `ECB+0x740` family
+  (`ECB=0x68fff000`). The candidate lever is therefore **the saved-CR word in the DR's resume context,
+  cr2 field**. [STATIC, carried from `2026-06-13-m13-rescope-dr-autovector.md`]
+- **Why not pinned to an offset:** the exact byte offset of the saved-CR word within the DR resume
+  context, and the precise interrupt-vs-fault cause encoding `0x5046d114` keys on, are in the
+  RAM-resident `0x5046xxxx`/`0x5046e1a4` save/resume path — absent from the ROM file, and beyond the
+  Q-0c static bound (≤2 call levels / ≤12 funcs around `0x5046d114`/`0x50325f00`) because those
+  bodies are not in the static image. QEMU cannot pin it either: it runs the real registered handler
+  (heap-resident, not in any ROM), so the oracle shows the *result* (frame + vector `$64` + SR, B.1.4)
+  but not the saved-CR write site.
+- **What would pin it (escalation, NOT required for Task C):** a live probe-dump of OUR engine at the
+  DR resume/save boundary — dump the DR's saved-context block at `ECB+0x740` across a real
+  trap-driven `0x5046d114` entry (`SS_PROBE_PC=0x5046d114` + `[ECB+0x740 : 0x80]`), diff the saved-CR
+  word with/without `cr2lt` set, to read off the exact offset and cause encoding.
+- **Why it does not block Task C:** the milestone's Task C HLEs the handler by *setting the DR's
+  `cr2lt` autovector trigger* at the `0x50325f00` point. The binding constraint Task C needs from this
+  task is the **nature** of the lever — register/context state in the DR's saved CR, not a pokable
+  memory latch (so a memory-poke approach is dead, consistent with the falsified-table). Task C
+  locates the saved-CR field empirically with the escalation probe above as its first sub-step.
+
+### B.3 Early-bringup confirmation — refutes the strong-circular fear [QEMU-BEHAVIORAL]
+
+The oracle (`/tmp/qemu-rigB/probes.txt`, ladder 10/20/40 s) shows 68k interrupt delivery is an
+**early-boot capability**, established progressively and well before Finder (~30 s+):
+
+| t (s) | `[0x64]` level-1 vector | Ticks `*(0x168)` | `$6e4` VBL chain `*(0x6e0)` |
+|-------|--------------------------|------------------|------------------------------|
+| 10 | `0x00000000` (not installed) | 0 | `0x00493dfe` (already populated) |
+| 20 | `0x0047d0ba` (handler INSTALLED) | 0 | `0x00493dfe` |
+| 40 | `0x0047d0ba` | `0xb1740000` (BE → `0x000074b1` = 29 873, **Mac OS ticking**) | `0x00493dfe` |
+
+The autovector handler is installed by ~20 s and Ticks advance by ~40 s — interrupt-driven 68k
+service comes up **during early bringup, before the system is "up."** EXT→68k delivery is therefore a
+bootstrap-time capability, not a Finder-only one; the fear that delivery is strongly circular with a
+fully-booted system is **refuted**. (Whether OUR boot can *reach* CGRP registration once Task C lands
+a single clean delivery remains the open keystone test from the step-0 recon — that is about
+registration reachability, a separate question from delivery being early-capable.)
+
+### B.4 Recorded divergences (oracle vs our DR bodies)
+
+- **PIC topology / addresses.** QEMU mac99 = `openpic` + `macio-newworld` at BAR0 `0x80000000`
+  (escc `0x80012000`). These are **QEMU-model addresses only**; our paravirtual machine uses the NK
+  software interrupt-source struct at `*(0x68ffefd0)` and (in the fallback scan) the MMIO base in
+  `r22 = [KDP+0xf18]`. No reference value crosses over. [QEMU-BEHAVIORAL]
+- **Hardware-scan vs paravirtual read — complementary, not contradictory.** Our `0x50325f00` does a
+  real controller read (`lwbrx r22`) to *identify the source*, then records into the NK software state;
+  the 68k handler `0x5000ED08` reads the *software* struct at `*(0x68ffefd0)`. Two layers (PPC source
+  ID → NK record → 68k software consume), not a divergence. [STATIC + prior PROBE]
+- **Ticks transient at the final 45 s probe** (`*(0x168)` read back as 0): a probe/shutdown-window
+  race overlapping the screenshot, not a boot regression; the 40 s reading (`0x000074b1`) is the
+  load-bearing one. [QEMU-BEHAVIORAL]
+
+### B.5 Files / evidence
+
+ROM static: `/Users/Shared/macemu/dumps/rom901.bin` (md5 `d1a267a91993bf2c27fac1ca91ad5974`).
+Oracle: `/tmp/qemu-rigB/probes.txt` + `device-tree.txt` (transient; regenerate via
+`bash SheepShaver/tools/qemu-rig.sh --ladder 10,20,40`).
+
+---
+
 ## Provenance (archived process trail — `docs/archive/2026-06/planning/`)
 
 - `2026-06-13-m13-atrap-bootstrap.md` — original M13 plan (Task A as injection) + Task-0 recon addenda.

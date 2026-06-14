@@ -371,25 +371,50 @@ init. But DEC interrupts reach the 68k world via the published DEC handler path 
 CGRP-dependent) — so if the Cuda protocol can be driven poll-driven (without requiring
 EXT→68k delivery), the boot might advance past CGRP registration.
 
-**Next steps (prioritized — investigate (b) FIRST):**
+### §4b — IER/IFR timeline (path (b) precondition, 2026-06-14)
 
-(b) **Poll-driven Cuda — investigate FIRST (non-circular escape).** If Cuda init can
-    complete by polling VIA IFR, the chicken-and-egg breaks with zero interrupt-delivery
-    machinery. CudaSettle already delivers on IFR reads. **Precondition:** pin who reads
-    IER 65,539× and why — is it Cuda init in a poll loop (→ (b) is the clean fix: make
-    the guest poll IFR instead of/in addition to IER), or the NK scheduler spinning (→
-    (b) is a red herring and you need (a))? Polling IER (the enable register) instead of
-    IFR (the flag register) is structurally odd and needs explaining before (b) is viable.
+Temporary IER/IFR read/write diagnostics in `dev_via6522.cpp` (reverted after capture):
 
-(a) **Host-side HLE (set cr2lt + hnfo+0x28) — GATE behind a smoke test.** This is the
-    un-revert of Task C / SS_NW_DR_AUTOVEC, but that mechanism was reverted UNTESTED (on
-    the bad retraction, never validated). It is an untested hypothesis, not a known fix.
-    **Smoke-test before committing:** at the fallback point, set cr2lt + the pending bit →
-    does the Cuda EXT reach ed08 and Cuda init complete? Only then build the gated
-    implementation. The M13 B.1–B.4 analysis provides the exact contract.
+| # | Event | IER | IFR | Meaning |
+|---|-------|-----|-----|---------|
+| W1 | IER write `0x7F` | `0x00→0x00` | — | Clear all |
+| R1-R2 | IFR read | — | **`0x04`** | IFR_SR already set (CudaSettle delivered on first IFR read) |
+| W2 | IER write `0x7F` | `0x00→0x00` | — | Clear all again |
+| W3 | IER write `0xA0` | `0x00→0x20` | — | SET T1 timer interrupt enable |
+| R1-65536 | IER read (65536×) | `0x20` | `0x00→0x20` | T1 poll loop; IFR_T1 fires at ~#32768 |
+| W4 | IER write `0x20` | `0x20→0x00` | — | CLEAR T1 |
+| W5 | IER write `0x84` | `0x00→0x04` | — | **SET SR interrupt enable** |
+| — | (ORB writes: Cuda handshake) | — | — | (no more IFR reads after this point) |
 
-(c) **CGRP forge — lowest priority.** M10 attempted (SS_M10_CGRP, crashed —
-    0xDEADBEEF from cold/warm dispatch-table deadfill). Leave unless (a)/(b) fail.
+**Findings:**
+1. The 65,539 IER reads are a **T1 timer wait loop** — NOT Cuda init polling. The guest
+   reads IER (not IFR) 65,536 times while waiting for T1 to fire. This is a ROM timer
+   calibration loop that runs BEFORE the Cuda attention handshake starts.
+
+2. **SR is enabled in IER AFTER the T1 loop** (write #5: IER |= `0x04`). Then the guest
+   starts the Cuda attention handshake (ORB writes). The guest expects an
+   **interrupt-driven** SR response, not a polled one — **there are NO IFR reads after
+   write #5**. The guest relies on the autovector interrupt chain (CGRP → DR cr2lt →
+   68k handler → IFR read) to service the Cuda SR int.
+
+3. **CudaSettle delivers on the first IFR read** (IFR reads #1-#2 show `0x04`), confirming
+   the settle-on-IFR-read mechanism works. But this early delivery is consumed before the
+   guest enables SR in IER and starts the Cuda handshake — it's a pre-init read, not part
+   of the protocol.
+
+**Verdict on path (b): RED HERRING.** The guest does not poll IFR for Cuda responses.
+It relies on interrupt-driven delivery. Path (b) cannot break the chicken-and-egg.
+
+**Next steps (revised priority):**
+
+(a) **Host-side HLE (set cr2lt + hnfo+0x28) — the only viable path.** Gate behind a
+    smoke test: at the NK fallback point, set cr2lt + the pending bit → does the Cuda
+    EXT reach ed08 and Cuda init complete? The M13 B.1–B.4 analysis provides the exact
+    contract. This is an untested hypothesis (the reverted Task-C SS_NW_DR_AUTOVEC used
+    a different mechanism) — smoke-test before building the gated implementation.
+
+(c) **CGRP forge — fallback.** M10 attempted (SS_M10_CGRP, crashed). Only pursue if
+    (a) fails.
 
 ## §5 — Bug found during investigation
 

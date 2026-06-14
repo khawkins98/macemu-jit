@@ -53,14 +53,14 @@
 >    (published DEC handler, not CGRP-dependent). Cuda init may be poll-driven but
 >    the guest polls IER (65,539×) instead of IFR (2×).
 >
-> **Next (choose one):**
-> (a) **Host-side HLE:** on Cuda EXT delivery, set cr2lt + populate hnfo+0x28 from the
->     host. M13 B.1–B.4 has the exact contract. Replaces the reverted SS_NW_DR_AUTOVEC
->     with the correct mechanism.
-> (b) **Poll-driven Cuda:** make CudaSettle deliver on IFR reads (it already does) AND
->     investigate why the guest reads IER 65,539× instead of IFR.
-> (c) **CGRP forge:** populate the CGRP dispatch table directly. M10 attempted this
->     (crashed). Needs correct struct layout.
+> **Next:**
+> (a) **Host-side HLE — the only viable path.** On Cuda EXT delivery, set cr2lt +
+>     populate hnfo+0x28 from the host. M13 B.1–B.4 has the exact contract. Gate behind
+>     a smoke test before building the real implementation.
+> (b) ~~Poll-driven Cuda~~ — **ELIMINATED.** IER/IFR timeline (§4b) shows the guest
+>     relies on interrupt-driven SR delivery, not polling. No IFR reads after SR is
+>     enabled in IER. The 65,539 IER reads are a T1 timer calibration loop.
+> (c) **CGRP forge — fallback.** Only if (a) fails.
 > (d) Fix §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
 >
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked. Never global pkill —

@@ -64,20 +64,19 @@ the previous: **get it running → make it drivable/testable → make it measura
 3. **Measure** ✅ — empirical, regression-tracked performance: Speedometer/MacBench capture, a boot-free
    kernel microbench (`a64/op`), and a per-block + instruction-mix profiler. Makes every later change
    quantifiable.
-4. **Widen emulation** 🔜 *(current primary thrust)* — close the structural gaps SheepShaver never could,
-   correctness first, measured continuously against stage 3. **First win: preliminary AltiVec (Velocity
-   Engine) support** — the JIT translates PowerPC AltiVec → ARM64 NEON, and with the opt-in `altivec`
-   pref a real app (AltiVec Fractal Carbon) now detects and runs its vector kernel through the JIT (see
-   below). **Active: the Machine Layer** — a proper hardware emulation layer (MMIO bus, SCC 8530 serial,
-   VIA 6522 timer, AArch64 fault-based MMIO dispatch) enabling the 9.0.1 NewWorld ROM to boot natively.
-   M0–M3 are complete (machine profiles, device models incl. a Cuda/ADB protocol stack, a virtual
-   clock, and a real PPC exception model delivering live interrupts and syscalls into the NewWorld
-   nanokernel's own handlers — including the first timer-interrupt deliveries through the
-   nanokernel's published vectors), along with the 68k↔PPC Mixed Mode switch and an HLE Time
-   Manager surface — the boot now runs tens of seconds deep into the 9.0.1 ROM's parcel/CFM init
-   on the fidelity profile, with host→guest interrupt routing as the active milestone and each
-   remaining boot wall mapped and worked milestone-by-milestone. See
-   [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md).
+4. **Widen emulation** 🔜 *(current primary thrust — Operation NewSheep)* — boot Mac OS 9.2 (NewWorld)
+   by **running/reproducing the producer of the boot-time init (the Trampoline)**, not forging its
+   outputs. The M8→M17 forge arc is closed (banked NO-GO — every wall was the same disease: the
+   Trampoline never runs). The **Machine Layer** (MMIO bus, SCC 8530, VIA 6522, AArch64 fault-based MMIO
+   dispatch, a real PPC exception model delivering live interrupts/syscalls into the nanokernel's own
+   handlers, the 68k↔PPC Mixed Mode switch, an HLE Time Manager) is the **complete platform (M0–M13)**
+   this builds on. **Status (2026-06-14):** both the Trampoline-RE and SS_M18 gating Task-0s are done →
+   Route A (run the real Trampoline + NanoKernel) decided — GO but a months-scale staged program (S1
+   paged MMU → S2 loader/OF-CI/DT → S3 two-supervisor reconciliation → S4 disk IM-init→CGRP). Earlier win
+   along the way: preliminary AltiVec (the JIT translates PowerPC AltiVec → ARM64 NEON; opt-in `altivec`
+   pref; AltiVec Fractal Carbon runs its vector kernel through the JIT). See
+   [`docs/planning/newsheep/README.md`](docs/planning/newsheep/README.md) (charter) +
+   [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md) (platform).
 5. **Optimize** — *then* push performance (per-block overhead, cross-block pinning, a vector register
    allocator, HLE), with the stage-3 benchmarks gating every change against regressions.
 
@@ -190,7 +189,9 @@ if present, is a fuller working index — but it is gitignored, so the canonical
 
 **JIT internals:** [`docs/planning/SheepShaver-AARCH64_JIT_PLAN.md`](docs/planning/SheepShaver-AARCH64_JIT_PLAN.md) (PPC→ARM64) · [`BasiliskII/docs/AARCH64_JIT_BRINGUP.md`](BasiliskII/docs/AARCH64_JIT_BRINGUP.md) (68K→ARM64 + bug history) · [`docs/planning/OPTIMIZATION-PLAN.md`](docs/planning/OPTIMIZATION-PLAN.md).
 
-**Machine Layer** *(active — Mac OS 9.x support)*: [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md) — dual machine profiles, MMIO bus, device models (SCC 8530, VIA 6522), enabling the 9.0.1 NewWorld ROM. Supersedes the earlier [NewWorld ROM port](docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md) and [Upgrade Card](docs/planning/UPGRADE-CARD-PATH.md) approaches.
+**Operation NewSheep** *(current frontier — 9.2 NewWorld via the Trampoline producer)*: [`docs/planning/newsheep/README.md`](docs/planning/newsheep/README.md) (charter) + the staged program [`docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`](docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md).
+
+**Machine Layer** *(complete M0–M13 — the platform NewSheep builds on)*: [`docs/planning/MACHINE-LAYER-PLAN.md`](docs/planning/MACHINE-LAYER-PLAN.md) — dual machine profiles, MMIO bus, device models (SCC 8530, VIA 6522), enabling the 9.0.1 NewWorld ROM. Supersedes the earlier [NewWorld ROM port](docs/planning/NEW-WORLD-ROM-SUPPORT-PLAN.md) and [Upgrade Card](docs/planning/UPGRADE-CARD-PATH.md) approaches.
 
 **E2E testing & guest automation:**
 - [`SheepShaver/e2e/README.md`](SheepShaver/e2e/README.md) — the E2E harness: smoke / Speedometer benchmark / real-app workload gates, with the toolkit map.

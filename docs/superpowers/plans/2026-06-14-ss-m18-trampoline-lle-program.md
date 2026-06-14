@@ -141,9 +141,15 @@ Stop-rule.
 
 ## Stage 1 — NewWorld-profile paged MMU (PREREQUISITE per Q2)
 
-**Effort band: UNKNOWN-months** (host-page aliasing may make it a bounded map-change hook; a per-access
-JIT walker would be perf-fatal — S1-Task-0's Discriminator-A + walker-vs-window decision settles which).
-**Needs its OWN deep Task-0.**
+**Effort band: UNKNOWN-months, leaning tractable** (host-page aliasing may make it a bounded map-change
+hook; a per-access JIT walker would be perf-fatal). **Discriminator-A run 2026-06-14 → COARSE on
+mechanism** (`FINDINGS-discriminator-a.md`): static RE of the md5-verified NK is conclusive — `mtsrin`
+context loop @0x50315290 is **segment-granular (one 256 MB segment/iter)**, all 8 IBAT/DBAT pairs
+programmed from a descriptor table, MMIO via SR-swap @0x50325894; the HTAB is the residual pageable map,
+not the JIT-covered RAM/ROM. → **path a (Dolphin shadow-arena) indicated.** Residual FINE-falsifier (dense
+mixed-perm 4 KB PTEs on JIT-covered regions) could NOT be exercised live (QEMU stalled in the OF→OS handoff
+before NK MMU-install) → routed to S1's MMU-oracle unit test (test-ladder item 2); if it ever shows the NK
+depending on such PTEs, re-band to softmmu. **Still needs its OWN deep Task-0.**
 
 **Goal.** PASS: a paged-MMU mode (gated `SS_M18_PAGED_MMU` + `MachineProfileIsNewWorld()`) in which a guest
 `mtsr`/`mtsrin` + SDR1 install followed by a translated load/store **resolves to the SR/page-table-selected
@@ -152,11 +158,15 @@ same VA maps to two PAs under two contexts (the Q2 consumption-#1 shape @0x50315
 V=P and byte-identical (the paged path is structurally unreachable when `!MachineProfileIsNewWorld()`).
 DIAGNOSTIC: walker/remap counters; how far a probe NK boot gets under translation.
 
-**Donor (C1).** **PORT Dolphin "Dynamic BAT" shadow-arena** (`Source/Core/Core/PowerPC/JitArm64/Memmap.cpp`,
-`UpdateDBATMappings`): remap the NATMEM arena at the rare `mtspr` BAT/SDR1/SR — the **80 JIT `LDR/STR`
-sites stay bit-identical**; translation cost lands on the map-change, not the access. **ORACLE only:**
-PearPC / QEMU softmmu PPC translator as a reference to diff our PA outputs (never port — per-access walker
-= the slow anti-pattern). DingusPPC is NOT a usable S1 oracle (no KeyLargo/OpenPIC).
+**Donor (C1) — details in `docs/planning/newsheep/DONOR-NOTES.md` (full pinned SHAs).** **PORT Dolphin
+"Dynamic BAT" shadow-arena:** the arena remap is `MemoryManager::UpdateDBATMappings()` in
+**`Source/Core/Core/HW/Memmap.cpp`** (~L233; the BAT-table rebuild is `MMU::DBATUpdated()` in `MMU.cpp`) —
+**NOT** `JitArm64/Memmap.cpp` (the JIT is deliberately uninvolved — that's the point). Remap the NATMEM
+arena at the rare `mtspr` BAT/SDR1/SR — the **80 JIT `LDR/STR` sites stay bit-identical**. The 16 KB-host /
+4 KB-guest fork is Dolphin's `CanCreateHostMappingForGuestPages()` (~L343) — **this IS our Discriminator-A
+risk** (it falls to the slow path unless the four constituent 4 KB pages are aligned+contiguous+same-perm).
+**ORACLE only:** PearPC / QEMU softmmu translator to diff our PA outputs (never port). DingusPPC is NOT a
+usable S1 oracle (no KeyLargo/OpenPIC). Dolphin master SHA `144d19433aa734c19c34e5978a1b817d2aa12663`.
 
 **Reuse (C3).** Supervisor state + `mtspr/mtsr/mtsrin` handlers already exist (Wave 0; "honor-the-write"
 largely done). Hook the shadow remap in the NATMEM/`vm_alloc` layer (`main_unix.cpp` ~:2079). Dead-ends

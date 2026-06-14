@@ -41,13 +41,23 @@ transfer question by direct diff. Both Task-0 instruments can run on 9.2 (static
 9.2-era ROM; QEMU already boots 9.2.1). **Action:** copy this set into the project asset area + a
 manifest; `tbxi`-verify each ROM's internal OS version; pick the canonical 9.2.x ROM for the RE.
 
-## ⚠️ R2 — the remaining 9.2 gap: SYSTEM SOFTWARE (not the ROM, and not needed for Task-0)
+## ✅ R2 — the 9.2 system-software gap: RESOLVED (genuine 9.2.x install ISOs in hand, found 2026-06-14)
 
-- The ROM file ≠ the OS. To eventually *boot* 9.2 in SheepShaver we still need genuine **Mac OS 9.2.x
-  system software** (install media / a bootable disk). `/Users/Shared/macemu/macos921.dsk` is
-  **mislabeled — it actually contains Mac OS 8.6** (verified earlier; see `docs/planning/MACHINE-LAYER-PLAN.md` + the M14-FINDINGS asset notes).
-- **Not on Task-0's critical path:** Task-0 is static `tbxi` RE of the ROM (in hand) + QEMU trace
-  (QEMU has its own 9.2.1 CD). The 9.2 system software is needed only for the later *boot* milestones.
+- The ROM file ≠ the OS. To boot 9.2 in SheepShaver (SS_M18 Stage 4: disk System/Enabler IM-init in the
+  loop) we need genuine **Mac OS 9.2.x system software**. `/Users/Shared/macemu/macos921.dsk` is
+  **mislabeled — it actually contains Mac OS 8.6** (do not use it for 9.2).
+- **Found in `~/Downloads/` (verified bootable Apple-partitioned PPC CD images, `file` + `hdiutil`):**
+
+  | ISO | Size | md5 | Notes |
+  |---|---|---|---|
+  | `~/Downloads/Apple Mac OS 9.2.1/macos_921_ppc.iso` | 640 MB | `3f129e037bfd1c08b45a34424a747025` | Apple_HFS + real CD boot drivers (Apple_Driver43_CD / ATAPI). |
+  | `~/Downloads/macos-922-uni/macos-922-uni.iso` | 579 MB | `2cfb856b1678336493301bec0a0ecdfa` | **9.2.2 universal** (Toast 5.2 HFS Builder volume); prime Stage-4 target. |
+
+  (Also present as `.7z`: `Apple Mac OS 9.2.1.7z`, `macos-922-uni.zip`, `Apple-Mac-OS-9-2.1.7z`.)
+- **Action when Stage 4 opens:** symlink/copy the chosen ISO into the project asset area
+  (`/Users/Shared/macemu/`), record md5 in the asset manifest, and confirm it boots far enough under the
+  S1+S2+S3 stack to run IM-init. The Stage-4 HARD-BLOCK in the program plan is now **cleared** (asset in
+  hand); booting it is gated on S1–S3 landing, not on sourcing.
 
 ## Tooling
 

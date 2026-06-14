@@ -120,7 +120,7 @@ EOF
 **Files:**
 - Modify: `docs/planning/M15-FINDINGS-consumption-recon.md` (Boot-B evidence section)
 
-The M8 default flip was refused over a deterministic `SC#1=0x0d` divergence. This task answers: is `0x0d` *on* the consumption critical path, or beside it?
+The M8 default flip was refused over a deterministic `SC#1=0x0d` divergence. **Task-1 confound (binding):** the findings doc shows `SC#1=0x0d` only appears under `SS_NW_IRQ_CONSUME=1` **without** `SS_NW_PIC` — but consumption is structurally unreachable without PIC (EXT delivers at level 0). With `SS_NW_PIC=1` (the real consumption regime) the first SC is `r0=0x3f`. So this task's actual question is sharper: **under the real consumption regime (PIC on), is the Task-1 stall (consumed EXT edge routes into CGRP fallback `0x50325fd0` instead of NK slot-4 service `0x50314660`) related to the SC sequence at all, or is `SC#1=0x0d` a PIC-off artifact irrelevant to the verdict?** Adjudicate that, don't just hunt `0x0d`.
 
 - [ ] **Step 1: Locate the SC#1=0x0d evidence basis**
 
@@ -133,9 +133,9 @@ Record what `0x0d` is (which syscall selector / what it normally returns) in the
 
 ```bash
 SheepShaver/tools/ss-slot-boot.sh --label m15-bootB-sc0d --timeout 45 \
-  --env 'SS_NW_PIC=1;SS_NW_IRQ_CONSUME=1;SS_DR_R24_RING=1'
+  --env 'SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1'
 ```
-`SS_PROBE_PC` does NOT fire at the syscall vector entry `0x50314ac0` (Task-0 finding) — instead read the always-on `[SC]`/`[EXC]` log lines (the `exc=` tuple records selector + r3) for the `sc` selector sequence, and cross-reference the r24 ring for ordering. Capture the first several `sc` selectors and whether `0x0d` precedes or follows the consumption-path stall pinned in Task 1.
+**`--env` splits on WHITESPACE, not `;`** (Task-1 correction; a `;`-joined string becomes one garbage token and silently drops the rest). `SS_PROBE_PC` does NOT fire at the syscall vector entry `0x50314ac0` — instead read the always-on `[SC]`/`[EXC]` log lines (the `exc=` tuple records selector + r3) for the `sc` selector sequence, and cross-reference the r24 ring for ordering. Capture the first several `sc` selectors under PIC-on, and determine whether the SC sequence is causally related to the Task-1 stall (EXT→CGRP-fallback `0x50325fd0` instead of NK slot-4 service `0x50314660`) or whether `SC#1=0x0d` is a PIC-off-only artifact irrelevant to the reachable consumption path.
 
 - [ ] **Step 3: Record on-path vs beside-path verdict**
 
@@ -169,8 +169,9 @@ Use the live-resolved base from Task 0 — NOT `0x68ff4f00` unless Task 0 confir
 
 ```bash
 # Task-0 live values: hnfo base = 0x68ff4f00 (matched prior session).
+# NOTE: --env splits on WHITESPACE not ';' (Task-1 correction).
 SheepShaver/tools/ss-slot-boot.sh --label m15-bootC-structwatch --timeout 45 \
-  --env 'SS_NW_PIC=1;SS_NW_IRQ_CONSUME=1;SS_JIT_TRACE_RING=1;SS_JIT_WATCH_ADDR=68ff4f00,68ff4f14:8,68ff4f28,68fff674;SS_JIT_WATCH_DUMPS=0'
+  --env 'SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_JIT_TRACE_RING=1 SS_JIT_WATCH_ADDR=68ff4f00,68ff4f14:8,68ff4f28,68fff674 SS_JIT_WATCH_DUMPS=0'
 ```
 `SS_JIT_WATCH_DUMPS=0` = report-only (faster). The watch is a CHANGE detector and is blind to value-identical writes — rely on `[WATCH]` change lines AND `[WATCH-SAMPLE]` logarithmic frozen-vs-moving lines together.
 

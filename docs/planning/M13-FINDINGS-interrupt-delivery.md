@@ -354,6 +354,93 @@ Reproduce: `ss-slot-boot.sh --timeout 45 --env 'SS_NW_PIC=1 SS_PROBE_PC=0x5046d1
 
 ---
 
+## §C-pin.7 — the IPL-7 "spin": what it waits on (2026-06-14, one bounded recon pass)
+
+Strict read-only recon (disasm + bounded probing; no inject/force/poke). Goal: characterize what the
+C-pin.6 "IPL-7 spin at r24=0x5000010a" is waiting on. **The pass overturned the framing of the
+question and surfaced a likely keystone false-negative.** Tags: [STATIC] = disasm of `rom901.bin`
+(md5 `d1a267a9…`, base `0x50000000`); [PROBE✓] = live boot of our engine (`SS_NW_PIC=1`, slot
+protocol). Evidence: slot rundir `/tmp/ss-slots/slot0/runs/20260614-093644.57802` (r24-ring + 68k
+probe) and `…-093817.58053` (lldb mem read); lldb script `/tmp/lldb_m13.txt`.
+
+### C-pin.7.1 r24=0x5000010a is NOT a spin — it is a mid-instruction fetch-pointer artifact
+- **Live low-ROM == static ROM, byte-identical.** A single bounded lldb read of host
+  `0x4000_5000_00e0…0120` and `…aad0…ab40` matches `rom901.bin` exactly — **low-ROM is not overlaid
+  or patched at runtime.** So the static decode is authoritative here. [PROBE✓ + STATIC]
+- In that authoritative decode, **`0x5000010a` is mid-instruction**: it is the displacement word
+  `0008` of `lea $50000112(pc),a6` at `0x50000108` (`4dfa 0008`). The DR advances r24 by 2 per
+  extension word (`lhau r27,2(r24)`, C-pin.4), so r24 transiently points *inside* a multi-word opcode.
+  `r24=0x5000010a` is simply where the fetch pointer sat when the PPC EXT seam sampled it. [STATIC]
+- **It is not visited as a loop.** `SS_PROBE_68K=0x5000010a:6` fired exactly **once** (match=1/6);
+  the r24-ring shows `0x5000010a` at a single record (`@14384`, 1 hit). [PROBE✓]
+- The actual code at `0x500000e0–0x50000130` is **straight-line early-boot init**: a run of subroutine
+  trampolines (`bra.l 0x5000ab4e`, `…ae82`, `…aad8`; `bsr.l 0x500081f8`; `bsr.w 0x50000624/03f2/03f6`;
+  `bsr.l 0x50007a20`; then an `FE4A` F-line) executed **once**, not a wait loop. The `0x5000aad8`
+  callee is device/IO register init (byte writes `move.b (a3)+,$1e00/$600/$400/$1800/$1600(a2)`,
+  `move.b #$7f,$1c00(a2)`). [STATIC]
+
+**⇒ Q1/Q2/Q3 as posed are vacated:** there is no polled flag at `0x5000010a`, no spin loop there, and
+no `move.w …,SR` exit-gate around it. The "IPL-7 spin at 0x5000010a" in C-pin.6 was the transient
+r24 at the autovector seam, mis-read as a wait location.
+
+### C-pin.7.2 The keystone may be a probe false-negative — the 68k handler region **DOES execute in baseline**
+This is the load-bearing new finding, and it cuts against the M9–M13 premise. In **plain baseline**
+(`SS_NW_PIC=1`, **autovector HLE OFF**), the r24-ring shows the 68k interrupt-handler region running:
+- `0x5000ed0a` is entered **207 times** as a far-`BRANCH` target (a vector/redirect into the handler),
+  and the full handler sweep executes linearly: `ed0a→ed10→ed38…ed60` (level dispatch + service) and
+  the deferred-task/Time-Manager/VBL pass `ee5a→eece` — the exact `0x5000ee58` pass the diagnosis says
+  "runs unconditionally after service." [PROBE✓]
+- **Why "0x5000ed08 never ran" was likely false:** the DR vectors to `0x5000ed08`, then the first
+  `lhau` advances r24 to `0x5000ed0a` **before** the dispatch-hook sample. The ring records `ed0a`/
+  `ed0e` and **never the even vector word `ed08`/`ed0c`**. `SS_PROBE_68K=0x5000ed08` (exact-match,
+  edge-triggered) is therefore **blind to the handler entry** — the same fetch-pointer granularity
+  artifact as C-pin.7.1. The "`0x5000ed08` never runs" keystone (TL;DR, stage-3, C-pin.6) is **very
+  likely a measurement artifact**: the handler entry lands on `0x5000ed0a`. [PROBE✓ — strong, see residue]
+
+### C-pin.7.3 The real wedge: the **68k DR halts** at ~10 s while the NK busy-spins
+Independent of delivery, the heartbeat pins where progress actually stops [PROBE✓]:
+- **`jDR` (68k blocks executed) FREEZES** — `2474517` flat across HB 10/20/30 s (run B: `2897186` flat
+  across 23/33/43 s) — while **`jNK` climbs unboundedly** (740M→2196M) at ~72M blocks/s. The 68k stops
+  advancing ~10 s in; only the NanoKernel spins. The 207 handler entries all occur **before** the freeze.
+- `[ALARM] boot stalled at 15s … guest NOT idle, still spinning … model-rejection alert / pre-System
+  screen, e.g. "won't work on this model"`. `dec_expiries=4054` (scheduler healthy), `comp` frozen at
+  6708. So: ticks are delivered, the VBL/deferred pass runs, the scheduler lives — **and the 68k still
+  parks forever.** [PROBE✓]
+
+### C-pin.7.4 Verdict — **(b) deeper circularity / (c) ROM-OS-version**, and interrupt delivery is *not* the lever for a new reason
+- **(a) Cheap-unstick on a missing NK memory handshake: NO.** There is no polled flag at `0x5000010a`;
+  the framing that pointed at one is an artifact.
+- **(b) Deeper than delivery: YES, and more strongly than C-pin.6 stated.** C-pin.6 concluded "ticks
+  cannot advance it because the 68k is masked at IPL 7." This pass shows the stronger fact: in baseline
+  the **handler already runs (≥207×) and the VBL pass already fires, yet the 68k DR still halts.** The
+  blocker is downstream of interrupt delivery entirely — the 68k early-boot/System is waiting on
+  *something that is not a tick* (a driver/device that never responds, or a model/gestalt gate), then
+  ceding to the NK permanently. The `[ALARM]` text's own hypothesis — a **model-rejection / "won't run
+  on this model"** pre-System gate — is the most economical fit and is a **(c) ROM/OS-version** issue,
+  not an interrupt one. This *re-validates* the C-pin.6 STOP-RULE-1 decision (delivery is not the lever)
+  while removing its stated cause (it is not "the mask is never lowered for ticks").
+- **(c) Version-specificity:** the wedge looks **OS/ROM-version-specific**, not universal NK behavior —
+  it is a pre-System (System-file/Gestalt era) gate on the 9.0.1 path, consistent with the QEMU oracle
+  booting the *same ROM* fine to ticking (B.3) where our paravirtual machine layer differs. This is
+  exactly the signal that a **route-around (Option 3: ROM/OS-version sweep, or closing the machine-layer
+  gap the System rejects)** is now *indicated* over further interrupt-delivery work.
+
+### C-pin.7.5 Residue (honest, one pass is all this was)
+1. **Mechanism of the 207 `0x5000ed0a` entries not 100% pinned.** They are far-`BRANCH` targets into
+   the autovector handler (consistent with real exception entry), but this pass did not prove they are
+   autovector-driven vs. a direct ROM call of the level dispatcher. **What would pin it:** widen
+   `SS_PROBE_68K` to `0x5000ed0a` (the post-fetch boundary, not `ed08`) and/or dump the 68k exception
+   frame (`$6(a7)==$64`) at entry; cross-check the source PC `≈0x5007b2fe` of the redirect. *This single
+   fix to the probe target retroactively tests the whole "handler never runs" keystone* — high-value,
+   cheap, deferred only by the one-pass budget.
+2. **What the 68k is actually waiting on at the halt** is not pinned (only that it is not a tick).
+   Pinning it means probing the *last* 68k subroutine the DR runs before `jDR` freezes (capture the r24
+   instruction-boundary trail in `[0x5000xxxx]` in the final 1–2 s) and identifying the device/gate it
+   polls — likely the model-rejection path the `[ALARM]` names. That is the next milestone's recon, not
+   this pass.
+
+---
+
 ## Provenance (archived process trail — `docs/archive/2026-06/planning/`)
 
 - `2026-06-13-m13-atrap-bootstrap.md` — original M13 plan (Task A as injection) + Task-0 recon addenda.

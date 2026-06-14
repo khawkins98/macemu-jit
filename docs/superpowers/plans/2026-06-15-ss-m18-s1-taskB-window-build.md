@@ -1,6 +1,21 @@
 # SS_M18 Stage 1 — NewWorld paged MMU: S1 Task-B — the vm_remap "window" MMU build — IMPLEMENTATION milestone
 
-> **Status:** rev-1 draft (2026-06-15), pre-red-team. This plan builds **Task B (the window)** — the
+> **Status:** rev-2 (2026-06-15) — **DEFERRED by the 3-reviewer red-team → BUILD ORDER FLIPPED to
+> SOFTMMU-FIRST.** PROCESS GO-WITH-FIXES · TECHNICAL GO-WITH-FIXES (V4 = NO-GO without a dedicated
+> spike) · ADVERSARY **WRONG-BUILD-ORDER**. The window is NOT abandoned — it remains the user-settled
+> *preferred end mechanism* (Discriminator-A) — but it is **re-sequenced to AFTER** (a) a softmmu walker
+> exists and yields a paged boot at zero foundation risk, (b) that boot HARVESTS the live
+> `(SR/BAT/SDR1,EA)` map + DBAT descriptors as measured constants (retiring G1.e's coverage predicate as
+> DATA), and (c) a dedicated `vm_remap VM_FLAGS_OVERWRITE`-on-live-reservation-under-concurrency spike
+> PASSES. Convergent reasons in the Red-team record below. **Do not execute this plan as written.** The
+> new critical-path step is the SOFTMMU-FIRST milestone (see HANDOFF / program STATUS).
+>
+> ---
+>
+> *(original rev-1 body retained below for the eventual window milestone — re-validate against the
+> softmmu-harvested constants + the overwrite spike before use.)*
+>
+> This plan builds **Task B (the window)** — the
 > host-side `vm_remap` shadow-remap of the NATMEM RAM/ROM reservations at `mtspr` BAT/SDR1/SR time —
 > the part the parent S1-impl plan (`2026-06-14-ss-m18-s1-impl-paged-mmu.md` rev-2) **PARKED** pending
 > a tlbie/HTAB-store interception design. **Task A is DONE/committed** (high_bat insurance + the
@@ -209,5 +224,51 @@ respect the boot budget) → resume. SECOND falsification of the same answer ⇒
    can a context switch transiently expose a hole / stale alias an in-flight access reads? The sharpest
    live-safety tension and the reason for Stop-rule #14 + the AUTHORIZATION GATE.
 
-## Red-team record
-*(empty — to be filled by the three-reviewer pre-implementation red-team: PROCESS + TECHNICAL + ADVERSARY. Must-answer voting list V1–V10 submitted alongside.)*
+## Red-team record (rev-2 — DEFERRED; build order flipped to softmmu-first)
+
+Three reviewers converged on **re-sequence, not refine**. The window plan is technically sound on its
+*interception surface* (BAT writes are genuinely `mtspr {I,D}BATxx`-exclusive — the single
+`ppc-execute.cpp:1626` case spans IBAT0U..DBAT3L; verified) but premature as the first build.
+
+**ADVERSARY — WRONG-BUILD-ORDER (decisive).**
+- The `vm_remap` premise is FALSIFIED-as-written: the c4 spike proved `vm_remap(VM_FLAGS_ANYWHERE)` into
+  FRESH space, single-threaded; the window needs `vm_remap(VM_FLAGS_OVERWRITE)` over a **live, in-use,
+  `MAP_FIXED` reservation with concurrent bare access** — never exercised (the spike's one over-existing
+  case, a2, FAILED `KERN_PROTECTION_FAILURE`).
+- Internal inconsistency that clinches it: the parent S1-impl plan binds *"softmmu stays FULLY live
+  until G1.e / walker is the default until measured"* — **un-implementable while softmmu is unwritten.**
+  Window-first makes the window the only live mechanism, contradicting the discipline it inherits.
+- Both load-bearing proofs (G1.a-under-JIT + DBAT coverage) are owed to a real paged boot → window-first
+  answers the coverage question for the first time *on* the at-risk foundation. Softmmu has neither risk
+  (no overwrite-remap; coverage total by construction) and is the mandated fallback + the in-process PA
+  oracle anyway → build it first, harvest the map as constants, then build the window as a pure
+  A/B-validatable optimization. Window-preferred (settled) is preserved; only the unsettled BUILD ORDER
+  flips.
+
+**TECHNICAL — V4 BLOCK pending a dedicated spike + topology decision (corroborates + root-causes).**
+- **Topology mismatch:** Dolphin's macOS path = `mach_make_memory_entry_64` + `vm_map` of a NAMED entry
+  with **separate** physical arena and PROT_NONE fastmem window (unmap leaves a benign hole in the
+  *window*). macemu NATMEM = a **single `vm_allocate` reservation that is BOTH store and access window**.
+  → the plan's "mirror Dolphin unmap-old/remap-new" mitigation **creates** a hole in the foundation all
+  ~80 RMEMBASE sites read. The hole-free primitive is **single-call atomic replace
+  (`VM_FLAGS_OVERWRITE`, no unmap)** — never named, unproven here.
+- Concurrency: non-CPU threads (device/DMA models, scheduler pump `:2058`, SDL fb readers) can bare-read
+  guest RAM mid-swap; Stop-rule #14 catches only `KERN_*`, not torn reads. Required gate: a real
+  `vm_allocate`-fixed → in-place `VM_FLAGS_OVERWRITE` re-alias spike with a concurrent reader thread,
+  as a PASS gate (not a c4 citation). All pinned sites verified accurate (no drift); paged_mmu interface
+  reuse + NATMEM/hook facts TRUE.
+
+**PROCESS — GO-WITH-FIXES (gate-executability).** C1: G1.e predicate-2 (no PTE diverges from BAT) needs
+a named HTAB-walk vehicle or drop to DIAGNOSTIC. C2: the G1.a-under-JIT vehicle (build the kpx_cpu
+harness — both other reviewers concur — vs fold-into-boot) must be PICKED before impl, not "if chosen".
+M1: state the reentrancy model + a deterministic stress probe. M2: define predicate-3 as the full
+RAM+ROM aperture (static). M3: split the external-oracle cross-check into its own dispatch. minor: the
+`mtsr`/`mtsrin` sites route through the illegal-ignored primop-31 drop bucket — hooking them is a
+behavior change, not a clean append.
+
+**Coordinator disposition (BINDING):** **DEFER this window plan; flip to SOFTMMU-FIRST.** When the
+window milestone is later opened, fold C1/C2/M1–M3 + the technical fixes (atomic `VM_FLAGS_OVERWRITE`
+replace, the overwrite-under-concurrency spike as a gate, the topology decision, the kpx_cpu harness,
+the unhooked-`mtmsr`/`MSR[DR]` staleness surface the adversary flagged) and re-validate against the
+softmmu-harvested constants. This is the milestone machine working as designed: the red-team killed a
+premature, foundation-risking build *on paper* before a line was written.

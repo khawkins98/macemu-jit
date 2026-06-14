@@ -3,16 +3,24 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-14):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION:** **S1-impl Task A is DONE + committed** (`fc3ca256` high-BAT insurance, `2bf1526b`
->   translation core + test, `191fe67c` adversary-found real-mode/BAT-ordering fix; `make test-jit`
->   score=100 verified, `test_paged_mmu` 36/36). **The new next step = a read-only DE-RISK RECON** of the
->   parked window: pin which guest PA ranges the live PTE engine (`@0x50319af8`, HTAB-store+`tlbie`)
->   actually targets vs the BAT-covered RAM/ROM the JIT uses. If disjoint → the window is earnable by
->   analysis (collapses the G1.e "need the window built to boot the window" chicken-and-egg); if it
->   touches JIT-covered regions → softmmu. THEN build Task B (window + tlbie interception) or softmmu.
->   **OWED before wiring the translation core:** external PearPC/QEMU PA oracle cross-check + the
->   Vs/Vp-vs-MSR[PR] privilege gate (paged_mmu adversary Finding 3). S1-impl plan rev-2
->   (3-reviewer red-teamed): `docs/superpowers/plans/2026-06-14-ss-m18-s1-impl-paged-mmu.md`.
+> - **▶ NEXT ACTION:** **S1 → SOFTMMU-FIRST** (build-order flipped by the Task-B plan red-team). Task A
+>   is DONE + committed (`fc3ca256` high-BAT insurance, `2bf1526b` translation core + test, `191fe67c`
+>   adversary real-mode/BAT fix; `make test-jit` score=100, `test_paged_mmu` 36/36). The window-build
+>   plan was drafted + 3-reviewer red-teamed → **DEFERRED (WRONG-BUILD-ORDER)**: its
+>   `vm_remap VM_FLAGS_OVERWRITE`-on-live-NATMEM primitive is unproven + topology-mismatched (macemu's
+>   single `vm_allocate` reservation is BOTH store and bare-access window, unlike Dolphin's separate
+>   arena → "mirror Dolphin unmap/remap" would hole the foundation), AND "softmmu-default-until-measured"
+>   (the parent plan's own discipline) is un-implementable while softmmu is unwritten.
+>   **▶ Open the SOFTMMU-FIRST milestone** (own plan→3-reviewer→gated impl): a softmmu walker reusing the
+>   committed `paged_mmu_translate()` at the interpreter chokepoint `vm.hpp:225` (gated
+>   `SS_M18_PAGED_MMU ∧ MachineProfileIsNewWorld()`, lower-risk — NO NATMEM surgery, NO vm_remap) → a
+>   real paged NK boot at **zero foundation risk** → HARVEST the live `(SR/BAT/SDR1,EA)` map + DBAT
+>   descriptors as measured constants (retires the window's owed coverage predicate as DATA) → THEN the
+>   window as a pure A/B-validatable optimization (deferred plan `…2026-06-15-ss-m18-s1-taskB-window-build.md`
+>   rev-2; re-validate against harvested constants + an overwrite-under-concurrency `vm_remap` spike).
+>   **OWED (subsumed by softmmu):** the external PearPC/QEMU oracle becomes the softmmu walker itself;
+>   the Vs/Vp-vs-MSR[PR] gate (paged_mmu adversary Finding 3) folds into the softmmu plan.
+>   S1-impl plan: `docs/superpowers/plans/2026-06-14-ss-m18-s1-impl-paged-mmu.md`.
 >   **Two decisive red-team findings reshaped it:** **(AD-2 FALSIFIED)** the NK's high-BAT writes
 >   (SPR 560–575) are **feature-gated dead code** on every PVR SS presents (7400 `0x000c0000`; gate bit
 >   `0x20` never set) → `high_bat[16]` is cheap INSURANCE, not a decision input; the recon-adversary's

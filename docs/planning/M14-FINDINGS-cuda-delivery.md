@@ -321,17 +321,69 @@ Two remaining gaps:
 > The gap is behavioral: it clears the source but doesn't forward to the DR. And the
 > struct gap is a data-layer problem (who populates it?), not a registration problem.
 
-**Next:**
-(a) Determine who is supposed to populate `*(0x68ffefd0)+0x28` — compare with QEMU's
-    mac99 behavioral oracle. Does the NK fallback write it? Does 68k ROM code write it
-    during boot init? Is it a different address on QEMU?
-(b) Determine what makes the NK fallback forward EXT to the DR (set cr2lt) — is there
-    a configuration step the boot hasn't reached yet, or does the fallback structurally
-    never forward?
-(c) The M13 analysis noted a stage-2-MISSING: the fallback "records the interrupt and
-    returns to PPC; it never touches any 68k/DR state." This may be the design — the
-    NK's registered-handler path (when fully initialized) does forward, but the fallback
-    intentionally doesn't. If so, the registered-handler init is the gate.
+### Hnfo struct probe at EXT handler entry (direct evidence, 2026-06-14)
+
+`SS_PROBE_PC=0x50314880` (NK EXT handler entry) with `SS_NW_PIC=1`:
+
+| Field | Address | Value | Meaning |
+|---|---|---|---|
+| hnfo_rec+0x14 | 0x68ff4f14 | **0x00000000** | Source table pointer = NIL |
+| hnfo_rec+0x28 | 0x68ff4f28 | **0x00000000** | Pending bits = empty |
+| hnfo_rec+0x70 | 0x68ff4f70 | 0x486e666f | `'Hnfo'` tag (set by trampoline) |
+| hnfo_rec+0xa8 | 0x68ff4fa8 | **0x00000000** | Source-device table = NIL |
+
+The VIA-IFR-RECON §5c table had `hnfo+0x28 = 0x80000000` from a 2026-06-12 session with
+different machinery (M10 CGRP or Task-C HLE, since reverted). Current baseline: zero.
+
+### Reconciliation with M13 stage-2-MISSING diagnosis
+
+The M13 original diagnosis was a 3-stage chain:
+1. **NK EXT → WORKS** (0x50314880 reached)
+2. **NK→DR handoff → MISSING** (CGRP handler not registered → fallback at 0x50325f00
+   consumes the PIC source and returns; never sets cr2lt for the DR)
+3. **DR autovector → never fires** (for EXT; DEC fires via the published DEC handler)
+
+The M13 RETRACTION ("ed0a fires 8/8 baseline → delivery works → don't re-chase") was
+based on a **capped-probe artifact**: SS_PROBE_68K default cap is 8. Uncapped (`:64`),
+baseline saturates at 64/64 in 30s — all DEC autovector ticks. Smoke H adds ZERO ed0a
+entries. The DEC path (published handler → DR → cr2lt → 68k frame → [0x64]→ed08) is
+healthy. The EXT path through the CGRP fallback does NOT reach the DR.
+
+**The M13 stage-2-MISSING was correct.** The retraction overcorrected. The evidence:
+- Uncapped ed0a probe: identical counts baseline vs Smoke-H → Cuda EXT adds zero
+- Watchpoints: hnfo+0x28 all zeros → no pending source bits ever set
+- Direct EXT-entry probe: hnfo+0x14 (source table) = NIL, hnfo+0x28 = 0
+- Static (M13): CGRP+0x20 = 1 (< 2 → "no handler" per NK guard at 0x50325f00)
+- M13 static: fallback reads PIC, clears source, returns via rfi — NEVER sets cr2lt
+
+**What the CGRP handler would do** (M13 B.1–B.4 analysis, never retracted):
+1. Scan the PIC source (the fallback already does this)
+2. Set cr2lt in the DR's PPC state to trigger the between-instruction exception path
+3. The DR then builds a genuine 68k frame (vector $64, saved SR/IPL) and vectors [0x64]→ed08
+4. The 68k handler at ed08/ed0a reads `hnfo_rec+0x28` to find the pending source
+
+Steps 2–4 require: (a) cr2lt to be set (stage-2), (b) hnfo+0x28 to be populated with the
+correct source bit (data-layer). Both are the registered CGRP handler's job.
+
+**Chicken-and-egg status:** The CGRP handler is installed by Mac OS's Interrupt Manager
+during boot. The boot stalls at Cuda init (packets=0) BEFORE reaching Interrupt Manager
+init. But DEC interrupts reach the 68k world via the published DEC handler path (not
+CGRP-dependent) — so if the Cuda protocol can be driven poll-driven (without requiring
+EXT→68k delivery), the boot might advance past CGRP registration.
+
+**Next steps (choose one):**
+(a) **Host-side HLE bypass:** When the host's EXT delivery hook fires for a Cuda/VIA
+    source, set cr2lt + populate hnfo+0x28 directly from the host side, bypassing the
+    CGRP mechanism entirely. This is what the reverted M13 Task-C SS_NW_DR_AUTOVEC
+    attempted but with a different (broken) mechanism. The M13 B.1–B.4 analysis provides
+    the exact contract for what to write.
+(b) **Poll-driven Cuda:** Make the Cuda init protocol work without interrupts — the
+    guest polls VIA IFR directly. This requires `CudaSettle` to run on IFR reads (it
+    already does) AND the guest to actually read IFR (currently only 2 reads vs 65,539
+    IER reads). Investigate why the guest reads IER 65,539× instead of IFR.
+(c) **Forge CGRP registration:** Write the CGRP dispatch table entries that the NK
+    needs. M10 attempted this (SS_M10_CGRP, crashed — 0xDEADBEEF). Would need the
+    correct CGRP struct layout.
 
 ## §5 — Bug found during investigation
 

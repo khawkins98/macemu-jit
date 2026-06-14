@@ -15,6 +15,8 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 
 Milestone M12: get Mac OS to write pixels to the framebuffer aperture at 0x81000000.
 Tasks A/B complete; Task C fails at trap-table bootstrapping wall (M13 input).
+(Diagnosis superseded 2026-06-13 — the real wall is NK→68k interrupt delivery, not a trap table;
+see `docs/planning/M13-FINDINGS-interrupt-delivery.md`.)
 
 **Wave 0 (Task A)** — extend NewWorld lowmem from 1 MB to 32 MB (`main_unix.cpp`):
 - Crash at `ea=0x010020c8` (68k VM Manager VMVectors struct placed at ~0x01002080 by

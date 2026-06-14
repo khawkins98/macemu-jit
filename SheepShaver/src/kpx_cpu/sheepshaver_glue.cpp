@@ -1301,6 +1301,18 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 							WriteMacInt32(table_base + i*4, desc_addr);
 						WriteMacInt32(desc_addr,     STUB_ADDR_EXT);
 						WriteMacInt32(desc_addr + 4, 0);
+						// --- DEAD-END WARNING (M13, 2026-06-13; full findings in
+						// docs/planning/M13-FINDINGS-interrupt-delivery.md) ---
+						// This STUB bctr's to DR_WARM (0x5046e9d8 — the `0x6000E9D8` ori below),
+						// the DR's COLD warm-entry trampoline, NOT the per-instruction dispatch
+						// loop.  The 68k DR is a recompiler (steady state runs in a code cache at
+						// 0x17fa0000+); DR_WARM is hit once per re-entry, with r29 = the COLD ROM
+						// dispatch table (~0x504920f8), not the live RAM table (0x17ffeb20).  That
+						// cold-table dispatch is what lands in dead-fill (0xDEADBEEF -> stfdu @
+						// ~0x100259dc) and SIGTRAPs ~1/3 boots.  Do NOT "fix" this by changing the
+						// DR_WARM target, by hand-restoring r29/r30, or by injecting at an arbitrary
+						// DR-range PC (all tried & falsified — Approaches B/C + the direct-inject
+						// attempt).  Correct 68k interrupt delivery must go through the NK CGRP/EXT path.
 						// Restore STUB code (16 words; A7 guard + exception frame push + CTR branch).
 						// r5  = scratch (holds old A7 from KDP+4).
 						// r12 = scratch (holds interrupted PC from live r24 — DR's 68k PC reg).

@@ -7,6 +7,8 @@
 ## Current frontier (2026-06-13, post-M12-partial)
 
 **M10 CGRP init + 68k EXT delivery — COMPLETE (2026-06-13).** Gate: `SS_M10_CGRP=1`.
+⚠️ **Reframed by M13:** M10's `0x5000ed08` probe-match was the CGRP-STUB→DR_WARM injection now
+FALSIFIED (crashes the DR); retained as a negative result, not a working delivery. See M13-FINDINGS.
 **M11a frame-PC stability — COMPLETE (2026-06-13).** No code change.
 **M11 Framebuffer aperture + OF node + SDL blit — COMPLETE (2026-06-13).** Gate: `SS_M11_FB=1`.
 - 16 MB aperture at 0x81000000 (`vm_mac_acquire_fixed`), SDL `the_buffer` → aperture.
@@ -23,9 +25,16 @@
 - Gate: `SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1` (NOT SS_M10_CGRP — it kills the boot).
 - Harness 353/353. Machine tests ALL PASS. e2e-test 122 passed. make e2e PASS.
 
-**Next: M13** — A-trap bootstrapping fix → CGRP interrupt delivery → QuickDraw init.
-Key question: how to either populate the trap table early, delay CGRP until after System
-init, or bypass the 0x5000ED08 handler for the QuickDraw pixel-write path.
+**M13 DIAGNOSED (2026-06-13) — authoritative: `docs/planning/M13-FINDINGS-interrupt-delivery.md`.**
+The above "A-trap 0xA9A8 at ED06" wall framing (line 21) is **WRONG/superseded.** Verified: the 68k
+handler `0x5000ED08` never runs; the 68k world spins starved for VBL/Time-Manager ticks → ~15s
+dead-end. Delivery is a 3-stage chain (NK EXT consume works → NK→DR handoff missing → DR autovector
+never fires); the handoff needs a **registered CGRP handler that is never installed** (CGRP+0x20=1,
+table empty). **Host-side hand-injection falsified 5× — do NOT retry** (warnings in the STUB code).
+`irq_fired` is MISLEADING (NK-level consume, not 68k delivery). NewWorld is **paravirtual**
+(software interrupt struct at `*(0x68ffefd0)`, NOT VIA IFR/IER). The DR's interrupt trigger is
+register/context state (no pokable memory latch). **Next:** RE the NK code-group registration the
+boot performs (what installs it / whether circular with tick-starvation → minimal bootstrap).
 
 **Tooling added (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress
 snapshot. Boots all-on cluster, emits `[NW-PROG verdict]`. Report-only by default.

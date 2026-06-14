@@ -4049,6 +4049,23 @@ static bool patch_68k(void)
 		const uint32 STACK_ADDR = CGRP_BASE + 0x78;  // 0x68ffc238
 		const uint32 DESC_ADDR  = CGRP_BASE + 0xa0;  // 0x68ffc260
 		const uint32 STUB_ADDR  = CGRP_BASE + 0xa8;  // 0x68ffc268
+		// DR_WARM is the DR emulator's COLD warm-entry trampoline, NOT the
+		// per-instruction dispatch loop.  --- DEAD-END WARNING (M13, 2026-06-13;
+		// full findings in docs/planning/M13-FINDINGS-interrupt-delivery.md) ---
+		// The 68k DR is a *recompiler*: steady-state 68k executes in a dynamic code
+		// cache at 0x17fa0000-0x17ffffff, and 0x5046e9d8 is visited exactly ONCE per
+		// re-entry (probe: 0 visits across 25949 dec-expiries of live DR execution).
+		// So you CANNOT inject 68k interrupts by patching/polling at this address as
+		// if it were an instruction-boundary loop (Approach B, falsified), and you
+		// cannot vector here from an arbitrary PC with a coherent register file.
+		// Worse: re-entering DR_WARM via this STUB runs with r29 = the COLD ROM
+		// dispatch table (~0x504920f8), while the live warm DR uses r29 = a RAM
+		// table (0x17ffeb20) inside the code cache.  Dispatching through the cold
+		// table lands in uncompiled dead-fill (0xDEADBEEF -> stfdu @ ~0x100259dc)
+		// => the intermittent SIGTRAP.  Restoring r29/r30 to the warm RAM values
+		// does NOT fix it either (the non-volatile 68k regs r14-r31 are also stale).
+		// The only architecturally-sound delivery is via the NK's own CGRP/EXT path
+		// (which resumes the recompiled world at a safe point) — see the bake-off doc.
 		const uint32 DR_WARM    = 0x5046e9d8;
 
 		// 1. TABLE_BASE: 10 entries → DESC_ADDR.

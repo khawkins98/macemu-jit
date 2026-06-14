@@ -2,9 +2,9 @@
 
 > **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL (Wave0+Wave1 stable,
-> irq_fired=0, pixel gate fails — A-trap wall). **Next: M13 A-trap bootstrapping.**
-> Live frontier: `docs/AGENT-CONTEXT.md`.
+> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL. **M13 DIAGNOSED (2026-06-13):**
+> 68k handler 0x5000ED08 never runs (delivery gated on uninstalled NK CGRP handler); host injection
+> falsified 5×. Findings: `docs/planning/M13-FINDINGS-interrupt-delivery.md`. Frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
 
@@ -52,7 +52,11 @@ Gate: `SS_NW_VIA_IFR` (currently a no-op — kept for M10 use). See `docs/HANDOF
 (0x50313ab0), CGRP path unreachable. The 68k handler at 0x5000ed08 cannot fire until M10
 fixes user-mode DR AND initializes CGRP. Full root cause: `docs/HANDOFF.md` §Session 4.
 
-## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires ✅ COMPLETE
+## M10: User-mode DR + CGRP initialization → 68k interrupt handler fires ✅ COMPLETE (reframed by M13)
+
+> ⚠️ **M13 reframing (2026-06-13):** M10's "handler fires" was the CGRP-STUB→DR_WARM injection now
+> FALSIFIED (→ 0xDEADBEEF crash; the DR re-entry is incoherent). Retained as a negative result, not a
+> working delivery path. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
 
 **Completed:** 2026-06-13. Gate: `SS_M10_CGRP=1`.
 **Acceptance:** `SS_PROBE_68K=0x5000ed08:5` fires — confirmed match=1/5, no crash
@@ -90,16 +94,27 @@ Plan: `docs/planning/superpowers/plans/2026-06-13-m12-display-pixels.md`.
 
 Harness: 353/353. Gates: machine tests ALL PASS, e2e-test 122 passed, make e2e PASS. `[FB-DIRTY]=0`.
 
-## M13: A-trap bootstrapping → CGRP interrupt delivery → QuickDraw init 🔜 NEXT
+## M13: 68k interrupt delivery — DIAGNOSED, re-scoped (2026-06-13) 🔬
 
-**Goal:** irq_fired≥1 and [FB-DIRTY] non_zero_pixels>0 after 180s boot.
-**Blocker:** ROM interrupt handler at 0x5000ED08 hits A-traps (0xA9A8 at ED06) before Mac OS
-Trap Dispatch Table is populated. Three candidate approaches:
-1. Populate minimal trap table entries for 0xA9A8 + the other A-traps in 0x5000ED00–0xEF00
-2. Delay CGRP interrupt delivery until after System init (gate on trap-table sentinel)
-3. Identify alternative QuickDraw init path not requiring the interrupt handler
+**Goal:** the 68k handler `0x5000ED08` runs → boot passes the ~15s dead-end → `[FB-DIRTY]>0`.
+**Authoritative findings:** `docs/planning/M13-FINDINGS-interrupt-delivery.md` (read this first).
 
-Requires Task-0 recon per MILESTONE-WORKFLOW.md.
+**Verified diagnosis (supersedes the old "A-trap 0xA9A8 at ED06" framing — that was wrong):**
+The 68k handler `0x5000ED08` never runs; the 68k world spins starved for VBL/Time-Manager ticks.
+Delivery is a 3-stage chain — NK EXT consume (works) → NK→DR handoff (missing) → DR autovector
+(never fires). The handoff needs a **registered CGRP interrupt handler that is never installed**
+(`CGRP+0x20=1`, table empty) because the boot wedges before driver/interrupt registration.
+
+**Falsified — 5 independent confirmations, do NOT retry:** host-side hand-injection of a 68k
+interrupt is architecturally impossible (CGRP-STUB→DR_WARM crash; any-DR-PC incoherent; resume-
+prologue; DR save-vectors; DR_WARM ROM-patch; "pending-IPL latch" — the DR's trigger is register/
+context state, not a pokable memory latch). `irq_fired` is MISLEADING (NK-level consume, not 68k
+delivery). NewWorld is paravirtual (software interrupt struct at `*(0x68ffefd0)`, not VIA IFR/IER).
+
+**Forward (next milestone pass):** the NK code-group **registration** the boot performs — what
+installs the CGRP handler, at what stage, and whether it's circular with tick-starvation (and if so,
+the minimal one-shot bootstrap to break the loop). Process: MILESTONE-WORKFLOW.md.
+**Strategic fork (whether to keep fighting the NK at all):** `docs/planning/NANOKERNEL-STRATEGY-DECISION.md`.
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

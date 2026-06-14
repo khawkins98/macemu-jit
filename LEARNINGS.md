@@ -5,6 +5,102 @@ For the full historical session journal: `docs/archive/2026-06/LEARNINGS-2026-06
 
 ---
 
+## 2026-06-13 — M13 Task A: the DR is a recompiler — you cannot hand-inject 68k interrupts
+
+Three-approach bake-off (parallel worktrees) on "deliver a 68k interrupt to the ROM handler at
+0x5000ED08 without the intermittent 0xDEADBEEF SIGTRAP." Two approaches falsified by RE, one
+(NK CGRP) confirmed as the only sound path. Full write-up:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` (process trail archived under
+`docs/archive/2026-06/planning/`); code warnings at the STUB sites in
+`rom_patches.cpp` (~DR_WARM const) and `sheepshaver_glue.cpp` (~STUB restore).
+
+**The load-bearing fact: the 68k "DR" emulator is a RECOMPILER, not an interpreter loop.**
+- DR_WARM (0x5046e9d8) is a *one-shot cold warm-entry trampoline*, NOT the per-instruction
+  dispatch loop. Probe: 0 visits across 25949 dec-expiries of live DR execution (chaining on
+  AND off). Steady-state 68k runs in a *dynamic code cache* at 0x17fa0000–0x17ffffff. There is
+  **no fixed guest address** for the between-instruction boundary → you cannot patch/poll a fixed
+  PC to get a per-instruction interrupt check (Approach B, falsified).
+- Two dispatch tables: re-entering DR_WARM via our CGRP STUB runs with r29 = the COLD ROM table
+  (~0x504920f8); the live warm DR uses r29 = a RAM table (0x17ffeb20) inside the cache. The cold
+  table dispatches into uncompiled dead-fill (0xDEADBEEF → `stfdu` @ ~0x100259dc) → the SIGTRAP.
+  This is the real root cause of the M10/M12 crash. (An earlier reading mistook the warm RAM
+  r29 for "the" dispatch base — it is only the *steady-state* value, not what the STUB path runs.)
+- DR dispatch-table slots 2/3/5 (0x5046fb00/fc00/fd00, byte-identical) are *volatile-only* trap
+  prologues: they save r7–r13 + A7 + CR/LR into ctx 0x68ffe000, NOT the non-volatile 68k file
+  (r14–r31). They presuppose a coherent register file rather than establish one → vectoring there
+  relocates the crash, not fixes it (Approach C, falsified). The recon shorthand "register-save
+  prologues snapshot the regfile" was an overstatement — they snapshot volatiles only.
+
+**Methodology wins this session:**
+- Re-baselining refuted a prior session's report (claimed dec=1 stall "predates our changes" and
+  "STUB never fires" — both were a self-inflicted regression from a divergent STUB-in-ROM rewrite,
+  parked in `git stash`). Always revert to HEAD and measure before theorizing on someone else's
+  half-finished state.
+- `dec_expiries=5` is NOT a wrong timer rate: 0x503230dc is the NK DEC re-arm that clamps DEC far
+  when no near-term events are queued → it is a symptom of stalled boot progress, coupled to
+  delivery. So even a correct injection won't reach the dec≥20 gate unless it advances the boot.
+- The "chaining hides the boundary" wall applies to *host-side* interrupt-poll hooks, not to
+  guest-code patches (chaining chains translations of the patched bytes) — but it is moot here
+  because there is no fixed guest loop to patch anyway.
+
+**Net:** correct 68k interrupt delivery must go through the NanoKernel's own CGRP/EXT path (which
+resumes the recompiled world at a safe point); hand-rolled injection at any fixed PC is a dead end.
+
+**4th confirmation (resume-prologue implement+test, C++-instrumented at the delivery point) — the
+decisive pin:** at the host-side EXT-delivery moment the CPU is executing **PPC (NK/DR) code, not
+68k code**, so there is NO interrupted-68k context to resume. `ECB+0x740` holds the DR's own
+*PPC-resume* state (save+0x3c = a PPC addr like 0x50510030, not a 68k PC; the A7 slot 0x68fff50c =
+DR arena 0x17ffebxx, not a 0x103fxxxx 68k stack); live r24 varies wildly (0 / random 68k PC). The
+"populate-first" branch is also dead — no coherent 68k context exists anywhere at that instant.
+**Inversion of the dec coupling:** the boot where we did NOT inject free-ran to dec_expiries=9117;
+every boot where we DID inject parked at 5 or SIGSEGV'd. Our injection is actively *harmful* — it
+disrupts an otherwise-healthy NK scheduler. So the frame "hand-inject a 68k interrupt at the host
+poll" is falsified four independent ways here (bake-off A/B/C + this; a 5th follows in Diagnostic #2,
+for five total). The 68k world receives interrupts
+only when the **NK schedules it and propagates EXT→68k itself**; the open question is no longer "how
+do we inject" but "why doesn't the NK propagate to 68k naturally / what must the 68k world have set
+up first (registered handlers, VIA IFR state, System interrupt handlers) before it can" — which loops
+back to needing the boot to progress on its own. Re-scope M13 away from injection accordingly.
+
+**Diagnostic #1 (injection-OFF baseline, 2026-06-13) — premise confirmed + a metric corrected:**
+With `SS_M10_CGRP=0` (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_M11_FB=1`): scheduler healthy
+(dec_expiries=67393), but the 68k handler `0x5000ed08` **NEVER fires** (PROBE68K armed, 0 matches;
+jit-analyze "No interrupt-delivered records found"). The 68k world wedges in a polling/wait loop —
+HOT-PC at the DR interpreter `0x50468ae4` with r24 cycling scattered ROM 68k PCs (0x5000010a /
+0x50038a2c / 0x5006621c …), comp frozen — i.e. it spins waiting for VBL/Time-Manager ticks that
+never arrive → pre-System dead-end at ~15s ([ALARM] model-rejection/hang, WindowManager never up).
+**CORRECTION: `irq_fired` is a MISLEADING metric** — it counts EXT *consumed at the NK*
+(g_exc_consume_stats.fired, deferred-edge at PPC pc=0x50325fd0/0x50318014), NOT delivery to the 68k
+handler. So "irq_fired=137" does NOT mean interrupts reached the 68k world; `0x5000ed08` running
+(PROBE68K match) is the real delivery signal. This confirms the blocker is specifically **delivery
+to the 68k handler 0x5000ed08**, which only ever fires under CGRP (on→handler runs but DR-re-entry
+crashes; off→never runs). The forward path is NK-native EXT→68k propagation (why does the NK consume
+the EXT but never route it to 0x5000ed08 — registered-handler-table / W2L-1 / CGRP routing), NOT
+hand-injection.
+
+**Diagnostic #2 (3-thread RE fan-out, 2026-06-13) — COMPLETE verified diagnosis. Delivery is a
+3-stage chain; we satisfy stage 1, stages 2-3 never happen** (full re-scope:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md`, process trail archived):
+1. **NK EXT (PPC) WORKS** — NK EXT body `0x50314880` is a PPC save→`rfi` return that by design never
+   vectors to 68k; with no CGRP handler registered (CGRP+0x20=1<2, table empty) it routes every EXT to
+   fallback `0x50325f00` which only updates the NK pending-bitmask. `irq_fired` counts these. [DISASM+PROBE✓]
+2. **NK→DR IPL handoff MISSING** — nothing translates the NK bitmask entry into a pending 68k IPL the
+   DR consults. This is the broken link.
+3. **DR autovector (68k) never fires** — the DR, at a between-instruction boundary, would see a pending
+   68k IPL above the SR mask and itself build the genuine 68k frame (vector `$64`) and vector through
+   `[0x64]`. QEMU confirms this is THE working contract (9.2.1 oracle). [QEMU✓]
+- **The 68k side is fully READY** (not the blocker): autovectors live `[0x64]=0x5000ed08 [0x68]=…ed10
+  [0x6c]=…ed18`; NewWorld is **paravirtual** (software interrupt-source struct at `*(0x68ffefd0)`, NOT
+  VIA IFR/IER hardware — corrects the M9 framing). The dispatcher's deferred/Time-Mgr/VBL pass at
+  `0x5000ee58` runs **unconditionally after service**, so even a pending-less autovector entry ticks
+  the starved queues and should advance the boot.
+- **Re-scoped target:** drive the DR's OWN between-instruction autovector (set a pending 68k IPL level
+  1, SR permitting) so the DR builds the frame and vectors to 0x5000ED08 — NOT inject a frame (dead 4×)
+  and NOT route the NK EXT/CGRP path (M10 forge crashes the DR). Next RE: locate the DR's IPL latch +
+  SR-mask check (DR resume/dispatch family 0x5046e1a4/0x5046cdd8) and how to set it host/PIC-side.
+
+---
+
 ## 2026-06-13 — M12 session 7: Wave1 fix + A-trap bootstrapping wall (CGRP frontier)
 
 **Wave1: 24-bit DR alias mapping (committed `348544cd`)**

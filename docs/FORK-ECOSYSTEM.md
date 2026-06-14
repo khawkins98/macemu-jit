@@ -243,7 +243,7 @@ sections below it contain commit-level detail.
 - **[sirmick/macemu](https://github.com/sirmick/macemu/tree/ss-vde)** also has an `ss-vde` branch — likely related or derived
 
 ### [audiocontrol-org/macemu](https://github.com/audiocontrol-org/macemu) — network SCSI bridge + automated OS 9 lab
-- **Status**: ❓
+- **Status**: 🔬 investigated (2026-06-13) — one relevant diagnostic finding harvested (see below); rest orthogonal
 - **Branches checked**:
   - [`feature/scsi-network-bridge`](https://github.com/audiocontrol-org/macemu/tree/feature/scsi-network-bridge) — 7 commits ahead of `master`
   - [`os9-minimal`](https://github.com/audiocontrol-org/macemu/tree/os9-minimal) — 68 commits ahead of `master`
@@ -256,6 +256,21 @@ sections below it contain commit-level detail.
   `script_hook.cpp` automation layer (xdotool-style KEY/CLICK/TYPE/SCREENSHOT, auto-dismiss Disk
   First Aid). Directly relevant to **our E2E/VNC harness** automation → Action #4.
 - Not directly VDE-related, but very interesting as an **alternative host↔guest I/O strategy** and as an example of emulator-assisted automation work
+- **🔬 Deep-dive verdict (2026-06-13): partially useful — one real diagnostic, no reusable code.** The
+  project is a SCSI/MIDI bridge for an Akai S3000XL sampler (booted **OldWorld** OS 9.0b9 under x86
+  Docker); ~60 of the 68 commits are SCSI/Docker/MESA-RE — orthogonal to our NewWorld machine layer.
+  **But** their root-level `DEBUGGING.md` independently characterizes the SheepShaver nanokernel
+  exception-table patches (`m68k_excp_tbl` / `ppc_excp_tbl` / `virt2phys`) that sit near our M13 A-trap
+  wall, and proves a non-obvious mechanism: **A-line opcodes (0xA000–0xAFFF) in the ROM-68k-emulator
+  context are intercepted by a dedicated "A-line fast path" that routes through the 68k *exception*
+  table — NOT the per-opcode dispatch table** (they patched the opcode-table entry at the verified RAM
+  address `0x50450448` → never reached). Plus a 38-row "do-not-repeat" disproof table (their theories
+  A–AL). **Critical caveat:** their case is OldWorld where the `m68k_excp_tbl` patch is *active*; in our
+  tree that patch is **SKIPPED for NewWorld** (`rom_patches.cpp:2506–2516`, pattern absent in 9.0.1
+  parcels) — so the finding tells us *which table to interrogate*, not a transplantable fix. Captured
+  into the M13 record (now `docs/planning/M13-FINDINGS-interrupt-delivery.md`; the original plan with
+  the "External prior art" section is archived at `docs/archive/2026-06/planning/2026-06-13-m13-atrap-bootstrap.md`). Read-once value;
+  do not track or merge this fork.
 
 ---
 

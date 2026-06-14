@@ -6,12 +6,13 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> Active work: M12 PARTIAL (Tasks A/B complete; Task C FAIL at trap-table bootstrapping).
-> M12 fixes: Wave0 (NW lowmem 32MB), Wave1 (0xFF000000-0xFFFFFFFF 24-bit DR alias).
-> Boot is stable 30+ seconds (dec_expiries=2000+) but `irq_fired=0` and `[FB-DIRTY]=0`.
-> Next: M13 — fix A-trap bootstrapping for CGRP interrupt delivery → QuickDraw init.
-> Key blocker: ROM interrupt handler at 0x5000ED08 hits A-traps (0xA9A8 at ED06) before
-> the Mac OS Trap Dispatch Table is set up. See M12 Task C FAIL section below.
+> **M13 DIAGNOSED (2026-06-13) — read `docs/planning/M13-FINDINGS-interrupt-delivery.md` FIRST.**
+> The 68k handler `0x5000ED08` never runs → boot wedges ~15s starved for ticks. Delivery is a
+> 3-stage chain gated on a **registered CGRP handler that is never installed** (CGRP+0x20=1, table
+> empty). Host-side hand-injection is falsified 5× — do NOT retry (warnings in the STUB code).
+> `irq_fired` is MISLEADING (NK-level consume, not 68k delivery); NewWorld is paravirtual (not VIA).
+> The old "A-trap 0xA9A8 at ED06" framing was WRONG. Next: RE the NK code-group registration the
+> boot performs (what installs it / whether circular with tick-starvation).
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
@@ -22,6 +23,8 @@
 - **M8** — shipped, gated-off-green (`SS_NW_IRQ_CONSUME`).
 - **M9** — stall fixed (ROM patch removed); 68k handler delivery blocked by deeper issues (see §S4 findings).
 - **M10** — COMPLETE (2026-06-13). `SS_PROBE_68K=0x5000ed08` fires. Gate: `SS_M10_CGRP=1`.
+  ⚠️ **Reframed by M13:** M10's probe-match was the CGRP-STUB→DR_WARM injection now FALSIFIED
+  (→ 0xDEADBEEF crash); retained as a negative result, NOT a working delivery. See M13-FINDINGS.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 

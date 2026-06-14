@@ -50,6 +50,47 @@
 
 ---
 
+## External prior art — audiocontrol-org `os9-minimal` (DEBUGGING.md)
+
+> Added 2026-06-13 (fork-ecosystem deep-dive). Source: `audiocontrol-org/macemu` @ `os9-minimal`,
+> root `DEBUGGING.md`. Full survey context: `docs/FORK-ECOSYSTEM.md` (audiocontrol-org entry).
+> **This is a reference/diagnostic frame — NOT code to import.** Read once, then proceed with Task 0.
+
+Another fork independently hit the SheepShaver A-line-dispatch problem from a different angle (a SCSI/MIDI
+bridge driving an Akai sampler under **OldWorld** OS 9.0b9). Their relevant finding — and its caveat:
+
+- **A-line traps use a "fast path", not the per-opcode table.** In the ROM-68k-emulator context,
+  opcodes `0xA000–0xAFFF` are intercepted by a dedicated A-line fast path that dispatches through the
+  **68k *exception* table** (at `r1+0x360`), bypassing the per-opcode dispatch table entirely. They
+  proved it: patching the per-opcode-table entry for `$A089` at the readback-verified RAM address
+  `0x50450448` had **zero effect** — the entry was never reached. So "the per-opcode table" and "the
+  OS trap dispatch table at low-mem `0x0400/0x0624`" are likely the *wrong* tables to interrogate for
+  our `0xAAF3/0xAAF4` traps; the **68k exception table** is the one in the path.
+- **⚠️ OldWorld-vs-NewWorld inversion (load-bearing).** Their wall is caused by SheepShaver's
+  `m68k_excp_tbl` patch (their `rom_patches.cpp:1469`) *deactivating* the 68k exception table — that
+  patch IS active on their OldWorld ROM. **In our tree the same patch is SKIPPED for NewWorld**
+  (`SheepShaver/src/rom_patches.cpp:2506–2516`; `find_rom_data` misses the pattern in the 9.0.1 parcels
+  → `[ROMPATCH] SKIP m68k_excp_tbl`). Same for `ppc_excp_tbl` (`:2428–2438`). So on our boot the 68k
+  exception table is **not** deactivated by us — meaning our A-trap failure mode may differ from theirs.
+  This *sharpens* Q-A3 rather than answering it: **first determine whether the 68k exception table is
+  active in our NewWorld boot at the `0x5000ED08` handler, and whether our A-traps go through it or the
+  per-opcode path** — before assuming the trap dispatch table needs populating.
+- **Do-not-repeat list (their disproof table, theories A–AL — the ones that bear on us):**
+  - **AI** — patching the per-opcode table at the correct RAM address (`0x50450448`): readback OK but never reached (A-line fast path).
+  - **Z** — writing a handler into the OS trap table at `0x0400/0x0624`: never reached from Mixed Mode (DEADBEEF marker stayed zero).
+  - **X / AC / AK** — SheepShaver emulation ops (`0xFExx`) inside a 68k trap handler: fail in the Mixed-Mode 68k context (error type 12).
+  - **AG** — naively removing the `m68k_excp_tbl` patch to restore the exception table: black-screen boot failure (OldWorld). (Moot for us since we don't apply it, but signals the table is load-bearing.)
+- **Key addresses they pinned (OldWorld 9.0b9 — re-verify against our 9.0.1 before use):** opcode-table
+  ptr `KernelData+0x1074` → `0x50480000`; A-line handler branch target `0x50369660`; ROM 68k emulator
+  region `0x50310000–0x50314000`.
+
+**Net for M13:** import no code. Use this to (a) reframe Q-A3 — interrogate the 68k *exception* table /
+A-line fast path, not just the low-mem trap table — and (b) avoid the four dead ends above. The
+OldWorld/NewWorld patch inversion means our path is genuinely different; treat their findings as a map
+of the terrain, not a solution.
+
+---
+
 ## Task 0 — BINDING Recon
 
 **Rule:** ALL blocking answers must be filled before ANY implementation task begins.
@@ -108,10 +149,12 @@ for i in md.disasm(code[start:start+64], base + start):
 
 | Item | Answer | Evidence tag |
 |------|--------|-------------|
-| Does probe at 0x5000ed36 fire? | TODO | |
-| If crash is in block 1 (movem.l): which instruction? | TODO | |
-| DR_WARM first instructions — does it do a cache lookup or direct branch? | TODO | |
-| Is r24 = 0x5000ED08 confirmed at DR_WARM entry (SS_PROBE_PC)? | TODO | |
+| Does probe at 0x5000ed36 fire? | **NO** — only 0x5000ed08 fires (match=1/3, all 3 baseline boots). Crash is in block 1. | [PROBE✓ 2026-06-13 baseline] |
+| If crash is in block 1 (movem.l): which instruction? | Not a 68k instruction — DR_WARM dispatch jumps to a **garbage handler address** (deadfill 0xDEADBEEF at DR cache 0x100259dc) because **r29 is clobbered**. The movem.l handler is fine; the dispatch *target* is wrong. | [PROBE✓ 2026-06-13] |
+| DR_WARM first instructions — does it do a cache lookup or direct branch? | **DR_WARM IS the 68k opcode dispatch loop**: `lha r27,0(r24)` (fetch opcode) / `rlwimi r29,r27,3,13,28` (handler = r29 dispatch-base \| opcode<<3) / `mtctr r29` / `lhau r27,2(r24)` / `bctr`. Handler addr is computed from **r29**, not a table lookup. | [DISASM✓ 2026-06-13] |
+| Is r24 = 0x5000ED08 confirmed at DR_WARM entry (SS_PROBE_PC)? | **YES.** Normal-exec probe at 0x5046e9d8: `r24=0x5000ed08 r29=0x17ffeb20 r30=0x17ffeb18 r1=0x17ffe9fa`. Crash addr 0x100259dc ∉ 0x17ffxxxx → r29 was corrupted at the delivery entry. | [PROBE✓ 2026-06-13] |
+
+**ROOT CAUSE (Q-A1 closed):** DR_WARM is the per-opcode dispatch loop; it computes the handler from **r29 (dispatch base, normally 0x17ffeb20)**. The CGRP STUB enters DR_WARM after the NK exception path has **clobbered r29/r30 and the D0-D7/A0-A6 GPRs**; baseline STUB restores only r24 and r1. → dispatch jumps to garbage (deadfill) → SIGTRAP. **FIX = restore the DR register set (r1, r8-r23, r24, r29, r30) before `bctr DR_WARM`** (the stashed agent's SAVE-area design, on the *baseline* plumbing — NOT the ROM relocation). Candidate A-1 is VOID: there is no interrupt entry-vector; 0x5046e8c0 is the 68k opcode-dispatch trampoline table (`b`/`twui` slots), and DR_WARM is the correct entry.
 
 ---
 
@@ -155,9 +198,11 @@ Compare slot semantics with Apple's DR documentation (re-verified from AGENT-CON
 
 | Item | Answer | Evidence tag |
 |------|--------|-------------|
-| Is there a DR entry point for "deliver interrupt" (not warm resume)? | TODO | |
-| Which slot does M10's STUB branch to (DR_WARM = which slot?)? | TODO | |
-| Is there a safer entry that compiles the handler block first? | TODO | |
+| Is there a DR entry point for "deliver interrupt" (not warm resume)? | **NO.** The plan's premise was wrong. 0x5046e8c0 is NOT a 16-slot pointer table — it is the 68k opcode-dispatch trampoline: `b` instructions (slots 0-3,5 → 0x50429d00/0x50429d80/0x5046fb00/0x5046fc00/0x5046fd00) with unimplemented slots = `twui r31,N` traps. DR_WARM (0x5046e9d8) is the dispatch loop itself. | [PROBE+DISASM✓ 2026-06-13] |
+| Which slot does M10's STUB branch to (DR_WARM = which slot?)? | DR_WARM is not a slot — it's the loop entry. STUB branches to it directly. Correct target. | [DISASM✓ 2026-06-13] |
+| Is there a safer entry that compiles the handler block first? | N/A — handler already compiled (works on every normal boot). Fix is register restoration, not entry selection. (Note: 0x50429xxx is DR trampoline space — the region the stashed rewrite chose for its ROM STUB.) | [DISASM✓ 2026-06-13] |
+
+**Note:** the ROM dump (`rom901.bin`, 4 MB = 0x50000000-0x50400000) does NOT contain the DR region 0x5046xxxx / 0x50429xxx — it is runtime-resident in guest RAM. Q-A2's static-RE recipe (disassemble rom901.bin at offset 0x46e8c0) is OUT OF BOUNDS; use runtime probe dumps (`SS_PROBE_PC=<hotPC>:[0xADDR],...`) instead.
 
 ---
 
@@ -265,10 +310,10 @@ The probe registers the DR-emulator PPC state at 68k dispatch. The valid-looking
 
 | Item | Answer | Evidence tag |
 |------|--------|-------------|
-| a_regs base gpr index in sheepshaver_glue.cpp | TODO | |
-| A7 = gpr[?] | TODO | |
-| STUB A7 guard load offset — is it loading from r1 or r23? | TODO | |
-| Does the guard correctly protect against a garbage stack pointer? | TODO | |
+| a_regs base gpr index in sheepshaver_glue.cpp | gpr[16] (A0=r16 .. A7=r23) per glue.cpp:478 — but this is the EMUL_OP/mixed-mode convention, NOT the DR dispatch convention. | [STATIC 2026-06-13] |
+| A7 = gpr[?] | **In the DR dispatch context: A7 = r1.** Probe at DR_WARM: `r1=0x17ffe9fa` = valid 68k stack. (a_regs[7]=gpr[23] applies only in the EMUL_OP path.) | [PROBE✓ 2026-06-13] |
+| STUB A7 guard load offset — is it loading from r1 or r23? | STUB loads A7 from KDP+4 (`*(0x68FFE004)`) into r5, sets r1 = r5-6. Correct: r1 IS the DR A7. | [STATIC+PROBE✓ 2026-06-13] |
+| Does the guard correctly protect against a garbage stack pointer? | Guard `bltlr if A7<32KB` is sound; baseline STUB delivery is confirmed (probe fires). A7 handling is NOT the bug — r29 restoration is. | [PROBE✓ 2026-06-13] |
 
 **Budget:** 1 static grep + 1 probe boot. BINDING: if A7=r23 (not r1), the STUB guard needs fixing before any Task A code changes.
 
@@ -309,6 +354,51 @@ CAVEAT (load-bearing): QEMU mac99 is behavioral oracle only. QEMU MacIO is at 0x
 **ALL tasks are gated DEFAULT-OFF. Baseline (`SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`) must stay byte-identical until acceptance.**
 
 > **BINDING CHECKPOINT:** Before Step A-4 (first code change), ALL addendum rows in Q-A1, Q-A2, and Q-A6 must be filled. Q-A3, Q-A4, Q-A5 may remain partial if their tasks (B, C) are not yet reached — but their blocking rows must be filled before those tasks begin. If any row is still TODO after the prescribed probe budget, the fallback answer from the blocking-answer table is the BINDING answer to proceed.
+
+---
+
+### Task A — implementation attempt + ARCHITECTURAL WALL (2026-06-13, session 2)
+
+**Approach tried (direct injection, NK bypass):** at an EXT-pending poll, build the 6-byte
+68k exception frame, set gpr(24)=0x5000ED08, resume DR_WARM — keeping the live DR register
+file (so r29/r30/r8-r23 are never NK-clobbered). Three gate variants tried:
+
+1. **Inject at any DR-range PC (0x5046e000..0x50500000):** never fired — the EXT pends while
+   executing NK code (cur_pc ~0x5031xxxx), not DR code.
+2. **Defer EXT until a DR-range poll, then inject:** FIRED but **SIGSEGV**. Injected at
+   cur_pc=0x504a8608 (inside a DR helper, *mid-68k-instruction*). There r8-r23/r29 are
+   **transient PPC scratch, not the coherent 68k register file** → dispatch computed a garbage
+   handler (r29 0x17ffeb20 → 0x17fa4738) → executed DR data @ 0x17ffe950 → SIGSEGV.
+3. **Inject only at the coherent boundary cur_pc==0x5046e9d8 (DR_WARM entry):** **never fired.**
+   JIT block-chaining means the interrupt poll (check_spcflags, runs only at *unchained* block
+   entries) never lands at DR_WARM — it is entered once then chained (probe shows visit=1 only).
+
+**WALL (the real Task A constraint):** safe 68k interrupt injection requires hitting the DR's
+*between-instruction* boundary (DR_WARM, where the 68k register file is coherent in gprs), but
+JIT block-chaining makes that boundary unreachable from the interrupt poll. The 68k register
+file is coherent ONLY at DR_WARM; everywhere else in DR-range it is transient. r29/r30 ARE
+stable across boots (0x17ffeb20/0x17ffeb18) but only meaningful AT that boundary. [PROBE✓/CRASH✓ 2026-06-13]
+
+**Promising lead for next session — DR has state-saving entry vectors.** Dispatch-table slots
+2/3/5 (targets 0x5046fb00 / 0x5046fc00 / 0x5046fd00, all identical) are **register-save
+prologues**: `lwz r1,0x2804(0)` (DR context block ptr) then `stw r6..r11,0x13c..(r6)` — they
+snapshot the register file into the context block at `*(0x2804)`. These look like the DR's own
+exception/interrupt entries (Candidate A-1 reborn, correctly this time). Next step: RE these
+three entries + the context block at `*(0x2804)` to learn whether vectoring to one (instead of
+DR_WARM) performs the save/restore that makes injection safe from an arbitrary PC.
+
+**Three forward options (architectural decision required):**
+- **(a) NK CGRP path + context restore** — deliver via the NK (safe-point by design), but set up
+  the CGRP context save area so the NK preserves/restores DR state. This is the original deep-RE
+  wall (summary report H1/H2). Most "correct", most expensive.
+- **(b) DR_WARM ROM-patch interrupt check** — patch a poll/inject at 0x5046e9d8 so every
+  between-instruction boundary checks pending EXT. Architecturally clean (mirrors real 68k
+  instruction-boundary IRQ checking) but invasive; must coexist with chaining (likely needs
+  no-chain for that block).
+- **(c) DR state-save entry vector** — vector to slot 2/3/5 (above) which snapshots the register
+  file itself, making injection safe from any PC. Cheapest IF the RE confirms it.
+
+Source change for this attempt was REVERTED (gated-off, non-working). Baseline intact (harness 353/353).
 
 ---
 

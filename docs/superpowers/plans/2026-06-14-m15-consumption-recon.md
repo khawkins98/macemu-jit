@@ -82,11 +82,13 @@ EOF
 
 - [ ] **Step 1: Run the consumption baseline boot**
 
+> **Task-0 corrections (binding):** Smoke-H is NOT in the tree (it was an uncommitted M14 hack) — do not reference it. Arm the consumption path with **`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`** (PIC required; without it EXT delivers at level 0 = no-op). `SS_PROBE_PC` does NOT fire at vector-entry PCs (`0x50314880`, `0x50314ac0`, `0x50325f00` are reached via vector dispatch, bypassing the block-entry hook) — use the always-on `[EXC]` log lines for delivery evidence and the r24 ring for the 68k flow. `--env` splits on `;`, which collides with multi-PC `SS_PROBE_PC` syntax — use at most ONE probe PC per boot.
+
 ```bash
 SheepShaver/tools/ss-slot-boot.sh --label m15-bootA-consume --timeout 45 \
-  --env 'SS_NW_IRQ_CONSUME=1;SS_DR_R24_RING=1;SS_PROBE_PC=0x50314880;0x50325f00'
+  --env 'SS_NW_PIC=1;SS_NW_IRQ_CONSUME=1;SS_DR_R24_RING=1'
 ```
-Note the printed `SLOT/RUNDIR/LOG/DIAG`. (Smoke-H delivery is the proven VIA-layer timer path; if it is not default-on under `SS_NW_IRQ_CONSUME`, add its env gate as recorded in Task 0 — do not invent a flag name; confirm from source first.)
+Note the printed `SLOT/RUNDIR/LOG/DIAG`. The consumption-path waypoints to look for (from Task 0): post latch `0x68fff070`, staging stub `0x5032d280`, drain `0x50324720`, slot-4 `twi` `0x5046e8d0`, NK slot-4 service `0x50314660`, 68k level-1 handler `0x5000ec50` (via_int `0xef2c`).
 
 - [ ] **Step 2: Walk the ring for the consumption round-trip**
 
@@ -131,9 +133,9 @@ Record what `0x0d` is (which syscall selector / what it normally returns) in the
 
 ```bash
 SheepShaver/tools/ss-slot-boot.sh --label m15-bootB-sc0d --timeout 45 \
-  --env 'SS_NW_IRQ_CONSUME=1;SS_DR_R24_RING=1;SS_PROBE_PC=0x50314ac0:r3,r4'
+  --env 'SS_NW_PIC=1;SS_NW_IRQ_CONSUME=1;SS_DR_R24_RING=1'
 ```
-(`0x50314ac0` = NK syscall entry, `[KDP+0x390]`.) Capture the first several `sc` selectors and whether `0x0d` precedes or follows the consumption-path stall pinned in Task 1.
+`SS_PROBE_PC` does NOT fire at the syscall vector entry `0x50314ac0` (Task-0 finding) — instead read the always-on `[SC]`/`[EXC]` log lines (the `exc=` tuple records selector + r3) for the `sc` selector sequence, and cross-reference the r24 ring for ordering. Capture the first several `sc` selectors and whether `0x0d` precedes or follows the consumption-path stall pinned in Task 1.
 
 - [ ] **Step 3: Record on-path vs beside-path verdict**
 
@@ -166,9 +168,9 @@ Use the live-resolved base from Task 0 — NOT `0x68ff4f00` unless Task 0 confir
 - [ ] **Step 2: Run the struct-population watch boot**
 
 ```bash
-# Replace the hnfo-derived addresses with the Task-0 live values.
+# Task-0 live values: hnfo base = 0x68ff4f00 (matched prior session).
 SheepShaver/tools/ss-slot-boot.sh --label m15-bootC-structwatch --timeout 45 \
-  --env 'SS_NW_IRQ_CONSUME=1;SS_JIT_TRACE_RING=1;SS_JIT_WATCH_ADDR=<HNFO00>,<HNFO14>:8,<HNFO28>,68fff674;SS_JIT_WATCH_DUMPS=0'
+  --env 'SS_NW_PIC=1;SS_NW_IRQ_CONSUME=1;SS_JIT_TRACE_RING=1;SS_JIT_WATCH_ADDR=68ff4f00,68ff4f14:8,68ff4f28,68fff674;SS_JIT_WATCH_DUMPS=0'
 ```
 `SS_JIT_WATCH_DUMPS=0` = report-only (faster). The watch is a CHANGE detector and is blind to value-identical writes — rely on `[WATCH]` change lines AND `[WATCH-SAMPLE]` logarithmic frozen-vs-moving lines together.
 

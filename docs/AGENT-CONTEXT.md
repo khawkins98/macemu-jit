@@ -11,6 +11,16 @@
 > milestone summaries. **Canonical M8→M17 lineage = `docs/planning/newsheep/GLOSSARY.md`** — the
 > M15/M16/M17 summaries here are the frontier doc's working context; the per-milestone table lives
 > once, there.
+>
+> **▶ Trampoline RE Task-0 COMPLETE (2026-06-14) → ROUTE A DECIDED.** Static (capstone disasm of the
+> Trampoline = `MacOS.elf`, 177/177 OF calls resolved) + dynamic (QEMU mac99 gdbstub via a Python RSP
+> client), mechanism-level agreement PASS. **Q0-A=BOUNDED, Q0-B=computed(OF-input), Q0-F=Trampoline +
+> NanoKernel** → run the real Trampoline + NanoKernel against a synthesized OF-CI + Core99 device tree
+> (B excluded, C≡A). OpenBIOS loads `MacOS.elf` at its ELF vaddr (PC=`0x20f078`, `r2=0x1001e8`).
+> Findings: `docs/planning/newsheep/FINDINGS-trampoline-re.md`; forks closed in `…/DECISIONS.md`.
+> **NEXT = `SS_M18_TRAMPOLINE_LLE`** (code-writing) — open with its OWN gating Task-0 + red-team first
+> on (1) emulator-host ownership, (2) MMU/V=P collision, (3) direct NanoKernel→CGRP trace (FINDINGS
+> "SS_M18 — gating risks"). Do not relitigate Route A.
 
 **M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
 consumption path is NOT one fixable divergence short of completing the guest's Interrupt
@@ -275,10 +285,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: OPERATION NEWSHEEP — Trampoline RE Task-0** (9.2 NewWorld is a HARD requirement — see
-Current frontier above). Charter `docs/planning/newsheep/README.md`; first milestone = `tbxi dump`
-+ disassemble the Trampoline (`MacOS.elf`) from the in-hand 9.2-era ROM (offline, today), output =
-the run/patch/reproduce route decision. M14–M17 RE banked (canonical lineage + links:
+**Next task: OPERATION NEWSHEEP — `SS_M18_TRAMPOLINE_LLE`** (Trampoline RE Task-0 is COMPLETE → Route A
+decided; see Current frontier above). 9.2 NewWorld is a HARD requirement. Charter
+`docs/planning/newsheep/README.md` §9; Task-0 findings `…/FINDINGS-trampoline-re.md`. SS_M18 is
+code-writing — open it with its own gating Task-0 + red-team first (emulator-host ownership, MMU/V=P,
+direct NanoKernel→CGRP trace). Do not relitigate Route A. M14–M17 RE banked (canonical lineage + links:
 `docs/planning/newsheep/GLOSSARY.md`; M17 spec/plan CLOSED). Compatibility-payoff is a secondary track. M13 close-out / retraction:
 `docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
 (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.

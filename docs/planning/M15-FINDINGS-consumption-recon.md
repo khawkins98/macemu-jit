@@ -310,3 +310,82 @@ characterization of the misroute (EXT edge consumed at NK EXT level, drives slot
 `0x5046e8d0`, then re-fires into CGRP fallback `0x50325fd0` rather than `0x50314660`;
 `pic i:0` confirms 0 injections) stands as the routing-gap description the forge design
 should target.
+
+---
+
+## Verdict (Task 4): FORGE — verified
+
+**M15 verdict: FORGE.** The `SS_NW_IRQ_CONSUME` consumption path is NOT one fixable
+divergence short of completing the guest's Interrupt Manager (IM) init. It dead-ends in the
+same CGRP fallback as the native path, and the guest never begins populating the NK routing
+structures, so there is nothing for a "real" fix to complete. The next milestone must seed
+(forge) those structs OR repair the routing (see handoff below).
+
+Three independently-confirmed evidence legs:
+
+1. **Routing gap (pillar 1).** Across **510 consumption boot.logs**
+   (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`, EXT delivered), the 68k level-1 handler `0x5000ec50`
+   is reached in **0 of 510** — while the CGRP fallback `0x50325fd0` fires in many. Direct
+   boot.log grep, no tool dependency; ring-confirmed in Boot A (0 hits in the full r24
+   ring). The EXT edge reaches the slot-4 `twi` (`0x5046e8d0`), then re-fires into
+   `0x50325fd0` instead of routing to the NK slot-4 service `0x50314660`.
+
+2. **`SC#1=0x0d` is an artifact of an unreachable config (pillar 2, independent of pillar
+   1).** Under the real consumption regime (PIC-on) the syscall selector sequence is
+   `0x3f, 0x19, 0x14, 0x19, 0x0f` — `0x0d` appears NOWHERE (selector census, Boot B). The
+   archived `SC#1=0x0d` (which blocked M8's default flip) occurs only with
+   `SS_NW_IRQ_CONSUME=1` WITHOUT `SS_NW_PIC` — a config where EXT delivers at level 0
+   (no-op), so consumption is structurally unreachable. The M8 default-flip refusal was
+   gated on an artifact. The routing gap is decoupled from the selector stream: all 5
+   syscalls retire before the EXT edge is asserted.
+
+3. **Structs never populated (the verdict pivot).** A live write-trap
+   (`SS_JIT_WATCH_ADDR` on `hnfo+0x00`=`68ff4f00`, `hnfo+0x14:8`, `hnfo+0x28`=`68ff4f28`,
+   `KDP+0x674`=`68fff674`, with `SS_JIT_TRACE_RING=1`) recorded **50 `[WATCH-SAMPLE]`
+   frozen lines to obs=1,000,000,000 with ZERO change events** — no struct-populating write
+   fired from any guest path. Corroborated by jit_diag `pic=out:0/r:4/i:0` (0 injections
+   into the guest) and DR68K stuck at first instruction (r24=0). Residual caveat: the watch
+   is blind to value-identical (zero-over-zero) and pure host-accessor (`WriteMacInt`)
+   writes, but the verdict-relevant event — guest IM init writing a non-zero
+   pointer/bits/mask into a NIL/zero struct — is exactly what it traps.
+
+**The two pillars are independent and load-bearing — the verdict does not rest on a single
+chain.** Pillar 1 (routing gap, 510/510) and pillar 2 (`0x0d` as a PIC-off artifact) are
+established by separate evidence (boot.log grep + ring vs. selector census), and the
+struct-watch (leg 3) seals the pivot from a third, orthogonal instrument. No single
+falsification collapses the verdict.
+
+**Standing gate (Task 4):** `SS_HARNESS_BATCH=1 make test-jit` → `score=100`. M15 changed
+only docs, so the result is structurally inert (no production path touched); paravirtual
+`make e2e` is likewise unaffected.
+
+### Next-milestone handoff: misroute-first gate → oracle-first forge fallback
+
+The next milestone's entry is **misroute-first as a time-boxed gate, with oracle-first
+forge as the documented fallback.**
+
+- **This does NOT reopen the FORGE verdict.** The verdict ("consumption dead-ends under the
+  current config," 510/510) is about what happens now and is settled. Misroute-why is a
+  SEPARATE, forward-looking question: "is that dead-end repairable?" Recording
+  FORGE-verified AND misroute-first as the entry sequence is not relitigating a decided
+  question.
+
+- **Next milestone Task 0 (time-boxed, SINGLE diagnostic — NOT "fix the routing"):**
+  Identify WHY the EXT edge routes to the CGRP fallback `0x50325fd0` instead of the NK
+  slot-4 service `0x50314660` — i.e. the decision register/condition at the branch point.
+  Cheap now with the corrected tool path **`tools/ring-walk.py`** (NOTE: repo-root
+  `tools/`, NOT `SheepShaver/tools/` — that path bug cost us this capture in Boot C). Scope
+  it as one diagnostic: `--find-pc 0x50325fd0`, `--find-pc 0x50314660` (expect absent),
+  `--regs-at` at the branch record just before the fallback re-fire, on a fresh
+  `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1` boot (do NOT use
+  `SS_JIT_WATCH_DUMPS=0`, which suppresses the ring dump).
+
+- **Decision rule for the next session (verbatim):**
+  - Misroute is an obvious wrong branch / one-line condition → fix it, attempt real init,
+    forge becomes unnecessary (real init strictly dominates forged state: genuine values,
+    no oracle dependency, no crash risk).
+  - Misroute is structural/expected, OR not obvious within the time-box → STOP, fall
+    through to **oracle-first forge (M14 §7 step 5)**: extract correct `hnfo+0x14` /
+    `hnfo+0x28` / `KDP+0x674` values from a working paravirtual or QEMU mac99 boot (where
+    IM init runs), then seed them. The dead-end is now confirmed at the MECHANISM level,
+    not just the symptom level.

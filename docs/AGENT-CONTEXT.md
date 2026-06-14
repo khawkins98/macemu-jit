@@ -6,6 +6,27 @@
 
 ## Current frontier (2026-06-14)
 
+**M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
+consumption path is NOT one fixable divergence short of completing the guest's Interrupt
+Manager (IM) init — it must be host-forged. Two **independent** load-bearing pillars: (1)
+**routing gap** — across **510 consumption boots** (`SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`) the
+68k level-1 handler `0x5000ec50` is reached **0/510**; the EXT edge re-fires into CGRP
+fallback `0x50325fd0` instead of NK slot-4 service `0x50314660`; (2) **`SC#1=0x0d` is a
+PIC-off artifact** — absent under the real (`SS_NW_PIC=1`) regime, so the M8 default-flip
+refusal was gated on an unreachable config. **Verdict pivot:** NK routing structs
+(`hnfo+0x00/0x14/0x28`, `KDP+0x674`) stay **frozen-zero across obs=1e9** — zero
+struct-populating guest writes. The verdict does NOT rest on a single chain. Canonical:
+`docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)".
+- **Next = misroute-first time-boxed gate → oracle-first forge fallback** (does NOT reopen
+  the verdict). Task 0: pin WHY the EXT edge selects `0x50325fd0` over `0x50314660` (the
+  branch decision register/condition) via `--find-pc`/`--regs-at` on a fresh
+  `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1` boot (NOT `SS_JIT_WATCH_DUMPS=0`).
+  Obvious one-line wrong branch → fix + real init (forge unnecessary); structural/non-obvious
+  within the box → fall through to oracle-first forge (M14 §7 step 5): extract correct
+  `hnfo+0x14`/`hnfo+0x28`/`KDP+0x674` from a working paravirtual or QEMU mac99 boot, then seed.
+- **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
+  `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
+
 **M13 — COMPLETE (2026-06-14). The load-bearing fact: NewWorld 68k interrupt delivery WORKS** — the
 M9→M13 keystone ("`0x5000ED08` never runs / interrupts never delivered") was a **probe-granularity
 artifact** (see "load-bearing negatives" below). M13's deliverable is that retraction plus the revert

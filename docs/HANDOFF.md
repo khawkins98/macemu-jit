@@ -1,13 +1,36 @@
 # Project Handoff — resume entry point
 
-> **Status: PIVOTING 2026-06-14** · M14 COMPLETE: NewWorld 9.x Cuda bootstrap is a
-> **precisely-characterized hard wall** (all paths collapse to crash-prone forge class).
-> **DEC does NOT signal the DR** — ed0a entries come from HandleInterrupt MODE_EMUL_OP,
-> not the NK DEC handler. KDP+0x674=0, hnfo+0x14=NIL, hnfo+0x28=0, all because IM init
-> runs downstream of Cuda init. **PARKED** with precise resume experiment in §7.
-> Next = **COMPATIBILITY-PAYOFF**: make the already-booting 8.6–9.0.4 genuinely usable.
-> Resume NewWorld 9.x: `docs/planning/M14-FINDINGS-cuda-delivery.md` §7 (forge smoke test).
+> **Status: M15 COMPLETE 2026-06-14 — FORGE verdict verified** · The `SS_NW_IRQ_CONSUME`
+> consumption path dead-ends: across **510 consumption boots** the 68k level-1 handler
+> `0x5000ec50` is reached **0/510** (EXT edge re-fires into CGRP fallback `0x50325fd0`, not
+> NK slot-4 service `0x50314660`); NK routing structs stay **frozen-zero across obs=1e9**
+> (zero struct-populating writes); `SC#1=0x0d` is a PIC-off artifact (absent under
+> `SS_NW_PIC=1`). Two independent pillars; verdict does NOT rest on a single chain.
+> **Next milestone entry = misroute-first time-boxed gate → oracle-first forge fallback**
+> (does NOT reopen the verdict — see below + `docs/planning/M15-FINDINGS-consumption-recon.md`
+> "Verdict (Task 4)").
+> Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
+> `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
+
+### M15 verdict (FORGE — verified) and next-milestone entry
+
+> M14 left NewWorld 9.x as a precisely-characterized wall (all paths collapse to forge
+> class; DEC does NOT signal the DR; KDP+0x674=0, hnfo+0x14=NIL, hnfo+0x28=0 because IM
+> init runs downstream of Cuda init). **M15 adjudicated the one open question** — is the
+> consumption path one fixable divergence short of completing IM init, or does it need a
+> host forge? **Answer: FORGE** (510/510 routing gap; structs frozen to obs=1e9; `0x0d`
+> is an unreachable-config artifact). The verdict is settled.
+>
+> The next milestone's Task 0 is a SEPARATE forward-looking question — "is that dead-end
+> repairable?" — entered as a **time-boxed misroute-why diagnostic** (why the EXT edge
+> selects CGRP fallback `0x50325fd0` over NK slot-4 service `0x50314660`), using
+> `tools/ring-walk.py` on a fresh `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1` boot
+> (NOT `SS_JIT_WATCH_DUMPS=0`). Decision rule: obvious wrong branch / one-line condition →
+> fix it and run real init (forge unnecessary); structural/not-obvious within the box →
+> STOP and fall through to **oracle-first forge (M14 §7 step 5)** — extract correct
+> `hnfo+0x14` / `hnfo+0x28` / `KDP+0x674` from a working paravirtual or QEMU mac99 boot,
+> then seed. This does NOT reopen the FORGE verdict.
 
 ## HEADLINE — the M13 correction + M14 reconciliation
 
@@ -35,13 +58,17 @@
 > - All paths (HLE, CR injection, CGRP forge, Execute68k) collapse to forge-class
 > - Evidence: M14-FINDINGS §4a (smoke tests) + §7 (DEC RE + collapse analysis)
 
-## Resume prompt (COMPATIBILITY-PAYOFF — making 8.6–9.0.4 usable)
+## Resume prompt
 
 > Read `docs/HANDOFF.md` (this HEADLINE), then `docs/AGENT-CONTEXT.md`.
 >
-> **NewWorld 9.x is PARKED.** The chicken-and-egg is precisely characterized (M14 §7)
-> and the resume experiment is written down verbatim. Don't re-derive — read §7 if
-> picking it up.
+> **M15 is COMPLETE — NewWorld 9.x consumption path adjudicated FORGE (verified).** If
+> resuming NewWorld 9.x, the next milestone enters at the **misroute-first time-boxed
+> gate** (Task 0: why EXT edge → CGRP fallback `0x50325fd0` not NK slot-4 `0x50314660`,
+> via `tools/ring-walk.py`), falling through to **oracle-first forge (M14 §7 step 5)** if
+> the misroute is structural/non-obvious. Read
+> `docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)" — don't re-derive.
+> This does NOT reopen the verdict.
 >
 > **Current focus: COMPATIBILITY-PAYOFF** — make the already-booting Mac OS 8.6–9.0.4
 > genuinely usable. The project boots to Finder with full native JIT on arm64. The
@@ -72,6 +99,14 @@
   runs downstream of Cuda init. All viable paths collapse to the M10-forge class (seed
   uninitialized NK routing infra from host). Parked with precise resume experiment in §7.
   See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
+- **M15** — COMPLETE (2026-06-14). Consumption-recon: adjudicated the one open M14 question
+  (is the `SS_NW_IRQ_CONSUME` path one fixable divergence short of completing IM init, or
+  forge?). **Verdict: FORGE — verified.** Two independent pillars (510/510 routing gap:
+  68k L1 handler `0x5000ec50` reached 0/510, EXT re-fires into CGRP fallback `0x50325fd0`;
+  `SC#1=0x0d` is a PIC-off artifact) + struct-watch pivot (NK routing structs frozen-zero
+  to obs=1e9, 0 populating writes). Doc-only milestone; harness score=100 unchanged. Next
+  = misroute-first time-boxed gate → oracle-first forge fallback.
+  See `docs/planning/M15-FINDINGS-consumption-recon.md`.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 - **M12** — PARTIAL (2026-06-13). Wave0+Wave1 landed (`ddbd8d79`, `348544cd`); boot stable

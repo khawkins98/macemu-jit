@@ -93,7 +93,7 @@ Note the printed `SLOT/RUNDIR/LOG/DIAG`. The consumption-path waypoints to look 
 - [ ] **Step 2: Walk the ring for the consumption round-trip**
 
 ```bash
-python3 SheepShaver/tools/ring-walk.py <RUNDIR> --r24-flow | tail -60
+python3 tools/ring-walk.py <RUNDIR> --r24-flow | tail -60
 python3 SheepShaver/tools/jit-analyze.py diag <RUNDIR>/jit_diag.log | head -40
 ```
 Look for the durable markers: `[DR68K] first instruction`, `EXT delivered #1`, `host-irq: edges=N consumed=M`, and whether the slot-4 `twi` waypoint (Task 0) appears in the r24 flow.

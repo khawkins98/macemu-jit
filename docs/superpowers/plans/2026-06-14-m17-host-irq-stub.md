@@ -100,6 +100,11 @@ PPC→68k cross from the NK EXT regime AND manufacture exactly the state the 68k
 Five answers are BLOCKING. **Primary tools: static RE of `sheepshaver_glue.cpp` + `rom901.bin`,
 bounded probe boots; QEMU is a BEHAVIORAL tiebreaker only (never addresses).**
 
+> **RUN ORDER (coordinator-mandated): Q0-B FIRST.** It is M17's "ROM-absent" — the highest-
+> probability early NO-GO. Pin the run-mode/MSR at `0x50314880` with ONE bounded probe before
+> spending any cycles on injection-option detail (Q0-C) or scratch (Q0-D). If the EXT regime is not
+> `MODE_EMUL_OP`-enterable, surface the NO-GO/staging-cost immediately — do not proceed to Q0-C/D.
+
 > **Budget honesty:** ≤8 slot boots total (≤60s each, ≤2 per question before residue status is
 > decided, co-scheduled — 8 probe PCs/run); ≤3 QEMU boots (behavioral only). Static RE windows are
 > bounded (≤2 call levels / ≤12 functions per chain); unbounded disassembly → residue + fallback.
@@ -122,12 +127,16 @@ bounded probe boots; QEMU is a BEHAVIORAL tiebreaker only (never addresses).**
   legal?** Record the exact sanctioned-cross recipe M17 will use (proc template + `Execute68k`, or
   a PPC-stub-via-EMUL_OP that re-enters this same host path). **Forbid any direct `rfi`-into-68k
   wild jump (R5).**
-- [ ] **Q0-C (BLOCKING — Task 1): the injection point.** Decide among spec §3 options (a)
-  CGRP-entry-SRR0→host-stub, (b) host-side hook at the EXT delivery site (glue:1254), (c) full CGRP
-  replacement. Write the trade-off. **Confirm the chosen point: for (b), that the host hook can
-  satisfy/defer the NK EXT EOI/level so the edge does not livelock (R6 — the `EXC_EXT_RUNAWAY_N`
-  guard bounds it); for (a)/(c), the scratch + M10 exposure.** Deliverable: chosen option + the
-  precise site + the bookkeeping plan.
+- [ ] **Q0-C (BLOCKING — Task 1): the injection point — option (b) is DECIDED (coordinator);
+  confirm its preconditions.** The injection is option (b) (host-side hook at the EXT delivery site,
+  glue:1254); (a) is a follow-up only if (b) advances the wall. **GO GATE (hard precondition, not a
+  post-hoc discovery): the host hook MUST be shown to satisfy or defer the NK EXT EOI/level
+  bookkeeping so the edge does not re-fire (R6 — the `EXC_EXT_RUNAWAY_N` guard bounds it but does
+  not fix it).** Pin the EOI/level plan BEFORE the Task-2 smoke boot — otherwise a livelock reads
+  ambiguously as "hypothesis refuted" when it is really "bookkeeping unsatisfied." Deliverable: the
+  precise hook site + the EOI/level satisfy-or-defer plan; "(b) satisfies/defers EOI" = GO. (If (b)
+  provably cannot satisfy EOI within budget, fall back to (a) with its scratch + M10 exposure, or
+  DoD-3.)
 - [ ] **Q0-D (BLOCKING — Task 1): the safe scratch region (only if the chosen option needs a
   guest-resident blob/stack/table).** Extend the occupancy map; pick from a verified free gap
   (`0x68FF6084..0x68FF7000`); confirm not MMIO-guarded and not NK-touched between trampoline-end
@@ -283,6 +292,12 @@ tally recorded.
    re-pin → resume; a SECOND falsification of the same contract → stop, re-scope, re-plan.
 5. **Next surface:** if the stub advances the wall but the boot dies on the NEXT frozen struct,
    that is the next milestone's named frontier — capture and stop (CGRP is first-of-N).
+6. **SERIES-LEVEL tripwire (spans milestones — the per-wall DoD does not cover it):** if after
+   ~2–3 crossed walls the pattern is uniformly "another frozen IM-init struct, same forge shape,"
+   STOP the per-wall series and reconsider the wholesale alternative — **forging or running IM-init
+   itself** (the root cause M14 deferred) vs. continuing per-wall. This keeps the 9.2 hard
+   requirement from silently degrading into unbounded whack-a-mole. Record the wall tally + the
+   recurring shape in the M17/M-series HANDOFF so the trigger is visible across sessions.
 
 ## Self-review record
 
@@ -299,25 +314,33 @@ The architecture deliberately reuses the **proven** in-tree cross (`HandleInterr
 The milestone is designed ITERATIVE wall-by-wall with a ring-walk progress metric (Q0-E), NOT a
 single all-or-nothing gate to Finder, per M15's first-of-N reality.
 
-**Known tensions flagged FOR the red team:**
-1. **Injection point (a) vs (b):** the spec leans option (b) (host-side hook, no NK-struct forge,
-   lowest M10 exposure) as the first cut, but (b) bypasses the NK's own dispatch — is that "real
-   enough", and does it satisfy the NK EXT EOI/level so the edge doesn't livelock (R6)? Red team to
-   adjudicate (b)-first vs (a)-first.
-2. **Is the host-side cross "host-side HLE where real guest code should run"?** The stop-rule's
-   "tempting wrong fix" trigger names host-side HLE. The defence: the *68k handler* (`0x5000ec50`
-   via_int chain) IS real guest code; M17 only manufactures the *cross* the missing IM-init would
-   have wired — and uses the already-sanctioned `Execute68k` path the host owns by design. Red team
-   to confirm this is not the proscribed HLE.
-3. **First-of-N value:** even a perfect DoD-1 buys one wall (M15). Is M17 worth it before a survey
-   of how many of the N walls are similarly forge-class? (Counter: 9.2 NW is now a hard requirement;
-   the first wall is the only way to learn the second.)
-4. **Q0-A manufacturability:** M15 shows hnfo+0x28 (pending bits) is frozen-zero; if the via_int
-   chain hard-derefs a source table the host can't legitimately populate, DoD-3 fires at Task 0 —
-   the red team should pre-judge whether Q0-A is answerable from static RE + QEMU-behavioral alone.
-5. **Run-mode at the EXT dispatch:** `Execute68k` requires `MODE_EMUL_OP`; the NK EXT regime may be
-   MODE_68K or MODE_NATIVE. If the cross can't be entered without forcing run-mode (which risks
-   desync), Q0-B may return NO-GO. Flagged as the highest-probability Task-0 killer.
+**Decisions made by the coordinator (2026-06-14 — DO NOT relitigate):**
+- **Injection: option (b) FIRST** (host-side hook, risk-first — tests the core hypothesis cheaply
+  with no NK-struct forge / lowest M10 exposure). Option (a) (CGRP-entry-SRR0) follows ONLY if (b)
+  advances the wall. Tension #1 below is RESOLVED; the red team should pressure (b)'s EOI/livelock
+  handling (R6), not re-open (b)-vs-(a).
+- **Proceed wall-by-wall.** Surveying wall N+1 without crossing wall N is not available, so per-wall
+  is the only feasible path. Tension #3 is RESOLVED (9.2 NW is a hard requirement). The *series*
+  risk is bounded by stop-rule 6 (tripwire), not by re-debating M17's worth.
+
+**Open tensions FOR the red team (priorities, in order):**
+1. **[PRIORITY — the "ROM-absent" of M17] Q0-B run-mode at the EXT dispatch — run FIRST.**
+   `Execute68k` requires `MODE_EMUL_OP` + the emulator pair `[KDP+0x1074/0x1078]` (M14: else a wild
+   jump). If the NK EXT regime at `0x50314880` is `MODE_68K`/`MODE_NATIVE`, the "re-use the existing
+   cross" de-risk WEAKENS and staging becomes real new work — surface immediately as a possible
+   early NO-GO BEFORE any injection-option detail. Highest-probability Task-0 killer.
+2. **[PRIORITY] R6 as a Task-0 GO GATE for option (b), not a post-hoc discovery.** (b) bypasses the
+   NK dispatcher → it MUST satisfy or defer the EXT EOI/level bookkeeping or the edge re-fires
+   (livelock). Pin this BEFORE the smoke boot — else a livelock reads ambiguously as "hypothesis
+   refuted" when it is really "bookkeeping unsatisfied." **"(b) satisfies/defers EOI" is a GO
+   precondition** (now folded into Q0-C as a hard gate).
+3. **[PRIORITY] Q0-A manufacturability:** M15 shows hnfo+0x28 (pending bits) is frozen-zero; if the
+   via_int chain hard-derefs a source table the host can't legitimately populate, DoD-3 fires at
+   Task 0 — pre-judge whether Q0-A is answerable from static RE + QEMU-behavioral alone.
+4. **Is the host-side cross "host-side HLE where real guest code should run"?** Defence: the *68k
+   handler* (`0x5000ec50` via_int chain) IS real guest code; M17 manufactures only the *cross* the
+   missing IM-init would have wired, via the already-sanctioned `Execute68k` path. Red team to
+   confirm this is not the proscribed HLE.
 
 ## Red-team record
 

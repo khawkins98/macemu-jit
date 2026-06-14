@@ -25,9 +25,17 @@
 > surviving path — a host-owned NK-EXT-handler PPC stub — is materially larger and documented as the
 > re-entry point if 9.x becomes a hard requirement. **RE banked (Q1–Q7):
 > `docs/planning/M16-FINDINGS-oracle-forge.md`.** Plan/spec CLOSED (do-not-execute banners).
-> **Next: compatibility-payoff** — make the already-booting 8.6–9.0.4 usable (CopyBits HLE,
-> idle-skip, perf, app compat, Silicon Sheep); start with a fresh brainstorming/planning pass.
-> Does NOT reopen the M15 FORGE verdict.
+> **Next: M17 — host-owned NK interrupt stub (9.2 NewWorld is a HARD requirement, user 2026-06-14).**
+> The M16 NO-GO closed the *cheap* CGRP-table seed, not the goal: M17 pursues the surviving path —
+> synthesize a host-owned stub that manufactures the pending-interrupt state and performs the
+> **sanctioned** PPC→68k cross (the `HandleInterrupt` MODE_EMUL_OP + `Execute68k` path that already
+> exists in-tree, newworld-fenced at `glue.cpp:3519`) so the 68k DR dispatches the level-1
+> autovector to `0x5000ec50` (confirmed real guest code). Success = advance ONE wall + capture the
+> next (CGRP is first-of-N), NOT reach Finder. DRAFT spec+plan committed (`3a7826f7`), **red-team
+> pending** (priority: Q0-B run-mode-at-EXT-dispatch is M17's likeliest early NO-GO). Spec/plan:
+> `docs/superpowers/{specs,plans}/2026-06-14-m17-host-irq-stub*`. The M16 RE stays banked
+> (`M16-FINDINGS` Q1–Q7). Compatibility-payoff (8.6–9.0.4 usability) is now a parallel/secondary
+> track. Does NOT reopen the M15 FORGE verdict.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

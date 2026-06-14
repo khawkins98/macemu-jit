@@ -143,12 +143,14 @@ is unaffected — **every new line is behind an env gate AND `MachineProfileIsNe
 | **(b) Hook EXT entry `0x50314880` earlier (host-side)** | In our EXT delivery path (`sheepshaver_glue.cpp:1254` `ExcEnter(...,EXC_EXTERNAL,...)`), when newworld + gated, route to a host trampoline that does the cross instead of (or before) entering the NK dispatcher. | Most robust — no guest-memory forge, no NK-struct write, no CGRP dependency, smallest M10 exposure. BUT bypasses the NK's own dispatch (less "real"); must ensure the NK EXT bookkeeping (EOI/level) is still satisfied or the edge re-fires. |
 | **(c) Replace CGRP descriptor wholesale** | Forge a complete host-owned CGRP descriptor + handler table + per-source stacks. | Highest fidelity to the guest model; highest crash exposure (full M10 class) + heaviest scratch budget. Likely OUT unless (a)/(b) fail. |
 
-> **Spec leaning (for the red team to challenge):** option **(b)** is the lowest-risk first cut —
-> it performs the sanctioned cross host-side with no NK-struct forge, directly testing the central
-> hypothesis (does crossing to `0x5000ec50` advance the boot?) before committing to the heavier
-> guest-memory synthesis of (a)/(c). If (b) advances the wall, (a) can follow as the "more real"
-> implementation. Task 0 must confirm (b) can satisfy NK EXT EOI/level bookkeeping so the edge
-> does not livelock.
+> **DECIDED (coordinator, 2026-06-14): option (b) first.** The lowest-risk first cut — it performs
+> the sanctioned cross host-side with no NK-struct forge, directly testing the central hypothesis
+> (does crossing to `0x5000ec50` advance the boot?) before committing to the heavier guest-memory
+> synthesis of (a)/(c). If (b) advances the wall, (a) follows as the "more real" implementation.
+> **Hard GO precondition (not a post-hoc discovery):** Task 0 (Q0-C) MUST confirm (b) can satisfy or
+> defer the NK EXT EOI/level bookkeeping so the edge does not livelock — pinned before the smoke
+> boot, else a livelock mis-reads as "hypothesis refuted." The red team should pressure (b)'s EOI
+> handling, NOT re-open (b)-vs-(a).
 
 **Budget (caps, not targets):** ≤~8 slot boots + ≤~3 QEMU boots (behavioral tiebreaker only).
 Stop-when: first wall crossed (DoD-1), OR the wrong precondition isolated (DoD-2), OR the cross is

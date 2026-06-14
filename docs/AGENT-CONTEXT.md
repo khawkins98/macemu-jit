@@ -35,9 +35,24 @@ pre-implementation red-team round (SHA `df627fe0`) fired the **pre-authorized ea
   a populated table re-opens the **M10 DR-reentry `0xDEADBEEF` crash class**; CGRP is the **first of N**
   frozen structs (M15). The only surviving path — a host-owned NK-EXT-handler PPC stub — is much
   larger; documented as the re-entry point if 9.x becomes a hard requirement.
-- **RE banked (Q1–Q7): `docs/planning/M16-FINDINGS-oracle-forge.md`.** Plan/spec CLOSED.
-  **Next = COMPATIBILITY-PAYOFF** (make 8.6–9.0.4 usable: CopyBits HLE, idle-skip, perf, app
-  compat, Silicon Sheep) — start with a fresh brainstorming/planning pass. Does NOT reopen FORGE verdict.
+- **RE banked (Q1–Q7): `docs/planning/M16-FINDINGS-oracle-forge.md`.** M16 plan/spec CLOSED.
+
+**M17 — ACTIVE (2026-06-14). 9.2 NewWorld is a HARD requirement (user).** The M16 NO-GO closed the
+cheap CGRP-table seed, not the goal. M17 = the surviving path: a host-owned stub that manufactures
+the pending-interrupt state and performs the **sanctioned** PPC→68k cross — the `HandleInterrupt`
+MODE_EMUL_OP proc-template + `Execute68k` mechanism that **already exists in-tree**, newworld-fenced
+at `sheepshaver_glue.cpp:3519` (the central de-risk vs M10's blind forge) — so the 68k DR dispatches
+the level-1 autovector to `0x5000ec50` (confirmed real guest code: `jmp $5000ef20`, via_int). DoD =
+advance ONE wall + capture the next (CGRP is **first-of-N**), NOT reach Finder. Injection DECIDED:
+option (b) (host-side hook at the EXT delivery site `glue:1254`) first, (a) only if (b) advances.
+- **State: DRAFT spec+plan committed (`3a7826f7`/updated), red-team PENDING.** Priority NO-GO check =
+  **Q0-B** (run-mode/MSR at the EXT dispatch `0x50314880` — `Execute68k` needs `MODE_EMUL_OP` + the
+  emulator pair `[KDP+0x1074/0x1078]`; if MODE_68K, the de-risk weakens → possible early NO-GO).
+  R6 (option-b EOI/level bookkeeping) is a Task-0 GO gate. Series tripwire: after ~2–3 uniformly-
+  frozen walls, reconsider forging/running IM-init wholesale vs. per-wall whack-a-mole.
+- Spec/plan: `docs/superpowers/{specs,plans}/2026-06-14-m17-host-irq-stub*`. Gate behind
+  `SS_M17_STUB=1` + `MachineProfileIsNewWorld()`; bases resolved live; `0xDEADBEEF` = immediate stop.
+- **Compatibility-payoff** (8.6–9.0.4 usability) is now a parallel/secondary track. Does NOT reopen FORGE verdict.
 - **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
   `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
 - **STANDING FACT (probe):** `SS_PROBE_PC` DID fire at the EXT vector-entry PC `0x50314880`
@@ -258,12 +273,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: COMPATIBILITY-PAYOFF** (M16 closed NO-GO; NewWorld 9.x banked as forge-class — see
-Current frontier above). Make the already-booting 8.6–9.0.4 usable: CopyBits HLE, idle-skip, perf,
-app compat, Silicon Sheep. Start with a fresh brainstorming/planning pass; see
-`docs/planning/ROADMAP.md` (COMPATIBILITY-PAYOFF track) + memory `project_macemu_jit`.
-The NewWorld-9.x re-entry point (host-owned EXT-handler stub) is documented in
-`docs/planning/M16-FINDINGS-oracle-forge.md` Q7. M13 close-out / retraction:
+**Next task: M17 — host-owned NK interrupt stub** (9.2 NewWorld is a HARD requirement — see Current
+frontier above). DRAFT spec+plan at `docs/superpowers/{specs,plans}/2026-06-14-m17-host-irq-stub*`
+(`3a7826f7`+updates); red-team PENDING, then BINDING Task-0 (run Q0-B FIRST). M16 RE banked in
+`docs/planning/M16-FINDINGS-oracle-forge.md` Q1–Q7. Compatibility-payoff (8.6–9.0.4 usability) is a
+parallel/secondary track. M13 close-out / retraction:
 `docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
 (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.
 Keep-active machine docs (`docs/planning/machine/`): `CORE99-MACHINE-DESCRIPTION.md`,

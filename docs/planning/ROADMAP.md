@@ -6,8 +6,11 @@
 > requirement) by running/reproducing the Trampoline (the producer of the nanokernel boot-time
 > init), NOT forging its outputs. The M8→M17 forge arc is CLOSED (banked NO-GO; M17 red-team
 > BLOCKED — every wall was one disease: the Trampoline never runs). **Start: `docs/planning/newsheep/README.md`.**
-> Next action = the Trampoline RE Task-0 (offline `tbxi` dump + disasm). Compatibility-payoff
-> (8.6–9.0.4 usability) is now SECONDARY. Frontier detail: `docs/AGENT-CONTEXT.md`.
+> Trampoline RE Task-0 + SS_M18 gating Task-0 COMPLETE → Route A GO but MONTHS (staged program planned,
+> rev-4: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`; critical path S1→S3→S4 ≈
+> quarters). Kickoff recon done: Discriminator-A=COARSE (S1 Dolphin shadow-arena indicated), donors
+> extracted, 9.2.x ISOs in hand. **Next action = open Stage 1's deep Task-0 (paged MMU).**
+> Compatibility-payoff (8.6–9.0.4 usability) is now SECONDARY. Frontier detail: `docs/AGENT-CONTEXT.md`.
 
 ---
 

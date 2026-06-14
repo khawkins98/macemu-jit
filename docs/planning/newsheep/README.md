@@ -159,39 +159,30 @@ interpretation bankrupt and handed us the exact producer to target.
 - [x] Effort opened; baseline tag `newsheep-baseline`; charter + log + assets + glossary written;
   HANDOFF/AGENT-CONTEXT frontier flipped to NewSheep.
 
-**The process (BINDING — `docs/MILESTONE-WORKFLOW.md`).** The first milestone — the **Trampoline RE
-Task-0** — is **COMPLETE (2026-06-14)**. Steps 1–5 all DONE; **▶ the next action is the next
-milestone: `SS_M18_TRAMPOLINE_LLE` (Route A implementation), HELD for the user** (it writes code).
-- [x] **1. Brainstorm** — done (method/version/budget locked; `DECISIONS.md` log).
-- [x] **2. Spec** — done: `docs/superpowers/specs/2026-06-14-newsheep-trampoline-re-design.md` (rev 2).
-- [x] **3. Plan** — done: `docs/superpowers/plans/2026-06-14-newsheep-trampoline-re.md` (rev 2).
-- [x] **4. Red-team** — done: 3 reviewers, all GO-WITH-FIXES, folded into rev-2.
-- [x] **5. Execute Task-0** — **DONE.** Static (`MacOS.elf` capstone disasm; 177/177 OF calls resolved)
-  + dynamic (QEMU mac99 gdbstub via Python RSP client) on the same `66210b4f…` ROM, mechanism-level
-  agreement gate PASS. **Q0-A = BOUNDED, Q0-B = computed(OF-input), Q0-F = Trampoline + NanoKernel** →
-  **ROUTE A DECIDED** (run the real Trampoline + NanoKernel against a synthesized OF-CI + Core99 device
-  tree). Findings + SS-integration sketch: `FINDINGS-trampoline-re.md`; forks closed in `DECISIONS.md`.
+**The process (BINDING — `docs/MILESTONE-WORKFLOW.md`).** Two Task-0s COMPLETE; the SS_M18
+implementation has been planned as a staged program; kickoff recon is done. State as of 2026-06-14:
+- [x] **Trampoline RE Task-0** — DONE. Static (`MacOS.elf` disasm; 177/177 OF calls) + dynamic (QEMU
+  gdbstub) on the `66210b4f…` ROM → **Q0-A BOUNDED, Q0-B computed(OF-input), Q0-F Trampoline+NanoKernel
+  → ROUTE A DECIDED.** `FINDINGS-trampoline-re.md`; forks in `DECISIONS.md`.
+- [x] **SS_M18 gating Task-0** (plan→red-team→2 recon agents) — DONE. **Route A GO but MONTHS**; the
+  weeks-sketch falsified by three findings: Q1 NK is a permanently-resident supervisor with no handoff
+  boundary; Q2 it requires a real paged MMU; Q3 CGRP is built by disk/CFM IM-init (NOT the NK parcel →
+  corrects Q0-F's inference, confirms M16). `FINDINGS-trampoline-re.md` "SS_M18 gating Task-0".
+- [x] **SS_M18 staged program planned** (rev-4, red-teamed + tech-writer/dev-advocate reviewed):
+  `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`. Four stages —
+  **S1** NewWorld paged MMU (PREREQUISITE) → **S2** Trampoline loader + OF-CI + Core99 DT (S2a parallel)
+  → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP. Critical path S1→S3→S4 strictly
+  sequential ≈ **multiple quarters**. Each stage opens with its OWN Task-0 + red-team before its code.
+- [x] **Kickoff recon (zero-dependency workstreams)** — DONE 2026-06-14: **Discriminator-A = COARSE** →
+  S1 path a (Dolphin Dynamic-BAT shadow-arena) indicated, JIT fast path preserved
+  (`FINDINGS-discriminator-a.md`); **donors extracted** (`DONOR-NOTES.md`); **9.2.x ISOs in hand**
+  (`ASSETS-AND-TOOLING.md` R2 — S4 asset block cleared).
 
-**▶ NEXT MILESTONE (held for user — code-writing): `SS_M18_TRAMPOLINE_LLE`.** Implement Route A behind
-`SS_M18_*` + `MachineProfileIsNewWorld()` (paravirtual byte-identical, `make test-jit`=100): an OF
-client-interface callback (`openfirmware_ci.cpp`) serving a Core99 device tree (incl. `interrupt-map`),
-`call-method` backends (disk `read-blocks` / `/mmu` claim·translate·map / display), a 3-word `interpret`
-shim, and a Trampoline loader that launches `MacOS.elf` at its ELF vaddr and lets it hand off to the
-NanoKernel. Sketch + field-by-field `SS_NW_TRAMPOLINE` reconciliation: `FINDINGS-trampoline-re.md`
-"SS-integration sketch".
-
-> **BINDING — open SS_M18 with its OWN gating Task-0 + red-team BEFORE any code** (the pattern that
-> caught M16/M17 cheaply), on the two architectural collisions Task-0 under-examined (FINDINGS "SS_M18
-> — gating risks"): **(1) emulator-host ownership** — how much M0–M13 supervisor/exception/MixedMode/
-> scheduler scaffolding does the real NanoKernel REPLACE vs. FIGHT (decides weeks-vs-months)?
-> **(2) MMU/V=P** — can `/mmu` claim/translate/map live within SheepShaver's flat V=P model, or does the
-> NanoKernel force a real paged MMU (deferred in machine-layer M5)? Plus **(3)** trace the
-> NanoKernel-v02.27's device-tree→CGRP construction directly under QEMU to pin the exact handoff
-> contract (Task-0 *inferred* it; SS_M18 should *prove* it).
-
-**Parallel dependency**
-- [ ] Source a genuine **Mac OS 9.2.x install ISO** (`ASSETS-AND-TOOLING.md` R2). Task-0 RE starts on
-  9.0.x without it; the actual 9.2 boot and any 9.2-only Trampoline behavior are blocked on it.
+**▶ NEXT ACTION: open Stage 1's OWN deep Task-0 + red-team** (the NewWorld paged MMU). Now leaning
+tractable (Discriminator-A COARSE): confirm the Dolphin shadow-arena maps onto our NATMEM/`vm_alloc`
+reservation layer + the 80 JIT `RMEMBASE` sites, and design the S1 MMU-oracle unit test (diff our
+shadow-arena vs a reference translator on identical `(SR/BAT/SDR1, EA)` → equal PA, under the JIT path).
+Stage details + the differential-oracle test ladder: the program plan rev-4. Do NOT relitigate Route A.
 
 **Standing rules for every milestone:** branch `macos-arm64`; never push unprompted; slot boots only
 (`ss-slot-boot.sh`, never global pkill); `make test-jit` = 100; all new code behind an env gate +

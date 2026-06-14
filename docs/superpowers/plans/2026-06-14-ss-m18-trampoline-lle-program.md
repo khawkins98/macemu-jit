@@ -238,6 +238,88 @@ Spec coverage: program structured as staged milestones each runnable through the
 3. **The dependency graph assumes S2 can be built and unit-tested against a stub `/mmu` and stub handoff before S1/S3 land.** If the Trampoline's `/mmu` `claim/translate/map` sequence cannot even be *exercised* without real translation (because the Trampoline reads back what it mapped), the stub is a false-clean and S2 cannot be validated ahead of S1 — collapsing the parallelism the graph relies on. RED TEAM: is S2's stub-`/mmu` build/unit phase real, or does S2's acceptance fully serialize behind S1, making the "S2 parallel with S1 Task-0" edge cosmetic?
 4. **Effort bands are per-surface but the program roll-up is sequential-months-times-four.** Each months stage gates the next (S1→S3→S4), so the program is not max(stage) but roughly sum of the critical-path months stages. RED TEAM: should the program advertise a critical-path estimate (S1 then S3 then S4, each months) rather than per-stage bands that read as if parallelizable?
 
-## Red-team record
+## Red-team record (2026-06-14 — 2 parallel reviewers, both GO-WITH-FIXES)
 
-*(empty — to be filled by the two parallel reviewers: PROCESS + TECHNICAL/CONTRACTS)*
+PROCESS: 1 Critical (critical-path honesty), 5 Major, 4 minor; all 4 tensions UPHELD/PARTIALLY.
+TECHNICAL/CONTRACTS: 1 Critical (S1 hot-path mis-scoped), 2 Major, 3 minor; constants all PASS.
+**Coordinator re-verified the load-bearing corrections against the tree (2026-06-14):** aarch64 JIT
+at `SheepShaver/src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp` has **exactly 80 `RMEMBASE` sites**
+(memory access inlined as `LDR/STR [RMEMBASE,X0]`, RMEMBASE=NATMEM_OFFSET — **no translation
+chokepoint**); the interpreter DOES have one (`src/cpu/vm.hpp:225` `vm_do_get_real_address`,
+`VMBaseDiff=NATMEM_OFFSET`); the supervisor delivery arm is **already `MachineProfileIsNewWorld()`-
+gated** (`src/cpu/ppc/ppc-cpu.cpp:1986`; `deliver_pending_dec_exception` newworld-only).
+
+## Rev-2 BINDING amendments (OVERRIDE the draft body where they conflict)
+
+**B1 [TECH-C1, Critical — Stage 1 hot path re-scoped → UNKNOWN-months].** The production boot runs on
+the **JIT**, which has NO translation chokepoint (80 inlined `RMEMBASE` sites). Editing `ppc-execute.cpp`
+(interpreter, chokepoint at `vm.hpp:225`) covers only the interpreter. Stage 1's true edit surface is
+**EITHER (a)** the host **mmap / `vm_alloc` / NATMEM-reservation layer** (host-page aliasing so
+`RMEMBASE+EA` hardware-resolves to per-context physical backing — codegen untouched; the **preferred**
+path) **OR (b)** the ~80 JIT memory emit sites in `src/cpu/jit/aarch64/ppc-jit.cpp` (a software walker —
+likely perf-fatal, the tail risk). S1 file-ownership ADDS the JIT file and the host-mmap layer; S1's
+Task-0 Q-S1.2 (walker-vs-window) becomes the **first** decision and decides (a) vs (b). **G1.a PASS must
+be proven UNDER THE JIT, not just the interpreter** (else it's a false-clean for the boot). **S1 is
+re-banded MONTHS → UNKNOWN-months** (it may be host-aliasing-tractable or codegen-fatal — Q-S1.2 settles
+it before any S1 code).
+
+**B2 [TECH-M1, Major — drop fictional file].** Remove `machine/reset_supervisor*` from S1's edit set —
+no such file; `reset_supervisor_for_test()` is a TEST-only helper in `sheepshaver_glue.cpp:560` (S3's
+file). S1 does not touch it on the live path; this preserves S1/S2 disjointness.
+
+**B3 [TECH-M2, Major — S3 boundary reframed].** `ExcEnter`/`ExcRfi` (`exc_core.cpp:12/:104`) are the
+**hardware exception-vectoring mechanism (PEM masks = LAW) and SURVIVE** under "SS=hardware / NK=OS"
+(real hardware still vectors). What S3 retires is SS's **synthetic handler/scheduler substitution**:
+`deliver_pending_dec_exception()` (`glue:1122`), the entry-vector synthesis forge (`rom_patches.cpp`),
+the stand-in scheduler. S3's file-ownership line is corrected: "retire SS handler/scheduler
+substitution; KEEP ExcEnter/ExcRfi."
+
+**B4 [TECH-m2, Major-GOODNEWS — S3 tractability precedent].** The supervisor surface is **already
+profile-forked** (`ppc-cpu.cpp:1986` newworld arm in `check_spcflags`; `deliver_pending_dec_exception`
+newworld-only `glue:1098`). So S3's "yield" **toggles an existing newworld arm**, not a gutting of shared
+code — materially reducing tension #2's "unravel the hybrid" risk. S3-Task-0 cites `ppc-cpu.cpp:1986` as
+the precedent and enumerates a **fourth architecture candidate** (TENSION #2): "SS hosts the NK as a guest
+supervisor behind a thin shim" alongside REPLACE / CO-OWN / yield-fully.
+
+**B5 [PROC-C1 + tension #4, Critical — honest critical-path estimate].** Add to Program goal:
+*"Critical path = S1 → S3 → S4, each MONTHS (S1 & S3 possibly UNKNOWN-months), STRICTLY SEQUENTIAL (S1
+gates S3 gates S4). Honest roll-up = SUM of S1+S3+S4 (≈ multiple quarters), NOT max(). S2 parallelizes
+only its dispatch/DT portion against S1's Task-0 — it saves weeks, not a stage."* Annotate the graph spine
+"(sequential months)".
+
+**B6 [PROC-M1 + m1, Major — split S2].** Split Stage 2 into **S2a** (OF-CI dispatch + Core99 DT model —
+genuinely parallel, acceptable on unit tests; the Trampoline DT-read mechanism is traced) and **S2b**
+(loader + `/mmu` + `NanoKernelEntry` handoff — acceptance SERIALIZED behind S1; the stub `/mmu` is
+build/unit-only). New stop-rule #7: **"S2 'build-complete on stub `/mmu`' ≠ S2 PASS; S2 PASS requires the
+post-S1 real-`/mmu` handoff acceptance (G2.a/G2.d non-stub). Shipping S2 on the stub is a false-clean."**
+
+**B7 [PROC-M2, Major — Stage 1 sufficiency].** Add **G1.e: a probe NK boot under translation reaches a
+translation-dependent landmark** (e.g. the `mtsrin` context-switch site `0x50315290` executing correctly
+live under the JIT) — G1.a–d alone (microtests) are necessary-not-sufficient to believe the foundational
+stage. (Consistent with B1's UNKNOWN-months re-band.)
+
+**B8 [PROC-M3 + M4, Major — paravirtual proof for S1/S3 is NOT the inertness substitute].** S1 and S3
+edit shared, **runtime-gated** hot/timing paths (not structurally unreachable), so the §6 inertness A/B
+substitute is INVALID for them. S1/S3 require **real `make e2e` paravirtual + a multi-run soak
+(`SS_E2E_RUNS=N` median±CV%)** as a BLOCKING pre-flip gate, plus for S1 a `make bench` ns/insn delta on
+the memory kernels. The inertness shortcut is available ONLY to S2a / S4 (genuinely new files). S3's
+revert-on-red is a **branch revert, not a flag flip** (the LAW-module restructure is merged regardless of
+the flag). Tighten the fix budget: a single ad-hoc fix to a PEM-mask LAW line in `exc_core.cpp` trips
+re-plan immediately (not after a second falsification).
+
+**B9 [PROC-M5, Major — S2 Task-0 has one real discovery].** Re-scope S2-Task-0 as "small + ONE bounded
+discovery: the Core99 `interrupt-map`/`-mask` tuple shape." Q-S2.3 gets an explicit disasm/doc window and
+an A6 residue disposition (if `CORE99-MACHINE-DESCRIPTION.md` lacks the exact tuple layout → flagged
+residue feeding S2b, NEVER a guessed shape).
+
+**B10 [PROC m2/m3/m4, minor].** S4-Task-0 start precondition is **S1 ∧ S2 ∧ S3 landed AND the 9.2.x medium
+boots into IM-init** (it is live-trace discovery, not mere residue inheritance). Each stage's Task-0 gets
+**gate-item-0 = re-verify pinned addresses against parcel md5 `61c176e9…`** (A5 inherited per-stage).
+G4.c PASS wording clarified: PASS = "CGRP guest-built AND boot advances past the CGRP gate to ANY
+non-IM-init wall"; the wall's identity is DIAGNOSTIC (the "Cuda IFR/IER" expectation does not make a
+different wall a fail).
+
+**Disposition:** GO-WITH-FIXES → all amendments folded BINDING. The dominant change is B1 (S1 = UNKNOWN-
+months, hot path is the JIT not the interpreter) + B5 (honest sequential roll-up = quarters). B4 is the
+one piece of good news (S3 toggles an existing gate). Each stage still opens with its own Task-0 + red-team
+per the machine before any of its code.

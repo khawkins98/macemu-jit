@@ -371,19 +371,25 @@ init. But DEC interrupts reach the 68k world via the published DEC handler path 
 CGRP-dependent) — so if the Cuda protocol can be driven poll-driven (without requiring
 EXT→68k delivery), the boot might advance past CGRP registration.
 
-**Next steps (choose one):**
-(a) **Host-side HLE bypass:** When the host's EXT delivery hook fires for a Cuda/VIA
-    source, set cr2lt + populate hnfo+0x28 directly from the host side, bypassing the
-    CGRP mechanism entirely. This is what the reverted M13 Task-C SS_NW_DR_AUTOVEC
-    attempted but with a different (broken) mechanism. The M13 B.1–B.4 analysis provides
-    the exact contract for what to write.
-(b) **Poll-driven Cuda:** Make the Cuda init protocol work without interrupts — the
-    guest polls VIA IFR directly. This requires `CudaSettle` to run on IFR reads (it
-    already does) AND the guest to actually read IFR (currently only 2 reads vs 65,539
-    IER reads). Investigate why the guest reads IER 65,539× instead of IFR.
-(c) **Forge CGRP registration:** Write the CGRP dispatch table entries that the NK
-    needs. M10 attempted this (SS_M10_CGRP, crashed — 0xDEADBEEF). Would need the
-    correct CGRP struct layout.
+**Next steps (prioritized — investigate (b) FIRST):**
+
+(b) **Poll-driven Cuda — investigate FIRST (non-circular escape).** If Cuda init can
+    complete by polling VIA IFR, the chicken-and-egg breaks with zero interrupt-delivery
+    machinery. CudaSettle already delivers on IFR reads. **Precondition:** pin who reads
+    IER 65,539× and why — is it Cuda init in a poll loop (→ (b) is the clean fix: make
+    the guest poll IFR instead of/in addition to IER), or the NK scheduler spinning (→
+    (b) is a red herring and you need (a))? Polling IER (the enable register) instead of
+    IFR (the flag register) is structurally odd and needs explaining before (b) is viable.
+
+(a) **Host-side HLE (set cr2lt + hnfo+0x28) — GATE behind a smoke test.** This is the
+    un-revert of Task C / SS_NW_DR_AUTOVEC, but that mechanism was reverted UNTESTED (on
+    the bad retraction, never validated). It is an untested hypothesis, not a known fix.
+    **Smoke-test before committing:** at the fallback point, set cr2lt + the pending bit →
+    does the Cuda EXT reach ed08 and Cuda init complete? Only then build the gated
+    implementation. The M13 B.1–B.4 analysis provides the exact contract.
+
+(c) **CGRP forge — lowest priority.** M10 attempted (SS_M10_CGRP, crashed —
+    0xDEADBEEF from cold/warm dispatch-table deadfill). Leave unless (a)/(b) fail.
 
 ## §5 — Bug found during investigation
 

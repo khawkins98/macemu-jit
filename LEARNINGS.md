@@ -22,13 +22,25 @@ literally says for `SS_PROBE_68K`: *"r24 word+2: to catch word X probe X+2."* Th
 never applied it. A documented instrument caveat is worthless if it is not applied to the
 load-bearing claim that rests on the instrument.
 
-**THE RULE (binding):** a load-bearing **NEGATIVE** result — "X never runs / never fires" — that
-rests on an **exact-match / point probe** MUST be cross-checked **before anything is built on it**,
-by one of: (a) apply the word+2 rule to the probe target, (b) confirm against the ring
-(`SS_DR_R24_RING=1` / `tools/ring-walk.py`), or (c) a frame/state read at the suspected entry.
-Negative results from exact-match instruments are the project's highest-risk claims — treat a
-"never" from a point-probe as **unproven until ring-confirmed.** Five milestones rode on an
-unverified "never."
+**THE RULE (binding, extended 2026-06-14 after the re-retraction):**
+
+1. A load-bearing **NEGATIVE** result — "X never runs / never fires" — that rests on an
+   **exact-match / point probe** MUST be cross-checked before anything is built on it:
+   (a) apply the word+2 rule, (b) ring-confirm, or (c) frame/state read at entry.
+
+2. A load-bearing **POSITIVE** result — "X runs / delivery works" — from a **capped or
+   aggregate probe** MUST attribute which source produced the entries. "The handler runs
+   8/8" from a saturated count tells you *something* runs, not *which source*. You must
+   uncap the probe AND correlate to the source under test (count delta, temporal
+   correlation, or source-specific state at entry). The M13 retraction rode on ed0a "8/8"
+   without asking "are these DEC ticks or Cuda EXT entries?" — the answer (all DEC, zero
+   Cuda) inverted the conclusion.
+
+Both rules instantiate the same principle: **a probe result is load-bearing only for what
+it discriminates.** Exact-match discriminates address but is blind to word+2. Capped/aggregate
+discriminates "runs at all" but is blind to source. The meta-trap: positives feel trustworthy
+("it works!") so nobody applies cap-scrutiny to them — the retraction that banked rule 1
+was itself a rule-2 violation.
 
 ---
 

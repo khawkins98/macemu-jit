@@ -177,8 +177,17 @@ milestone: `SS_M18_TRAMPOLINE_LLE` (Route A implementation), HELD for the user**
 client-interface callback (`openfirmware_ci.cpp`) serving a Core99 device tree (incl. `interrupt-map`),
 `call-method` backends (disk `read-blocks` / `/mmu` claim·translate·map / display), a 3-word `interpret`
 shim, and a Trampoline loader that launches `MacOS.elf` at its ELF vaddr and lets it hand off to the
-NanoKernel. Run the milestone machine (brainstorm → spec → plan → red-team) before coding. Sketch +
-field-by-field `SS_NW_TRAMPOLINE` reconciliation: `FINDINGS-trampoline-re.md` "SS-integration sketch".
+NanoKernel. Sketch + field-by-field `SS_NW_TRAMPOLINE` reconciliation: `FINDINGS-trampoline-re.md`
+"SS-integration sketch".
+
+> **BINDING — open SS_M18 with its OWN gating Task-0 + red-team BEFORE any code** (the pattern that
+> caught M16/M17 cheaply), on the two architectural collisions Task-0 under-examined (FINDINGS "SS_M18
+> — gating risks"): **(1) emulator-host ownership** — how much M0–M13 supervisor/exception/MixedMode/
+> scheduler scaffolding does the real NanoKernel REPLACE vs. FIGHT (decides weeks-vs-months)?
+> **(2) MMU/V=P** — can `/mmu` claim/translate/map live within SheepShaver's flat V=P model, or does the
+> NanoKernel force a real paged MMU (deferred in machine-layer M5)? Plus **(3)** trace the
+> NanoKernel-v02.27's device-tree→CGRP construction directly under QEMU to pin the exact handoff
+> contract (Task-0 *inferred* it; SS_M18 should *prove* it).
 
 **Parallel dependency**
 - [ ] Source a genuine **Mac OS 9.2.x install ISO** (`ASSETS-AND-TOOLING.md` R2). Task-0 RE starts on

@@ -270,6 +270,39 @@ paravirtual byte-identical):** replace the output-forge with a producer-run:
 **GOOD** outcome (producer approach worked; back on the machine-layer mainline with device models
 already staged). Reaching Finder remains the north star, not this milestone's DoD.
 
+## SS_M18 — gating risks to red-team BEFORE any code (carried forward from external review)
+
+Task-0 answered *"is the Trampoline runnable?"* → **yes** (bounded OF surface, hostable at its ELF
+vaddr). It did **not** fully answer *"is running the real Trampoline + NanoKernel tractable inside
+**SheepShaver specifically**?"* Two architectural collisions are under-examined here and must be the
+**gating Task-0 of SS_M18** (run its own binding recon + red-team first — the pattern that caught
+M16/M17 cheaply). Neither invalidates Route A; "producer-run reveals a non-IM wall = the GOOD outcome"
+applies. But they decide whether Route A is weeks or months.
+
+1. **Emulator-host collision (bigger than "re-bind one pair").** SheepShaver *is* the 68k/PPC
+   emulator (its JIT). The real **NanoKernel-v02.27 wants to OWN the 68k emulator** — it points the
+   Execute68k pair at the ROM's `EmulatorCode @0x360000`. Beyond re-binding `[KDP+0x1074/0x1078]`,
+   running the real NanoKernel may collide with the supervisor / exception / MixedMode / scheduler
+   scaffolding SS built across M0–M13. **Gating question: how much of that existing scaffolding does
+   the real NanoKernel REPLACE vs. FIGHT?** If it fights, Route A is months.
+2. **MMU collision (foundational, not a backend).** The Trampoline builds a **real PPC page map**
+   (`/mmu` `claim`/`translate`/`map`). SheepShaver runs a **V=P flat model**
+   (DIRECT_ADDRESSING / NATMEM_OFFSET; the paged MMU was deliberately deferred in machine-layer M5).
+   The sketch above treats `/mmu` as "a call-method backend to implement" — but it may instead force a
+   **real MMU**, colliding head-on with flat addressing. **Gating question: can `/mmu` claim/translate/
+   map be satisfied within V=P (identity/window mapping), or does the NanoKernel require a live paged
+   MMU?**
+3. **Trace the NanoKernel's CGRP construction directly (close the inferred gap).** The dynamic trace
+   observed the *Trampoline's* OF calls but **inferred** (did not directly trace) the NanoKernel
+   building CGRP from the device tree. SS_M18 Task-0 should breakpoint into the **NanoKernel-v02.27**
+   region under QEMU and trace the device-tree→CGRP construction, to pin the **exact handoff state**
+   (what the NanoKernel reads from the DT, what it writes, in what order) — the precise contract our
+   synthesized device tree must satisfy.
+
+> **Expected next wall after the IM-init class clears** (charter §6 / M14-FINDINGS): the **Cuda
+> device-model IFR/IER bug**. Risks 1–2 above are *earlier* gates — they decide SS_M18's tractability
+> before that wall is even reached.
+
 ## Scope-guard verification
 `git log --stat newsheep-baseline..HEAD` shows **docs-only** (no source files) — RE-only milestone
 respected. The SS integration is the NEXT, code-writing milestone (sketched above, not implemented here).

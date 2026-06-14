@@ -125,4 +125,14 @@
   milestone = `SS_M18_TRAMPOLINE_LLE` (code-writing; held for user). Scope-guard: `newsheep-baseline..HEAD`
   is docs-only. **Task-0 COMPLETE.**
 
+- **External review of Task-0 (2026-06-14): verdict ACCEPTED; 2 SS_M18 gating risks banked.** Reviewer
+  signed off on the Route A verdict (both instruments on one binary; 177/177 static resolution; the
+  OpenBIOS-loads-at-ELF-vaddr find; mechanism-level gate correct; Route A honestly costed; the
+  Execute68k-pair catch). Flagged two architectural collisions Task-0 under-examined — now recorded as
+  **SS_M18's gating Task-0** (FINDINGS "SS_M18 — gating risks", README §9): (1) **emulator-host
+  ownership** — the real NanoKernel wants to own the 68k emulator; does it replace or fight M0–M13
+  scaffolding (weeks vs months)? (2) **MMU/V=P** — `/mmu` may force a real paged MMU vs SS's flat V=P
+  (deferred in machine-layer M5). Plus: trace the NanoKernel-v02.27 device-tree→CGRP construction
+  directly under QEMU (Task-0 inferred it). These GATE SS_M18 coding, not Task-0 (which stands).
+
 <!-- next entry below -->

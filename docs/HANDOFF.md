@@ -52,16 +52,22 @@
 > hostable at its static addresses. **Findings + SS-integration sketch:
 > `docs/planning/newsheep/FINDINGS-trampoline-re.md`**; forks closed in `…/DECISIONS.md`.
 >
-> **▶▶▶ NEXT = `SS_M18_TRAMPOLINE_LLE`** (code-writing; Route A: an OF client-interface callback +
-> Core99 device tree + `call-method` backends + a 3-word `interpret` shim + a Trampoline loader, all
-> behind `SS_M18_*` + `MachineProfileIsNewWorld()`, paravirtual byte-identical, `make test-jit`=100).
-> **BINDING: open SS_M18 with its OWN gating Task-0 + red-team BEFORE any code** (the pattern that caught
-> M16/M17 cheaply) on the two architectural collisions Task-0 under-examined: **(1) emulator-host
-> ownership** — does the real NanoKernel REPLACE or FIGHT the M0–M13 supervisor/exception/MixedMode/
-> scheduler scaffolding (weeks vs months)? **(2) MMU/V=P** — can `/mmu` claim/translate/map live in SS's
-> flat V=P model, or does the NanoKernel force a real paged MMU (deferred in machine-layer M5)? Plus
-> **(3)** trace the NanoKernel-v02.27 device-tree→CGRP construction directly under QEMU (Task-0 inferred
-> it). Full statement: `FINDINGS-trampoline-re.md` "SS_M18 — gating risks".
+> **▶▶▶ SS_M18 gating Task-0 COMPLETE (2026-06-14) → Route A GO but MONTHS; original weeks-sketch
+> FALSIFIED. DECISION PENDING (user).** The cheap-recon-first front-end (plan rev-2 + 2 red-teamers + 2
+> boot-disjoint recon agents) priced SS_M18 before any code and found three INDEPENDENT month-forcing
+> collisions: **Q1** — the real NanoKernel-v02.27 is a *permanently-resident paged supervisor* with **no
+> handoff boundary** (it never yields the live 68k/exception/scheduler regime back to SS; "re-inject
+> post-handoff" is fiction; all 5 ledger surfaces FIGHT; the Execute68k pair is an SS synthetic absent
+> from the parcel). **Q2** — the NanoKernel **requires a real paged MMU** (per-context `mtsrin` SR
+> reload, MMIO via segment swap + MSR[DR] toggle, 13 `tlbie`) — collides with the deferred machine-layer
+> M5. **Q3** [QEMU-BEHAVIORAL] — **CGRP is built by disk/CFM IM-init, NOT the NK parcel** (resolves the
+> Q0-F inference vs M16-RE **in M16's favor**; working boot shows CGRP fully populated in low disk-loaded
+> RAM w/ shared CFM TOC) → Route A must run the disk System/Enabler IM-init in the loop to get CGRP at
+> all. **Full-fidelity Route A = paged MMU (un-defer M5) + two-supervisor reconciliation +
+> disk-IM-init-in-loop = months.** Route A is NOT relitigated/NO-GO — it remains the decided route; the
+> open question is whether/how to commit a months-scale effort, and in what sequence (paged MMU is now a
+> prerequisite). Findings + per-surface effort bands: `FINDINGS-trampoline-re.md` "SS_M18 gating Task-0".
+> Plan: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

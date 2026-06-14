@@ -18,9 +18,15 @@
 > NanoKernel** → run the real Trampoline + NanoKernel against a synthesized OF-CI + Core99 device tree
 > (B excluded, C≡A). OpenBIOS loads `MacOS.elf` at its ELF vaddr (PC=`0x20f078`, `r2=0x1001e8`).
 > Findings: `docs/planning/newsheep/FINDINGS-trampoline-re.md`; forks closed in `…/DECISIONS.md`.
-> **NEXT = `SS_M18_TRAMPOLINE_LLE`** (code-writing) — open with its OWN gating Task-0 + red-team first
-> on (1) emulator-host ownership, (2) MMU/V=P collision, (3) direct NanoKernel→CGRP trace (FINDINGS
-> "SS_M18 — gating risks"). Do not relitigate Route A.
+> **▶ SS_M18 gating Task-0 COMPLETE (2026-06-14) → Route A GO but MONTHS; weeks-sketch FALSIFIED;
+> DECISION PENDING (user).** Three independent month-forcing collisions: Q1 the real NanoKernel-v02.27
+> is a permanently-resident paged supervisor with NO handoff boundary (FIGHT ×5; Execute68k pair is an
+> SS synthetic); Q2 requires a real paged MMU (un-defer machine-layer M5); Q3 [QEMU] CGRP is built by
+> disk/CFM IM-init NOT the NK parcel (Q0-F inference CORRECTED → M16 was right) → Route A needs disk
+> IM-init in the loop. Route A NOT relitigated (still the decided route); open Q = whether/how/in-what-
+> sequence to commit a months effort (paged MMU is now a prerequisite). Findings + per-surface effort
+> bands: FINDINGS-trampoline-re.md "SS_M18 gating Task-0". Plan:
+> `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
 
 **M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
 consumption path is NOT one fixable divergence short of completing the guest's Interrupt

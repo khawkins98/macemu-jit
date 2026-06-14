@@ -1,7 +1,8 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-14** · M13 COMPLETE (artifact retraction + dead mechanisms reverted) ·
-> Next = M14 (model-rejection gate) · Resume: read this doc, then `docs/AGENT-CONTEXT.md`.
+> **Status: PAUSED 2026-06-14** · M14 SMOKE TESTS COMPLETE (5 hacks; consume-once model is the bug — need level-triggered Cuda IFR assertion) ·
+> Next = run level-triggered smoke test (§4a); implement only if packets>0 ·
+> Resume: read this doc, then `docs/planning/M14-FINDINGS-cuda-delivery.md` §4/§4a, then `docs/AGENT-CONTEXT.md`.
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
 
 ## HEADLINE — the M13 correction (read before anything else)
@@ -18,31 +19,33 @@
 > (`SS_NW_DR_AUTOVEC` Task-C HLE, `SS_M10_CGRP` forged table) were **reverted in this M13
 > close-out**. Evidence: `docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.7 / §C-pin.8.
 
-## Resume prompt (M14 — the new frontier)
+## Resume prompt (M14 — Cuda level-triggered delivery)
 
-> Read `docs/HANDOFF.md` (this HEADLINE), then `docs/AGENT-CONTEXT.md` (frontier + constants), then
-> `docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.7/8 (why delivery is NOT the blocker).
-> **The wall moved downstream.** Native delivery, the 68k handler, and the scheduler are all healthy;
-> the boot still parks ~15 s in at the `[ALARM]` **model-rejection / pre-System gate** — a
-> Gestalt/machine-ID or System-file boot gate that rejects this machine/ROM combo (saved 68k PC at
-> the autovector seam was `0x50034cae`; the `jDR` 68k-block counter FREEZES ~10 s in while the NK
-> spins on). This is a **ROM/OS-version** issue, not an interrupt one.
+> Read `docs/HANDOFF.md` (this HEADLINE), then `docs/planning/M14-FINDINGS-cuda-delivery.md`
+> (full root cause + 5 smoke tests in §4, revised fix direction in §4a), then
+> `docs/AGENT-CONTEXT.md` (frontier + constants).
 >
-> **M14 — characterize the model-rejection gate first, hard.** This wall is in already-RE'd,
-> gate-bypass-TOOLED territory — MORE tractable than the opaque NK internals, not less:
-> `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` (Mac OS 9.x `boot` id=3 anatomy, DSAT
-> resource format, error catalog, gate-bypass details) and the archived 4-byte System-file
-> gate-bypass work in `docs/archive/2026-06/planning/UPGRADE-CARD-PATH.md`.
-> ▶ **FIRST ACTION:** characterize the gate (pin the last 68k subroutine before `jDR` freezes; identify
-> the device/gate it polls — capture the r24 instruction-boundary trail in the final 1–2 s). Use
-> **ONE early cross-version boot as a cheap version-locked check** — a single boot of a different rev
-> (the staged 9.2.1 / 9.0.4 / 1.1 ROM at `/Users/Shared/macemu/`, or the QEMU 9.2.1 oracle) to see if
-> it hits the *same* `[ALARM]` or a *different* one. **The full ROM/OS-version route-around sweep is
-> PROMOTED only if that check shows the gate is version-locked.** Do NOT jump to the sweep before
-> characterizing — that repeats the act-before-understand mistake.
-> Process: `docs/MILESTONE-WORKFLOW.md`. Run recon via `superpowers:subagent-driven-development`.
-> Never push without being asked. Never global pkill — slot boots only via
-> `SheepShaver/tools/ss-slot-boot.sh`.
+> **M14 recon + 5 smoke tests COMPLETE.** The "model-rejection gate" was WRONG — it's a
+> **Cuda device model bug**: the consume-once `sr_int_pending` + deferred `CudaSettle`
+> model doesn't match real hardware. Five smoke tests (§4) narrowed it:
+> - Eager ORB-edge delivery unblocked NK→68k (jDR 600×↑, IFR 2→15K), proving lazy delivery
+>   was blocking — but CV-10 timing violation breaks the protocol (packets=0).
+> - SR-read-triggered delivery sets `ifr_latched=0x04` correctly, but `ier=0x00` at that
+>   point — the guest enables IER.2 (SR) AFTER clearing IFR.2 via SR read.
+> - **The real bug:** consume-once `sr_int_pending` can't re-assert IFR.2 after the SR read
+>   clears it. On real hardware, Cuda's interrupt is **level-triggered** — IFR.2 re-latches
+>   as long as TREQ is asserted.
+>
+> **Next: run the level-triggered smoke test** (§4a). Make `CudaSettle` return RAISE whenever
+> `treq_asserted` (not consume-once); call it on IER writes too. One boot. If `packets > 0`,
+> the level-triggered model is confirmed — then build it properly (env-gated). If not,
+> re-recon before building.
+>
+> Also fix the §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
+> VIA `irq_fn` wiring: defer until the level-triggered test shows whether IFR polling suffices.
+>
+> Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked. Never global pkill —
+> slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 
 ---
 
@@ -56,8 +59,14 @@
   (0xDEADBEEF). Retained only as a negative-result record in M13-FINDINGS / LEARNINGS.
 - **M13** — COMPLETE (2026-06-14). Produced the **artifact retraction**: native interrupt delivery
   confirmed working (ed0a 8/8 baseline, genuine vector-$64 frame); the dead `SS_NW_DR_AUTOVEC` and
-  `SS_M10_CGRP` mechanisms reverted. New frontier = the model-rejection / pre-System gate (M14).
-  See `docs/planning/M13-FINDINGS-interrupt-delivery.md` (retraction banner + §C-pin.8).
+  `SS_M10_CGRP` mechanisms reverted. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
+- **M14** — SMOKE TESTS COMPLETE (2026-06-14). The "model-rejection gate" was WRONG — it's a
+  **Cuda device model bug**: consume-once `sr_int_pending` doesn't match real hardware's
+  level-triggered interrupt. 5 smoke tests (§4): eager delivery unblocks NK→68k (jDR 600×↑,
+  IFR 2→15K) but CV-10 timing + IER ordering prevent packets; the guest enables IER.2 AFTER
+  clearing IFR.2, and consume-once can't re-assert. Fix = level-triggered CudaSettle (return
+  RAISE while `treq_asserted`, not consume-once) + settle on IER writes. **Gated on one more
+  smoke test (§4a) before building.** See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 - **M12** — PARTIAL (2026-06-13). Wave0+Wave1 landed (`ddbd8d79`, `348544cd`); boot stable

@@ -164,3 +164,71 @@ and even drives the slot-4 `twi`, but the deferred edge lands in the CGRP fallba
 (`0x50325fd0`) rather than the NK slot-4 service (`0x50314660`), so it never reaches the
 68k level-1 handler — the consumption path is **stalled between the slot-4 `twi`
 (`0x5046e8d0`) and the NK slot-4 service (`0x50314660`)**.
+
+## Boot B — SC sequence under consumption regime + 0x0d adjudication
+
+**RUNDIR:** `/tmp/ss-slots/slot0/runs/20260614-150141.44550` (SLOT=0, EXIT=133/SIGTRAP)
+**Regime:** `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1` — the REAL (reachable) consumption regime.
+**Boots used this task:** 1 (no second boot needed).
+
+### Verbatim `[EXC] SC delivered` lines (PIC-on consumption)
+```
+[EXC] SC delivered #1: r0=0000003f r1=103ffb50 lr=500cf108 -> entry=50314ac0
+[EXC] SC delivered #2: r0=00000019 r1=103ffb10 lr=500d2fec -> entry=50314ac0
+[EXC] SC delivered #3: r0=00000014 r1=103ffb00 lr=500d2d7c -> entry=50314ac0
+[EXC] SC delivered #4: r0=00000019 r1=103ffb10 lr=500d2fec -> entry=50314ac0
+[EXC] SC delivered #5: r0=0000000f r1=103ffac0 lr=500d29d4 -> entry=50314ac0
+```
+**SC selector sequence (first 5): `0x3f, 0x19, 0x14, 0x19, 0x0f`.**
+
+Full-boot selector census (always-on summary line):
+```
+[EXC] sc selectors (arrival order, distinct=16): 0x3f x1 0x19 x6 0x14 x3 0x0f x8 0x27 x7
+      0x40 x1 0x42 x2 0x50 x1 0x4d x1 0xfffffffe x17 0xffffffff x204 0x1b x3 0x1c x3
+      0x07 x3 0x0c x3 0x08 x3 (+4 deliveries beyond 16 distinct)
+[EXC] host-irq: edges=1 consumed=1 deasserts=0 pending=0
+```
+`0x0d` does **not appear anywhere** in the census or in any SC line (`grep -c r0=0000000d → 0`).
+Note `0x0c x3` is present, but that is a distinct selector, not `0x0d`.
+
+### Ordering vs the Task-1 stall (log-sequence confirmed)
+The `[IRQ-CONSUME]`/`[EXC]` lines are sequentially ordered (always-on; vector-dispatched
+PCs correctly do not appear in the block-entry r24 ring, per the Task-0 instrument caveat —
+`--find-pc` for `5046e8d0`/`50325fd0`/`50314ac0`/`504b3050` all return 0, as expected):
+```
+line 116-120  SC delivered #1..#5  (0x3f,0x19,0x14,0x19,0x0f)     ← ALL before the EXT edge
+line 135/137  EXT pending ASSERTED (host-irq latch, edge #1)
+line 142      EXT delivered #1: restart=504b3050 -> entry=50314880
+line 145      PROGRAM delivered #5: srr0=5046e8d0 slot=4           ← the slot-4 twi
+line 146-147  [IRQ-CONSUME] EE edge deferred at pc=50318014  (x2)
+line 148-149  [IRQ-CONSUME] deferred edge fired at pc=50325fd0 (held=0) (x2)  ← CGRP fallback
+```
+**No `sc`/`SC delivered` line occurs between the slot-4 twi (line 145) and the fallback
+re-fire (lines 148-149).** The five syscalls all retire BEFORE the EXT edge is even
+asserted (line 135). The EXT-routing decision — twi → EE-defer stub `0x50318014` →
+deferred-edge re-fire at the CGRP fallback `0x50325fd0` (instead of the NK slot-4 service
+`0x50314660`) — runs entirely through the deferred-edge / PIC consumption machinery with
+**no syscall on the path**. The 68k L1 handler `0x5000ec50` remains ring-absent in this
+boot too (`--find-pc 5000ec50 → 0` hits), reproducing Task-1.
+
+### Verdict on SC#1=0x0d
+**PIC-off artifact — IRRELEVANT to the verdict.** The archived `0x0d` residue
+(`r0=0x0d r1=1017ffde lr=5046c5ac`, M8 Task C, deterministic 2/2 on default+consume) was
+recorded WITHOUT `SS_NW_PIC`. Under that regime, the EXT edge delivers at level 0 (no-op),
+so consumption never actually reaches the slot-4 service — the `0x0d` is injected by the
+M8 Q-C3 stub's unconditional level-0 staging, a code path that exists only in the
+PIC-off configuration. Under the REAL consumption regime (`SS_NW_PIC=1`), `0x0d` is
+absent (0 occurrences), SC#1 is the canonical `0x3f`, and the level-0 re-arm mechanism
+does not run. The M8 default-flip refusal was therefore gated on an artifact of an
+**unreachable** configuration.
+
+### Conclusion: the Task-1 stall is an INDEPENDENT routing gap, not SC-related
+There is no syscall causally on the EXT-routing path between the slot-4 twi and the CGRP
+fallback re-fire. The stall (EXT consumed at the NK EXT level and even driving the slot-4
+twi, but the deferred edge landing in CGRP fallback `0x50325fd0` rather than the NK slot-4
+service `0x50314660`) is a **deferred-edge routing gap internal to the PIC/consumption
+machinery**, fully decoupled from the `sc` selector stream. This leans **forge**: the
+divergence is not "one fixable SC-selector divergence short of completing Interrupt Manager
+init" — it is a structural routing miss in the same dead-end class as the native path
+(the consumed edge never crosses into the 68k world). The `SC#1=0x0d` lead is closed as a
+PIC-off artifact and should not be carried as a real-fix prerequisite.

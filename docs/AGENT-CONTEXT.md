@@ -25,8 +25,15 @@
 > disk/CFM IM-init NOT the NK parcel (Q0-F inference CORRECTED → M16 was right) → Route A needs disk
 > IM-init in the loop. Route A NOT relitigated (still the decided route); open Q = whether/how/in-what-
 > sequence to commit a months effort (paged MMU is now a prerequisite). Findings + per-surface effort
-> bands: FINDINGS-trampoline-re.md "SS_M18 gating Task-0". Plan:
+> bands: FINDINGS-trampoline-re.md "SS_M18 gating Task-0". Gating-Task-0 plan:
 > `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
+> **▶ STAGED PROGRAM PLANNED (2026-06-14, user-approved) → `…/2026-06-14-ss-m18-trampoline-lle-program.md`
+> (rev-2, red-teamed).** S1 paged MMU (own Task-0; UNKNOWN-months — the JIT has NO translation chokepoint,
+> 80 inlined RMEMBASE sites → host-page aliasing in NATMEM/vm_alloc, NOT a per-access JIT walker) → S2
+> loader+OF-CI+DT (S2a parallel/S2b serial) → S3 two-supervisor reconciliation (own Task-0; toggles the
+> already-newworld-gated supervisor arm `ppc-cpu.cpp:1986`) → S4 disk IM-init→CGRP (HARD-BLOCKS on 9.2.x
+> ISO). **Critical path S1→S3→S4 strictly sequential ≈ multiple quarters.** NEXT = open Stage 1's own deep
+> Task-0 + red-team (walker-vs-window) before any S1 code.
 
 **M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
 consumption path is NOT one fixable divergence short of completing the guest's Interrupt

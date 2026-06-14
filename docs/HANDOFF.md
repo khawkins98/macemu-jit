@@ -67,7 +67,23 @@
 > disk-IM-init-in-loop = months.** Route A is NOT relitigated/NO-GO — it remains the decided route; the
 > open question is whether/how to commit a months-scale effort, and in what sequence (paged MMU is now a
 > prerequisite). Findings + per-surface effort bands: `FINDINGS-trampoline-re.md` "SS_M18 gating Task-0".
-> Plan: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
+> Gating-Task-0 plan: `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-gating-task0.md`.
+>
+> **▶▶▶▶ STAGED PROGRAM PLANNED (2026-06-14, user-approved "plan the full months program now") →
+> `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` (rev-2, red-teamed).** Four staged
+> milestones, each runnable through the machine: **S1** NewWorld-profile paged MMU (PREREQUISITE per Q2;
+> own deep Task-0) → **S2** Trampoline loader + OF-CI callback + Core99 DT (S2a parallel / S2b serialized
+> behind S1) → **S3** two-supervisor reconciliation (Q1; own deep Task-0; SS yields supervisor role to the
+> real NK — good news: the supervisor arm is ALREADY `MachineProfileIsNewWorld()`-gated at
+> `ppc-cpu.cpp:1986`, so S3 toggles an existing arm, not a gut) → **S4** disk System/Enabler IM-init in the
+> loop → CGRP (Q3; HARD-BLOCKS on the genuine 9.2.x ISO). **Honest critical path = S1→S3→S4, strictly
+> sequential, each months (S1 & S3 possibly UNKNOWN-months) = SUM ≈ multiple quarters.** Rev-2 headline:
+> the aarch64 JIT (runs the boot) has **no translation chokepoint** (80 inlined RMEMBASE sites) → S1 = host-
+> page aliasing in the NATMEM/vm_alloc layer (preferred) or a perf-fatal ~80-site codegen rewrite; S1 is
+> UNKNOWN-months until its Task-0's walker-vs-window decision. **▶ NEXT ACTION = open Stage 1's OWN deep
+> Task-0 + red-team** (walker-vs-window feasibility; is a paged MMU tractable in the hybrid without breaking
+> paravirtual?) before any S1 code. Parallel kickoff workstream: source the genuine 9.2.x install medium
+> (S4 hard-block; `ASSETS-AND-TOOLING.md` R2).
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

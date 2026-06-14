@@ -1,7 +1,7 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-14** · M14 RECON COMPLETE (9 smoke tests; timer delivery WORKS at VIA/PIC layer — but packets=0 because NK→68k interrupt routing for VIA source is missing) ·
-> Next = NK registered-handler table for IRQ 0x19 (VIA/Cuda), or characterize how Mac OS 9 ENIM/IHT registers the VIA handler ·
+> **Status: PAUSED 2026-06-14** · M14 RECON COMPLETE (9 smoke tests; timer delivery WORKS through full VIA→PIC→NK→68k pipeline — but packets=0 because 68k Cuda dispatch path doesn't find the Cuda pending bit in the interrupt-source struct) ·
+> Next = characterize the 68k-side Cuda interrupt dispatch at 0x68ffefd0 (+0x28) ·
 > Resume: read this doc, then `docs/planning/M14-FINDINGS-cuda-delivery.md` §4/§4a (Smoke H), then `docs/AGENT-CONTEXT.md`.
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
 
@@ -26,21 +26,23 @@
 > `docs/AGENT-CONTEXT.md` (frontier + constants).
 >
 > **M14 recon + 9 smoke tests COMPLETE.** Timer-delayed Cuda SR delivery is validated
-> at the VIA/PIC layer (Smoke H: IFR_SR latched after IER.SR enables, irq_out 0→1,
-> PIC edge, NK EXT delivered to 0x50314880). But `packets=0` — the remaining blocker
-> is NK→68k interrupt routing:
-> - The NK EXT handler at `[KDP+0x5b0]` (0x50325f00) is a FALLBACK — the registered-
->   handler table is NOT installed (W2L-1). The NK receives the VIA IRQ but has no
->   handler entry for IRQ source 0x19 (OPENPIC_IRQ_VIA_CUDA) to dispatch to the 68k
->   VIA interrupt handler that would drive the Cuda byte exchange.
-> - The chicken-and-egg question: does Mac OS 9's ENIM/IHT register the VIA handler
->   during boot, and does registration itself require the Cuda protocol to be working?
+> through the full pipeline (Smoke H: IFR_SR latched after IER.SR enables, irq_out 0→1,
+> PIC edge, NK EXT delivered, **68k autovector handler at ed0a fires 8/8**). But
+> `packets=0` — the remaining blocker is the **68k-side Cuda dispatch path**:
+> - The 68k handler runs (ed0a fires 8/8 in BOTH baseline+PIC and Smoke-H+PIC).
+> - The interrupt reaches the 68k world. The problem is DOWNSTREAM: the Cuda-specific
+>   pending bit in the software interrupt-source struct at `0x68ffefd0` (+0x28) is
+>   apparently not set, so the 68k dispatcher doesn't know to service the Cuda/VIA
+>   interrupt and the byte exchange never starts.
+> - **DO NOT** re-investigate NK routing / registered-handler table / CGRP — that is
+>   the twice-retracted M13 thesis (probe artifact). The ed0a probe proves delivery works.
 >
-> **Next:** characterize the NK registered-handler table gap. Either:
-> (a) RE what the NK fallback handler at 0x50325f00 does with the VIA IRQ (does it
->     try to dispatch to a handler that simply isn't registered yet?), or
-> (b) probe the IHT (Interrupt Handler Table) setup during boot — does the 68k world
->     register VIA interrupt handlers, and when?
+> **Next:** characterize the 68k-side Cuda interrupt dispatch:
+> (a) Probe the interrupt-source struct at `0x68ffefd0` (+0x28) — is the Cuda pending
+>     bit ever written? By whom?
+> (b) Trace what the 68k autovector handler at `ed0a` does after entry — which memory
+>     it reads to decide there's nothing to service.
+> (c) Compare with QEMU mac99 for the dispatch mechanism.
 >
 > Also fix the §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
 >
@@ -61,11 +63,12 @@
   confirmed working (ed0a 8/8 baseline, genuine vector-$64 frame); the dead `SS_NW_DR_AUTOVEC` and
   `SS_M10_CGRP` mechanisms reverted. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
 - **M14** — RECON COMPLETE (2026-06-14). 9 smoke tests. Timer-delayed Cuda SR delivery
-  validated at VIA/PIC layer (Smoke H: IFR_SR latched after IER.SR enables, irq_out 0→1,
-  PIC edge, NK EXT delivered to 0x50314880). But `packets=0` — remaining blocker is NK→68k
-  interrupt routing: the NK registered-handler table is NOT installed (W2L-1), so the NK
-  EXT handler has no dispatch entry for IRQ 0x19 (VIA/Cuda). Next: characterize the NK
-  handler table gap / ENIM/IHT registration. See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
+  validated through full VIA→PIC→NK→68k pipeline (Smoke H: IFR_SR latched, irq_out 0→1,
+  PIC edge, NK EXT delivered, **68k handler ed0a fires 8/8**). But `packets=0` — remaining
+  blocker is the **68k-side Cuda dispatch path**: the interrupt-source struct at 0x68ffefd0
+  (+0x28) doesn't have the Cuda pending bit set, so the 68k dispatcher doesn't service
+  the Cuda interrupt. DO NOT re-investigate NK routing (twice-retracted M13 thesis).
+  See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 - **M12** — PARTIAL (2026-06-13). Wave0+Wave1 landed (`ddbd8d79`, `348544cd`); boot stable

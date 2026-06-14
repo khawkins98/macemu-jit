@@ -286,25 +286,33 @@ the VIA read/write path.
 - But `irq_fired=0`, `packets=0` — the NK EXT handler (`0x50314880`) dispatched
   but the Cuda protocol never advanced
 
-**Diagnosis:** The timer delivers the interrupt correctly through the full VIA→PIC→NK
-pipeline. The block is DOWNSTREAM: the NK's fallback external interrupt handler at
-`[KDP+0x5b0]` (0x50325f00) doesn't know how to service VIA/Cuda interrupts and route
-them to the 68k interrupt handler that would drive the Cuda byte exchange. This is the
-registered-handler table gap (W2L-1 in the sheepshaver_glue comments): the NK has no
-registered handler for IRQ source 0x19 (OPENPIC_IRQ_VIA_CUDA).
+**Diagnosis (CORRECTED after M13-retraction ed0a validation):** The timer delivers the
+interrupt correctly through the full VIA→PIC→NK→68k pipeline. `SS_PROBE_68K=0x5000ed0a`
+confirms the 68k autovector handler fires **8/8** with Smoke H + `SS_NW_PIC=1` — AND
+fires 8/8 in **baseline** + `SS_NW_PIC=1` (no timer, no Smoke H). The interrupt reaches
+the 68k handler in both cases. `packets=0` is a **downstream 68k-side Cuda dispatch
+problem**: the 68k VIA interrupt handler runs, enters the dispatch path, but the
+Cuda-specific interrupt source bit in the software interrupt-source struct
+(`0x68ffefd0 + 0x28`) is apparently not set, so the dispatcher doesn't know to service
+the Cuda/VIA interrupt and the Cuda byte exchange never starts.
+
+> **DO NOT re-investigate NK routing, registered-handler table, CGRP registration, or
+> 68k injection** — this was the M13 thesis, retracted as a probe artifact (ed08 vs ed0a).
+> The ed0a probe proves the 68k handler IS running. See HEADLINE in HANDOFF.md.
 
 **Verdict: PARTIAL SUCCESS.** Timer-delayed delivery is the correct VIA-layer fix —
-it delivers IFR_SR at the right time (after IER.SR enables). But packets=0 because
-the interrupt routing from NK to 68k VIA handler is missing (a separate milestone's
-scope — the NK registered-handler table / interrupt dispatch chain, not the Cuda
-device model).
+it delivers IFR_SR at the right time (after IER.SR enables). `packets=0` is NOT a
+timer/PIC/NK routing problem — the 68k handler fires in both baseline and timer runs.
+The blocker is the 68k-side Cuda dispatch path: the interrupt-source struct that the
+68k dispatcher reads doesn't have the Cuda pending bit set.
 
-**Next:** The Cuda timer delivery is validated at the VIA/PIC layer. The remaining
-blocker is NK→68k interrupt routing for the VIA source. Either:
-(a) wire the NK registered-handler table entry for IRQ 0x19 (VIA/Cuda), or
-(b) identify how Mac OS 9's Nanokernel Interrupt Manager (ENIM/IHT) registers
-    the VIA handler during boot (it may need the Cuda protocol to be working
-    first — a chicken-and-egg).
+**Next:** Characterize the 68k-side Cuda interrupt dispatch:
+(a) Probe the software interrupt-source struct at `0x68ffefd0` (`+0x28`) — is the
+    Cuda pending bit ever written? Who writes it (68k code? the Cuda model? NK?)?
+(b) If the struct is empty, trace what the 68k autovector handler at `ed0a` does
+    after entry — which memory it reads to decide "nothing to service."
+(c) Compare with QEMU's mac99 — does QEMU populate a software interrupt-source
+    struct, or does it use a different dispatch mechanism?
 
 ## §5 — Bug found during investigation
 

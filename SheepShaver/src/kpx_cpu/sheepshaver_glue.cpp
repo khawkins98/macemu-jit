@@ -202,23 +202,6 @@ static bool exc_dec_published_enabled(void)
 	return cached != 0;
 }
 
-/* M13 Task C: SS_NW_DR_AUTOVEC gate (default OFF; explicit-on "1"/non-"0"). When
- * OFF, the EXT-delivery path is byte-identical to today (records-and-returns via
- * the NK fallback 0x50325f00). When ON (newworld only), the EXT seam HLEs the
- * missing registered-CGRP-handler→DR signal: it drives the DR's OWN autovector
- * builder by setting the two levers pinned in M13-FINDINGS §C-pin.4 — the
- * memory-backed pending field [ECB+0x1d0] and the live cr2lt divert bit. NOT a
- * forged CGRP table, NOT a host-fabricated 68k frame (the 5× falsified class). */
-static bool nw_dr_autovec_enabled(void)
-{
-	static int cached = -1;
-	if (cached < 0) {
-		const char *e = getenv("SS_NW_DR_AUTOVEC");
-		cached = (e && e[0] && strcmp(e, "0") != 0) ? 1 : 0;
-	}
-	return cached != 0;
-}
-
 /* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
  * runs the hook). CPU-thread-only writers (check_spcflags context, plan §2g), so
  * plain uint64_t is fine; readers (heartbeat, crash dump) run on the same thread
@@ -1258,76 +1241,6 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		break;
 	}
 
-	// --- M13 Task C: HLE the missing CGRP-handler→DR autovector signal --------
-	// (SS_NW_DR_AUTOVEC, default OFF — gated-off this whole block is skipped and
-	// every delivery is byte-identical to today.) Mechanism + evidence:
-	// docs/planning/M13-FINDINGS-interrupt-delivery.md §C-pin.4 [DISASM✓ live RAM].
-	//
-	// We have a DELIVER decision (a real NK interrupt — DEC or EXT). The NK records
-	// it but never signals the 68k DR (the registered CGRP handler that would is
-	// uninstalled). At this seam, when the interrupted PPC context is the DR itself
-	// (restart_pc in the DR mirror-emulator range — pinned 3/3), the live registers
-	// ARE the DR's, so we can drive the DR's OWN autovector builder (0x5046d248) by
-	// setting the two levers a healthy registered handler would, then FALL THROUGH
-	// to the normal NK delivery below (so the NK scheduler/DEC bookkeeping still
-	// runs; the NK's exception save/restore round-trips our cr2lt back to the DR,
-	// which then vectors [0x64]→0x5000ED08 at its next opcode tail):
-	//   1. [ECB+0x1d0] = LEVEL  — the pending-interrupt-level field the DR's
-	//      interrupt selector 0x5046d3e4 reads fresh each slow-path entry.
-	//   2. cr2lt (CR bit 0x00800000) — the between-instruction divert gate the
-	//      opcode tail (bgectr cr2 @ 0x50468ae8) tests; set ⇒ b 0x5046d114.
-	// No forged CGRP table, no host-fabricated 68k frame (the 5× falsified class).
-	//
-	// MISUSE HARDENING (the M10 lesson — never deliver into a cold/wrong state):
-	//   - newworld only, gate on;
-	//   - restart_pc in the DR range (a coherent between-instruction boundary — the
-	//     hook fires at a JIT block boundary; outside the DR the live regs are the
-	//     NK's, not the DR's, so we must NOT touch cr2lt then);
-	//   - (gpr(25) & 7) < LEVEL — respect the 68k IPL mask EXACTLY as the DR's own
-	//     selector does (cmplw pending,mask; blelr). NEVER force a masked interrupt;
-	//     if the DR is masked we just don't signal (a captured frontier, not a crash).
-	// Caveat: the cr2lt round-trip relies on the published 2-SPR DEC/EXT shim
-	// (SS_NW_DEC_PUBLISHED default ON), which does not touch CR. The legacy KDP-shim
-	// (=0) splices CR fields 1-3 (mask 0x0fff0000 ⊇ cr2) and would clobber cr2lt —
-	// not a supported combination with this gate.
-	// A total delivery budget bounds livelock risk (level-held source + RTE re-take).
-	if (nw_dr_autovec_enabled() && MachineProfileIsNewWorld()) {
-		static uint64_t autovec_delivered  = 0;
-		static uint64_t autovec_skipped_ipl = 0;
-		const uint32 DR_LO = 0x50460000u, DR_HI = 0x504a0000u;
-		const uint32 AUTOVEC_LEVEL = 1u;          // VBL/timer → vector $64
-		const uint32 CR2LT = 0x00800000u;
-		const uint32 ECB = (uint32)(KERNEL_DATA_BASE + 0x1000);  // 0x68fff000
-		const uint64_t AUTOVEC_BUDGET = 200000u;
-		const uint32 restart_pc_now = pc();
-		const bool dr_live = (restart_pc_now >= DR_LO && restart_pc_now < DR_HI);
-		const bool ipl_ok  = ((gpr(25) & 7u) < AUTOVEC_LEVEL);
-		if (dr_live && ipl_ok && autovec_delivered < AUTOVEC_BUDGET) {
-			WriteMacInt32(ECB + 0x1d0, AUTOVEC_LEVEL);   // lever 1: pending level
-			cr().set(get_cr() | CR2LT);                   // lever 2: cr2lt divert
-			if (++autovec_delivered <= 8)
-				fprintf(stderr, "[NW-AUTOVEC] delivered #%llu: level=%u dr_pc=%08x "
-				        "src=%s sr_ipl=%u (cr2lt set, [ECB+0x1d0]=%u) — DR will "
-				        "vector [0x64]->0x5000ED08\n",
-				        (unsigned long long)autovec_delivered, AUTOVEC_LEVEL,
-				        restart_pc_now, dec_pending ? "DEC" : "EXT",
-				        (unsigned)(gpr(25) & 7u), AUTOVEC_LEVEL);
-			// fall through to the normal NK delivery below (scheduler stays alive;
-			// the NK round-trips cr2lt back to the DR).
-		} else if (dr_live && !ipl_ok
-		           && (++autovec_skipped_ipl & (autovec_skipped_ipl - 1)) == 0) {
-			fprintf(stderr, "[NW-AUTOVEC] skip (IPL masked): dr_pc=%08x sr_ipl=%u "
-			        ">= level=%u (skip #%llu)\n", restart_pc_now,
-			        (unsigned)(gpr(25) & 7u), AUTOVEC_LEVEL,
-			        (unsigned long long)autovec_skipped_ipl);
-		} else if (autovec_delivered == AUTOVEC_BUDGET) {
-			autovec_delivered++;  // log once
-			fprintf(stderr, "[NW-AUTOVEC] budget exhausted (%llu) — lever inert\n",
-			        (unsigned long long)AUTOVEC_BUDGET);
-		}
-	}
-	// --- end M13 Task C ---
-
 	// --- Source selection: DEC before EXT (M3b rev 2 m11/C1, justified
 	// locally as required): OEA ranks External ABOVE Decrementer, but our DEC
 	// latch is ONE-SHOT-clear-on-delivery while PIC pending is LEVEL-HELD —
@@ -1361,79 +1274,6 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		// shims (no SS_EXC_BARE gate: two register writes, no guest memory).
 		sprg_reg(1) = gpr(1);
 		sprg_reg(2) = lr();
-		// M10: re-sync CGRP+0x4c = *(KDP-0x1c) before entry so the NK delivery
-		// function's beq at 0x5031496c is taken (the NK updates *(KDP-0x1c)
-		// after cold-init, so it may diverge from what we set at first DR dispatch).
-		if (getenv("SS_M10_CGRP") && strcmp(getenv("SS_M10_CGRP"), "0") != 0) {
-			uint32_t kdp = sprg_reg(0);
-			if (kdp) {
-				uint32_t cgrp_base = ReadMacInt32(kdp - 0x338);
-				if (cgrp_base) {
-					// Re-sync CGRP+0x4c = *(KDP-0x1c) (NK updates it after cold-init).
-					uint32_t kdp_m1c = ReadMacInt32(kdp - 0x1c);
-					WriteMacInt32(cgrp_base + 0x4c, kdp_m1c);
-					// Re-write CGRP structural fields + TABLE + DESC + STUB each time.
-					// NK cold-init AND periodic NK operation overwrites CGRP+0x3c (TABLE_BASE)
-					// back to the ROM address; must unconditionally restore to RAM address.
-					// Layout: TABLE(40B)+STACK(40B)+DESC(8B)+STUB(56B) at 0x68ffc210.
-					const uint32_t TABLE_BASE_EXT = 0x68ffc210u;
-					const uint32_t STUB_ADDR_EXT  = 0x68ffc268u;
-					WriteMacInt32(cgrp_base + 0x3c, TABLE_BASE_EXT);  // TABLE_BASE restored
-					WriteMacInt32(cgrp_base + 0x40, 0x68ffc238u);     // STACK_TABLE restored
-					WriteMacInt32(cgrp_base + 0x44, 10);              // count
-					{
-						uint32_t table_base = TABLE_BASE_EXT;
-						uint32_t desc_addr = table_base + 80;  // after TABLE(40B) + STACK(40B)
-						for (int i = 0; i < 10; i++)
-							WriteMacInt32(table_base + i*4, desc_addr);
-						WriteMacInt32(desc_addr,     STUB_ADDR_EXT);
-						WriteMacInt32(desc_addr + 4, 0);
-						// --- DEAD-END WARNING (M13, 2026-06-13; full findings in
-						// docs/planning/M13-FINDINGS-interrupt-delivery.md) ---
-						// This STUB bctr's to DR_WARM (0x5046e9d8 — the `0x6000E9D8` ori below),
-						// the DR's COLD warm-entry trampoline, NOT the per-instruction dispatch
-						// loop.  The 68k DR is a recompiler (steady state runs in a code cache at
-						// 0x17fa0000+); DR_WARM is hit once per re-entry, with r29 = the COLD ROM
-						// dispatch table (~0x504920f8), not the live RAM table (0x17ffeb20).  That
-						// cold-table dispatch is what lands in dead-fill (0xDEADBEEF -> stfdu @
-						// ~0x100259dc) and SIGTRAPs ~1/3 boots.  Do NOT "fix" this by changing the
-						// DR_WARM target, by hand-restoring r29/r30, or by injecting at an arbitrary
-						// DR-range PC (all tried & falsified — Approaches B/C + the direct-inject
-						// attempt).  Correct 68k interrupt delivery must go through the NK CGRP/EXT path.
-						// Restore STUB code (16 words; A7 guard + exception frame push + CTR branch).
-						// r5  = scratch (holds old A7 from KDP+4).
-						// r12 = scratch (holds interrupted PC from live r24 — DR's 68k PC reg).
-						// r1  = new 68k A7 (old_A7 - 6).
-						// A7 guard: if KDP+4 < 32KB, return to NK (68k stack not ready).
-						//
-						// r24 at STUB entry = the DR emulator's 68k PC at interrupt time (NK
-						// saves/restores all GPRs including r24 across the exception delivery).
-						// Reading from r16+0x1c4 is UNRELIABLE — different NK context blocks
-						// have garbage there. Use live r24 instead.
-						//
-						// Exception frame layout at (old_A7 - 6):
-						//   +0: SR = 0 (16-bit, big-endian)
-						//   +2: PC = interrupted 68k PC (32-bit, big-endian)
-						WriteMacInt32(STUB_ADDR_EXT,      0x3CA06900u);  // lis    r5, 0x6900
-						WriteMacInt32(STUB_ADDR_EXT +  4, 0x80A5E004u);  // lwz    r5, -0x1ffc(r5) → *(0x68FFE004)=KDP+4=A7
-						WriteMacInt32(STUB_ADDR_EXT +  8, 0x28058000u);  // cmplwi r5, 0x8000
-						WriteMacInt32(STUB_ADDR_EXT + 12, 0x4D800020u);  // bltlr  (A7<32KB → return to NK)
-						WriteMacInt32(STUB_ADDR_EXT + 16, 0x7F0CC378u);  // mr     r12, r24  → r12 = interrupted 68k PC
-						WriteMacInt32(STUB_ADDR_EXT + 20, 0x3825FFFAu);  // addi   r1, r5, -6  → r1 = old_A7-6 (new A7)
-						WriteMacInt32(STUB_ADDR_EXT + 24, 0x91810002u);  // stw    r12, 2(r1) → frame PC at r1+2
-						WriteMacInt32(STUB_ADDR_EXT + 28, 0x39800000u);  // li     r12, 0 (SR=0)
-						WriteMacInt32(STUB_ADDR_EXT + 32, 0xB1810000u);  // sth    r12, 0(r1) → frame SR=0 at r1+0
-						WriteMacInt32(STUB_ADDR_EXT + 36, 0x3F005000u);  // lis    r24, 0x5000
-						WriteMacInt32(STUB_ADDR_EXT + 40, 0x6318ED08u);  // ori    r24, r24, 0xed08 → r24=0x5000ed08
-						WriteMacInt32(STUB_ADDR_EXT + 44, 0x931001C4u);  // stw    r24, 0x1c4(r16) → update context
-						WriteMacInt32(STUB_ADDR_EXT + 48, 0x3C005046u);  // lis    r0, 0x5046
-						WriteMacInt32(STUB_ADDR_EXT + 52, 0x6000E9D8u);  // ori    r0, r0, 0xe9d8  → DR_WARM
-						WriteMacInt32(STUB_ADDR_EXT + 56, 0x7C0903A6u);  // mtctr  r0
-						WriteMacInt32(STUB_ADDR_EXT + 60, 0x4E800420u);  // bctr
-					}
-				}
-			}
-		}
 		// SRR1.EE=1 mandatory (the NK EXT body's punch-through guard PANICS on
 		// EE=0): structurally guaranteed — the EE gate above admits only EE=1
 		// MSRs and ExcEnter keeps the low 16 bits (test_exc_chain pins it).

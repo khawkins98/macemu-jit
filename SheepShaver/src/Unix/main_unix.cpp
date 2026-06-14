@@ -1630,14 +1630,14 @@ int main(int argc, char **argv)
 		uint64_t nw_dexp = g_virt_clock.dec_expiries;
 		uint32_t nw_irq  = g_exc_consume_stats.fired;
 		fprintf(stderr,
-		    "[NW-PROG config]   profile=%s  opt-in: PIC=%d CONSUME=%d CGRP=%d  "
+		    "[NW-PROG config]   profile=%s  opt-in: PIC=%d CONSUME=%d  "
 		        "(newworld cluster defaults implied)\n"
 		    "[NW-PROG nk-stage] program_max=%u  %-4s  highest NK PROGRAM# delivered (j2i Start68k path)\n"
 		    "[NW-PROG dr68k]    dr68k=%d  %-4s  68k DR emulator entered; 0=never started\n"
 		    "[NW-PROG sched]    dec_expiries=%llu  %-4s  scheduler liveness: 5-6=long-park, >=40=baseline-healthy, >=200=milestone-done\n"
 		    "[NW-PROG irq]      irq_fired=%u  %-4s  interrupts delivered to 68k world; 0=none yet, >=1=delivery live\n",
 		    MachineProfileIsNewWorld() ? "newworld" : "paravirtual",
-		    env_on("SS_NW_PIC"), env_on("SS_NW_IRQ_CONSUME"), env_on("SS_M10_CGRP"),
+		    env_on("SS_NW_PIC"), env_on("SS_NW_IRQ_CONSUME"),
 		    nw_prog,                (nw_prog >= 8)  ? "OK"   : "LOW",
 		    nw_dr,                  nw_dr           ? "OK"   : "NONE",
 		    (unsigned long long)nw_dexp, (nw_dexp >= 200) ? "DONE" : (nw_dexp >= 40) ? "OK" : "PARK",

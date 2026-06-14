@@ -275,8 +275,6 @@ static uint32_t s_probe68k_pc = 0;
 static uint32_t s_probe68k_max = 8;
 static uint32_t s_probe68k_hits = 0;
 static uint32_t s_probe68k_prev = 0;     // previous r24 seen at the hook (edge trigger)
-// M10: one-shot flag — write CGRP+0x20 on first DR dispatch (bpc >= 0x5046e000)
-static bool s_m10_cgrp_armed = false;
 
 // True once the DR has dispatched its first 68k instruction. s_probe68k_state is
 // -1 until that moment, then set to 0 UNCONDITIONALLY (see ~line 330, before
@@ -285,43 +283,6 @@ static bool s_m10_cgrp_armed = false;
 extern "C" int SheepDR68KStarted(void) { return s_probe68k_state >= 0 ? 1 : 0; }
 
 static void probe68k_check(powerpc_registers *r, uint32_t bpc) {
-	// M10: arm CGRP+0x20 on first dispatch in the DR code range (0x5046e000+).
-	// Fires BEFORE the state<0 one-shot below so we don't depend on ordering.
-	// This is the earliest safe moment: the DR range is only entered after the
-	// NK has loaded the 68k context block (A7 and friends) from the NK context.
-	if (__builtin_expect(!s_m10_cgrp_armed && bpc >= 0x5046e000u, false)) {
-		if (getenv("SS_M10_CGRP") && strcmp(getenv("SS_M10_CGRP"), "0") != 0) {
-			volatile uint32_t *cgrp20 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffc1e0ULL);
-			*cgrp20 = htonl(0x503143a0u);
-			// KDP-0x338 pointer intentionally deferred to here (not set at NW-TRAMP
-			// time) so NK cold-init delivery-function calls exit early (beqlr).
-			volatile uint32_t *kdp_m338 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffdcc8ULL);
-			*kdp_m338 = htonl(0x68ffc1c0u);
-			volatile uint32_t *cgrp38_1 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffc1f8ULL);  // CGRP+0x38 guard
-			*cgrp38_1 = htonl(1u);
-			volatile uint32_t *cgrp3c_1 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffc1fcULL);
-			*cgrp3c_1 = htonl(0x50429dacu);  // CGRP+0x3c TABLE_BASE
-			volatile uint32_t *cgrp40_1 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffc200ULL);
-			*cgrp40_1 = htonl(0x50429dd4u);  // CGRP+0x40 STACK_TABLE
-			volatile uint32_t *cgrp44_1 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffc204ULL);
-			*cgrp44_1 = htonl(10u);          // CGRP+0x44 count
-			// CGRP+0x4c must equal *(KDP-0x1c) so the NK delivery function
-			// beq at 0x5031496c is taken (skipping bl 0x50323f78 alt path).
-			// Mirror the live NK value; the EXT shim re-syncs before each delivery.
-			volatile uint32_t *kdp_m1c = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffDFE4ULL);
-			volatile uint32_t *cgrp4c_1 = (volatile uint32_t *)(uintptr_t)(
-			    NATMEM_OFFSET + 0x68ffc20cULL);
-			*cgrp4c_1 = *kdp_m1c;  // mirror live *(KDP-0x1c)
-		}
-		s_m10_cgrp_armed = true;
-	}
 	if (__builtin_expect(s_probe68k_state < 0, false)) {
 		// Always-on one-shot: first 68k instruction ever dispatched by the DR.
 		// Fires regardless of SS_PROBE_68K. If this line never appears, the 68k
@@ -2410,39 +2371,6 @@ void powerpc_cpu::execute(uint32 entry)
 						// SS_PROBE_68K: 68k-PC probe at the same DR dispatch hook.
 						if (__builtin_expect(s_probe68k_state != 0, false))
 							probe68k_check(regs_ptr(), (uint32_t)jit_block_start_pc);
-						// M10 CGRP arm: unconditional, fires on first DR block (independent of SS_PROBE_68K).
-						if (__builtin_expect(!s_m10_cgrp_armed &&
-								(uint32_t)jit_block_start_pc >= 0x5046e000u, false)) {
-							if (getenv("SS_M10_CGRP") && strcmp(getenv("SS_M10_CGRP"), "0") != 0) {
-								volatile uint32_t *cgrp20 = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc1e0ULL);
-								uint32_t nk_val = ntohl(*cgrp20);
-								*cgrp20 = htonl(0x503143a0u);
-								volatile uint32_t *kdp_m338 = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffdcc8ULL);
-								*kdp_m338 = htonl(0x68ffc1c0u);
-								volatile uint32_t *cgrp38_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc1f8ULL);
-								*cgrp38_n = htonl(1u);              // guard
-								volatile uint32_t *cgrp3c_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc1fcULL);
-								*cgrp3c_n = htonl(0x68ffc210u); // TABLE_BASE (guest RAM, CGRP+0x50)
-								volatile uint32_t *cgrp40_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc200ULL);
-								*cgrp40_n = htonl(0x68ffc238u); // STACK_TABLE (guest RAM, CGRP+0x78)
-								volatile uint32_t *cgrp44_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc204ULL);
-								*cgrp44_n = htonl(10u);         // count
-								// CGRP+0x4c must equal *(KDP-0x1c); NK updates it after
-								// cold-init so mirror the live value rather than hardcoding.
-								volatile uint32_t *kdp_m1c_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffDFE4ULL);
-								volatile uint32_t *cgrp4c_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc20cULL);
-								*cgrp4c_n = *kdp_m1c_n;  // mirror live *(KDP-0x1c)
-							}
-							s_m10_cgrp_armed = true;
-						}
 						// SS_INTERP_RING: RAM-block JIT entry capture (see iring_jit_block).
 						if (__builtin_expect(iring_check_enabled() > 0, false))
 							iring_jit_block(this, (uint32_t)jit_block_start_pc, (uint32_t)lr());
@@ -2995,39 +2923,6 @@ void powerpc_cpu::execute(uint32 entry)
 						// SS_PROBE_68K: 68k-PC probe at the same DR dispatch hook.
 						if (__builtin_expect(s_probe68k_state != 0, false))
 							probe68k_check(regs_ptr(), (uint32_t)jit_block_start_pc);
-						// M10 CGRP arm: unconditional, fires on first DR block (independent of SS_PROBE_68K).
-						if (__builtin_expect(!s_m10_cgrp_armed &&
-								(uint32_t)jit_block_start_pc >= 0x5046e000u, false)) {
-							if (getenv("SS_M10_CGRP") && strcmp(getenv("SS_M10_CGRP"), "0") != 0) {
-								volatile uint32_t *cgrp20 = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc1e0ULL);
-								uint32_t nk_val = ntohl(*cgrp20);
-								*cgrp20 = htonl(0x503143a0u);
-								volatile uint32_t *kdp_m338 = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffdcc8ULL);
-								*kdp_m338 = htonl(0x68ffc1c0u);
-								volatile uint32_t *cgrp38_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc1f8ULL);
-								*cgrp38_n = htonl(1u);              // guard
-								volatile uint32_t *cgrp3c_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc1fcULL);
-								*cgrp3c_n = htonl(0x68ffc210u); // TABLE_BASE (guest RAM, CGRP+0x50)
-								volatile uint32_t *cgrp40_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc200ULL);
-								*cgrp40_n = htonl(0x68ffc238u); // STACK_TABLE (guest RAM, CGRP+0x78)
-								volatile uint32_t *cgrp44_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc204ULL);
-								*cgrp44_n = htonl(10u);         // count
-								// CGRP+0x4c must equal *(KDP-0x1c); NK updates it after
-								// cold-init so mirror the live value rather than hardcoding.
-								volatile uint32_t *kdp_m1c_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffDFE4ULL);
-								volatile uint32_t *cgrp4c_n = (volatile uint32_t *)(uintptr_t)(
-									NATMEM_OFFSET + 0x68ffc20cULL);
-								*cgrp4c_n = *kdp_m1c_n;  // mirror live *(KDP-0x1c)
-							}
-							s_m10_cgrp_armed = true;
-						}
 						// SS_INTERP_RING: RAM-block JIT entry capture (see iring_jit_block).
 						if (__builtin_expect(iring_check_enabled() > 0, false))
 							iring_jit_block(this, (uint32_t)jit_block_start_pc, (uint32_t)lr());

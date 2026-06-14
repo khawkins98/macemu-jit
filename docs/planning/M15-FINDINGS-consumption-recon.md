@@ -389,3 +389,71 @@ forge as the documented fallback.**
     `hnfo+0x28` / `KDP+0x674` values from a working paravirtual or QEMU mac99 boot (where
     IM init runs), then seed them. The dead-end is now confirmed at the MECHANISM level,
     not just the symptom level.
+
+---
+
+## Addendum — misroute-why diagnostic (2026-06-14): STRUCTURAL → oracle-first forge
+
+**Outcome: the misroute is STRUCTURAL (NK-internal, uninitialized routing state), NOT an
+obvious wrong branch in our code. Decision rule → STOP, fall through to oracle-first forge.**
+This does NOT reopen the FORGE verdict; it confirms the dead-end at the *mechanism* level.
+
+### What ran
+One fresh boot, single diagnostic (per the time-boxed Task-0 mandate):
+```
+ss-slot-boot.sh --label misroute-why --timeout 45 \
+    --env 'SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1'
+RUNDIR = /tmp/ss-slots/slot0/runs/20260614-152035.57881
+```
+
+### Findings (mechanism, not symptom)
+
+1. **`0x50325fd0` is NOT a routing branch — it is `pc()` at latch-release.** The boot.log's
+   only `0x50325fd0` references are two `[IRQ-CONSUME] deferred edge fired at pc=50325fd0
+   (held=0)` lines from `powerpc_cpu::check_spcflags` (`ppc-cpu.cpp:2018`). That `%08x` is
+   `pc()` — *where the guest happened to be* (the CGRP idle/fallback loop) when the deferred
+   EE-edge released — printed for telemetry. It is not a branch target the EXT edge "re-fires
+   into." The M15 "EXT re-fires into CGRP fallback `0x50325fd0`" framing was a misread of this
+   telemetry line. After the latch releases, `SheepExcDeliverPending()` delivers EXT
+   **correctly** to the published NK EXT entry: `[EXC] EXT delivered #1 ... -> entry=50314880`
+   (`= [KDP+0x374]`, the right entry). Our delivery side is correct.
+
+2. **The misroute is DOWNSTREAM of `0x50314880`, inside the NK's own dispatch logic.**
+   Disassembly of the NK EXT dispatcher (`rom901.bin` @ file 0x314880):
+   ```
+   50314884  rlwinm.  r9, r11, 0, 16, 16   ; test bit 0x8000 of saved r11
+   50314888  beq      0x50313ab0           ; bit clear → branch away, no onward route
+   5031488c  lwz      r9, -0x338(r8)       ; r9 = *(KDP/SPRG-relative routing-struct ptr)
+   50314890  lwz      r9, 0x20(r9)         ; r9 = struct->[0x20]  (source-count field)
+   50314894  cmpwi    r9, 2
+   50314898  blt      0x50314660           ; field < 2 → early-RETURN stub (unserviced)
+   5031489c  bl       0x503238ac           ; else service path (sets err code 9 at -0x238(r8))
+   ```
+   The onward route is gated entirely on **NK-internal data-structure fields** — bit 0x8000
+   of the saved `r11`, and `*(r8-0x338)→+0x20` (a KDP/SPRG-relative routing struct). These
+   are the exact frozen-zero struct class M15 pillar 3 proved is never populated (no guest
+   write to obs=1e9). With routing state uninitialized, the dispatcher cannot route onward,
+   and the 68k L1 handler `0x5000ec50` is never reached (confirmed 0 hits this boot too).
+   Note: `0x50314660` is itself a `lwz r9,0x5b0(r1); mtlr r9; blr` **early-return stub**, not
+   a "service" — reaching it would mean *returning unserviced*, not progress. The handoff's
+   "slot-4 service" label was imprecise.
+
+3. **The 68k world's interrupt traffic is the host VBL path, not the NK EXT route.**
+   `0x5000ed0a` fires 37449× (r24 ring + boot.log) and `irq_fired=290`, but these are the
+   `HandleInterrupt` MODE_EMUL_OP `Execute68k` VBL path (M14's finding), independent of the
+   NK EXT dispatch. The boot spins in the DR emulator (`jit_diag`: `pc=50465f28`, jDR in the
+   billions, `j2i=0`, comp frozen) — consistent with the NK never completing onward routing.
+
+### Why this is STRUCTURAL (not a one-line fix)
+Our code delivers EXT to the correct published entry. The non-routing is the NK's *own*
+decision, keyed on routing structs that IM init (downstream of Cuda init) never populates —
+the M14/M15 chicken-and-egg, now pinned to the exact branch (`50314898 blt`) and the exact
+deciding fields (`r11` bit 0x8000, `*(r8-0x338)+0x20`). No edit to our delivery path changes
+this; the structs must be populated. → **oracle-first forge** is the correct next step.
+
+### Next: oracle-first forge (M14 §7 step 5)
+Extract correct `hnfo+0x14` / `hnfo+0x28` / `KDP+0x674` (and the `*(r8-0x338)+0x20` source
+field + the deciding `r11` bit semantics) from a working paravirtual or QEMU mac99 boot where
+IM init runs, then seed them. Open a real-fix milestone via `docs/MILESTONE-WORKFLOW.md`.
+Note for that milestone: also capture what sets the saved-`r11` bit 0x8000 on the EXT frame —
+both the struct field AND that bit gate the onward route (`50314884`/`50314888`).

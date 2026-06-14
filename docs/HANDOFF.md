@@ -6,9 +6,16 @@
 > NK slot-4 service `0x50314660`); NK routing structs stay **frozen-zero across obs=1e9**
 > (zero struct-populating writes); `SC#1=0x0d` is a PIC-off artifact (absent under
 > `SS_NW_PIC=1`). Two independent pillars; verdict does NOT rest on a single chain.
-> **Next milestone entry = misroute-first time-boxed gate → oracle-first forge fallback**
-> (does NOT reopen the verdict — see below + `docs/planning/M15-FINDINGS-consumption-recon.md`
-> "Verdict (Task 4)").
+> **Misroute-why diagnostic COMPLETE (2026-06-14): STRUCTURAL → oracle-first forge.** The
+> EXT edge IS delivered correctly to the published NK EXT entry `0x50314880`; the misroute is
+> DOWNSTREAM, inside the NK dispatcher — onward routing keys on uninitialized NK structs (saved
+> `r11` bit 0x8000 + `*(r8-0x338)+0x20`) at `50314898 blt 0x50314660`. (`0x50325fd0` was only
+> `pc()` at latch-release telemetry, not a branch target; `0x50314660` is an early-return stub,
+> not a "service".) No edit to our delivery path fixes it. **Next milestone = oracle-first forge
+> (M14 §7 step 5)** — extract correct `hnfo+0x14`/`hnfo+0x28`/`KDP+0x674` (+ the `r11` bit and
+> `*(r8-0x338)+0x20` semantics) from a working paravirtual/QEMU mac99 boot, seed them. See
+> `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic". Does
+> NOT reopen the verdict.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

@@ -241,6 +241,63 @@ Oracle: `/tmp/qemu-rigB/probes.txt` + `device-tree.txt` (transient; regenerate v
 
 ---
 
+## Task C cr2-feed pinning probe — addendum (2026-06-14)
+
+Required FIRST sub-step of Task C (the empirical cr2-feed pin). All boots via the slot
+protocol, newworld 9.0.1 diagnostic template + `SS_NW_PIC=1` (the precondition env;
+`SS_NW_EAGER_TICK` does not exist). Binary built green at commit `b576c7ba`. Tags: [PROBE✓].
+
+### C-pin.1 The frontier reproduces under `SS_NW_PIC=1` (NOT under the bare template)
+- Bare template (PIC=0): boot parks early — `dec_expiries=4`, EXT delivered ×1, the wall is
+  barely reached. **`SS_NW_PIC=1` is required** to reach the documented Q-0a frontier.
+- With `SS_NW_PIC=1`: `dec_expiries=4181` (healthy), wall `0x50468ae4` ≥1000 visits, EXT
+  fallback `0x50325f00` ≥100 visits, **slow-path `0x5046d114` fires (≥1 visit)**, registration
+  `0x5031b290` **0 visits** (the keystone gap, as expected). [PROBE✓]
+
+### C-pin.2 The cr2-feed lever is PINNED — but it is the LIVE DR CR, not an ECB save slot
+The decisive finding **revises B.2's working theory**. B.2 assumed the DR was *suspended*
+at EXT time, so its CR lived in an ECB save slot (`ECB+0x740` family) that Task C would have
+to locate by offset. **Empirically the interrupted context AT the host EXT-delivery seam IS
+the DR itself:**
+- EXT-delivery `restart_pc` (`pc()` at the host hook) observed = `0x50466144`, `0x50498540`,
+  `0x50488148` — **3/3 in the DR mirror-emulator range** (`0x5046xxxx`/`0x5048xxxx`/`0x5049xxxx`).
+  The wall is the DR idle-spin, so when EXT fires the DR is the live PPC context. [PROBE✓]
+- Therefore the DR's CR **is the live `cr()` register** at our EXT hook — no ECB byte-offset
+  needed in the common path. The `ECB+0x740` escalation from B.2 is **moot** for this seam
+  (and, separately, the absolute-range probe form `[0xADDR:SIZE]` is unsupported by the probe
+  parser — only `[rN:SIZE]` ranges and single-word `[0xADDR]` work; `r31=ECB=0x68fff000` is
+  confirmed live at `0x5046d114`).
+
+### C-pin.3 cr2 bit math, confirmed both directions [PROBE✓]
+- cr2 field = host-CR mask `0x00f00000`; **cr2lt = bit mask `0x00800000`**.
+- Slow-path `0x5046d114` entry (fault-driven): `CR=0x80f01820` → cr2 nibble `0xf` → **cr2lt=1**
+  (confirms B.1.2: a *set* cr2lt is the divert condition; `bgectr cr2` falls through to
+  `0x5046d114` when cr2lt=1).
+- Normal DR execution at the wall `0x50468ae4`: `CR ∈ {0x00100083, 0x40100f0f, 0x20101efe,
+  0x20100f07}` → cr2 nibble `∈{1,0}` → **cr2lt=0** in every sample (normal continue). So
+  OR-ing `0x00800000` into the live CR at the EXT seam is a meaningful, non-redundant divert
+  trigger.
+
+### C-pin.4 RESIDUAL — the interrupt-vs-fault CAUSE encoding is NOT pinned
+B.2 flagged two unknowns: (a) the cr2lt *location* and (b) the *cause encoding* `0x5046d114`
+keys on to build a vector-`$64` **interrupt** frame vs a fault/bus-error frame. (a) is now
+pinned (C-pin.2/.3). **(b) remains unpinned** — `0x5046d114`'s body is RAM-resident
+(`0x5046xxxx`, absent from `rom901.bin`), and the fault-driven entry we can observe carries
+fault-cause side state (e.g. `r4=0xffffffff r6=0xffffffc0 r8=0xffffffff r9/r10/r13=0xff
+r11=0x0a r12=0x801 r27=0x50c1` at the observed entry) whose interrupt-path equivalents are
+unknown. Setting cr2lt alone may route the DR to a *fault* frame, not the `$64` autovector
+frame — this is the open feasibility risk for Task C delivery, and bears on stop-rule
+trigger 3. Pinning it needs a live RAM disassembly of `0x5046d114` (capstone over a guest-RAM
+probe dump, or a single bounded lldb read at host `0x40005046d114`) — an escalation, deferred
+pending coordinator decision.
+
+### C-pin.5 Evidence (slot rundirs, transient)
+`/tmp/ss-slots/slot0/runs/`: `…085423` (frontier+PIC, 4-PC probe), `…085551` (full reg dump
+@ `0x5046d114`), `…085849` (`r31`/ECB confirm), `…090032` (wall CR samples). Reproduce:
+`ss-slot-boot.sh --timeout 45 --env 'SS_NW_PIC=1 SS_PROBE_PC=0x5046d114'`.
+
+---
+
 ## Provenance (archived process trail — `docs/archive/2026-06/planning/`)
 
 - `2026-06-13-m13-atrap-bootstrap.md` — original M13 plan (Task A as injection) + Task-0 recon addenda.

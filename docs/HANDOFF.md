@@ -3,7 +3,22 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-14):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION:** **S1-impl gating first step** (NewWorld paged MMU). S1 Task-0 recon DONE + 3-reviewer red-teamed → **RESIDUE-PASS** (`FINDINGS-s1-paged-mmu.md` rev-2): window (mach `vm_remap` on the separate NATMEM RAM/ROM reservations — NOT MEM_BULK) is the *preferred* mechanism, BUT the adversary FALSIFIED two rev-1 claims from primary parcel bytes: (AD-1) the NK runs a **live 4 KB PTE engine** (HTAB not "residual"); (AD-2) the NK programs **high BATs SPR 560–575** that SheepShaver drops (`ppc-execute.cpp:1651`) and the oracle `(SR,BAT[16],SDR1,EA)` contract can't express. → **walker/softmmu is the DEFAULT**, and S1-impl does NOT start by betting on the window. **Gating first step:** append `high_bat[16]` to the supervisor block (BEFORE the MUST-stay-LAST block — struct-offset hazard, needs clean PPC recompile), capture SPR 560–575 in the `mtspr` handler, extend the oracle I/O contract to `(SR[16],BAT[16],HIGH_BAT[16],SDR1,EA)`, then build the G1.a-pure oracle test + FINE/high-BAT battery → that measurement earns the window (or confirms softmmu). Env-gated `SS_M18_PAGED_MMU ∧ MachineProfileIsNewWorld()`, paravirtual byte-identical, `make test-jit`=100. Plan `…/2026-06-14-ss-m18-s1-paged-mmu-task0.md`. Off-path: S2a Task-0 recon (plan rev-2 red-teamed). Do NOT re-run the gating Task-0 / Discriminator-A. Do NOT relitigate Route A.
+> - **▶ NEXT ACTION:** **S1-impl Task A is building** (NewWorld paged MMU). S1-impl plan rev-2
+>   (3-reviewer red-teamed): `docs/superpowers/plans/2026-06-14-ss-m18-s1-impl-paged-mmu.md`.
+>   **Two decisive red-team findings reshaped it:** **(AD-2 FALSIFIED)** the NK's high-BAT writes
+>   (SPR 560–575) are **feature-gated dead code** on every PVR SS presents (7400 `0x000c0000`; gate bit
+>   `0x20` never set) → `high_bat[16]` is cheap INSURANCE, not a decision input; the recon-adversary's
+>   AD-2 re-band over-weighted a dead premise. **(AD-1 CONFIRMED + deepened)** the live 4 KB PTE engine
+>   remaps via **HTAB stores + `tlbie`, NOT `mtspr`** → a window hooking only `mtspr`/`mtsr`/`mtsrin`
+>   silently desyncs; **window adequacy is owed to G1.e (a real boot); softmmu is the DEFAULT until
+>   then.** **Task A (AUTHORIZED, gated, structurally inert):** append `high_bat[16]` at the struct TAIL
+>   (after `msr` — JIT-safe per the static_asserts `ppc-cpu.cpp:861/866/868`; clean PPC recompile) +
+>   `case 560…575` capture; build `machine/paged_mmu.cpp` (mechanism-agnostic segment+BAT+HTAB
+>   translation) + `machine/test_paged_mmu.cpp` (SPEC-derived oracle; high-BAT rows dropped as dead).
+>   Gates: build-ss + `make test-jit` score=100 (authoritative) + machine test. **Task B (the window)
+>   PARKED** — needs a tlbie/HTAB-store interception design OR a G1.e PTE-engine-disjointness proof
+>   (SURFACE to user). Off-path: S2a-impl cleared (deferred). Do NOT re-run the gating Task-0 /
+>   Discriminator-A. Do NOT relitigate Route A.
 
 ## Resume chain (read in this order; see CONTRIBUTING §0b for the discipline)
 

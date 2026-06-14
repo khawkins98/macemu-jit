@@ -29,6 +29,20 @@ re-verified this session (the plan's pinned numbers may drift ±5; refreshed val
 > `(SR[16], BAT[16], HIGH_BAT[16], SDR1, EA)`, then run the FINE/high-BAT oracle battery + G1.e live
 > coverage instrumentation. THAT measurement *earns* the window (or confirms softmmu). The window
 > remap code is not written until the FINE/high-BAT coverage is measured.
+>
+> **⚠ rev-3 correction (2026-06-14, from the S1-IMPL plan ADVERSARY — read this):** **AD-2 was
+> subsequently OPERATIONALLY FALSIFIED.** The high-BAT writes (SPR 560–575) are **feature-gated dead
+> code** on every PVR SheepShaver can present (gate bit `0x20` @`0x14114`; the PVR feature tables
+> @`0x118c`/`0x11cc` never set it; SS PVR `0x000c0000` = 7400, which architecturally has no extended
+> BATs). So this rev-2 verdict's framing **over-weighted AD-2** (an M8→M17 *false-positive* — the mirror
+> of the failure the re-band guarded against). **The RESIDUE-PASS still stands, but on AD-1 alone
+> (strengthened):** the live 4 KB PTE engine remaps via **HTAB stores + `tlbie`, NOT `mtspr`**, so a
+> window hooking only `mtspr`/`mtsr`/`mtsrin` silently desyncs on any PTE-engine remap of a JIT-covered
+> page → window adequacy is owed to **G1.e** (a real boot), softmmu is the DEFAULT until then. The
+> S1-impl first step is therefore **reshaped**: `high_bat[16]` is cheap dead-code INSURANCE (not a
+> decision input); the real deliverable is the mechanism-agnostic translation function + oracle test;
+> the window (Task B) is PARKED pending a tlbie/HTAB-store interception design. Full record:
+> `docs/superpowers/plans/2026-06-14-ss-m18-s1-impl-paged-mmu.md` rev-2 Red-team record.
 
 S1-impl may proceed **into that gating first step** (subject to coordinator review). The G1.a-under-JIT
 proof and the empirical `make e2e` A/B run remain **owed-falsifiers** at their named gates (G1.d/G1.c/G1.e).

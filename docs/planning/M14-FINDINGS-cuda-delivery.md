@@ -175,29 +175,97 @@ The consume-once `sr_int_pending` model has no way to re-assert it.
 4. **VIA `irq_fn` is NULL** (IRQ output unwired). Whether this matters depends on
    whether IFR polling suffices once delivery is level-correct. Not yet determined.
 
-## §4a — Fix direction (revised post-smoke-tests)
+### Smoke E: Level-triggered CudaSettle (RAISE while treq_asserted) + IER-write settle
 
-The fix is **level-triggered Cuda interrupt assertion**, not delayed delivery.
+`CudaSettle` returns RAISE whenever `treq_asserted` (not consume-once); called on IER
+writes too so enabling SR immediately latches IFR.2.
 
-The consume-once `sr_int_pending` + `CudaSettle` model is the wrong abstraction. On real
-hardware, the Cuda's TREQ/attention line is level-sensitive: the VIA's IFR.2 re-latches
-on every IFR read (or continuously, depending on 6522 implementation) as long as the
-Cuda holds the line asserted. The correct model:
+| | Baseline | Smoke E |
+|---|---|---|
+| jDR | 2.1M | **1,348M** (same as Smoke B profile) |
+| IFR reads | 2 | **15,002** |
+| Cuda packets | 0 | 0 |
 
-1. **Replace `sr_int_pending` (edge latch) with a level predicate.** `CudaSettle` should
-   return RAISE whenever the Cuda has an active condition (e.g. `treq_asserted` and the
-   protocol is in a state expecting the guest to respond), not consume-once.
-2. **CudaSettle must run at IER-write time too** (or on every VIA access), so that when
-   the guest enables IER.2, the already-asserted Cuda line immediately latches IFR.2 and
-   the VIA summary IRQ fires.
-3. **VIA IRQ output wiring** — test empirically after 1+2. If IFR polling suffices
-   (Smoke B's 15K reads suggest it may), defer IRQ wiring.
+**Same profile as Smoke B — still packets=0.** The IFR trace showed: `treq_asserted`
+goes from 1 to 0 DURING the attention sync (ORB write `0x30` negates TREQ), so by the
+time the guest enables IER.2, `treq_asserted=0` and CudaSettle returns NONE. The
+attention TREQ is a PULSE, not a sustained level — `treq_asserted` is the wrong
+predicate for level-triggered assertion.
 
-**The cheapest smoke test for this hypothesis:** make `CudaSettle` return RAISE whenever
-`treq_asserted` (not consume-once), and call it on IER writes too. One boot. If
-`packets > 0`, level-triggered is confirmed correct.
+### Smoke F: Non-consuming CudaSettle (sr_int_pending persists through IFR reads) + IER settle
 
-**Gate:** run the level-triggered smoke test before building the proper implementation.
+`CudaSettle` returns RAISE while `sr_int_pending` without consuming it. `CudaSRRead`
+consumes `sr_int_pending` (the acknowledgment point). Called on IER writes too.
+
+| | Baseline | Smoke F |
+|---|---|---|
+| jDR | 2.1M | **1,348M** (same profile) |
+| Cuda packets | 0 | 0 |
+
+**Still packets=0.** The non-consuming `sr_int_pending` is consumed by the SR read
+(which happens before the IER write). Same ordering problem as Smoke D.
+
+### Smoke G: Persistent sr_int_pending (NOT cleared by SR reads, only by ORB edges)
+
+`sr_int_pending` persists through SR reads — only new ORB edges overwrite it.
+Non-consuming CudaSettle + IER-write settle.
+
+| | Baseline | Smoke G |
+|---|---|---|
+| jDR | 2.1M | 2.1M (**BACK TO BASELINE**) |
+| IFR reads | 2 | 2 |
+| Cuda packets | 0 | 0 |
+
+**Regression to baseline.** With `sr_int_pending` persistent through SR reads,
+CudaSettle keeps re-latching IFR_SR after every SR read → the guest's SR-read cycle
+loops forever (the CV-10 `0x9584` sync park). This confirms the CV-10 constraint: IFR_SR
+MUST be cleared after the SR read and NOT immediately re-asserted, or the guest parks.
+
+### Smoke test conclusions (revised after 8 tests)
+
+1. **The lazy-delivery structural diagnosis (§3) is CONFIRMED.** Smoke B proves it:
+   eager delivery radically changes the execution profile (jDR 600×↑, IFR 2→15K).
+2. **IFR-reading is state/timing-dependent, not "never."** Smoke B's 15K IFR reads
+   show the guest polls IFR heavily once the protocol advances. The 2-read baseline
+   reflects the protocol being stuck, not a polling design choice.
+3. **The bug is a timing model problem, not a simple model choice.** All three classes
+   of delivery fail:
+   - **Too early** (Smoke B, G): IFR_SR before/during SR read → CV-10 sync park
+   - **Too late** (baseline, Smoke A): IFR_SR never arrives because IFR barely polled
+   - **Right time but wrong IER state** (Smoke D, F): IFR_SR delivered after SR read
+     but ier=0x00; consumed/cleared before IER enables SR
+4. **TREQ is a pulse, not a level** during attention sync — `treq_asserted` is the
+   wrong predicate for level-triggered assertion (Smoke E).
+5. **The fix needs a TIMER** — the only way to deliver IFR_SR at the right moment
+   (after the guest's SR read AND after IER enables SR) is a real time delay, matching
+   QEMU's `cuda_delay_set_sr_int` with `sr_delay_ns = 20000` (20µs). The EventScheduler
+   already exists and is wired to the VIA. The delay must be long enough for the guest
+   to: (a) read SR, (b) enable IER.2, (c) start polling IFR.
+6. **VIA `irq_fn` is NULL** (IRQ output unwired). Whether this matters depends on
+   whether IFR polling suffices once delivery timing is correct. Defer until the timer
+   smoke test resolves it.
+
+## §4a — Fix direction (revised after 8 smoke tests)
+
+The fix is **timer-delayed Cuda SR interrupt delivery** — the QEMU
+`cuda_delay_set_sr_int` model. The EventScheduler is already bound to the VIA
+(`VIABindScheduler`); the Cuda model needs a similar binding to schedule a one-shot
+that fires ~20µs after each `sr_int_pending` is set, delivering IFR_SR at that point.
+
+Three elements:
+1. **Cuda→VIA callback or EventScheduler binding:** the Cuda model needs to schedule a
+   one-shot timer. Either bind the EventScheduler directly, or use a VIA back-pointer
+   so the Cuda can call `cuda_apply` outside the VIA read/write path.
+2. **Timer-based delivery:** on `sr_int_pending=1`, schedule delivery ~20µs later (using
+   `VIA_CLOCK_HZ = 783360`, that's ~16 VIA ticks). The timer callback sets
+   `ifr_latched |= IFR_SR` and calls `via_update_irq`.
+3. **VIA IRQ output wiring** — defer; test empirically after the timer works.
+
+**The cheapest smoke test:** use the existing EventScheduler to schedule a one-shot from
+`CudaORBWritten` (via a new Cuda→VIA seam), delivering IFR_SR after ~16 VIA ticks.
+One boot. If `packets > 0`, the timer model is confirmed correct.
+
+**Gate:** run the timer smoke test before building the proper gated implementation.
 
 ## §5 — Bug found during investigation
 

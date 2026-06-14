@@ -1,7 +1,7 @@
 # Project Handoff — resume entry point
 
-> **Status: PAUSED 2026-06-14** · M14 SMOKE TESTS COMPLETE (5 hacks; consume-once model is the bug — need level-triggered Cuda IFR assertion) ·
-> Next = run level-triggered smoke test (§4a); implement only if packets>0 ·
+> **Status: PAUSED 2026-06-14** · M14 RECON COMPLETE (8 smoke tests; all non-timer approaches eliminated — need timer-delayed Cuda SR delivery à la QEMU `cuda_delay_set_sr_int`) ·
+> Next = run timer smoke test (§4a); schedule IFR_SR ~20µs after sr_int_pending via EventScheduler; implement only if packets>0 ·
 > Resume: read this doc, then `docs/planning/M14-FINDINGS-cuda-delivery.md` §4/§4a, then `docs/AGENT-CONTEXT.md`.
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
 
@@ -19,30 +19,32 @@
 > (`SS_NW_DR_AUTOVEC` Task-C HLE, `SS_M10_CGRP` forged table) were **reverted in this M13
 > close-out**. Evidence: `docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.7 / §C-pin.8.
 
-## Resume prompt (M14 — Cuda level-triggered delivery)
+## Resume prompt (M14 — timer-delayed Cuda SR delivery)
 
 > Read `docs/HANDOFF.md` (this HEADLINE), then `docs/planning/M14-FINDINGS-cuda-delivery.md`
-> (full root cause + 5 smoke tests in §4, revised fix direction in §4a), then
+> (full root cause + 8 smoke tests in §4, revised fix direction in §4a), then
 > `docs/AGENT-CONTEXT.md` (frontier + constants).
 >
-> **M14 recon + 5 smoke tests COMPLETE.** The "model-rejection gate" was WRONG — it's a
+> **M14 recon + 8 smoke tests COMPLETE.** The "model-rejection gate" was WRONG — it's a
 > **Cuda device model bug**: the consume-once `sr_int_pending` + deferred `CudaSettle`
-> model doesn't match real hardware. Five smoke tests (§4) narrowed it:
+> model doesn't match real hardware. Eight smoke tests (§4) systematically eliminated
+> every non-timer approach:
 > - Eager ORB-edge delivery unblocked NK→68k (jDR 600×↑, IFR 2→15K), proving lazy delivery
 >   was blocking — but CV-10 timing violation breaks the protocol (packets=0).
 > - SR-read-triggered delivery sets `ifr_latched=0x04` correctly, but `ier=0x00` at that
->   point — the guest enables IER.2 (SR) AFTER clearing IFR.2 via SR read.
-> - **The real bug:** consume-once `sr_int_pending` can't re-assert IFR.2 after the SR read
->   clears it. On real hardware, Cuda's interrupt is **level-triggered** — IFR.2 re-latches
->   as long as TREQ is asserted.
+>   point — the guest enables IER.2 (SR) AFTER clearing IFR.2 via SR read (D+IER trace).
+> - Level-triggered (`treq_asserted`): treq is a PULSE (goes 1→0 within ORB sequence),
+>   not a sustained level — same result as eager (Smoke E).
+> - Non-consuming `sr_int_pending`: SR read consumes before IER enables (Smoke F).
+> - Persistent through SR reads: regresses to baseline CV-10 park (Smoke G).
 >
-> **Next: run the level-triggered smoke test** (§4a). Make `CudaSettle` return RAISE whenever
-> `treq_asserted` (not consume-once); call it on IER writes too. One boot. If `packets > 0`,
-> the level-triggered model is confirmed — then build it properly (env-gated). If not,
-> re-recon before building.
+> **Next: run the timer smoke test** (§4a). Use EventScheduler to schedule IFR_SR delivery
+> ~16 VIA ticks (~20µs) after `sr_int_pending` is set — matching QEMU's
+> `cuda_delay_set_sr_int` model. One boot. If `packets > 0`, the timer model is confirmed
+> — then build it properly (env-gated). If not, re-recon before building.
 >
 > Also fix the §5 bug (SS_NW_TRAMPOLINE=0 existence check, machine_profile.cpp:80).
-> VIA `irq_fn` wiring: defer until the level-triggered test shows whether IFR polling suffices.
+> VIA `irq_fn` wiring: defer until the timer test shows whether IFR polling suffices.
 >
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked. Never global pkill —
 > slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
@@ -60,13 +62,15 @@
 - **M13** — COMPLETE (2026-06-14). Produced the **artifact retraction**: native interrupt delivery
   confirmed working (ed0a 8/8 baseline, genuine vector-$64 frame); the dead `SS_NW_DR_AUTOVEC` and
   `SS_M10_CGRP` mechanisms reverted. See `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
-- **M14** — SMOKE TESTS COMPLETE (2026-06-14). The "model-rejection gate" was WRONG — it's a
+- **M14** — RECON COMPLETE (2026-06-14). The "model-rejection gate" was WRONG — it's a
   **Cuda device model bug**: consume-once `sr_int_pending` doesn't match real hardware's
-  level-triggered interrupt. 5 smoke tests (§4): eager delivery unblocks NK→68k (jDR 600×↑,
-  IFR 2→15K) but CV-10 timing + IER ordering prevent packets; the guest enables IER.2 AFTER
-  clearing IFR.2, and consume-once can't re-assert. Fix = level-triggered CudaSettle (return
-  RAISE while `treq_asserted`, not consume-once) + settle on IER writes. **Gated on one more
-  smoke test (§4a) before building.** See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
+  timer-delayed interrupt. 8 smoke tests (§4) eliminated all non-timer approaches: eager
+  delivery unblocks NK→68k (jDR 600×↑, IFR 2→15K) but CV-10 timing violation; SR-read and
+  IER-write triggered delivery hits IER ordering (guest enables IER.2 AFTER clearing IFR.2);
+  level-triggered treq fails (treq is a pulse not a level); persistent sr_int_pending regresses
+  to CV-10 park. Fix = timer-delayed delivery (~20µs after ORB edge, à la QEMU
+  `cuda_delay_set_sr_int`) via EventScheduler. **Gated on timer smoke test (§4a) before
+  building.** See `docs/planning/M14-FINDINGS-cuda-delivery.md`.
 - **M11a** — COMPLETE (2026-06-13). Frame-PC stability: static RE confirmed r24 is never clobbered by NK (see LEARNINGS 2026-06-13 M11a). 3/3 × 90s acceptance runs: probe match=1/5, no SIGSEGV. No code change.
 - **M11** — COMPLETE (2026-06-13). Aperture at 0x81000000 (vm_mac_acquire_fixed 16MB), MMIO_APERTURE non-hull, SDL the_buffer → aperture, OF video node (640×480×32, "cofb"), T-F6 (13/13). [FB-DIRTY]=0 expected (boot exits 0.3s). Harness 353/353. Next: M12.
 - **M12** — PARTIAL (2026-06-13). Wave0+Wave1 landed (`ddbd8d79`, `348544cd`); boot stable

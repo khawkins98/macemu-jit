@@ -1,6 +1,6 @@
 # NewSheep — Trampoline RE (Task-0) Findings
 
-**Status:** IN PROGRESS · spec `docs/superpowers/specs/2026-06-14-newsheep-trampoline-re-design.md`
+**Status:** COMPLETE (2026-06-14) — **Route A decided**; Q0-A/B/C/D/E/F all CLOSED · spec `docs/superpowers/specs/2026-06-14-newsheep-trampoline-re-design.md`
 **Method:** two instruments (static tbxi+capstone / dynamic QEMU gdbstub), gated on agreement; both on 9.2.
 
 ## Blocking-answer table
@@ -11,7 +11,7 @@
 | Q0-B | Interrupt-setup writes: constants/relocations vs computed-from-OF-tree | **computed(OF-input)** — Trampoline reads `interrupt-map`/`-mask`/`AAPL,interrupt-*` from OF; the routing data derives from the OF device tree, not ROM constants (explains M16's ROM-absent handler PC) | **CONFIRMS** — `getprop interrupt-map` ×6 + `interrupt-map-mask` ×6 observed at runtime; `claim`×11 + `call-method translate` = page-map build. Provenance = computed(OF-input) | ✅ mechanism | **CLOSED** |
 | Q0-C | Can Route B be honest re-binding (relocation), not value-hardcoding? | Writes are `computed(OF-input)` → Route B honest only as a relocation/DT-adaptation, NEVER value-hardcode (see Q0-E table) | consistent (provenance computed → see Q0-E) | ✅ | **CLOSED** |
 | Q0-F | **Who builds CGRP — the Trampoline directly, or the NanoKernel from the device tree the Trampoline produces?** | **CONFIRMED: Trampoline + NanoKernel.** `CGRP` absent from `MacOS.elf`; Trampoline only *reads* `interrupt-map` + *edits* DT via `setprop` + builds page map via `/mmu` claim/translate/map. NanoKernel builds CGRP from the DT downstream | **CONFIRMS** — no NK-struct writes seen from the Trampoline; it reads interrupt-map + claims memory. CGRP construction is downstream (NanoKernel parcel) | ✅ mechanism | **CLOSED** |
-| Q0-E | Route decision (A run / B patch / C reproduce) + SS-integration sketch | _pending_ | _pending_ | — | — |
+| Q0-E | Route decision (A run / B patch / C reproduce) + SS-integration sketch | **Route A — run the real Trampoline + NanoKernel** against a synthesized OF device tree + OF-CI callback (C≡A here since writes are computed(OF-input); B can't supply an OF env by patching). Passes the S3 feasibility check. | (same) | ✅ | **CLOSED** |
 
 ## Evidence
 
@@ -175,3 +175,101 @@ value/count/path differences from OpenBIOS's device tree, exactly the pre-declar
 class. No mechanism-level divergence found.
 
 **Working artifacts:** `/tmp/newsheep/gdbcli.py` (RSP client), `/tmp/newsheep/qemu.log`.
+
+---
+
+## Reconciliation — agreement gate (T0.3)
+
+The two instruments analyze the **same ROM binary** (`66210b4f…`) but in different OF environments
+(our offline disasm vs OpenBIOS at runtime). Applying the **mechanism-level** gate (services /
+write-classes / provenance — never literal values/addresses/counts):
+
+| Mechanism axis | Static | Dynamic | Verdict |
+|---|---|---|---|
+| OF gateway | 3 wrappers, OF entry `[r2-0x60]`, `r2=0x1001e8`, glue `0x21024c` | identical (`r2=0x1001e8`, Trampoline at ELF vaddr) | **agree** |
+| Hardcoded services | `call-method`(`0x20dcc0`), `interpret`(`0x20ddb4`) | same wrappers fired with same hardcoded services | **agree** |
+| Direct service set | 21 enumerated | runtime set ⊆ static set (all predicted) | **agree** |
+| Q0-B provenance | interrupt routing = computed(OF-input) (reads `interrupt-map`) | `getprop interrupt-map`×6 + `-mask`×6 observed | **agree** |
+| Q0-F producer | Trampoline reads DT + claims mem; NanoKernel builds CGRP | no NK-struct writes from Trampoline at runtime | **agree** |
+
+**Expected divergences (pre-declared OpenBIOS≠AppleOF class — logged, NOT blocking):** dynamic shows
+more getprop keys (PCI-config probing), 397× `nextprop` (full live tree-walk) vs static's 1 resolved,
+and concrete device paths (`/pci@f2000000/mac-io@c/…/cdrom@0`). All are value/count/path differences,
+not mechanism differences. **No mechanism-level divergence found → gate PASS; Q0-A/B/C/F CLOSED.**
+
+## Route decision (T0.4 / Q0-E)
+
+**Inputs:** Q0-A = **bounded** (call-surface finite + DT-query data tractable); Q0-B =
+**computed(OF-input)**; Q0-F = **producer is Trampoline + NanoKernel**.
+
+**Truth-table cell (bounded × computed(OF-input)) → Route A**, with **C ≡ A** here (reproducing the
+writes requires reproducing the NanoKernel's CGRP computation *and* supplying its OF interrupt-map
+input — i.e. you end up running/feeding the producer anyway). **Route B is excluded**: the Trampoline's
+blocker is not relocation (OpenBIOS already runs it at its ELF vaddr) but the *absence of an OF
+environment* — which `tbxi build` patching of the parcel cannot supply; a value-hardcode B would be the
+banked forge in a tbxi hat (Q0-C). 
+
+> **DECISION: Route A — run the real Trampoline (`MacOS.elf`) and let it hand off to the real
+> NanoKernel-v02.27, against a SheepShaver-synthesized OpenFirmware client interface + Core99 device
+> tree.** This is the highest-fidelity "solid foundations" rung: the frozen CGRP/IM structures get
+> populated by *real guest code* computing *real values* from the device tree, clearing the whole
+> frozen-struct class at once instead of forging one wall at a time.
+
+**Honest cost (NOT cheap — the `SS_NW_TRAMPOLINE` problem one level up):** Route A's "stub OF" =
+**synthesize the OF device tree the producer reads** + implement an OF client-interface callback that
+services the bounded call set. Concretely, the next milestone must provide:
+1. **An OF-CI callback** (single entry, handed to the Trampoline in r5 at launch; the Trampoline stashes
+   it at `[r2-0x60]` and calls only through the 3 wrappers) dispatching the 21 direct services +
+   `call-method` + a 3-word `interpret` shim (`key?`/`key`/`reset-all`).
+2. **A Core99 OF device tree** answering finddevice/getprop/nextprop — populated from
+   `CORE99-MACHINE-DESCRIPTION.md` + the QEMU device-tree oracle (`<rundir>/device-tree.txt`). The
+   load-bearing properties are `interrupt-map` / `interrupt-map-mask` on
+   `/pci/mac-io/interrupt-controller` (the routing data the NanoKernel turns into CGRP), plus
+   `reg`/`ranges`/`assigned-addresses`/`AAPL,address` for the MMIO layout.
+3. **`call-method` backends:** `read-blocks`/`write-blocks`/`block-size` → SheepShaver's boot disk;
+   `/mmu` `claim`/`translate`/`map` + direct `claim` → SheepShaver's memory/page setup; display
+   methods (`dimensions`/`set-colors`/`fill-rectangle`/`draw-rectangle`) → framebuffer or no-op;
+   `instantiate-rtas` → a minimal RTAS stub.
+4. **Launch + handoff:** load `MacOS.elf` into guest space (`0x100000`/`0x200000`; OpenBIOS proves the
+   ELF vaddr is honorable), set the CHRP entry ABI (r5 = OF-CI callback), jump to `0x20f078`; the
+   Trampoline builds the DT-derived page map and calls `NanoKernelEntry`; the NanoKernel builds CGRP.
+
+**Mechanical-feasibility check (S3) — Route A passes (falsifiable assertion + evidence):** *"`MacOS.elf`
+is relocatable into our guest space and its entry ABI is one we can supply."* Evidence: `ET_EXEC`, 2
+`PT_LOAD` at fixed vaddrs `0x100000`/`0x200000` (total < `0x210260`, comfortably inside SheepShaver's
+guest RAM aperture); a PIC self-reloc stub at entry; **its only external entry dependency is the single
+OF-CI callback pointer** (everything else is the bounded, enumerated call set) — and OpenBIOS already
+demonstrates a working launch at that vaddr. The dependency surface is one well-defined interface we
+implement, not an open-ended firmware. ✅ GO.
+
+## SS-integration sketch — what `SS_NW_TRAMPOLINE` becomes
+
+**Today:** `SS_NW_TRAMPOLINE` (in `rom_patches.cpp` / `sheepshaver_glue.cpp`) is a *partial hand-built
+substitute* — a register-fixup trampoline + entry-vector-slot synthesis + a cluster of staged globals
+(`'Hnfo'@0x68ff4f00`, PIC-rail staging `[[KDP-0x20]+0xf18]`, `[KDP+0xf2c]` TimebaseSpeed, the Execute68k
+emulator pair `[KDP+0x1074]=0x50480000`/`[KDP+0x1078]=0x50460000`). It forges the *outputs* the real
+Trampoline+NanoKernel would produce.
+
+**Route A milestone (proposed `SS_M18_TRAMPOLINE_LLE`, gated + `MachineProfileIsNewWorld()`,
+paravirtual byte-identical):** replace the output-forge with a producer-run:
+
+| Existing `SS_NW_TRAMPOLINE` write | Disposition under Route A |
+|---|---|
+| Entry-vector slot synthesis / register-fixup trampoline | **Replaced** — the real Trampoline + NanoKernel populate the NK dispatch state from the device tree. |
+| `'Hnfo'@0x68ff4f00`, PIC-rail staging, `[KDP+0xf2c]` TimebaseSpeed | **Replaced/redundant** — produced by the real NanoKernel init (these are exactly its outputs). |
+| Execute68k emulator pair `[KDP+0x1074]=0x50480000` / `[KDP+0x1078]=0x50460000` | **KEEP / re-inject post-handoff** — these point at SheepShaver's *own* JIT emulator (mirror base `0x50460000`, DR table `0x50480000`), not the ROM's; the real NanoKernel would point at the ROM emulator, so SS must re-bind this pair after the NanoKernel runs. The one genuinely SS-specific seam. |
+| CGRP family (`*(KDP-0x338)`, `[CGRP+0x38/0x3c/0x40/0x44]`, service `0x503148e0`) | **Guest-populated** — built by the real NanoKernel from our device tree's `interrupt-map`; this is the win (M16's frozen, ROM-absent struct now computed by real code). |
+
+**New code (next milestone):** (1) `of_ci_callback()` + device-tree model (new file, e.g.
+`SheepShaver/src/openfirmware_ci.cpp`); (2) the `call-method` backends wired to SS disk/memory/fb;
+(3) a Trampoline loader + CHRP entry in the newworld boot path; all behind `SS_M18_*` +
+`MachineProfileIsNewWorld()`, with the paravirtual path untouched and `make test-jit`=100.
+
+**Expected next wall (per charter §6, M14-FINDINGS):** the **Cuda device-model IFR/IER bug**
+(`sr_int_pending` never reaches VIA IFR; the NK polls IER) — a *different* regime, which is the
+**GOOD** outcome (producer approach worked; back on the machine-layer mainline with device models
+already staged). Reaching Finder remains the north star, not this milestone's DoD.
+
+## Scope-guard verification
+`git log --stat newsheep-baseline..HEAD` shows **docs-only** (no source files) — RE-only milestone
+respected. The SS integration is the NEXT, code-writing milestone (sketched above, not implemented here).

@@ -112,4 +112,17 @@
   (extra PCI-config getprops, 397× nextprop tree-walk, concrete device paths) logged, not blocking.
   Q0-A/B/C/F all CLOSED.
 
+- **T0.3/T0.4 — agreement gate + ROUTE DECISION (Q0-E).** Mechanism-level agreement gate **PASS**
+  (gateways/services/provenance/producer all agree static↔dynamic; OpenBIOS≠AppleOF value/count/path
+  divergences logged not blocking). Truth-table cell = bounded × computed(OF-input) → **Route A**
+  (C≡A; B excluded). **DECISION: run the real Trampoline (`MacOS.elf`) + NanoKernel-v02.27 against a
+  SheepShaver-synthesized OF client-interface callback + Core99 device tree.** Honest cost stated (not
+  cheap — it's the `SS_NW_TRAMPOLINE` problem one level up: synthesize the DT the producer reads +
+  service call-method on disk/mmu/display + a 3-word interpret shim). Passes the S3 mechanical-
+  feasibility check (ELF relocatable into guest space; single OF-CI entry dependency; OpenBIOS proves
+  the vaddr launch). SS-integration sketch written (what `SS_NW_TRAMPOLINE` becomes; the Execute68k
+  emulator pair `[KDP+0x1074/0x1078]` is the one SS-specific seam to re-inject post-handoff). Next
+  milestone = `SS_M18_TRAMPOLINE_LLE` (code-writing; held for user). Scope-guard: `newsheep-baseline..HEAD`
+  is docs-only. **Task-0 COMPLETE.**
+
 <!-- next entry below -->

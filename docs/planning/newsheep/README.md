@@ -159,28 +159,26 @@ interpretation bankrupt and handed us the exact producer to target.
 - [x] Effort opened; baseline tag `newsheep-baseline`; charter + log + assets + glossary written;
   HANDOFF/AGENT-CONTEXT frontier flipped to NewSheep.
 
-**The process (BINDING — `docs/MILESTONE-WORKFLOW.md`).** The first milestone is the **Trampoline RE
-Task-0**. Steps 1–4 are DONE (2026-06-14); **▶ the next action is step 5 — execute Task-0** per the plan:
+**The process (BINDING — `docs/MILESTONE-WORKFLOW.md`).** The first milestone — the **Trampoline RE
+Task-0** — is **COMPLETE (2026-06-14)**. Steps 1–5 all DONE; **▶ the next action is the next
+milestone: `SS_M18_TRAMPOLINE_LLE` (Route A implementation), HELD for the user** (it writes code).
 - [x] **1. Brainstorm** — done (method/version/budget locked; `DECISIONS.md` log).
 - [x] **2. Spec** — done: `docs/superpowers/specs/2026-06-14-newsheep-trampoline-re-design.md` (rev 2).
 - [x] **3. Plan** — done: `docs/superpowers/plans/2026-06-14-newsheep-trampoline-re.md` (rev 2).
-- [x] **4. Red-team** — done: 3 reviewers, all GO-WITH-FIXES, folded into rev-2 (producer reframe Q0-F,
-  mechanism-level gate, Python gdb-remote client + `-S`). `DECISIONS.md` log + `RESEARCH-LOG.md`.
-- [ ] **5. ▶ NEXT — Execute Task-0** (offline-first, no SheepShaver boots; follow the rev-2 plan —
-  framed as variance-reduction on the Q0-A feasibility gate, not a general "disassemble and see"):
-  - `pip install tbxi`; `tbxi dump -o <dir> <rom>` the in-hand 9.2-era ROM(s); disassemble the
-    **Trampoline = top-level `MacOS.elf`** (capstone, PPC BE) — NOT a parcel; the NanoKernel is the
-    separate `NanoKernel-vNN` parcel.
-  - **Q0-A (GATING): enumerate the OF client-interface calls the Trampoline makes** → bounded-and-
-    stubbable vs open-ended. This decides whether Route A is viable or secretly "write an OpenFirmware."
-  - **QEMU as a Trampoline TRACER (a step, not a backstop):** single-step the Trampoline under QEMU
-    mac99; capture which OF services it calls (→ Q0-A) and which guest addresses it writes with which
-    values (→ Q0-B: constants/relocations vs computed-from-OF-tree). Behavioral/structural only —
-    never our addresses.
-  - Pin (a) what OF state it **reads**, (b) the nanokernel interrupt-setup it **writes** (the frozen
-    CGRP/IM structures), (c) the **gap** vs. our synthesized OF + `SS_NW_TRAMPOLINE`.
-  - **Output:** close Q0-A/B/C in `DECISIONS.md` → the A/B/C route decision, recorded there +
-    `RESEARCH-LOG.md` + a `NEWSHEEP-FINDINGS-*.md`.
+- [x] **4. Red-team** — done: 3 reviewers, all GO-WITH-FIXES, folded into rev-2.
+- [x] **5. Execute Task-0** — **DONE.** Static (`MacOS.elf` capstone disasm; 177/177 OF calls resolved)
+  + dynamic (QEMU mac99 gdbstub via Python RSP client) on the same `66210b4f…` ROM, mechanism-level
+  agreement gate PASS. **Q0-A = BOUNDED, Q0-B = computed(OF-input), Q0-F = Trampoline + NanoKernel** →
+  **ROUTE A DECIDED** (run the real Trampoline + NanoKernel against a synthesized OF-CI + Core99 device
+  tree). Findings + SS-integration sketch: `FINDINGS-trampoline-re.md`; forks closed in `DECISIONS.md`.
+
+**▶ NEXT MILESTONE (held for user — code-writing): `SS_M18_TRAMPOLINE_LLE`.** Implement Route A behind
+`SS_M18_*` + `MachineProfileIsNewWorld()` (paravirtual byte-identical, `make test-jit`=100): an OF
+client-interface callback (`openfirmware_ci.cpp`) serving a Core99 device tree (incl. `interrupt-map`),
+`call-method` backends (disk `read-blocks` / `/mmu` claim·translate·map / display), a 3-word `interpret`
+shim, and a Trampoline loader that launches `MacOS.elf` at its ELF vaddr and lets it hand off to the
+NanoKernel. Run the milestone machine (brainstorm → spec → plan → red-team) before coding. Sketch +
+field-by-field `SS_NW_TRAMPOLINE` reconciliation: `FINDINGS-trampoline-re.md` "SS-integration sketch".
 
 **Parallel dependency**
 - [ ] Source a genuine **Mac OS 9.2.x install ISO** (`ASSETS-AND-TOOLING.md` R2). Task-0 RE starts on

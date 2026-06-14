@@ -7,10 +7,10 @@
 | # | Question | Static finding | Dynamic finding | Agree? | Status |
 |---|----------|----------------|-----------------|--------|--------|
 | Q0-D | Canonical 9.2.x ROM + internal version (the "9.0.1=9.2.2" reframe) | **CLOSED** — `2001-12-19 Mac OS ROM 9.0.1` (md5 `66210b4f…`, == active project ROM) chosen as canonical RE binary; NanoKernel **v02.27**, ROM-file ver only (no embedded OS ver) | n/a | n/a | ✅ |
-| Q0-A | OF client-interface call set the Trampoline makes; bounded-and-stubbable vs open-ended | **BOUNDED** — 3 gateways: 21 direct services (177×), `call-method` (20×, ~14 fixed method names), `interpret` (4×, fixed Forth literals). Surface finite & enumerated; data = standard Core99 DT | _pending_ | _pending_ | static done |
-| Q0-B | Interrupt-setup writes: constants/relocations vs computed-from-OF-tree | **computed(OF-input)** — Trampoline reads `interrupt-map`/`-mask`/`AAPL,interrupt-*` from OF; the routing data derives from the OF device tree, not ROM constants (explains M16's ROM-absent handler PC) | _pending_ | _pending_ | static done |
-| Q0-C | Can Route B be honest re-binding (relocation), not value-hardcoding? | Writes are `computed(OF-input)` → Route B honest only as a relocation/DT-adaptation, NEVER value-hardcode (see Q0-E table) | _pending_ | _pending_ | static done |
-| Q0-F | **Who builds CGRP — the Trampoline directly, or the NanoKernel from the device tree the Trampoline produces?** | **CONFIRMED: Trampoline + NanoKernel.** `CGRP` absent from `MacOS.elf`; Trampoline only *reads* `interrupt-map` + *edits* DT via `setprop` + builds page map via `/mmu` claim/translate/map. NanoKernel builds CGRP from the DT downstream | _pending_ | _pending_ | static done |
+| Q0-A | OF client-interface call set the Trampoline makes; bounded-and-stubbable vs open-ended | **BOUNDED** — 3 gateways: 21 direct services (177×), `call-method` (20×, ~14 fixed method names), `interpret` (4×, fixed Forth literals). Surface finite & enumerated; data = standard Core99 DT | **CONFIRMS** — runtime trace (2000 hits): same gateways, same `r2=0x1001e8`; services ⊆ static set (getprop/getproplen/nextprop/parent/peer/child/finddevice/claim/seek/read/open/canon/…); `call-method` translate/get-key-map/size; `interpret 'key?'` | ✅ mechanism | **CLOSED** |
+| Q0-B | Interrupt-setup writes: constants/relocations vs computed-from-OF-tree | **computed(OF-input)** — Trampoline reads `interrupt-map`/`-mask`/`AAPL,interrupt-*` from OF; the routing data derives from the OF device tree, not ROM constants (explains M16's ROM-absent handler PC) | **CONFIRMS** — `getprop interrupt-map` ×6 + `interrupt-map-mask` ×6 observed at runtime; `claim`×11 + `call-method translate` = page-map build. Provenance = computed(OF-input) | ✅ mechanism | **CLOSED** |
+| Q0-C | Can Route B be honest re-binding (relocation), not value-hardcoding? | Writes are `computed(OF-input)` → Route B honest only as a relocation/DT-adaptation, NEVER value-hardcode (see Q0-E table) | consistent (provenance computed → see Q0-E) | ✅ | **CLOSED** |
+| Q0-F | **Who builds CGRP — the Trampoline directly, or the NanoKernel from the device tree the Trampoline produces?** | **CONFIRMED: Trampoline + NanoKernel.** `CGRP` absent from `MacOS.elf`; Trampoline only *reads* `interrupt-map` + *edits* DT via `setprop` + builds page map via `/mmu` claim/translate/map. NanoKernel builds CGRP from the DT downstream | **CONFIRMS** — no NK-struct writes seen from the Trampoline; it reads interrupt-map + claims memory. CGRP construction is downstream (NanoKernel parcel) | ✅ mechanism | **CLOSED** |
 | Q0-E | Route decision (A run / B patch / C reproduce) + SS-integration sketch | _pending_ | _pending_ | — | — |
 
 ## Evidence
@@ -126,3 +126,52 @@ means the Trampoline's DT-build + page-map AND the NanoKernel's DT→CGRP step.
 service inventory). Resolver method: capstone PPC-BE + backward const-propagation anchored on
 `r2=0x1001e8`; 177/177 + 24/24 OF call sites resolved with zero unresolved (the few `None` argument
 slots are runtime-computed names — the dynamic instrument's job).
+
+---
+
+### Q0-A / Q0-B / Q0-F — dynamic RE: QEMU mac99 Trampoline tracer (T0.2) [QEMU-BEHAVIORAL]
+
+**Rig:** QEMU `qemu-system-ppc -M mac99 -m 512` booting the rig's cached test ISO
+(`/tmp/qemu-rig-cd_test_901.iso` = 9.2.1 installer + the **same** `66210b4f…` 9.0.1 ROM swapped in —
+so static & dynamic analyze one binary), launched with **`-s -S`** (gdbstub on `:1234`, halted at
+reset). **R1 resolved:** no PPC `gdb` on host → drove the stub with a hand-written Python gdb-remote
+(RSP) client (`/tmp/newsheep/gdbcli.py`); breakpoint step-over = remove-bp → single-step → re-insert →
+continue (the naive `c` re-fires the same bp).
+
+**R1 made trivial by a load-bearing finding: OpenBIOS loads the Trampoline at its ELF vaddr.** A
+breakpoint at the static ELF entry `0x20f078` hit at +7.4 s with **PC = `0x20f078`** and
+**`r2 = 0x1001e8`** — identical to the static analysis. So the static addresses (the 3 OF wrappers
+`0x20dbec`/`0x20dcc0`/`0x20ddb4`, the OF-entry TOC slot `[r2-0x60]`) are the runtime addresses; tracing
+reduces to breakpointing those three wrappers and reading r3/args from live memory.
+
+**Trace (2000 OF-wrapper hits in 2.5 s, then capped):**
+- **Direct services** (`0x20dbec`): `getprop`×895, `getproplen`×455, `nextprop`×397, `parent`×97,
+  `peer`×53, `child`×52, `finddevice`×14, `claim`×11, `seek`×5, `read`×5, `open`×3,
+  `instance-to-package`×2, `instance-to-path`×2, `canon`×1, `write`×1, `package-to-path`×1.
+- **call-method** (`0x20dcc0`): `translate`×3, `get-key-map`×1, `size`×1.
+- **interpret** (`0x20ddb4`): `'key?'`×1.
+- **finddevice paths:** `/chosen`, `/`, `/aliases`, `/options`, `/rtas`, `/cpus/@0`,
+  `/cpus/@0/l2-cache`(+`/l2-cache`), `/rom/macos`, **`/pci/mac-io/interrupt-controller`**, and a
+  runtime-resolved concrete boot path `/pci@f2000000/mac-io@c/ata-3@20000/cdrom@0` (one of static's
+  `None` paths, now concrete).
+- **getprop keys:** the standard set led by `name`/`device_type`/`compatible`/`#address-cells`/
+  `interrupt-parent`/`reg`/`model`, **including `interrupt-map`×6 + `interrupt-map-mask`×6** and PCI
+  config keys (`vendor-id`/`device-id`/`class-code`/…).
+
+**Mechanism-level agreement (the gate):**
+- ✅ Same OF gateway mechanism (3 wrappers, hardcoded `call-method`/`interpret`, OF entry at
+  `[r2-0x60]`, `r2=0x1001e8`).
+- ✅ Same service *set* (runtime services ⊆ the static-enumerated surface; every dynamic service was
+  predicted statically).
+- ✅ Same Q0-B provenance class: `interrupt-map`/`-mask` are **read** from OF at runtime → routing data
+  is `computed(OF-input)`, corroborating the static classification and M16's ROM-absent handler PC.
+- ✅ Same Q0-F: the Trampoline reads interrupt-map + claims memory; no NK-interrupt-struct writes —
+  CGRP is built downstream by the NanoKernel.
+
+**Expected divergences (logged, NOT blocking — OpenBIOS ≠ Apple OF, per the gate):** dynamic shows
+**more** getprop keys (PCI-config probing: vendor-id/device-id/class-code/etc.) and **far more**
+`nextprop` (full live tree-walk, 397× vs static's 1 resolved) and concrete device paths — all are
+value/count/path differences from OpenBIOS's device tree, exactly the pre-declared expected-divergence
+class. No mechanism-level divergence found.
+
+**Working artifacts:** `/tmp/newsheep/gdbcli.py` (RSP client), `/tmp/newsheep/qemu.log`.

@@ -89,4 +89,27 @@
   Two NanoKernel parcels in the dump (v02.27 active per Configfile, v02.24 alternate); CGRP-builder
   disasm target (Q0-F) = `NanoKernel-v02.27`. FINDINGS Q0-D row + evidence block filled.
 
+- **T0.1 — static RE of the Trampoline (Q0-A/B/F) [STATIC].** `MacOS.elf` = Trampoline (ELF PPC-BE,
+  entry `0x20f078`, exec `0x200000` / data `0x100000`). Disassembled with capstone → `/tmp/newsheep/
+  tramp.asm`. **OF gateway pinned:** OF entry ptr at TOC slot `[r2-0x60]` (`r2=0x1001e8`), indirect glue
+  `0x21024c`, reached by **3 wrappers** — `0x20dbec` (177× direct services), `0x20dcc0` (20× hardcoded
+  `call-method`), `0x20ddb4` (4× hardcoded `interpret`). Resolved **177/177 + 24/24** call sites via
+  backward const-prop, 0 unresolved. **Q0-A = BOUNDED:** 21 direct services + 14 call-method targets +
+  4 interpret Forth literals (`key?`/`key`/`reset-all`, fixed — not arbitrary input). finddevice paths
+  + getprop keys all standard Core99 DT. **Q0-B = computed(OF-input):** Trampoline reads `interrupt-map`/
+  `-mask`; no NK-struct writes (only 12 `setprop` DT edits, 5 netboot). **Q0-F = CONFIRMED Trampoline +
+  NanoKernel** (`CGRP` absent from `MacOS.elf`; NanoKernel-v02.27 parcel builds it downstream).
+
+- **T0.2 — dynamic RE: QEMU mac99 gdbstub tracer (Q0-A/B/F) [QEMU-BEHAVIORAL].** Booted the rig's
+  cached test ISO (same `66210b4f…` ROM) under `qemu-system-ppc -M mac99 -s -S`; drove the gdbstub with
+  a hand-written Python RSP client (`/tmp/newsheep/gdbcli.py`) — **R1 resolved** (no PPC gdb on host).
+  **Load-bearing find: OpenBIOS loads the Trampoline at its ELF vaddr** — breakpoint at `0x20f078` hit
+  with PC=`0x20f078`, `r2=0x1001e8` (identical to static), so the 3 wrappers are at their static
+  addresses. Traced 2000 OF-wrapper hits: services ⊆ static set; **`getprop interrupt-map`×6 +
+  `interrupt-map-mask`×6 + `claim`×11 + `call-method translate`** observed → confirms Q0-B
+  computed(OF-input) provenance + Q0-F (read interrupt-map, no NK-struct write). **Mechanism-level
+  agreement gate: PASS** (same gateways/services/provenance). Expected OpenBIOS≠AppleOF divergences
+  (extra PCI-config getprops, 397× nextprop tree-walk, concrete device paths) logged, not blocking.
+  Q0-A/B/C/F all CLOSED.
+
 <!-- next entry below -->

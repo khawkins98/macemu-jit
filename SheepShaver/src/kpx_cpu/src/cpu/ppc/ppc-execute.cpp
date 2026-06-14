@@ -1626,6 +1626,12 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
 		regs().bat[spr - powerpc_registers::SPR_IBAT0U] = s;
 		break;
+	case 560 ... 575:	/* High BATs (SPR 0x230..0x23f): IBAT4-7U/L, DBAT4-7U/L.
+						 * Dead-code insurance (plan AD-2): feature-gated off on every
+						 * presentable PVR, so never read in production — but capture the
+						 * write rather than drop it via default. Mirrors the bat[16] arm. */
+		regs().high_bat[spr - 560] = s;
+		break;
 	case 22:	/* DEC — M2: honored on the virtual clock (was: dropped) */
 		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
 			VirtClockNoteDECWritePC(&g_virt_clock, pc());  // W2-4 cadence capture

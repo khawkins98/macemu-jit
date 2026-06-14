@@ -868,6 +868,11 @@ static_assert(offsetof(powerpc_registers, reserve_valid) == 1060,
 static_assert(offsetof(powerpc_registers, reserve_addr) == 1064,
               "reserve_addr offset changed — update PPCR_RESERVE_ADDR in ppc-jit.cpp");
 #endif
+/* high_bat[16] (SPR 560-575 insurance) MUST remain the LAST field of the struct,
+ * immediately after msr — the JIT-safe appended-after tail (see ppc-registers.hpp).
+ * If anything is added after it, move this guard so the LAST field is checked. */
+static_assert(offsetof(powerpc_registers, high_bat) == offsetof(powerpc_registers, msr) + sizeof(uint32),
+              "high_bat must remain the LAST field (immediately after msr)");
 
 #include <time.h>
 #include <unistd.h>

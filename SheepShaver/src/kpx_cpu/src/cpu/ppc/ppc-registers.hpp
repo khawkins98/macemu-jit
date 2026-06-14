@@ -277,6 +277,15 @@ struct powerpc_registers
 								// Stored state only in Wave 0 - MSR[DR/EE] semantics land in M3a.
 								// COLD VALUE MUST BE 0xf072 (init in powerpc_cpu init/reset) so
 								// mfmsr-before-any-mtmsr is byte-identical to the old hardcode.
+	uint32 high_bat[16];		// High BAT registers (SPR 560-575): IBAT4U/L..IBAT7U/L,
+								// DBAT4U/L..DBAT7U/L. DEAD-CODE INSURANCE for SPR 560-575: the NK's
+								// 24 high-BAT writes are feature-gated off on every PVR SheepShaver can
+								// present (gate bit 0x20 never set for SS PVR 0x000c0000; see plan AD-2),
+								// so this is never read in production — kept as cheap harmless state
+								// so the dropped writes are captured rather than silently discarded.
+								// MUST stay LAST (see the static_assert in ppc-cpu.cpp). Stored state
+								// only; JIT mtspr/mfspr for these SPRs fall back to the interpreter,
+								// so its exact offset is irrelevant to codegen.
 };
 
 #endif /* PPC_REGISTERS_H */

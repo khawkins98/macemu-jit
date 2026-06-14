@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku pass (2026-06).
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** one-off review synthesis complete — review actions landed
+>
+
 # Guest UI Introspection — Multi-Lens Review Synthesis & Action Plan
 
 > **Date:** 2026-06-06 · **Updated:** 2026-06-06 · **Status:** 🟡 review actions landed; now in S4 (first real-world workload)

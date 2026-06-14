@@ -3,7 +3,7 @@
 > **Status:** 📖 Reference · **Created:** 2026-06-07 · **Updated:** 2026-06-07
 > **Why this doc exists:** an AI agent (or human) that can run repo Python already has everything it needs to
 > *observe and drive* the SheepShaver guest — `from sse2e import uidump, vnc`. No MCP server required. This
-> is the "agent surface" (proposal P4a in `docs/planning/E2E-TOOLKIT-REVIEW-AND-MCP-PROPOSAL.md`). An MCP
+> is the "agent surface" (proposal P4a in `docs/archive/2026-06/planning/E2E-TOOLKIT-REVIEW-AND-MCP-PROPOSAL.md`). An MCP
 > wrapper only earns its keep for an agent that *cannot* execute repo Python (a remote/sandboxed model).
 
 ## The two sensors + the actuator

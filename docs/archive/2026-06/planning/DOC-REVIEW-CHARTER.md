@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku pass (2026-06).
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** never dispatched — superseded by manual doc sweep 2026-06-10
+>
+
 # Documentation Review & CHANGELOG Reconciliation — Agent Charter
 
 > **Status:** ⏸ Never dispatched — superseded by manual doc sweep 2026-06-10 · **Created:** 2026-06-07 · **Updated:** 2026-06-10

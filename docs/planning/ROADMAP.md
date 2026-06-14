@@ -76,7 +76,7 @@ and no SIGSEGV. No code change needed. M11a → COMPLETE.
 
 ## M11: Framebuffer aperture + OF node + SDL blit ✅ COMPLETE
 
-Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md`. Tasks A–D done.
+Plan: `docs/archive/2026-06/superpowers/plans/2026-06-13-m11-framebuffer.md`. Tasks A–D done.
 16 MB aperture at 0x81000000 (quiet mode: vm_mac_acquire_fixed; MMIO hull unchanged),
 SDL the_buffer redirected to aperture, OF display node published (640×480×32, "cofb"),
 MMIO_APERTURE non-hull contract verified by T-F6 unit test (13/13). [FB-DIRTY]=0 in
@@ -85,7 +85,7 @@ Harness 353/353. Commits: 4ba87d8d (T-F6), 8f4197fa (Tasks A–D), 46c31ee7 (pos
 
 ## M12: Display pixels — Wave0+Wave1 stable, pixel gate FAIL ⏸ PARTIAL (2026-06-13)
 
-Plan: `docs/planning/superpowers/plans/2026-06-13-m12-display-pixels.md`.
+Plan: `docs/archive/2026-06/superpowers/plans/2026-06-13-m12-display-pixels.md`.
 - **Task A (Wave0)** ✅: NW lowmem extended 1MB → 32MB; fixes crash at ea=0x010020c8. Commit `ddbd8d79`.
 - **Task B (VideoDriverStub)** ✅: VideoDriverStub verified; kOpenCommand path confirmed.
 - **Task C (pixel gate)** ❌ FAIL: Boot stable 30+ seconds (dec_expiries=2000+) but irq_fired=0.

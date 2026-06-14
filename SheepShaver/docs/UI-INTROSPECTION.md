@@ -386,7 +386,7 @@ the spin-wait's exit — triggering the VBL-timer-starvation trap documented in 
 Feature-detect with `"menuBar" in snap.raw` rather than asserting on schema version.
 
 For the full action plan and prioritized queue, see
-`docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`.
+`docs/archive/2026-06/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`.
 
 ---
 

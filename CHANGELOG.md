@@ -1604,7 +1604,7 @@ Post-M1 diagnostic spike (2026-06-10):
 ### [e2e][docs] E2E toolkit review — `drive.py` refactor, agent API, discoverable doc map
 
 Tidy-up + coherence pass on the E2E harness before handing it to parallel work, adversarially reviewed
-(`docs/planning/E2E-TOOLKIT-REVIEW-AND-MCP-PROPOSAL.md`). The review flipped the plan: the first job was a
+(`docs/archive/2026-06/planning/E2E-TOOLKIT-REVIEW-AND-MCP-PROPOSAL.md`). The review flipped the plan: the first job was a
 **refactor**, not docs. Shipped:
 - **`sse2e/drive.py`** (`f97310bd`) — extracted the boot/drive/gate primitives + the dedup'd `quit_app` /
   `clean_shutdown` / `reactor_shutdown` (was verbatim-duplicated across `_quit_to_finder`/`_quit_workload`,
@@ -1825,7 +1825,7 @@ global coords). Review-driven Plan-1 hardening also landed: honest modality from
 and the benchmark's quit-to-Finder is now a definitive "Speedometer gone + Finder front" check
 (heuristic kept as fallback). DX: `make ui-dump` CLI + `Snapshot.render()` ASCII layout,
 `wait_for_window`, `click_point`. Canonical reference `SheepShaver/docs/UI-INTROSPECTION.md` updated;
-action plan in `docs/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`. Plans: `…-p2a-dialog-items.md`.
+action plan in `docs/archive/2026-06/planning/UI-INTROSPECTION-REVIEW-SYNTHESIS.md`. Plans: `…-p2a-dialog-items.md`.
 **Plan 2b (control state):** control-type items also emit `value`, `hilite` (255 = dimmed/disabled),
 and a self-checking `crect` (the `ControlRecord` rect, which must equal the item rect); text with
 `^0`–`^3` is flagged `hasParams` (resolution deferred to Backend B). Python `Item.checked`/`.dimmed`/

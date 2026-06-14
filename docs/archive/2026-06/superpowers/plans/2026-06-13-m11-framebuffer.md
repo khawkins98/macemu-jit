@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku pass (2026-06).
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete — M11 shipped 2026-06-13
+>
+
 # M11 — Framebuffer: aperture registration + OF display node + SDL blit
 
 > **Status: COMPLETE (2026-06-13)** · Branch: `macos-arm64`

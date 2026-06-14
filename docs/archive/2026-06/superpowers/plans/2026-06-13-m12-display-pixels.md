@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku pass (2026-06).
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone partial — M12 Wave0+Wave1 landed, frontier captured; superseded by M13
+>
+
 # M12 — Display pixels: get Mac OS to write to the framebuffer aperture
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

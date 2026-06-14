@@ -4,57 +4,39 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-13, post-M12-partial)
+## Current frontier (2026-06-14)
 
-**M10 CGRP init + 68k EXT delivery — COMPLETE (2026-06-13).** Gate: `SS_M10_CGRP=1`.
-⚠️ **Reframed by M13:** M10's `0x5000ed08` probe-match was the CGRP-STUB→DR_WARM injection now
-FALSIFIED (crashes the DR); retained as a negative result, not a working delivery. See M13-FINDINGS.
-**M11a frame-PC stability — COMPLETE (2026-06-13).** No code change.
-**M11 Framebuffer aperture + OF node + SDL blit — COMPLETE (2026-06-13).** Gate: `SS_M11_FB=1`.
-- 16 MB aperture at 0x81000000 (`vm_mac_acquire_fixed`), SDL `the_buffer` → aperture.
-- OF display node published (640×480×32, "cofb"). MMIO hull unchanged (T-F6 green).
+**M10 / M11a / M11 — COMPLETE (2026-06-13)** (detail: ROADMAP + CHANGELOG). Gates `SS_M10_CGRP=1` /
+`SS_M11_FB=1`. **Load-bearing:** M10's `0x5000ed08` probe-match was the CGRP-STUB→DR_WARM injection now
+**FALSIFIED** (crashes the DR) — a negative result, NOT a working delivery (see M13-FINDINGS). M11 = 16 MB
+aperture at 0x81000000 + OF display node ("cofb"); M11a = r24 never NK-clobbered (no code change).
 
-**M12 PARTIAL — Wave0+Wave1 landed; pixel gate FAIL; frontier captured.**
-- **Wave0** (`ddbd8d79`): NW lowmem extended 1MB → 32MB; fixes ea=0x010020c8 crash.
-- **Wave1** (`348544cd`): Anonymous zero at 0xFF000000–0xFFFFFFFF; fixes ea=0xFFFFEFD0.
-  The DR sign-extends 16-bit negative 68k EAs (0xEFD0 → 0xFFFFEFD0). Probe confirmed
-  0x00FFEFD0 = 0 at boot; both forms return zero — no behavioral difference.
-- **Boot stable** 30+ seconds (dec_expiries=2000+) but `irq_fired=0`, `[FB-DIRTY]=0`.
-- **A-trap wall**: CGRP routes EXT → ROM+0xED08, which hits A-trap 0xA9A8 at ROM+0xED06
-  before Mac OS Trap Dispatch Table is loaded. The A-line vector is `bra.s *` → parks.
-- Gate: `SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1` (NOT SS_M10_CGRP — it kills the boot).
-- Harness 353/353. Machine tests ALL PASS. e2e-test 122 passed. make e2e PASS.
+**M12 PARTIAL — Wave0+Wave1 landed; pixel gate FAIL; frontier captured.** Wave0 (`ddbd8d79`): NW lowmem
+1MB→32MB. Wave1 (`348544cd`): anon-zero 0xFF000000–0xFFFFFFFF (sign-extended 68k EAs). Boot stable 30s+
+(dec_expiries=2000+) but `irq_fired=0`, `[FB-DIRTY]=0`. Gate: `SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1`
+(NOT `SS_M10_CGRP` — it kills the boot). Harness 353/353; machine tests + e2e PASS.
 
-**M13 STRATEGY DECIDED (2026-06-13), REDRAFTED (2026-06-14).**
-Decision: `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` ("COMPLETE OUR OWN"). Findings:
-`docs/planning/M13-FINDINGS-interrupt-delivery.md` (verified 3-stage diagnosis). Plan:
-`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`.
-The "A-trap 0xA9A8 at ED06" wall framing (line 21) is **WRONG/superseded.** Verified: the 68k handler
-`0x5000ED08` never runs; the 68k world spins starved for ticks. Delivery is a 3-stage chain (NK EXT
-consume works → NK→DR handoff missing → DR autovector never fires); the handoff needs a registered
-CGRP handler never installed (CGRP+0x20=1, table empty) — **circular** (registration needs the boot
-to advance past the tick-starved spin).
-**Decided model:** keep SheepShaver + Apple's NanoKernel; the gap is **unwired eager interrupt
-delivery** + the **unmodeled EXT-fallback→DR-autovector handoff** at `0x50325f00` (set DR `cr2lt`) —
-wiring + RE, not silicon. Do NOT fork the NK / switch base (DingusPPC = wrong OldWorld path) / borrow
-device models (we have them). **Host-side 68k injection falsified 5× AND forging the CGRP table
-(= M10 crash) — do NOT retry** (warnings in the STUB code). `irq_fired` is MISLEADING (NK-level
-consume, not 68k delivery). NewWorld is **paravirtual** (software interrupt struct at `*(0x68ffefd0)`,
-NOT VIA IFR/IER). The DR's interrupt trigger is register/context state (no pokable memory latch).
-**Plan tasks (step-0 RESOLVED 2026-06-14 — plan Rev 2):** wall = **idle spin `0x50468ae4`** (NOT the
-MMU fly-by `0x50326050`); **eager delivery FALSIFIED** — EXT already saturates the fallback `0x50325f00`
-≥10000× in baseline, forcing 7× more EXT does NOT advance the boot (`0x5000ED08` never runs). So
-**Task A is demoted to a thin EXT precondition (`SS_NW_PIC` leg); Task C is the sole lever** = HLE the
-NK→DR handoff at `0x50325f00` (`SS_NW_DR_AUTOVEC`, set DR `cr2lt`). B = QEMU oracle (handler→DR signal).
-Keystone open test: does running `0x5000ED08` advance the boot to where registration (`0x5031b290`,
-kcall sel 1) self-sustains? — eager EXT did NOT break that circularity. Flip-last.
+**M13 — STRATEGY DECIDED (2026-06-13), plan REDRAFTED (2026-06-14). The canonical docs are authoritative
+over this summary:** `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` ("COMPLETE OUR OWN"),
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` (verified 3-stage diagnosis),
+`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md` (plan Rev 2).
+- **Model:** keep SheepShaver + Apple's NanoKernel; the gap is unwired interrupt delivery + the
+  unmodeled EXT-fallback→DR-autovector handoff at `0x50325f00` (set DR `cr2lt`) — wiring + RE, not silicon.
+  Do NOT fork the NK / switch base (DingusPPC = wrong OldWorld path) / borrow device models (we have them).
+- **Load-bearing negatives (do NOT retry):** host-side 68k injection falsified 5×; forging the CGRP table
+  = M10 crash (warnings in the STUB code). NewWorld is **paravirtual** (software int struct at `*(0x68ffefd0)`,
+  NOT VIA IFR/IER; the DR's trigger is register/context state, no pokable memory latch).
+  `irq_fired` is MISLEADING (NK-level consume, not 68k delivery).
+- **Plan Rev 2 (step-0 RESOLVED 2026-06-14):** wall = idle spin `0x50468ae4` (NOT MMU fly-by `0x50326050`);
+  **eager delivery FALSIFIED** (EXT already saturates fallback `0x50325f00` ≥10000×; 7× more EXT does not
+  advance the boot, `0x5000ED08` never runs). **Task A demoted to a thin EXT precondition (`SS_NW_PIC` leg);
+  Task C is the sole lever** = HLE the NK→DR handoff at `0x50325f00` (`SS_NW_DR_AUTOVEC`, set DR `cr2lt`).
+  B = QEMU oracle (handler→DR signal). Keystone test: does running `0x5000ED08` advance to where
+  registration (`0x5031b290`, kcall sel 1) self-sustains? Flip-last.
 
-**Tooling added (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress
-snapshot. Boots all-on cluster, emits `[NW-PROG verdict]`. Report-only by default.
-**CRITICAL CAVEAT:** All-on boot is ~50/50 non-deterministic. A post-EXT SIGSEGV is NOT
-a regression — it's the known frontier wall. Classify by durable markers (`[DR68K] first
-instruction`, `EXT delivered #1`), not SIGSEGV presence. Full rationale: LEARNINGS
-2026-06-13 "NW frontier boot is non-deterministic".
+**Tooling (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress snapshot (all-on
+cluster → `[NW-PROG verdict]`, report-only). Its load-bearing non-determinism caveat (post-EXT SIGSEGV
+≠ regression; classify by durable markers) is in the Instruments section below.
 
 ## Boot recipes
 
@@ -63,11 +45,10 @@ instruction`, `EXT delivered #1`), not SIGSEGV presence. Full rationale: LEARNIN
   (acquires a lease under /tmp/ss-slots/, per-slot prefs/logs/diag, SIGTERM at deadline
   so atexit dumps fire, prints SLOT/RUNDIR/LOG). Reap strays: `SheepShaver/tools/ss-reap.sh`.
   Full doc: `SheepShaver/tools/README-slots.md`. Concurrent boots are SAFE (proven).
-- Default diagnostic config = newworld, 9.0.1 ROM, nogui, no disk (the wrapper's default
-  template). Standard env is baked in (SS_TERM_DUMP, SS_NW_TRAMPOLINE, SS_ROM_LENIENT).
-- Capture discipline: SIGTERM (the wrapper does this), never SIGKILL/SIGALRM — they skip
-  the atexit telemetry dumps. Heartbeat silence in late-boot regimes is normal; the
-  term-dump is the capture.
+- Default diagnostic config = newworld, 9.0.1 ROM, nogui, no disk; standard env baked in
+  (SS_TERM_DUMP, SS_NW_TRAMPOLINE, SS_ROM_LENIENT).
+- Capture discipline: SIGTERM (the wrapper does this), never SIGKILL/SIGALRM — they skip the atexit
+  telemetry dumps. Heartbeat silence in late-boot regimes is normal; the term-dump is the capture.
 
 ## Instruments (caveats are load-bearing)
 
@@ -208,25 +189,18 @@ the standalone `SS_NW_IRQ_CONSUME`; full disposition in MACHINE-LAYER-PLAN re-sc
 
 ## Gate tiers (see MILESTONE-WORKFLOW.md §6/§6b for the policy)
 
-- **Run tiers via `tools/gates.sh <inner|task|full> [--reason "…"]`** — read its
-  `GATE …: PASS|FAIL` summary lines and the final `GATES <tier>: PASS|FAIL` verdict,
-  NOT the raw gate output (on FAIL it prints the failing gate's last 20 lines; full
-  per-gate logs stay in the printed tmpdir for audit). Boot assertions likewise:
-  `ss-slot-boot.sh --expect 'PAT;;…' [--absent 'PAT;;…']` prints
-  `EXPECT: n/m present, k absent-violations` + `BOOT-VERDICT: PASS|FAIL` (exit
-  0/3) — grep targets, not log reading.
+- **Run tiers via `tools/gates.sh <inner|task|full> [--reason "…"]`** — read the
+  `GATE …: PASS|FAIL` summary lines + final `GATES <tier>: PASS|FAIL` verdict, not raw output.
+  Boot assertions: `ss-slot-boot.sh --expect 'PAT;;…' [--absent 'PAT;;…']` →
+  `EXPECT: n/m present` + `BOOT-VERDICT: PASS|FAIL` (exit 0/3) — grep targets, not log reading.
 - **Per-commit (inner)**: `make build-ss` + `SS_HARNESS_BATCH=1 make test-jit` (353/353)
-  + `make -C src/machine test` (ALL PASS). ~1 minute warm.
-- **Per-task (final commit)**: + plain `make test-jit` (authoritative) + `make e2e-test`.
-- **NewWorld observe line (report-only)**: `make nw-northstar` — the standing "how far did
-  the NewWorld boot get?" signal (all-on cluster boot → `[NW-PROG verdict]`). Run at task
-  close on any newworld-path change; quote the verdict. NOT a failing gate (boot is
-  non-deterministic — bare SIGSEGV ≠ regression; the verdict classifies by durable markers).
-  A `REGRESSED(...)` = real below-frontier break.
-- **Risk-based**: paravirtual `make e2e` — REQUIRED when the change touches code
-  reachable on paravirtual (shared functions, non-gated lines); SUBSTITUTABLE by the
-  structural-inertness argument + the gated-off byte-identical A/B boot when every new
-  line is inside MachineProfileIsNewWorld()/env gates (state which in the commit).
+  + `make -C src/machine test`. **Per-task**: + plain `make test-jit` (authoritative) + `make e2e-test`.
+- **NewWorld observe line (report-only)**: `make nw-northstar` → `[NW-PROG verdict]` at task close on
+  any newworld-path change. NOT a failing gate (non-deterministic; classify by durable markers — see
+  the load-bearing caveat under Instruments). A `REGRESSED(...)` = real below-frontier break.
+- **Risk-based**: paravirtual `make e2e` — REQUIRED when the change touches code reachable on
+  paravirtual; SUBSTITUTABLE by the structural-inertness argument + a gated-off byte-identical A/B
+  boot when every new line is inside `MachineProfileIsNewWorld()`/env gates (state which in the commit).
 - Doc-only commits: no gates.
 
 ## Standing rules (the short list)
@@ -242,13 +216,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: M13 NewWorld interrupt delivery (redrafted).** Plan:
-`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`. Strategy:
-`docs/planning/NANOKERNEL-STRATEGY-DECISION.md`. Findings: `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
-Step-0 recon (pin the wall + eager-delivery experiment) runs in parallel — the plan consumes its result.
-Prior recon (complete): `docs/planning/machine/FRAMEBUFFER-RECON.md`.
-Keep-active machine docs: `CORE99-MACHINE-DESCRIPTION.md`, `M1-DEVICE-CONFORMANCE.md`,
-`ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md`.
-Archived milestone recon: `docs/archive/2026-06/machine/`.
-Archived plans: `docs/archive/2026-06/superpowers/plans/`.
+**Next task: M13 NewWorld interrupt delivery (redrafted).** Plan / Strategy / Findings:
+`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`,
+`docs/planning/NANOKERNEL-STRATEGY-DECISION.md`, `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
+Keep-active machine docs (`docs/planning/machine/`): `CORE99-MACHINE-DESCRIPTION.md`,
+`M1-DEVICE-CONFORMANCE.md`, `ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md` (prior recon, complete).
+Archived: `docs/archive/2026-06/{machine,superpowers/plans}/`; session log
+`docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
 Knob reference: `SheepShaver/docs/DIAGNOSTICS.md`. Process: `docs/MILESTONE-WORKFLOW.md`.

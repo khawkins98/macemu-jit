@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku pass (2026-06).
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete — M11a shipped 2026-06-13
+>
+
 # M11a — Frame-PC stability: reliable interrupted-68k-PC at STUB entry
 
 > **Status: COMPLETE 2026-06-13** · Branch: `macos-arm64`

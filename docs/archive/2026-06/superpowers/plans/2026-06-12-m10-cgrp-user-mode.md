@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku pass (2026-06).
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** milestone complete — M10 shipped 2026-06-13
+>
+
 # M10 — User-mode DR + CGRP initialization → 68k interrupt handler fires
 
 > **Status: ✅ COMPLETE 2026-06-13** · Branch: `macos-arm64`

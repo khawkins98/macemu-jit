@@ -36,4 +36,16 @@
   - **Win condition = clear the IM-init class; expected next wall = M14 `[ALARM]` boot-gate, NOT
     Finder.** R3 (non-IM wall) is the GOOD outcome (back on machine-layer mainline).
 
+- **Task-0 brainstorm decisions (2026-06-14):** (1) **both instruments gated on agreement** (static
+  `tbxi`-RE + QEMU trace; divergence = own investigation); (2) **both on 9.2** (version-matched);
+  (3) **QEMU tracer required, open budget** (no static-only fallback). See `DECISIONS.md` log.
+- **NewWorld ROM collection found + banked (2026-06-14).** User pointed to
+  `~/Downloads/New_World_Mac_Roms`; copied 19 ROM files (1998→2003 progression) to
+  `/Users/Shared/macemu/newworld-roms/` + `MANIFEST.txt` (md5s). Key facts: (a) filename version =
+  ROM-*file* version, NOT the OS version; (b) our active "9.0.1" ROM (`66210b4f…`) is byte-identical
+  to the folder's `2001-12-19 Mac OS ROM 9.0.1` — dated **9.2.2 era**; (c) "source 9.2 ROM first" is
+  effectively SOLVED (8.4≈9.2/9.2.1, 9.0.1≈9.2.2 in hand); (d) **reframe to verify via `tbxi`:** the
+  M-series likely ran against a 9.2-era ROM all along. Remaining 9.2 gap = system software (not on
+  the Task-0 RE path). Updates `ASSETS-AND-TOOLING.md` + `DECISIONS.md` Q0-D (🟢 mostly closed).
+
 <!-- next entry below -->

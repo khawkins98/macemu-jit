@@ -22,7 +22,7 @@
 | Kickoff: donor studies (`DONOR-NOTES.md`) | ✅ DONE | — | — |
 | Kickoff: 9.2.x ISO | ✅ DONE — in hand (`ASSETS` R2) | copy into asset area at S4 | — |
 | **S1 — paged MMU** | **▶ IN PROGRESS — Task-0 recon DONE → RESIDUE-PASS (rev-2, 3-reviewer; adversary FALSIFIED 2 claims)** | **S1-impl gating first step:** model high BATs (SPR 560–575, currently dropped `ppc-execute.cpp:1651`) + fix oracle contract to incl `HIGH_BAT[16]` + measure FINE/4KB-PTE coverage → *earns* the window. **Walker/softmmu = DEFAULT until measured.** `FINDINGS-s1-paged-mmu.md` | — (unblocked) |
-| S2a — OF-CI + Core99 DT | **Task-0 plan rev-2 (3-reviewer red-team folded)** | execute the S2a Task-0 recon (`2026-06-14-ss-m18-s2a-ofci-dt-task0.md`); DT-coverage closure + interrupt-map = named hand-offs to first integration boot | — (unblocked) |
+| S2a — OF-CI + Core99 DT | **Task-0 recon DONE → RESIDUE-PASS (3-reviewer folded); S2a-impl CLEARED** | open S2a-impl: new `openfirmware_ci.{cpp,h}` + DT model (incl scaffolding nodes `/chosen` `/aliases` `/options` `/rtas` `/cpus` `/rom/macos`) + unit test. **Binding (ADV-1):** finddevice = component-wise unit-address-insensitive match; battery uses SHORT static spellings. interrupt-map value + DT-coverage closure = named hand-offs to first integration boot | — (unblocked) |
 | S2b — loader + /mmu + handoff | blocked | — | S1 |
 | S3 — two-supervisor reconciliation | blocked | S3 deep Task-0 | S1 + S2 |
 | S4 — disk IM-init → CGRP | blocked | S4 Task-0 (live trace) | S3 (ISO in hand) |

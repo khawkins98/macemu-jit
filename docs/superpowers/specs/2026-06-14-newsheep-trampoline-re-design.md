@@ -83,6 +83,15 @@ B or C," or "park with the integration cost documented." Partial findings beat s
 (2) **both on 9.2** (version-matched: the in-hand 9.2-era ROM + QEMU 9.2.1); (3) **QEMU tracer
 required, open budget** — no static-only fallback.
 
+**Leverage banked SS-milestone RE (do not re-derive).** The plan's "Prior-art" section catalogs the
+M8→M17 + machine-layer facts the RE cross-references: the KDP/ROMBase/exception-entry constants, the
+M16 CGRP descriptor + service-routine layout (`*(KDP-0x338)=0x68ffc1c0`, gate/guard/base/count, `0x503148e0`),
+the Execute68k emulator pair, and the **existing `SS_NW_TRAMPOLINE` synthesis** we are deciding to
+replace/augment. Critically, **three address spaces stay distinct** — the Trampoline-ELF vaddr (static),
+QEMU's guest map (dynamic, NOT our addresses), and SheepShaver's synthesized space (where the M-series
+facts live, and the target for the SS-integration sketch). Structures are matched by tag/field-role
+across spaces, never by literal address.
+
 ### Instrument 1 — static (`tbxi` + capstone)
 1. `pip install tbxi`; `tbxi dump` the candidate 9.2-era ROMs (`/Users/Shared/macemu/newworld-roms/`,
    esp. `Mac OS ROM 8.4` ≈ 9.2/9.2.1 and `9.0.1` ≈ 9.2.2 = our active ROM). Read internal

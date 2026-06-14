@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu
 
 test: $(TESTS)
 	./test_machine_profile
@@ -20,6 +20,7 @@ test: $(TESTS)
 	./test_dev_cuda
 	./test_adb_stub
 	./test_dev_openpic
+	./test_paged_mmu
 
 test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/machine_profile.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_machine_profile.cpp machine_profile.cpp
@@ -72,6 +73,11 @@ test_adb_stub: test_adb_stub.cpp adb_stub.cpp ../include/adb_stub.h
 # M3b Wave 2 (stop-rule disposition: model + unit tests, EXC_EXTERNAL wiring deferred)
 test_dev_openpic: test_dev_openpic.cpp dev_openpic.cpp ../include/dev_openpic.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dev_openpic.cpp dev_openpic.cpp
+
+# SS_M18 S1 Task A2: mechanism-agnostic PPC classic MMU translation core.
+# Standalone (no kpx_cpu link); spec-derived differential-implementation oracle.
+test_paged_mmu: test_paged_mmu.cpp paged_mmu.cpp ../include/paged_mmu.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_paged_mmu.cpp paged_mmu.cpp
 
 clean:
 	rm -f $(TESTS)

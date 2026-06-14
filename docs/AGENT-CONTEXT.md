@@ -37,22 +37,27 @@ pre-implementation red-team round (SHA `df627fe0`) fired the **pre-authorized ea
   larger; documented as the re-entry point if 9.x becomes a hard requirement.
 - **RE banked (Q1–Q7): `docs/planning/M16-FINDINGS-oracle-forge.md`.** M16 plan/spec CLOSED.
 
-**M17 — ACTIVE (2026-06-14). 9.2 NewWorld is a HARD requirement (user).** The M16 NO-GO closed the
-cheap CGRP-table seed, not the goal. M17 = the surviving path: a host-owned stub that manufactures
-the pending-interrupt state and performs the **sanctioned** PPC→68k cross — the `HandleInterrupt`
-MODE_EMUL_OP proc-template + `Execute68k` mechanism that **already exists in-tree**, newworld-fenced
-at `sheepshaver_glue.cpp:3519` (the central de-risk vs M10's blind forge) — so the 68k DR dispatches
-the level-1 autovector to `0x5000ec50` (confirmed real guest code: `jmp $5000ef20`, via_int). DoD =
-advance ONE wall + capture the next (CGRP is **first-of-N**), NOT reach Finder. Injection DECIDED:
-option (b) (host-side hook at the EXT delivery site `glue:1254`) first, (a) only if (b) advances.
-- **State: DRAFT spec+plan committed (`3a7826f7`/updated), red-team PENDING.** Priority NO-GO check =
-  **Q0-B** (run-mode/MSR at the EXT dispatch `0x50314880` — `Execute68k` needs `MODE_EMUL_OP` + the
-  emulator pair `[KDP+0x1074/0x1078]`; if MODE_68K, the de-risk weakens → possible early NO-GO).
-  R6 (option-b EOI/level bookkeeping) is a Task-0 GO gate. Series tripwire: after ~2–3 uniformly-
-  frozen walls, reconsider forging/running IM-init wholesale vs. per-wall whack-a-mole.
-- Spec/plan: `docs/superpowers/{specs,plans}/2026-06-14-m17-host-irq-stub*`. Gate behind
-  `SS_M17_STUB=1` + `MachineProfileIsNewWorld()`; bases resolved live; `0xDEADBEEF` = immediate stop.
-- **Compatibility-payoff** (8.6–9.0.4 usability) is now a parallel/secondary track. Does NOT reopen FORGE verdict.
+**M17 — CLOSED, red-team BLOCKED (`cc6fc422`).** The host-owned-stub de-risk did NOT survive contact:
+the EXT-edge regime is **MODE_68K** (run-mode `[0x2810]=0`), not the `MODE_EMUL_OP` the "sanctioned
+cross" (`Execute68k`) requires; and the level-1 handler PC is a second ROM-absent value. The **series
+tripwire fired on wall 1** → per-wall forging is structurally bankrupt (every wall is the same
+disease). Spec/plan CLOSED.
+
+**▶ CURRENT FRONTIER = OPERATION NEWSHEEP (research effort, opened 2026-06-14; 9.2 NewWorld HARD
+requirement).** Reframe: **run/reproduce the PRODUCER of the boot-time init — the Trampoline — not
+forge its outputs.** The Trampoline is an ELF parcel *inside the Mac OS ROM file we already hold*;
+on real HW it copies/modifies the OF device tree and **sets up the nanokernel's interrupts** — the
+exact frozen CGRP/IM structures the whole M8→M17 arc fought. Running/reproducing it clears the whole
+frozen-struct *class* at once (vs. one wall at a time), with real values. Three-route ladder (A run
+it / B patch offline via `tbxi`+`tbxi-patches` / C informed host-reproduction), chosen by a cheap
+**offline** Task-0 (`tbxi dump` + disassemble the Trampoline — startable today on the 9.0.x ROMs).
+QEMU mac99 booting real 9.2 is the existence proof.
+- **Charter + scope + risks + asset gaps: `docs/planning/newsheep/README.md`** (+ `RESEARCH-LOG.md`,
+  `ASSETS-AND-TOOLING.md` [⚠️ 9.2-ISO gap: our `macos921.dsk` is actually 8.6], `GLOSSARY.md`).
+  Baseline tag `newsheep-baseline`. First milestone (Trampoline RE Task-0) runs the normal machine.
+- Banked forge-era RE stays valid: `docs/planning/M14/M15/M16-FINDINGS-*.md`. Does NOT reopen the
+  M15 FORGE verdict — supersedes the forge *approach* with a producer-side one.
+- **Compatibility-payoff** (8.6–9.0.4 usability) remains a valid secondary track, not current focus.
 - **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
   `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
 - **STANDING FACT (probe):** `SS_PROBE_PC` DID fire at the EXT vector-entry PC `0x50314880`
@@ -273,11 +278,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: M17 — host-owned NK interrupt stub** (9.2 NewWorld is a HARD requirement — see Current
-frontier above). DRAFT spec+plan at `docs/superpowers/{specs,plans}/2026-06-14-m17-host-irq-stub*`
-(`3a7826f7`+updates); red-team PENDING, then BINDING Task-0 (run Q0-B FIRST). M16 RE banked in
-`docs/planning/M16-FINDINGS-oracle-forge.md` Q1–Q7. Compatibility-payoff (8.6–9.0.4 usability) is a
-parallel/secondary track. M13 close-out / retraction:
+**Next task: OPERATION NEWSHEEP — Trampoline RE Task-0** (9.2 NewWorld is a HARD requirement — see
+Current frontier above). Charter `docs/planning/newsheep/README.md`; first milestone = `tbxi dump`
++ disassemble the Trampoline parcel from the 9.0.x ROMs (offline, today), output = the run/patch/
+reproduce route decision. M14–M17 RE banked (`docs/planning/M14/M15/M16-FINDINGS-*.md`; M17 spec/plan
+CLOSED). Compatibility-payoff (8.6–9.0.4 usability) is a secondary track. M13 close-out / retraction:
 `docs/planning/M13-FINDINGS-interrupt-delivery.md` (§C-pin.7/8). The M13 strategy/plan docs
 (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical — they planned the non-problem.
 Keep-active machine docs (`docs/planning/machine/`): `CORE99-MACHINE-DESCRIPTION.md`,

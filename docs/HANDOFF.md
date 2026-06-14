@@ -25,17 +25,23 @@
 > surviving path — a host-owned NK-EXT-handler PPC stub — is materially larger and documented as the
 > re-entry point if 9.x becomes a hard requirement. **RE banked (Q1–Q7):
 > `docs/planning/M16-FINDINGS-oracle-forge.md`.** Plan/spec CLOSED (do-not-execute banners).
-> **Next: M17 — host-owned NK interrupt stub (9.2 NewWorld is a HARD requirement, user 2026-06-14).**
-> The M16 NO-GO closed the *cheap* CGRP-table seed, not the goal: M17 pursues the surviving path —
-> synthesize a host-owned stub that manufactures the pending-interrupt state and performs the
-> **sanctioned** PPC→68k cross (the `HandleInterrupt` MODE_EMUL_OP + `Execute68k` path that already
-> exists in-tree, newworld-fenced at `glue.cpp:3519`) so the 68k DR dispatches the level-1
-> autovector to `0x5000ec50` (confirmed real guest code). Success = advance ONE wall + capture the
-> next (CGRP is first-of-N), NOT reach Finder. DRAFT spec+plan committed (`3a7826f7`), **red-team
-> pending** (priority: Q0-B run-mode-at-EXT-dispatch is M17's likeliest early NO-GO). Spec/plan:
-> `docs/superpowers/{specs,plans}/2026-06-14-m17-host-irq-stub*`. The M16 RE stays banked
-> (`M16-FINDINGS` Q1–Q7). Compatibility-payoff (8.6–9.0.4 usability) is now a parallel/secondary
-> track. Does NOT reopen the M15 FORGE verdict.
+> **M17 CLOSED — red-team BLOCKED (`cc6fc422`).** The host-owned-stub plan's de-risk did NOT survive
+> contact: the EXT-edge regime is **MODE_68K** (not the MODE_EMUL_OP the "sanctioned cross" needs),
+> and the level-1 handler PC is a second ROM-absent value — the **series tripwire fired on wall 1**,
+> proving per-wall forging is structurally bankrupt (every wall is the same disease). Spec/plan
+> CLOSED.
+>
+> **▶ NEXT = OPERATION NEWSHEEP** (research effort, opened 2026-06-14; 9.2 NewWorld is a HARD
+> requirement). The reframe: **run/reproduce the PRODUCER of the boot-time init (the Trampoline),
+> not forge its outputs.** The Trampoline is an ELF parcel *inside the Mac OS ROM file we already
+> hold*; on real HW it sets up the nanokernel's interrupts — exactly the frozen CGRP/IM structures.
+> Running/reproducing it clears the whole frozen-struct *class* at once (vs. forging one wall at a
+> time). Three-route ladder (run it / patch it offline via `tbxi` / informed host-reproduction),
+> chosen by a cheap offline Task-0 (`tbxi dump` + disassemble the Trampoline — startable today on
+> 9.0.x). **Charter + scope + risks + asset gaps: `docs/planning/newsheep/README.md`** (log /
+> assets / glossary alongside). Baseline tag: `newsheep-baseline`. First milestone (Trampoline RE
+> Task-0) runs the normal machine. Does NOT reopen the M15 FORGE verdict — it supersedes the forge
+> *approach* with a producer-side one. The M14–M17 RE stays banked.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.
@@ -89,18 +95,18 @@
 
 > Read `docs/HANDOFF.md` (this HEADLINE), then `docs/AGENT-CONTEXT.md`.
 >
-> **M15 is COMPLETE — NewWorld 9.x consumption path adjudicated FORGE (verified).** If
-> resuming NewWorld 9.x, the next milestone enters at the **misroute-first time-boxed
-> gate** (Task 0: why EXT edge → CGRP fallback `0x50325fd0` not NK slot-4 `0x50314660`,
-> via `tools/ring-walk.py`), falling through to **oracle-first forge (M14 §7 step 5)** if
-> the misroute is structural/non-obvious. Read
-> `docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)" — don't re-derive.
-> This does NOT reopen the verdict.
+> **Current focus: OPERATION NEWSHEEP** — boot Mac OS 9.2 (NewWorld; HARD requirement) by
+> **running/reproducing the producer of the boot-time init (the Trampoline), not forging its
+> outputs.** The M8→M17 forge arc is closed (banked NO-GO): every wall was the same disease —
+> the Trampoline (an ELF parcel inside the Mac OS ROM file we already hold) never runs, so the
+> nanokernel interrupt structures it would build stay frozen. **Start here: read the charter
+> `docs/planning/newsheep/README.md`** (+ `GLOSSARY.md` for the M8→M17 lineage in one read,
+> `ASSETS-AND-TOOLING.md` for the `tbxi` tooling + the 9.2-ISO gap). First milestone = the
+> Trampoline RE Task-0 (`tbxi dump` + disassemble; offline, startable today on the 9.0.x ROMs),
+> output = the run/patch/reproduce route decision. Baseline tag: `newsheep-baseline`.
 >
-> **Current focus: COMPATIBILITY-PAYOFF** — make the already-booting Mac OS 8.6–9.0.4
-> genuinely usable. The project boots to Finder with full native JIT on arm64. The
-> highest-value work is: CopyBits HLE, idle-skip, perf optimization, app compatibility,
-> and the Silicon Sheep launcher (Track C).
+> Compatibility-payoff (8.6–9.0.4 usability: CopyBits HLE, idle-skip, perf, app compat, Silicon
+> Sheep) remains a valid *secondary* track but is not the current focus.
 >
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked. Never global pkill —
 > slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.

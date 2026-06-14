@@ -294,7 +294,104 @@ P2=Q3 (QEMU), boot-disjoint, fused by the coordinator.
    RED TEAM: should the deliverable require a *per-surface* effort estimate rather than one
    weeks-vs-months roll-up?
 
-## Red-team record
+## Red-team record (2026-06-14 — 2 parallel reviewers, both GO-WITH-FIXES)
 
-*(empty — a red-team round (PROCESS + TECHNICAL/CONTRACTS, parallel) follows this draft;
-findings fold as rev-2 BINDING amendments before the recon agents dispatch.)*
+PROCESS reviewer: 1 Critical (C1), 4 Major (M1–M4), 4 minor; explicit closures on all 4
+self-review tensions. TECHNICAL/CONTRACTS reviewer: 1 Critical (F1), 1 Major (F2), minors
+(F3); re-verified provenance + every source anchor against the live tree. The two Criticals
+**converge** on Q3 (the breakpoint target is wrong AND it's an inverted address-oracle).
+
+**Verified source corrections (coordinator re-confirmed before folding):**
+- Glue path is **`SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp`** (the `src/Unix/` prefix
+  used loosely above is WRONG — that file does not exist; every `[STATIC]` glue cite must
+  use the kpx_cpu path). Execute68k pair read live at **:1504–1505** (CONFIRMED, every
+  excursion). `reset_supervisor_for_test` body **:560–569** (not :555).
+- **No page-table walker exists** (grep `tlbie|get_physical_address|htab|page_table` over
+  the PPC cpu sources → none) — V=P is structural. BUT BAT/SDR1/SR are writable+readable
+  **live** via interpreter `mtspr/mfspr` (the aarch64 JIT falls back for unknown SPRs), so
+  a "write-BAT-then-read-BAT" check passes **inertly** and is a **false-clean** for Q2.
+
+## Rev-2 BINDING amendments (these OVERRIDE the draft body above where they conflict)
+
+**A1 [C1+F1, Critical — Q3 re-targeted].** `0x503148e0` is the CGRP **service/dispatch**
+routine (M16-FINDINGS:71,77 — indexes by source#, self-guards `beqlr`, `rfi`s), NOT the
+builder. M16 RE further found the **`"CGRP"` tag (`0x43475250`) appears 0× in the ROM** and
+**no inline ROM builder stores to `[base+0x38/+0x3c/+0x44]` off `*(KDP-0x338)`** (M16:107–109)
+— i.e. the descriptor is materialized at runtime by **disk/CFM-loaded IM-init**, contradicting
+Q0-F's *inference* that the NK parcel builds it. **Q3 is re-chartered to RESOLVE this
+contradiction directly.** Concretely:
+  1. **Q3.0 precondition (also closes the inverted-address-oracle hole):** SheepShaver's
+     `0x5031xxxx` / `[KDP-0x338]` / `0x503148e0` are **SheepShaver-space ORIENTATION ONLY** —
+     do NOT set a QEMU breakpoint on them. First derive the **live NK run base** under QEMU
+     from the Trampoline's `NanoKernelEntry` handoff (read where it jumps), and the **live
+     CGRP descriptor base** from a register/memory snapshot.
+  2. **Instrument = memory watchpoint, not PC breakpoint:** once the live CGRP base is known,
+     set a gdbstub **watchpoint** (`Z2`/`Z4`) on the descriptor fields (`+0x38/+0x3c/+0x44`)
+     to catch **the writer's PC wherever it lives**, then disassemble around that PC.
+     `gdbcli.py` currently has only the bp step-over path — **add a watchpoint path** (note
+     it as a tooling sub-task; tag the artifact md5).
+  3. **Pinned Q3 deliverable now includes "builder identity + location":** NK-v02.27 parcel
+     vs disk/CFM IM-init (outside the parcel). This feeds weeks-vs-months directly — if the
+     builder is disk-resident IM-init, Route A needs the disk System/Enabler IM-init in the
+     loop to produce CGRP at all (surface as a finding; do NOT relitigate Route A).
+
+**A2 [M1, Major — Q3 PASS reconciled].** Goal-3 PASS = a **pinned ordered read/write
+contract tagged EITHER [QEMU-BEHAVIORAL] (traced) OR [STATIC-inferred] (residue fallback)** —
+both satisfy Task-0. A [STATIC-inferred] result is an explicitly-flagged OPEN item the
+implementation plan's own Task-0 must close by tracing. (Removes the traced-vs-inferred
+contradiction.)
+
+**A3 [M2+F2, Major — Q2 asymmetric evidence].** Replace the Codebase-fact "BAT/SDR1 touched
+only in the test helper" with: *"BAT/SDR1/SR are writable+readable live via interpreter
+mtspr/mfspr (JIT falls back: ppc-jit.cpp aarch64 ~:1987/:2022 → ppc-execute.cpp ~:1607/1626/
+1539/1561), stored **inertly** — no walker/htab/tlbie consumer exists; V=P is structural."*
+Q2's verdict rule becomes asymmetric: within budget Q2 may return ONLY **(a) requires-paged-
+MMU** — POSITIVE evidence (cited instruction addresses of a **branch on translated≠physical**
+or a genuine dependence on translation occurring; readback-consistency is a **false-clean**
+and is NOT evidence) — or **(b) requires-paged-MMU-UNKNOWN → months-risk** (conservative
+residue). A bare "satisfiable within V=P" is **forbidden** unless the agent also pins the
+bound where translated addresses are consumed and shows it lies inside the traced window.
+
+**A4 [M4+Tension-1, Major — Q1 third verdict + handoff-boundary precondition].** Q1 answers
+a **precondition row FIRST:** *"Does a coherent post-NK-init handoff boundary exist — a point
+where NK init completes and yields to a steady state in which SS's `execute_68k`/`ExcEnter`/
+scheduler path is the live emulator? Cite NK disasm."* Add a **third ledger verdict
+CO-OWN/TIME-SHARE** (NK and SS alternate ownership of live state with no clean yield point).
+Roll-up: **any load-bearing FIGHT *or* CO-OWN ⇒ months; a MISSING handoff boundary ⇒ months
+and is itself the headline finding** (it means "re-inject post-handoff" is fiction).
+
+**A5 [M3, Major — provenance race].** Provenance is a **coordinator-serialized pre-dispatch
+gate**: re-verify/re-extract md5 anchors and record them in the addendum BEFORE dispatching
+P1/P2. Recon agents treat all `/tmp/newsheep/*` artifacts as **read-only** and never
+re-extract.
+
+**A6 [Tension-3, Major — Q3 pins mechanism, defers shape].** Extend the Q3 caveat beyond
+addresses: *"Q3 pins only the MECHANISM — which DT properties are read, what is written into
+the CGRP family, and in what ORDER. Property VALUES and SHAPES (tuple layout, lengths,
+encodings) are OpenBIOS-specific and are explicitly DEFERRED to the synthesized Core99 DT
+(`docs/planning/machine/CORE99-MACHINE-DESCRIPTION.md`), exactly as the Trampoline RE gated
+on mechanism-not-values. Pinning a property shape/value from the QEMU oracle = stop-rule
+violation."*
+
+**A7 [Tension-4, Major — per-surface effort bands].** The deliverable requires a
+**per-surface effort band** {Trampoline loader+CHRP entry; OF-CI callback dispatch; Core99 DT
+model; `/mmu` backend-vs-paged-MMU; Execute68k re-bind / 68k-regime} each tagged weeks /
+months / UNKNOWN-months, with the single roll-up = max() **derived from** (not replacing) the
+per-surface breakdown.
+
+**A8 [new stop-rules].** #6 — do NOT break on a SheepShaver NK address under QEMU; derive the
+run address from the live handoff first (inverted address-oracle). #7 — never assert
+"satisfiable within V=P" from absence of install code within the window; default to
+UNKNOWN→months.
+
+**A9 [minors].** NO-GO is narrowed to "Route A not viable *as a SheepShaver milestone on this
+host*" — distinct from GO-but-months (which is the expected non-optimistic outcome). The
+**non-MMU `call-method` backends** (`read-blocks`/display/`instantiate-rtas`) are NOT
+recon-blocked (Q0-A bounded them) — they are implementation-plan items, stated here so their
+absence from the blocking table is not read as a gap. Reserve **1 boot of the ≤4 QEMU cap**
+for a one-iteration re-pin; a partial-within-boot ordered prefix is an acceptable
+[QEMU-BEHAVIORAL] deliverable.
+
+**Disposition:** GO-WITH-FIXES → all amendments folded BINDING. Recon dispatches (P1 static
+Q1+Q2; P2 QEMU Q3) carry A1–A9 in their cards. The Q0-F-inference vs M16-RE contradiction
+(A1) is the headline thing Q3 exists to settle.

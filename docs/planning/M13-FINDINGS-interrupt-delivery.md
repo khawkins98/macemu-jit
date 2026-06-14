@@ -278,23 +278,79 @@ the DR itself:**
   OR-ing `0x00800000` into the live CR at the EXT seam is a meaningful, non-redundant divert
   trigger.
 
-### C-pin.4 RESIDUAL — the interrupt-vs-fault CAUSE encoding is NOT pinned
-B.2 flagged two unknowns: (a) the cr2lt *location* and (b) the *cause encoding* `0x5046d114`
-keys on to build a vector-`$64` **interrupt** frame vs a fault/bus-error frame. (a) is now
-pinned (C-pin.2/.3). **(b) remains unpinned** — `0x5046d114`'s body is RAM-resident
-(`0x5046xxxx`, absent from `rom901.bin`), and the fault-driven entry we can observe carries
-fault-cause side state (e.g. `r4=0xffffffff r6=0xffffffc0 r8=0xffffffff r9/r10/r13=0xff
-r11=0x0a r12=0x801 r27=0x50c1` at the observed entry) whose interrupt-path equivalents are
-unknown. Setting cr2lt alone may route the DR to a *fault* frame, not the `$64` autovector
-frame — this is the open feasibility risk for Task C delivery, and bears on stop-rule
-trigger 3. Pinning it needs a live RAM disassembly of `0x5046d114` (capstone over a guest-RAM
-probe dump, or a single bounded lldb read at host `0x40005046d114`) — an escalation, deferred
-pending coordinator decision.
+### C-pin.4 CAUSE encoding — RESOLVED by live RAM disasm (feasibility GREEN)
+Escalation done (coordinator-approved): single bounded lldb read of host `0x40005046d114`
+(768 B) + capstone PPC-BE, plus the DR dispatch loop at `0x504689e0`. The interrupt-vs-fault
+selection is **NOT** un-fabricatable fault-cause side-state — it is a **memory-backed pending
+field plus the cr2lt divert**, both coherently reachable from our seam. Mechanism, pinned
+[DISASM✓ live RAM]:
+
+- **Opcode tail** (e.g. `0x50468ae8`): `bgectr cr2` → next opcode when cr2lt **clear**; falls
+  through to `b 0x5046d114` (DIVERT) when cr2lt **set**. The dispatch helper `0x50468b08`
+  (`rlwimi r29,r27,3,..; mtctr r29; lhau r27,2(r24)` + the movem cr4–7 loads) does **NOT touch
+  cr2** — so cr2lt is preserved across the loop and only *tested* at the tail. **Poking memory
+  alone will not divert; cr2lt must be set** (corroborates B.2's "register/context state").
+- **Slow-path `0x5046d114`** calls `0x5046d3e4`, which is the interrupt selector:
+  `lwz r3,0x1d0(r31)` (pending level = **`[ECB+0x1d0]`**), `clrlwi r6,r25,0x1d` (IPL mask =
+  **`r25 & 7`**), `cmplw r3,r6; blelr` → returns (no interrupt) if `pending <= mask`. When
+  `pending > mask` it sets cr2eq, so `0x5046d140 beql cr2` calls the **interrupt builder
+  `0x5046d248`**, which builds the frame: `li r4,0xc0; rlwimi r4,r7,2,..` → vector offset, and
+  `xori r6,r4,0xa0` → for level 1 yields **`r6 = 0x64`**, written to frame+6 (`sth r6,6(r1)`) —
+  exactly the `cmpi.w #$64,$6(a7)` the handler asserts (B.1.4). The faulting 68k PC goes to
+  frame+2 (`stw r24,2(r1)`). The opcode-mask fault/trap decode (`0x3c/0x46c0/0x6000` at
+  `0x5046d160+`) is a **different branch**, reached only when the interrupt selector declines.
+- **Steady-state values [PROBE✓]:** `[ECB+0x1d0]=0` always (the pending latch nothing sets —
+  the smoking gun for "no registered handler"); `[ECB+0x71]=1`; `r25&7 = 0` at the fault-driven
+  slow-path entry (`r25=0x20`) but `= 7` at the idle wall `0x50468ae4` (`r25=0x27`).
+
+**Task C lever (pinned, no fabrication):** at the EXT seam (DR live), write `[ECB+0x1d0] =
+level` (via `gpr(31)`=ECB) **and** OR `0x00800000` (cr2lt) into the live `cr()`; the DR resumes,
+self-diverts at its next tail, and its own `0x5046d248` builds the genuine `$64` frame. No
+forged CGRP table, no host frame fabrication. Refines B.2: the interrupt selector IS a pokable
+memory latch (`[ECB+0x1d0]`); B.2 missed it only because the body was not statically disassembled.
+
+**Residual (delivery-success variable, not a feasibility blocker):** the IPL-mask gate
+(`r25 & 7`) must be `< level` at the divert. Mask is 7 at the idle wall (level-1 would be
+*masked there* — correct 68k semantics, NOT to be forced). Delivery is therefore gated on
+`(gpr(25) & 7) < level` (misuse hardening — never force a masked interrupt, the M10 lesson). If
+the DR is never at a deliverable IPL at the EXT seam, that is a captured frontier, not a crash;
+the `SS_PROBE_68K=0x5000ed08` sub-contract answers it falsifiably.
+
+### C-pin.6 IMPLEMENTED + delivery FALSIFIED — the IPL-7 frontier (stop-rule 1) [PROBE✓]
+The HLE landed gated-OFF (`SS_NW_DR_AUTOVEC`, `sheepshaver_glue.cpp`, in the DELIVER path of
+`deliver_pending_exception`, inside `MachineProfileIsNewWorld()`): on a DEC/EXT DELIVER, when
+the interrupted PPC context is the DR (restart_pc in `[0x50460000,0x504a0000)`) and the IPL
+permits, it writes `[ECB+0x1d0]=1` and ORs cr2lt into the live CR, then falls through to normal
+NK delivery. All gates green (build, harness 353/353, machine ALL PASS, e2e-test 122, paravirtual
+e2e PASS, gated-off A/B byte-identical: 0 `[NW-AUTOVEC]`).
+
+**Env-on (`SS_NW_PIC=1 SS_NW_DR_AUTOVEC=1`): delivery sub-contract FALSIFIED, but cleanly.**
+- **0 deliveries / `0x5000ed08` never ran / no crash / scheduler healthy** (dec_expiries 29k).
+- Cause, decisive [PROBE✓]: **at EVERY delivery-seam sample the DR is at IPL 7** (`gpr(25)&7 == 7`,
+  `SR=0x2700`) — the pre-System 68k spins *masked*. 512+ consecutive `[NW-AUTOVEC] skip (IPL
+  masked)` at dr_pc cycling `0x50460100`/`0x50465ef8`, zero `ipl_ok`. The misuse-hardening
+  correctly **refuses to force a masked interrupt** (the M10 lesson), so it never fires.
+- Cross-fact: the DR *does* run at IPL 0 elsewhere (the fault-driven `0x5046d114` entry has
+  `r25=0x20`), so IPL-7 is not a constant — but **the coherent host delivery seam (the NK DEC/EXT
+  hook) only fires while the 68k is masked-and-idling (ceding to the NK)**; it never coincides
+  with a DR-at-IPL<7 moment. The two phases are disjoint at this seam.
+
+**Verdict — STOP-RULE 1 (deeper circularity), captured as frontier; NOT improvised around.**
+The cause-encoding lever is correct and proven safe, but a level-1 autovector is *correctly*
+undeliverable: the boot is wedged in 68k early-init at `SR=0x2700` (IPL 7), upstream of the point
+where the OS lowers its interrupt mask to accept ticks. Delivering ticks cannot advance it — the
+blocker is "why the 68k never lowers IPL below 7," not interrupt delivery. Forcing it (clearing
+the mask, or level 7 — the DR selector's `cmplw pending,mask; blelr` blocks `7<=7` too) would be
+exactly the falsified "force a masked interrupt" class. **Next:** characterize what the pre-System
+68k is waiting on at IPL 7 (r24=`0x5000010a` low-ROM at the wall) — likely a memory flag the NK
+should set, i.e. the route-around rises (ROM/OS-version), per the step-0 keystone caveat.
 
 ### C-pin.5 Evidence (slot rundirs, transient)
 `/tmp/ss-slots/slot0/runs/`: `…085423` (frontier+PIC, 4-PC probe), `…085551` (full reg dump
-@ `0x5046d114`), `…085849` (`r31`/ECB confirm), `…090032` (wall CR samples). Reproduce:
-`ss-slot-boot.sh --timeout 45 --env 'SS_NW_PIC=1 SS_PROBE_PC=0x5046d114'`.
+@ `0x5046d114`), `…085849` (`r31`/ECB confirm), `…090032` (wall CR samples), `…090908`
+(`[ECB+0x1d0]`/`r25` fields). Live RAM disasm: `/tmp/dr_5046d114.bin` (768 B @ host
+`0x40005046d114`), `/tmp/dr_dispatch.bin` (512 B @ `0x4000504689e0`) — capstone PPC-BE.
+Reproduce: `ss-slot-boot.sh --timeout 45 --env 'SS_NW_PIC=1 SS_PROBE_PC=0x5046d114'`.
 
 ---
 

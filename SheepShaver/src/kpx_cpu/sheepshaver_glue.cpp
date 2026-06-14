@@ -202,6 +202,23 @@ static bool exc_dec_published_enabled(void)
 	return cached != 0;
 }
 
+/* M13 Task C: SS_NW_DR_AUTOVEC gate (default OFF; explicit-on "1"/non-"0"). When
+ * OFF, the EXT-delivery path is byte-identical to today (records-and-returns via
+ * the NK fallback 0x50325f00). When ON (newworld only), the EXT seam HLEs the
+ * missing registered-CGRP-handler→DR signal: it drives the DR's OWN autovector
+ * builder by setting the two levers pinned in M13-FINDINGS §C-pin.4 — the
+ * memory-backed pending field [ECB+0x1d0] and the live cr2lt divert bit. NOT a
+ * forged CGRP table, NOT a host-fabricated 68k frame (the 5× falsified class). */
+static bool nw_dr_autovec_enabled(void)
+{
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("SS_NW_DR_AUTOVEC");
+		cached = (e && e[0] && strcmp(e, "0") != 0) ? 1 : 0;
+	}
+	return cached != 0;
+}
+
 /* M3a Task 4 telemetry: DEC delivery counters (newworld only — paravirtual never
  * runs the hook). CPU-thread-only writers (check_spcflags context, plan §2g), so
  * plain uint64_t is fine; readers (heartbeat, crash dump) run on the same thread
@@ -1240,6 +1257,76 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 		exc_native_rearm_used = 0;	// M7 item 2: delivery resets the re-arm budget
 		break;
 	}
+
+	// --- M13 Task C: HLE the missing CGRP-handler→DR autovector signal --------
+	// (SS_NW_DR_AUTOVEC, default OFF — gated-off this whole block is skipped and
+	// every delivery is byte-identical to today.) Mechanism + evidence:
+	// docs/planning/M13-FINDINGS-interrupt-delivery.md §C-pin.4 [DISASM✓ live RAM].
+	//
+	// We have a DELIVER decision (a real NK interrupt — DEC or EXT). The NK records
+	// it but never signals the 68k DR (the registered CGRP handler that would is
+	// uninstalled). At this seam, when the interrupted PPC context is the DR itself
+	// (restart_pc in the DR mirror-emulator range — pinned 3/3), the live registers
+	// ARE the DR's, so we can drive the DR's OWN autovector builder (0x5046d248) by
+	// setting the two levers a healthy registered handler would, then FALL THROUGH
+	// to the normal NK delivery below (so the NK scheduler/DEC bookkeeping still
+	// runs; the NK's exception save/restore round-trips our cr2lt back to the DR,
+	// which then vectors [0x64]→0x5000ED08 at its next opcode tail):
+	//   1. [ECB+0x1d0] = LEVEL  — the pending-interrupt-level field the DR's
+	//      interrupt selector 0x5046d3e4 reads fresh each slow-path entry.
+	//   2. cr2lt (CR bit 0x00800000) — the between-instruction divert gate the
+	//      opcode tail (bgectr cr2 @ 0x50468ae8) tests; set ⇒ b 0x5046d114.
+	// No forged CGRP table, no host-fabricated 68k frame (the 5× falsified class).
+	//
+	// MISUSE HARDENING (the M10 lesson — never deliver into a cold/wrong state):
+	//   - newworld only, gate on;
+	//   - restart_pc in the DR range (a coherent between-instruction boundary — the
+	//     hook fires at a JIT block boundary; outside the DR the live regs are the
+	//     NK's, not the DR's, so we must NOT touch cr2lt then);
+	//   - (gpr(25) & 7) < LEVEL — respect the 68k IPL mask EXACTLY as the DR's own
+	//     selector does (cmplw pending,mask; blelr). NEVER force a masked interrupt;
+	//     if the DR is masked we just don't signal (a captured frontier, not a crash).
+	// Caveat: the cr2lt round-trip relies on the published 2-SPR DEC/EXT shim
+	// (SS_NW_DEC_PUBLISHED default ON), which does not touch CR. The legacy KDP-shim
+	// (=0) splices CR fields 1-3 (mask 0x0fff0000 ⊇ cr2) and would clobber cr2lt —
+	// not a supported combination with this gate.
+	// A total delivery budget bounds livelock risk (level-held source + RTE re-take).
+	if (nw_dr_autovec_enabled() && MachineProfileIsNewWorld()) {
+		static uint64_t autovec_delivered  = 0;
+		static uint64_t autovec_skipped_ipl = 0;
+		const uint32 DR_LO = 0x50460000u, DR_HI = 0x504a0000u;
+		const uint32 AUTOVEC_LEVEL = 1u;          // VBL/timer → vector $64
+		const uint32 CR2LT = 0x00800000u;
+		const uint32 ECB = (uint32)(KERNEL_DATA_BASE + 0x1000);  // 0x68fff000
+		const uint64_t AUTOVEC_BUDGET = 200000u;
+		const uint32 restart_pc_now = pc();
+		const bool dr_live = (restart_pc_now >= DR_LO && restart_pc_now < DR_HI);
+		const bool ipl_ok  = ((gpr(25) & 7u) < AUTOVEC_LEVEL);
+		if (dr_live && ipl_ok && autovec_delivered < AUTOVEC_BUDGET) {
+			WriteMacInt32(ECB + 0x1d0, AUTOVEC_LEVEL);   // lever 1: pending level
+			cr().set(get_cr() | CR2LT);                   // lever 2: cr2lt divert
+			if (++autovec_delivered <= 8)
+				fprintf(stderr, "[NW-AUTOVEC] delivered #%llu: level=%u dr_pc=%08x "
+				        "src=%s sr_ipl=%u (cr2lt set, [ECB+0x1d0]=%u) — DR will "
+				        "vector [0x64]->0x5000ED08\n",
+				        (unsigned long long)autovec_delivered, AUTOVEC_LEVEL,
+				        restart_pc_now, dec_pending ? "DEC" : "EXT",
+				        (unsigned)(gpr(25) & 7u), AUTOVEC_LEVEL);
+			// fall through to the normal NK delivery below (scheduler stays alive;
+			// the NK round-trips cr2lt back to the DR).
+		} else if (dr_live && !ipl_ok
+		           && (++autovec_skipped_ipl & (autovec_skipped_ipl - 1)) == 0) {
+			fprintf(stderr, "[NW-AUTOVEC] skip (IPL masked): dr_pc=%08x sr_ipl=%u "
+			        ">= level=%u (skip #%llu)\n", restart_pc_now,
+			        (unsigned)(gpr(25) & 7u), AUTOVEC_LEVEL,
+			        (unsigned long long)autovec_skipped_ipl);
+		} else if (autovec_delivered == AUTOVEC_BUDGET) {
+			autovec_delivered++;  // log once
+			fprintf(stderr, "[NW-AUTOVEC] budget exhausted (%llu) — lever inert\n",
+			        (unsigned long long)AUTOVEC_BUDGET);
+		}
+	}
+	// --- end M13 Task C ---
 
 	// --- Source selection: DEC before EXT (M3b rev 2 m11/C1, justified
 	// locally as required): OEA ranks External ABOVE Decrementer, but our DEC

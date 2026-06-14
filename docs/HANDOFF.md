@@ -80,10 +80,14 @@
 > sequential, each months (S1 & S3 possibly UNKNOWN-months) = SUM ≈ multiple quarters.** Rev-2 headline:
 > the aarch64 JIT (runs the boot) has **no translation chokepoint** (80 inlined RMEMBASE sites) → S1 = host-
 > page aliasing in the NATMEM/vm_alloc layer (preferred) or a perf-fatal ~80-site codegen rewrite; S1 is
-> UNKNOWN-months until its Task-0's walker-vs-window decision. **▶ NEXT ACTION = open Stage 1's OWN deep
-> Task-0 + red-team** (walker-vs-window feasibility; is a paged MMU tractable in the hybrid without breaking
-> paravirtual?) before any S1 code. Parallel kickoff workstream: source the genuine 9.2.x install medium
-> (S4 hard-block; `ASSETS-AND-TOOLING.md` R2).
+> UNKNOWN-months until its Task-0's walker-vs-window decision. **Kickoff recon DONE (2026-06-14):**
+> Discriminator-A = **COARSE on mechanism** → Stage-1 **path a (Dolphin Dynamic-BAT shadow-arena) indicated**,
+> JIT fast path preserved (`FINDINGS-discriminator-a.md`; residual fine-PTE falsifier routed to S1's
+> MMU-oracle unit test); donor extract done (`DONOR-NOTES.md` — `UpdateDBATMappings` in Dolphin
+> `HW/Memmap.cpp`, Cuda IFR/IER crux `ViaCuda::update_irq`); **9.2.x ISOs found** (S4 hard-block CLEARED —
+> `~/Downloads/macos_921_ppc.iso`, `macos-922-uni.iso`; `ASSETS-AND-TOOLING.md` R2). **▶ NEXT ACTION =
+> open Stage 1's OWN deep Task-0 + red-team** (now leaning tractable: confirm the Dolphin shadow-arena maps
+> onto our NATMEM/`vm_alloc` layer; the S1 MMU-oracle unit-test design) before any S1 code.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

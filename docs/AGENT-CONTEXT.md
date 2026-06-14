@@ -32,8 +32,11 @@
 > 80 inlined RMEMBASE sites → host-page aliasing in NATMEM/vm_alloc, NOT a per-access JIT walker) → S2
 > loader+OF-CI+DT (S2a parallel/S2b serial) → S3 two-supervisor reconciliation (own Task-0; toggles the
 > already-newworld-gated supervisor arm `ppc-cpu.cpp:1986`) → S4 disk IM-init→CGRP (HARD-BLOCKS on 9.2.x
-> ISO). **Critical path S1→S3→S4 strictly sequential ≈ multiple quarters.** NEXT = open Stage 1's own deep
-> Task-0 + red-team (walker-vs-window) before any S1 code.
+> ISO). **Critical path S1→S3→S4 strictly sequential ≈ multiple quarters.** Kickoff recon DONE
+> (2026-06-14): Discriminator-A=COARSE → Stage-1 path a (Dolphin shadow-arena) indicated
+> (`FINDINGS-discriminator-a.md`); donors extracted (`DONOR-NOTES.md`); 9.2.x ISOs found (S4 block cleared,
+> `ASSETS-AND-TOOLING.md` R2). NEXT = open Stage 1's own deep Task-0 + red-team (now leaning tractable)
+> before any S1 code.
 
 **M15 — COMPLETE (2026-06-14). Verdict: FORGE — verified.** The `SS_NW_IRQ_CONSUME`
 consumption path is NOT one fixable divergence short of completing the guest's Interrupt

@@ -8,7 +8,7 @@
 static RE of our ROM; keeping it alive requires a larger host-owned EXT-handler stub that re-opens
 the M10 crash class. RE banked (Q1–Q7); milestone closed. (Forge era closed → Operation NewSheep;
 9.2 NewWorld is a HARD requirement. The earlier "pivot to compatibility-payoff" framing is superseded.)
-**Plan:** `docs/superpowers/plans/2026-06-14-m16-oracle-forge.md` (rev-4, CLOSED) · **Spec:** `docs/superpowers/specs/2026-06-14-m16-oracle-forge-design.md` (rev-2, CLOSED)
+**Plan:** `docs/archive/2026-06/superpowers/plans/2026-06-14-m16-oracle-forge.md` (rev-4, CLOSED) · **Spec:** `docs/archive/2026-06/superpowers/specs/2026-06-14-m16-oracle-forge-design.md` (rev-2, CLOSED)
 **Predecessor:** `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic".
 
 ## Task 0 — blocking-answer table

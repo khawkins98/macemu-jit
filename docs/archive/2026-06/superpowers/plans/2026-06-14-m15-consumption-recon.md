@@ -1,3 +1,8 @@
+> **ARCHIVED 2026-06-14** — Moved to archive during the Reku doc-archive sweep.
+> May contain outdated assumptions, resolved questions, or superseded plans.
+> Current state: `docs/HANDOFF.md` · `docs/planning/ROADMAP.md`
+> **Reason:** M8→M17 forge arc CLOSED (banked NO-GO); superseded by Operation NewSheep. Verdict banked in the paired `docs/planning/M1x-FINDINGS-*.md`.
+
 # M15 Consumption-Path Recon Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

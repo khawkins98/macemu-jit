@@ -8,8 +8,8 @@
 `SS_NW_IRQ_CONSUME` consumption path is one `SC#1=0x0d` divergence short of completing the
 guest's Interrupt Manager (IM) init (→ "real" fix) or needs a host-side forge (→ "forge"
 fallback). It is the findings record for spec
-`docs/superpowers/specs/2026-06-14-m15-consumption-recon-design.md` and plan
-`docs/superpowers/plans/2026-06-14-m15-consumption-recon.md`. **Task 0** below pins the two
+`docs/archive/2026-06/superpowers/specs/2026-06-14-m15-consumption-recon-design.md` and plan
+`docs/archive/2026-06/superpowers/plans/2026-06-14-m15-consumption-recon.md`. **Task 0** below pins the two
 load-bearing facts (the LIVE `hnfo` base and the consumption-path waypoint PCs) that every
 later watch/probe depends on, so they are resolved live rather than trusted from prior
 sessions.

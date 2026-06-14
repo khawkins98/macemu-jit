@@ -23,7 +23,7 @@
 
 - **Round-1 charter feedback folded (2026-06-14).** External agent review: framing sound
   ("not just a different forge"; route-ladder-with-shared-cheap-Task-0 is right). Load-bearing
-  points, now captured in `DECISIONS.md` (Q0-A…E) + charter §6/§9:
+  points, now captured in `DECISIONS.md` (Q0-A…F) + charter §6/§9:
   - **Q0-A is THE feasibility gate:** does Route A mean implementing OpenFirmware? (the Trampoline is
     an OF client). Enumerate its OF calls FIRST; bounded→A viable, open-ended→ladder collapses to B/C.
   - **Route C ≠ automatically distinct from the buried forge** (M16: handler PC is computed-at-runtime);
@@ -64,5 +64,16 @@
   - **Tracer:** no PPC `gdb` on this host → Python gdb-remote client; QEMU needs `-S` (halt at reset) or
     the one-shot Trampoline is missed. tbxi: `tbxi dump -o <dir> <rom>`.
   All folded into plan/spec rev-2 + charter §1 + DECISIONS (Q0-F).
+
+- **Doc-coherence sweep applied (2026-06-14).** Dev-advocate + technical-writer sub-agent audits
+  (both found the NewSheep docs internally clean but the *rest* of the repo still advertised a stale
+  main aim). Fixed: ROADMAP header/arc/workstream + M14-section now lead with NewSheep (was "Next=M14");
+  charter §9 steps 1–4 marked DONE (▶ next = execute Task-0); M17 spec/plan banners → CLOSED/superseded;
+  M14/M15/M16-FINDINGS got forward-pointer banners + M16's "pivot to compatibility-payoff" line fixed;
+  MACHINE-LAYER-PLAN header points to NewSheep as its child; CLAUDE.md Development-Status + Key-Doc
+  table lead with NewSheep; memory updated. **Contradiction reconciled:** the "expected next wall" is
+  M14-FINDINGS' actual VERDICT (Cuda device-model IFR/IER bug), NOT the retracted "model-rejection
+  gate" framing (fixed in charter §6, AGENT-CONTEXT, DECISIONS). Q0-A…E→Q0-A…F normalized; dangling
+  `[[machine-layer-pivot]]` link fixed; R2 corrected (we hold the 9.2-era ROM; gap is system software).
 
 <!-- next entry below -->

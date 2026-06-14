@@ -1,5 +1,9 @@
 # M15 — Consumption-Recon Findings
 
+> **CLOSED / banked RE — superseded by Operation NewSheep** (`docs/planning/newsheep/README.md`).
+> The FORGE verdict here is settled and still valid; the forge *approach* it pointed to was closed by
+> M16/M17. The branch's main aim is now running/reproducing the Trampoline producer.
+
 **Purpose:** This doc records the bounded recon (M15) that decides whether the existing
 `SS_NW_IRQ_CONSUME` consumption path is one `SC#1=0x0d` divergence short of completing the
 guest's Interrupt Manager (IM) init (→ "real" fix) or needs a host-side forge (→ "forge"

@@ -1,8 +1,13 @@
 # M16 — NewWorld NK Interrupt-Routing Forge: Findings
 
+> **CLOSED / banked RE — superseded by Operation NewSheep** (`docs/planning/newsheep/README.md`).
+> The forge approach (this milestone) is closed; the branch's main aim is now running/reproducing the
+> Trampoline producer. This doc's RE (Q1–Q7) remains valid and is leveraged by NewSheep.
+
 **Status:** COMPLETE — DoD-3 NO-GO (2026-06-14). CGRP-table synthesis is not reachable from
 static RE of our ROM; keeping it alive requires a larger host-owned EXT-handler stub that re-opens
-the M10 crash class. RE banked (Q1–Q7); milestone closed; frontier pivots to compatibility-payoff.
+the M10 crash class. RE banked (Q1–Q7); milestone closed. (Forge era closed → Operation NewSheep;
+9.2 NewWorld is a HARD requirement. The earlier "pivot to compatibility-payoff" framing is superseded.)
 **Plan:** `docs/superpowers/plans/2026-06-14-m16-oracle-forge.md` (rev-4, CLOSED) · **Spec:** `docs/superpowers/specs/2026-06-14-m16-oracle-forge-design.md` (rev-2, CLOSED)
 **Predecessor:** `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic".
 

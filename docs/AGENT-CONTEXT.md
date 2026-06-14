@@ -79,18 +79,13 @@ of the two dead delivery mechanisms (`SS_NW_DR_AUTOVEC`, `SS_M10_CGRP`). Canonic
 anon-zero 0xFF000000–0xFFFFFFFF (sign-extended 68k EAs). Boot stable 30s+. Its "pixel gate FAIL =
 `irq_fired=0`" framing is subsumed by the M13 retraction (delivery was never the blocker).
 
-**NEW FRONTIER (M14): the model-rejection / pre-System gate.** Native delivery, the 68k handler, and the
-scheduler are all healthy; the boot parks ~15 s in at the `[ALARM]` model-rejection / pre-System gate
-(Gestalt/machine-ID or System-file boot gate rejecting this machine/ROM combo; `jDR` 68k-block counter
-FREEZES ~10 s in while the NK spins). This is a **ROM/OS-version** issue, not an interrupt one.
-- **Leverage (already-RE'd, gate-bypass-TOOLED territory):** `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md`
-  (`boot` id=3 anatomy, DSAT format, gate-bypass) + the archived 4-byte System-file bypass in
-  `docs/archive/2026-06/planning/UPGRADE-CARD-PATH.md`.
-- **Approach (per lead):** characterize the gate FIRST (pin the last 68k subroutine before `jDR` freezes;
-  identify the device/gate it polls). Use ONE early cross-version boot as a cheap version-locked check
-  (a single boot of a different rev — staged 9.2.1/9.0.4/1.1 ROM at `/Users/Shared/macemu/`, or QEMU
-  9.2.1 oracle — same `[ALARM]` or different?). The full ROM/OS-version route-around sweep is PROMOTED
-  only if that check shows the gate is version-locked. Do NOT jump to the sweep before characterizing.
+**HISTORICAL frontier note (M14) — RETRACTED framing, kept for context.** The boot parks ~15 s in at
+an `[ALARM]` stall. The original "model-rejection / pre-System gate" framing was **retracted by
+M14-FINDINGS' VERDICT**: it is a **Cuda device-model IFR/IER bug** (`sr_int_pending` never reaches VIA
+IFR because `CudaSettle()` runs only on IFR reads, and the NK polls IER — 65,539 IER reads vs 2 IFR).
+This is the most likely **post-NewSheep next wall**, NOT the live frontier. The live frontier is
+Operation NewSheep (see "Current frontier" above). The SYSTEM-BOOT-GATES / 4-byte-bypass leverage
+applies only if a real System-file gate later appears.
 
 **Tooling (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress snapshot (all-on
 cluster → `[NW-PROG verdict]`, report-only). Its load-bearing non-determinism caveat (post-EXT SIGSEGV

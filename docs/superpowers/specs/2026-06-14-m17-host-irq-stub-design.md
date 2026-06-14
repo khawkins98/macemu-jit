@@ -1,9 +1,11 @@
 # M17 — Host-Owned NK Interrupt-Handler Stub: Design Spec
 
-> **STATUS: DRAFT — pre-red-team (2026-06-14).** Not yet reviewed; do NOT execute. This spec
-> opens the surviving NewWorld-9.x interrupt path documented in `M16-FINDINGS-oracle-forge.md` Q7
-> ("host-owned NK-EXT-handler PPC stub") now that 9.2 NewWorld is a **hard requirement**.
-> A pre-implementation red-team round follows this draft; findings fold as rev-2 amendments.
+> **STATUS: CLOSED — red-team BLOCKED (2026-06-14). DO NOT EXECUTE. Superseded by Operation NewSheep**
+> (`docs/planning/newsheep/README.md`). The red-team falsified the de-risk (the EXT-edge regime is
+> MODE_68K, not the MODE_EMUL_OP the "sanctioned cross" needs; the level-1 handler PC is a second
+> ROM-absent value) — the series tripwire fired on wall 1, proving per-wall forging is bankrupt. The
+> effort pivoted to running/reproducing the producer (the Trampoline). Retained for history.
+> (Original draft banner below.)
 
 **Status:** rev 1 (DRAFT) · 2026-06-14
 **Parent strategy:** `docs/planning/MACHINE-LAYER-PLAN.md`

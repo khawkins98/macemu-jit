@@ -1,7 +1,10 @@
 # M17 — Host-Owned NK Interrupt-Handler Stub: Implementation Plan
 
-> **STATUS: BLOCKED — red-team round 1 complete (2026-06-14). DO NOT EXECUTE pending a strategic
-> decision.** The round surfaced two independent likely-fatal findings (Q0-B: the EXT regime is
+> **STATUS: CLOSED — superseded by Operation NewSheep (`docs/planning/newsheep/README.md`). DO NOT
+> EXECUTE.** The strategic decision was made: pivot from forging the Trampoline's outputs (per-wall,
+> bankrupt) to running/reproducing the producer. Retained for history. (Original BLOCKED banner below.)
+>
+> **STATUS (historical): BLOCKED — red-team round 1 complete (2026-06-14).** The round surfaced two independent likely-fatal findings (Q0-B: the EXT regime is
 > MODE_68K, so the "re-use the sanctioned cross" de-risk is falsified; Q0-A: the real dispatch
 > target `Lvl1DT[0]`@`$192` holds a ROM-absent handler PC — a second M16-class wall), both reducing
 > to M16's root cause (the guest IM-init never runs). See the Red-team record at the bottom. The

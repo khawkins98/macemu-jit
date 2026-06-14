@@ -15,7 +15,7 @@
 > Python gdb-remote client; QEMU needs `-S` (halt) or the one-shot Trampoline is missed. (5) tbxi:
 > `tbxi dump -o <dir> <rom>`. Full plan rev-2 carries the detail.
 **Effort:** Operation NewSheep (`docs/planning/newsheep/README.md`) · baseline tag `newsheep-baseline`
-**Live forks:** `docs/planning/newsheep/DECISIONS.md` (Q0-A…E)
+**Live forks:** `docs/planning/newsheep/DECISIONS.md` (Q0-A…F)
 **Predecessors (banked):** M14/M15/M16-FINDINGS (forge-class NO-GO arc); M17 spec/plan CLOSED.
 
 > **What this is:** the first NewSheep milestone — a **reverse-engineering recon** that decides *how*

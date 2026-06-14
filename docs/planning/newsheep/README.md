@@ -99,7 +99,7 @@ we take the cheapest that works.
   with the derivation cited from the disassembly (not guessed).
 - **All**: `make test-jit` = 100; gated-off byte-identical A/B; new frontier captured in `RESEARCH-LOG.md`.
 
-> **Live fork tracker:** `DECISIONS.md` holds the open questions (Q0-A…E) with status. The single
+> **Live fork tracker:** `DECISIONS.md` holds the open questions (Q0-A…F) with status. The single
 > dominant one is **Q0-A**, below.
 
 ## 6. Key risks (carried into the first milestone's Task 0)
@@ -115,9 +115,11 @@ we take the cheapest that works.
   forge in a tbxi hat; the red-team enforces this in the DoD (Q0-C).
 - **R1b — OF-service depth (Route A):** even if bounded, the OF callbacks must be stubbed. Bound the
   set in Task-0 before committing to Route A.
-- **R2 — 9.2 asset gap:** we have 9.0.1/9.0.4 ROMs; the `macos921.dsk` asset is actually 8.6. The
-  Trampoline RE can *start* on 9.0.x, but the real 9.2 boot needs genuine 9.2.x media (an ISO, not a
-  hardware ROM). Tracked in `ASSETS-AND-TOOLING.md`.
+- **R2 — 9.2 asset gap is SYSTEM SOFTWARE, not the ROM:** we hold the full NewWorld ROM-file
+  progression incl. the 9.2-era ROMs (`/Users/Shared/macemu/newworld-roms/`; our active "9.0.1" file is
+  the Dec-2001/9.2.2-era ROM). So the Trampoline RE runs on the in-hand 9.2-era ROM. The remaining gap
+  is genuine **Mac OS 9.2.x system software** for the eventual *boot* (the `macos921.dsk` asset is
+  actually 8.6) — NOT on Task-0's critical path. Tracked in `ASSETS-AND-TOOLING.md`.
 - **R3 — producer-run reveals a non-IM wall: this is the GOOD outcome.** It means the producer
   approach worked and we're back on the machine-layer plan's mainline (device models already staged),
   not a forge cul-de-sac.
@@ -130,9 +132,10 @@ we take the cheapest that works.
   (`DECISIONS.md` Q0-D).
 
 > **Win condition, stated plainly (so success isn't mis-sold):** NewSheep wins by **clearing the
-> IM-init frozen-struct class**. The expected *next* wall is the **M14 `[ALARM]` model-rejection /
-> pre-System boot gate** — a known, separate downstream frontier — NOT Finder. Reaching Finder is the
-> effort's north star but not this class's DoD.
+> IM-init frozen-struct class**. The most likely *next* wall is the one M14-FINDINGS pinned: the
+> **Cuda device-model IFR/IER bug** (`sr_int_pending` never reaches VIA IFR; the NK polls IER, not
+> IFR) — a known, separate downstream frontier (NOT a "model-rejection gate" — M14-FINDINGS retracted
+> that framing). Reaching Finder is the effort's north star but NOT this class's DoD.
 
 ## 7. How this fits the existing plan
 This is the `MACHINE-LAYER-PLAN.md` §2.7 principle ("LLE for boot, HLE for runtime") finally pointed
@@ -157,20 +160,17 @@ interpretation bankrupt and handed us the exact producer to target.
   HANDOFF/AGENT-CONTEXT frontier flipped to NewSheep.
 
 **The process (BINDING — `docs/MILESTONE-WORKFLOW.md`).** The first milestone is the **Trampoline RE
-Task-0**. Run the full machine; do NOT jump to implementation:
-- [ ] **1. Brainstorm** — invoke the brainstorming skill to frame the Trampoline-RE milestone
-  (what we must learn, what "done" looks like, which route ladder rung each finding would unlock).
-- [ ] **2. Spec** — write the milestone spec under `docs/superpowers/specs/` (problem, DoD, scope,
-  method, risks), cross-linked from this charter and `RESEARCH-LOG.md`.
-- [ ] **3. Plan** — write the implementation plan under `docs/superpowers/plans/` on the house
-  template, with a BINDING Task-0 blocking-answer table.
-- [ ] **4. Red-team** — pre-implementation adversarial round against the committed spec/plan SHA
-  (the round that caught M16's ROM-absent and M17's MODE_68K problems early). Fold findings.
-- [ ] **5. Execute Task-0 — framed as variance-reduction on the Q0-A feasibility gate** (offline-first,
-  no SheepShaver boots). Point it straight at the highest-variance unknown, not a general "disassemble
-  and see":
-  - `pip install tbxi`; `tbxi dump` the 9.0.1 + 9.0.4 Mac OS ROM files; disassemble the **Trampoline
-    ELF** parcel (capstone, PPC BE).
+Task-0**. Steps 1–4 are DONE (2026-06-14); **▶ the next action is step 5 — execute Task-0** per the plan:
+- [x] **1. Brainstorm** — done (method/version/budget locked; `DECISIONS.md` log).
+- [x] **2. Spec** — done: `docs/superpowers/specs/2026-06-14-newsheep-trampoline-re-design.md` (rev 2).
+- [x] **3. Plan** — done: `docs/superpowers/plans/2026-06-14-newsheep-trampoline-re.md` (rev 2).
+- [x] **4. Red-team** — done: 3 reviewers, all GO-WITH-FIXES, folded into rev-2 (producer reframe Q0-F,
+  mechanism-level gate, Python gdb-remote client + `-S`). `DECISIONS.md` log + `RESEARCH-LOG.md`.
+- [ ] **5. ▶ NEXT — Execute Task-0** (offline-first, no SheepShaver boots; follow the rev-2 plan —
+  framed as variance-reduction on the Q0-A feasibility gate, not a general "disassemble and see"):
+  - `pip install tbxi`; `tbxi dump -o <dir> <rom>` the in-hand 9.2-era ROM(s); disassemble the
+    **Trampoline = top-level `MacOS.elf`** (capstone, PPC BE) — NOT a parcel; the NanoKernel is the
+    separate `NanoKernel-vNN` parcel.
   - **Q0-A (GATING): enumerate the OF client-interface calls the Trampoline makes** → bounded-and-
     stubbable vs open-ended. This decides whether Route A is viable or secretly "write an OpenFirmware."
   - **QEMU as a Trampoline TRACER (a step, not a backstop):** single-step the Trampoline under QEMU

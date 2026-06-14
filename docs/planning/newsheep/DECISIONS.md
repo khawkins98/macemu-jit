@@ -25,7 +25,8 @@
 - **Task-0 is variance-reduction on the Q0-A fork.** Point the cheap offline RE straight at the
   highest-variance unknown (OF-depth), not a general "disassemble and see."
 - **Win condition stated plainly:** NewSheep's win = **clearing the IM-init frozen-struct class**.
-  The expected *next* wall is the **M14 `[ALARM]` model-rejection / pre-System boot gate** (a known,
+  The expected *next* wall is the one M14-FINDINGS pinned: the **Cuda device-model IFR/IER bug**
+  (`sr_int_pending` never reaches VIA IFR; NK polls IER) — NOT a "model-rejection gate" (retracted). (a known,
   separate downstream frontier), NOT Finder. Don't mis-sell success as "9.2 boots."
 - **R3 (producer-run reveals a non-IM wall) is the GOOD outcome** — it means the producer approach
   worked and we're back on the machine-layer mainline with device models already staged.

@@ -19,7 +19,10 @@ Mode switch, and NK syscall/FE1F/PROGRAM delivery surfaces all shipped; the firs
 interrupt deliveries through the NK's own published handlers have landed (riser boots;
 `delivered_dec=3` live). Current default diagnostic boot (9.0.1 NewWorld ROM) runs 44.4 s
 to the PROGRAM#5 srr0=0x50324fec park. The paravirtual profile (the Mac OS 8.6 boot
-above) is frozen and byte-identical throughout. Tracker: `docs/planning/MACHINE-LAYER-PLAN.md`.
+above) is frozen and byte-identical throughout. **Live thrust (2026-06-14): the M8→M17 forge arc is
+CLOSED (banked NO-GO); the branch's main aim is now Operation NewSheep — boot 9.2 (NewWorld) by
+running/reproducing the Trampoline producer. See `docs/planning/newsheep/README.md`.** Tracker:
+`docs/planning/MACHINE-LAYER-PLAN.md`.
 
 ## SheepShaver PPC JIT (2026-05-17, upstream Linux ARM64)
 

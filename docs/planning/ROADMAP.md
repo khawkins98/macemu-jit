@@ -1,12 +1,13 @@
 # Roadmap / Work Tracker — `macos-arm64`
 
-> **Status:** ⏸ PAUSED 2026-06-14 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
-> **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL; **M13 COMPLETE (2026-06-14)**.
-> **M13 RESULT:** NewWorld 68k interrupt delivery WORKS — the M9→M13 "`0x5000ED08` never runs" thesis
-> was a probe-granularity artifact (ed08-vs-ed0a). Dead `SS_NW_DR_AUTOVEC`/`SS_M10_CGRP` reverted.
-> **Next = M14:** the model-rejection / pre-System gate (a ROM/OS-version issue, NOT interrupts).
-> Findings: `docs/planning/M13-FINDINGS-interrupt-delivery.md` §C-pin.8. Frontier: `docs/AGENT-CONTEXT.md`.
+> **Status:** 🟢 ACTIVE 2026-06-14 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
+> **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native JIT
+> (stable). **MAIN AIM OF THIS BRANCH = OPERATION NEWSHEEP** — boot Mac OS 9.2 (NewWorld; HARD
+> requirement) by running/reproducing the Trampoline (the producer of the nanokernel boot-time
+> init), NOT forging its outputs. The M8→M17 forge arc is CLOSED (banked NO-GO; M17 red-team
+> BLOCKED — every wall was one disease: the Trampoline never runs). **Start: `docs/planning/newsheep/README.md`.**
+> Next action = the Trampoline RE Task-0 (offline `tbxi` dump + disasm). Compatibility-payoff
+> (8.6–9.0.4 usability) is now SECONDARY. Frontier detail: `docs/AGENT-CONTEXT.md`.
 
 ---
 
@@ -16,7 +17,7 @@
 |-------|--------|-------|
 | **1. Foundation** | Native AArch64 JIT on macOS — SheepShaver boots Mac OS 8.6/9 to Finder | ✅ done |
 | **2. Instrumentation** | Differential harness, E2E boot/workload harness, guest-UI introspection, benchmarks | ✅ done (maintained) |
-| **3. Widen emulation** | Mac OS 9.2.x via Machine Layer (real device models); AltiVec reachable ✅ | 🟡 active |
+| **3. Widen emulation** | **Mac OS 9.2.x via Operation NewSheep** (run/reproduce the Trampoline producer; `docs/planning/newsheep/`) — the forge approach is closed | 🟢 MAIN AIM |
 | **4. Optimize** | Per-block overhead, cross-block pinning, HLE — gated by Phase-2 benchmarks | 🟡 levers open |
 | **Silicon Sheep** | Tauri launcher/VM manager (Track C) | ⏸ deferred |
 
@@ -32,7 +33,7 @@ fidelity (interpreter-only; GPLv3 reuse feasible — cite per backport hygiene; 
 | **A** | Correctness & verification | 🔜 active | `docs/TESTING.md` |
 | **B** | JIT perf optimization | 🟡 levers open | `docs/planning/OPTIMIZATION-PLAN.md` |
 | **C** | Desktop integration (Silicon Sheep) | ⏸ deferred | `docs/planning/DESKTOP_INTEGRATION_PLAN.md` |
-| **D** | Machine Layer / platform breadth | 🟡 active (M14) | `docs/planning/MACHINE-LAYER-PLAN.md` |
+| **D** | **Operation NewSheep** (9.2 NewWorld via the Trampoline producer) — MAIN AIM | 🟢 active | `docs/planning/newsheep/README.md` |
 
 ---
 
@@ -124,12 +125,22 @@ the SECOND five-milestone misdirection from a measurement artifact (cf. session-
 > The M13 strategy/plan docs (`NANOKERNEL-STRATEGY-DECISION.md`, the m13 plan) are now historical —
 > they designed the non-problem. Do NOT re-chase interrupt delivery / CGRP registration / 68k injection.
 
-## M14: Model-rejection / pre-System gate — 🔬 NEW FRONTIER (2026-06-14)
+## M14–M17: the forge arc (CLOSED — superseded by Operation NewSheep)
+
+> **HISTORICAL.** M14 (the "model-rejection gate" framing below) was **superseded within its own
+> findings**: `M14-FINDINGS-cuda-delivery.md` VERDICT (2026-06-14) reclassified the `[ALARM]` stall as
+> a **Cuda device-model bug** (`sr_int_pending` never reaches VIA IFR; the NK polls IER, not IFR) —
+> NOT a model-rejection / Gestalt / System-file gate. M15 (FORGE verified) → M16 (DoD-3 NO-GO: CGRP
+> synthesis target ROM-absent) → M17 (red-team BLOCKED: EXT regime is MODE_68K) closed the per-wall
+> forge approach. **The live track is now Operation NewSheep (`docs/planning/newsheep/README.md`).**
+> The text below is retained for history; "NEW FRONTIER" no longer applies.
+
+## M14 (historical): "model-rejection / pre-System gate" framing — RETRACTED by M14-FINDINGS verdict
 
 **The wall moved downstream.** Native delivery, the 68k handler, and the scheduler are all healthy;
-the boot still parks ~15 s in at the `[ALARM]` **model-rejection / pre-System gate** — a
-Gestalt/machine-ID or System-file boot gate rejecting this machine/ROM combo (`jDR` 68k-block counter
-FREEZES ~10 s in while the NK spins on). This is a **ROM/OS-version** issue, not an interrupt one.
+the boot still parks ~15 s in at the `[ALARM]` stall. (Original framing — a model-rejection /
+Gestalt / System-file gate — was **retracted**: M14-FINDINGS pins it as a Cuda device-model IFR/IER
+bug. See that doc's VERDICT.)
 
 **Leverage (already-RE'd, gate-bypass-TOOLED — MORE tractable than NK internals):**
 `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` (`boot` id=3 anatomy, DSAT format, error

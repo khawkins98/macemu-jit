@@ -1,11 +1,12 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
-> **Status:** 🟢 Approved architecture (rev 4) · ⏸ project PAUSED 2026-06-12 (resume: `docs/HANDOFF.md`)
-> **Current state (header budget = 5 lines):** M0–M13. ⚠️ **M13 RETRACTION (2026-06-14):** the
-> M9→M13 "`SS_PROBE_68K=0x5000ed08` never fires / interrupts never reach 68k" criterion was a
-> PROBE-GRANULARITY ARTIFACT (exact-match on `ed08` vs the post-`lhau` `ed0a`, which matches 8/8 in
-> baseline — genuine vector-$64 delivery). **Native interrupt delivery WORKS.** New frontier (M14) =
-> the downstream model-rejection / pre-System gate. Do NOT re-chase interrupt delivery / CGRP / injection.
+> **Status:** 🟢 Approved architecture (rev 4) · parent strategy for **Operation NewSheep** (the
+> branch's MAIN AIM — `docs/planning/newsheep/README.md`). Resume: `docs/HANDOFF.md`.
+> **Current state (header budget = 5 lines):** M0–M13 landed; M14–M17 (the forge arc) CLOSED — banked
+> NO-GO (M17 red-team BLOCKED). The §2.7 principle here ("LLE for boot, HLE for runtime") is now
+> pointed at the right component by NewSheep: **run/reproduce the Trampoline (producer of the
+> nanokernel boot-time init), not forge its outputs.** Native interrupt *delivery* works (M13); the
+> wall is that the Trampoline never runs. Do NOT re-chase per-wall CGRP/injection forging (bankrupt).
 > Re-scores: #3 CONFIRMED, #4 trigger recorded (§9). Live frontier: `docs/AGENT-CONTEXT.md`.
 > Full arc: `CHANGELOG.md` + §"Archived status narratives" below.
 > · **Created:** 2026-06-10 · **Updated:** 2026-06-12

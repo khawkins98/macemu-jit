@@ -9,6 +9,20 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-14 (strategy pivot — Operation NewSheep)
+
+- **[docs]** **The M8→M17 "forge" arc is CLOSED (banked NO-GO).** M15 verified the FORGE verdict;
+  M16 hit DoD-3 NO-GO (CGRP synthesis target ROM-absent); M17's red-team BLOCKED the host-stub
+  approach (EXT regime is MODE_68K) — the series tripwire fired on wall 1, proving per-wall forging
+  is bankrupt. Root cause across all of them: the **Trampoline** (producer of the nanokernel
+  boot-time init) never runs in our emulation; we synthesize a partial substitute.
+- **[docs]** **Opened Operation NewSheep — now the MAIN AIM of this branch:** boot Mac OS 9.2
+  (NewWorld; HARD requirement) by running/reproducing the Trampoline producer, not forging its
+  outputs. Charter + plan/spec/decisions under `docs/planning/newsheep/`; first milestone (Trampoline
+  RE Task-0) brainstormed → spec'd → red-teamed (rev 2), held pre-execution. Baseline tag
+  `newsheep-baseline`. NewWorld Mac OS ROM collection (1998→2003) banked to
+  `/Users/Shared/macemu/newworld-roms/`.
+
 ## 2026-06-14 (M13 close-out — interrupt-delivery artifact retraction)
 
 ### [SheepShaver] M13 COMPLETE: native NewWorld interrupt delivery confirmed WORKING

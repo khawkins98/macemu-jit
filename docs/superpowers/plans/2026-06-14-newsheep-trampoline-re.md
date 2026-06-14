@@ -38,7 +38,7 @@
 ## File structure
 
 This milestone creates/modifies (all docs — no source):
-- **Create:** `docs/planning/newsheep/FINDINGS-trampoline-re.md` — the recon record: blocking-answer table (Q0-A…E) → per-instrument evidence → reconciliation → route decision + SS-integration sketch.
+- **Create:** `docs/planning/newsheep/FINDINGS-trampoline-re.md` — the recon record: blocking-answer table (Q0-A…F) → per-instrument evidence → reconciliation → route decision + SS-integration sketch.
 - **Modify:** `docs/planning/newsheep/DECISIONS.md` (close Q0-A…D), `RESEARCH-LOG.md` (dated entries).
 - **Working artifacts (NOT committed; referenced by path):** `tbxi` dump trees under `/tmp/newsheep/`, capstone disasm output, QEMU gdb trace logs.
 
@@ -130,7 +130,7 @@ docs(newsheep): Task-0 findings scaffold — Trampoline RE blocking-answer table
 EOF
 ```
 
-**Acceptance:** the findings doc exists with the Q0-A…E blocking-answer table, all rows `_pending_`.
+**Acceptance:** the findings doc exists with the Q0-A…F blocking-answer table, all rows `_pending_`.
 
 ---
 
@@ -404,7 +404,7 @@ interrupt-setup writes to their SS-space target fields (the CGRP family) by role
 
 - [ ] **Step 4: Close the forks + update effort docs**
 
-Mark Q0-A…E resolved in `DECISIONS.md` (move to its Decision Log); append `RESEARCH-LOG.md`; flip `README.md` §9 status (Task-0 done; next milestone = the chosen route's SS integration). Commit:
+Mark Q0-A…F resolved in `DECISIONS.md` (move to its Decision Log); append `RESEARCH-LOG.md`; flip `README.md` §9 status (Task-0 done; next milestone = the chosen route's SS integration). Commit:
 ```bash
 git add docs/planning/newsheep/FINDINGS-trampoline-re.md docs/planning/newsheep/DECISIONS.md docs/planning/newsheep/RESEARCH-LOG.md docs/planning/newsheep/README.md
 git commit -F- <<'EOF'

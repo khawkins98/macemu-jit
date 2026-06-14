@@ -45,7 +45,7 @@ manifest; `tbxi`-verify each ROM's internal OS version; pick the canonical 9.2.x
 
 - The ROM file ≠ the OS. To eventually *boot* 9.2 in SheepShaver we still need genuine **Mac OS 9.2.x
   system software** (install media / a bootable disk). `/Users/Shared/macemu/macos921.dsk` is
-  **mislabeled — it actually contains Mac OS 8.6** (verified earlier; see `[[machine-layer-pivot]]`).
+  **mislabeled — it actually contains Mac OS 8.6** (verified earlier; see `docs/planning/MACHINE-LAYER-PLAN.md` + the M14-FINDINGS asset notes).
 - **Not on Task-0's critical path:** Task-0 is static `tbxi` RE of the ROM (in hand) + QEMU trace
   (QEMU has its own 9.2.1 CD). The 9.2 system software is needed only for the later *boot* milestones.
 

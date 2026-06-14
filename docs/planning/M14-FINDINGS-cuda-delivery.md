@@ -1,5 +1,10 @@
 # M14 Findings — Cuda SR Interrupt Delivery Failure
 
+> **CLOSED / banked RE — superseded by Operation NewSheep** (`docs/planning/newsheep/README.md`).
+> The VERDICT below (the `[ALARM]` stall is a Cuda device-model IFR/IER bug, NOT a model-rejection
+> gate) is still the canonical characterization of the expected post-NewSheep wall — cite it, not the
+> retracted "model-rejection gate" framing. The branch's main aim is now the Trampoline producer.
+
 > **VERDICT (2026-06-14):** The [ALARM] boot stall on `machine newworld` is NOT a
 > model-rejection / Gestalt / System-file gate. It is a **Cuda device model bug** —
 > `sr_int_pending` is never delivered to VIA IFR because `CudaSettle()` only runs on

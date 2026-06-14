@@ -3,7 +3,15 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-14):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION:** **S1-impl Task A is building** (NewWorld paged MMU). S1-impl plan rev-2
+> - **▶ NEXT ACTION:** **S1-impl Task A is DONE + committed** (`fc3ca256` high-BAT insurance, `2bf1526b`
+>   translation core + test, `191fe67c` adversary-found real-mode/BAT-ordering fix; `make test-jit`
+>   score=100 verified, `test_paged_mmu` 36/36). **The new next step = a read-only DE-RISK RECON** of the
+>   parked window: pin which guest PA ranges the live PTE engine (`@0x50319af8`, HTAB-store+`tlbie`)
+>   actually targets vs the BAT-covered RAM/ROM the JIT uses. If disjoint → the window is earnable by
+>   analysis (collapses the G1.e "need the window built to boot the window" chicken-and-egg); if it
+>   touches JIT-covered regions → softmmu. THEN build Task B (window + tlbie interception) or softmmu.
+>   **OWED before wiring the translation core:** external PearPC/QEMU PA oracle cross-check + the
+>   Vs/Vp-vs-MSR[PR] privilege gate (paged_mmu adversary Finding 3). S1-impl plan rev-2
 >   (3-reviewer red-teamed): `docs/superpowers/plans/2026-06-14-ss-m18-s1-impl-paged-mmu.md`.
 >   **Two decisive red-team findings reshaped it:** **(AD-2 FALSIFIED)** the NK's high-BAT writes
 >   (SPR 560–575) are **feature-gated dead code** on every PVR SS presents (7400 `0x000c0000`; gate bit

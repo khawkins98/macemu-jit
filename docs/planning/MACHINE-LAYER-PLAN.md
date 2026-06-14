@@ -14,6 +14,19 @@
 > **machine profile** beside the proven paravirtual path.
 >
 > **This is the new primary approach for ROADMAP D3** ("break the 9.0.4 ceiling").
+>
+> **Refinement (M13, 2026-06-14) — sharpens, does NOT overturn this plan.** The M13 investigation
+> confirmed this plan's own rev-2 correction (line 28: "device models alone were never the blocking
+> walls on the 9.0.1 path") and pinned the actual 9.0.1 NewWorld blocker: **not device-model fidelity**
+> (we already model SCC/VIA/Cuda/OpenPIC, and a forced-eager hardware tick was empirically shown NOT to
+> advance the boot — EXT already saturates the NK fallback), **but the unwired NK→DR interrupt handoff**
+> — the registered-CGRP-handler signal that translates the NK pending-bitmask into the DR's 68k
+> autovector trigger (`cr2lt` at the coherent EXT fallback `0x50325f00`). So the Machine Layer's
+> "fidelity profile" thesis holds, but for the interrupt path the decided work is **HLE-ing one missing
+> NK-interaction signal, not adding silicon**. Decided strategy + verified diagnosis + the active plan:
+> `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` ("COMPLETE OUR OWN"),
+> `docs/planning/M13-FINDINGS-interrupt-delivery.md`,
+> `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`.
 
 ---
 

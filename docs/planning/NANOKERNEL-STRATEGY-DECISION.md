@@ -114,29 +114,88 @@ cheap parallel route-around.) Cross-check pending from the static RE agent (`nk-
   while the control `0x50325f00` fires; dynamic: zero footprint, table never written, `CGRP+0x20=1`).
 - **No fault / no SIG\*** → the "entered-but-faulted" early-failure flavor is RULED OUT by both.
 
-**OPEN (agents lean opposite — the one unresolved bit):** WHY the call is never issued —
-- *Circular* (static): the call site is downstream of the SystemTask/driver-load phase the starved idle
-  loop is waiting to reach (need-ticks→advance→load-drivers→register→ticks).
-- *Upstream-guard skip / early* (dynamic): QEMU shows ticks/68k-handler live EARLY (~8–12s, before
-  Finder), so registration may be an early op our boot skips a precondition for — BUT the QEMU evidence
-  is indirect (couldn't watch the CGRP store; "early" partly reflects the already-healthy 68k side).
-- **Discriminator (next step):** directly observe what calls `0x5031b290` in a healthy boot + its
-  precondition — via PPC gdb on QEMU (absent on host — install) OR trace our NK dispatcher
-  (`~0x5031af00`) selectors during bringup to see if the registration selector is ever requested.
+**RESOLVED — CIRCULAR (WHY-trace agent, 2026-06-13, MED-HIGH).** Registration is **NK kernel-call
+selector `0x01`** (gateway `0x5031aca0`, selector = `*(r6+0x104)`; dispatcher `0x5031aed0`; handler
+`0x5031b250`→`0x5031b290`). Our injection-OFF boot issues **~1 NK kcall total** (the one observed was
+raw selector `0x3f`, not 1); the registration handler `0x5031b24c` gets **0 hits** over 45s; no fault.
+A *guard* hypothesis would require the client to run → funnel traffic; the funnel is **silent**, so the
+kcall-issuing OS bringup phase **is never reached** — the boot is wedged in the early tick-starved 68k
+idle spin **upstream** of it. So it is circular, not an upstream-guard. (Sides with the static agent;
+reconciles the dynamic agent — QEMU's "early" is wall-clock-early but still causally downstream of the
+tick/idle dependency.) Caveat: absence-based (couldn't time a healthy boot's selector-1 via PPC gdb).
 
-**CONVERGENT FIX DIRECTION (both agents, regardless of which WHY):**
-- A **one-shot bootstrap** to break the idle spin / get registration issued once, then self-sustain —
-  e.g. invoke the deferred-service routine `0x5000ee58` once, or issue the real NK registration call
-  `0x5031b290` ourselves with a proper descriptor (now that the routine + r3==0 convention are known —
-  this is DISTINCT from M10's forged table: it lets the NK set up the descriptor + coherent resume).
-- **NOT needed:** host injection (5× falsified) and the deep "make the NK self-register from outside"
-  rabbit hole. Cheap parallel route-around: the ROM/OS-version sweep (#5).
+**THE HARD CONVERGENCE (all agents together):** (a) it's **circular** — registration needs the boot to
+advance past the tick-starved idle spin; (b) the spike proved we **cannot break it by injection** — no
+coherent one-shot 68k autovector / `0x5000ee58` / `0x5031b290` call is host-feasible (the whole M13
+saga). Therefore the loop can only be broken by the boot **advancing naturally**, which requires the
+**real interrupt/timer hardware the NK's early path expects** — i.e. **LLE the machine**, not fake a
+tick. NOTE: this means the WHY-trace's suggested "one-shot bootstrap" fix collides with the spike's
+"injection infeasible" — reconciled by: the bootstrap must come from a **modeled hardware interrupt
+source**, not host injection. Open sub-question (→ borrow-eval): we already model SCC/VIA/Cuda/OpenPIC,
+so what is incomplete/unwired such that the early boot never gets its ticks?
+
+**BOOTSTRAP SPIKE RESULT (2026-06-13) — the "one-shot bootstrap" is NOT FEASIBLE; tempers the optimism.**
+Both candidates fail on contract analysis:
+- **Invoke `0x5031b290` ourselves (A):** the r3==0 "default" path is NOT an "NK-supplies-handler" path.
+  The CGRP descriptor table must hold **client-supplied, MMU-validated PPC handler routines** that a
+  pre-driver boot has not produced. Issuing the call needs (a) a fabricated NK-call context (r6/KDP/NK
+  stack — same incoherence class as the 5 falsified injections) AND (b) a real client handler+table
+  that doesn't exist yet. The only host-supplyable table is **forged = exactly M10's falsified path**
+  (reproduced as the intermittent ~1/3 SIGTRAP). [contract DISASM✓ + PROBE✓: 0x5031b290 never fires]
+- **Drive `0x5000ee58` (B):** DR-recompiler 68k code, coherent only at the DR between-instruction
+  boundary — the already-falsified DR-injection class.
+
+**So registration is not a call we can fake** — it intrinsically requires a *client* (driver/OS
+component) to supply a real handler. This pushes the WHY toward **circular** (registration is
+downstream of driver-load) and means "feed the NK" is NOT "make one call."
+
+**LIVE PRINCIPLED LEAD (from the spike):** the EXT fallback `0x50325f00` runs in a **coherent PPC
+supervisor context** (it fires naturally every interrupt). So the real direction is **HLE the
+registered handler's DR-signal at that fallback point** — i.e. at 0x50325f00, do what the (missing)
+registered handler would: translate the pending interrupt into the DR's autovector trigger (set
+`cr2lt` in the DR's resumed context). This is a real effort, NOT a one-shot, and first needs the
+still-open RE: **characterize the handler's DR context-signal** (how a registered handler hands the
+68k IPL to the DR). Cheap parallel route-around remains the ROM/OS-version sweep (#5).
+**NOT needed:** host frame-injection (5× falsified) and forging the CGRP table (= M10, crashes).
 
 **STRATEGIC BOTTOM LINE:** Option 1 (feed the NK) is the indicated path and is **tractable, not an
 unbounded rabbit hole.** The decision leans clearly AWAY from abandoning the NanoKernel. Remaining work
 is bounded: resolve the one WHY sub-question, then implement the one-shot bootstrap.
 
-## Decision
-TBD. Do not commit further multi-milestone effort to Option 1 without (a) the registration-circularity
-answer and (b) the ideation triage in hand.
+## Borrow-vs-rebuild evaluation (2026-06-13, `m13-borrow-eval`)
+- **The gap is NOT a missing device model.** We already model SCC/VIA/Cuda/OpenPIC. The blocker is
+  (a) OpenPIC→CPU EXT delivery is **gated OFF by default** (only fires under `SS_NW_PIC=1`;
+  wiring exists: `main_unix.cpp` OpenPICBindOutput→nw_pic_output_edge→SheepExcExtSetPending),
+  (b) **lazy** VIA/Cuda/decrementer assertion, and (c) the **unmodeled** EXT-fallback→DR-autovector
+  signal (translate pending IRQ → `cr2lt` at the coherent `0x50325f00`). It's wiring + RE, not silicon.
+- **DingusPPC is the WRONG donor:** it boots Mac OS 9 ONLY on the **OldWorld** G3-Beige path (MacIO
+  Grand Central/Heathrow, **no OpenPIC**); **NewWorld (our NanoKernel/OpenPIC 9.0.1 path) is not
+  supported.** So it doesn't exercise our boot path. (Clean GPLv3 code; our tree is GPLv2-OR-LATER so a
+  GPLv3 import is *legal but moot* given the path mismatch. Usable as a behavioral *reference* for
+  VIA/Cuda/ESCC timer semantics only — cite SHA, never PR inbound.)
+- **QEMU mac99** = the correct NanoKernel-path oracle (real OpenPIC + NewWorld MacIO) — reference-only.
+- **Infinite Mac runs 9.x on SheepShaver, not DingusPPC** → SheepShaver is the proven NewWorld-9.x base;
+  switching base would regress proven capability.
+
+## DECISION (2026-06-13) — COMPLETE OUR OWN; keep SheepShaver + Apple's NanoKernel
+
+Evidence resolves the fork: **do NOT fork the NK** (Apple's, works), **do NOT switch base** (DingusPPC =
+wrong OldWorld path; SheepShaver is the proven NewWorld base), **do NOT borrow device models** (we have
+them; the gap is unwired eager delivery + the DR-handoff, not absent silicon). The path is bounded
+engineering in our own NK-interaction layer:
+1. **Un-gate eager interrupt delivery** (OpenPIC `SS_NW_PIC` toward default-on + eager VIA-T1/T2 +
+   decrementer) so a periodic tick reaches `ExcEnter(EXC_EXTERNAL)` before driver-load.
+2. **Characterize the registered-handler→DR signal** (how a healthy boot hands the 68k IPL to the DR)
+   via the QEMU mac99 oracle.
+3. **HLE that signal at the coherent EXT fallback `0x50325f00`** (set the DR's `cr2lt` autovector
+   trigger) — the one principled, coherent point, distinct from the 5 falsified injections and from
+   M10's crashing forged table.
+- **Cheapest validating experiment (no rebuild):** `SS_NW_PIC=1` + eager VIA-timer slot-boot — does
+  `0x50325f00` fire repeatedly AND does the idle-spin/`dec_expiries` advance past the wall? Yes →
+  the DR-handoff HLE is the bounded finish line. No → circularity is deeper; the ROM/OS-version sweep
+  (route-around) rises in priority.
+
+**RECONFIRM BEFORE COMMITTING MILESTONE EFFORT:** the exact stall wall — M13 inventory cites an MMU
+wall `~0x50326050`, the 2026-06-13 convergence cites a tick-starved idle spin. Both are "pre-driver-
+load," but pin the precise wall first (cheap probe) so the redraft targets the real one.
 </content>

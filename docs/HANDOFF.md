@@ -6,13 +6,21 @@
 ## Resume prompt
 
 > Read `docs/HANDOFF.md`, then `docs/AGENT-CONTEXT.md` (authoritative frontier + constants).
-> **M13 DIAGNOSED (2026-06-13) — read `docs/planning/M13-FINDINGS-interrupt-delivery.md` FIRST.**
-> The 68k handler `0x5000ED08` never runs → boot wedges ~15s starved for ticks. Delivery is a
-> 3-stage chain gated on a **registered CGRP handler that is never installed** (CGRP+0x20=1, table
-> empty). Host-side hand-injection is falsified 5× — do NOT retry (warnings in the STUB code).
+> **M13 STRATEGY DECIDED (2026-06-13), REDRAFTED (2026-06-14).** Read in order:
+> `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` (THE decision — "COMPLETE OUR OWN"),
+> `docs/planning/M13-FINDINGS-interrupt-delivery.md` (the verified 3-stage diagnosis), then the
+> redrafted plan `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`.
+> **Decided model:** keep SheepShaver + Apple's NanoKernel; the gap is unwired eager interrupt
+> delivery + the unmodeled EXT-fallback→DR-autovector handoff at `0x50325f00` (set DR `cr2lt`).
+> Do NOT fork the NK / switch base / borrow device models. **Host-side 68k injection falsified 5×
+> AND forging the CGRP table (= M10 crash) — do NOT retry** (warnings in the STUB code).
 > `irq_fired` is MISLEADING (NK-level consume, not 68k delivery); NewWorld is paravirtual (not VIA).
-> The old "A-trap 0xA9A8 at ED06" framing was WRONG. Next: RE the NK code-group registration the
-> boot performs (what installs it / whether circular with tick-starvation).
+> Plan tasks (step-0 RESOLVED 2026-06-14, see plan Rev 2): wall = **idle spin `0x50468ae4`** (not MMU);
+> **eager delivery FALSIFIED** (EXT already saturates the fallback ≥10000×, boot doesn't advance) →
+> **Task A demoted to a thin EXT precondition; Task C is the sole lever** = HLE the NK→DR handoff at
+> `0x50325f00` (`SS_NW_DR_AUTOVEC`, set DR `cr2lt`). B = QEMU oracle for the handler→DR signal.
+> Keystone open test: does running `0x5000ED08` advance the boot to where registration self-sustains?
+> Flip-last.
 > Process: `docs/MILESTONE-WORKFLOW.md`. Never push without being asked.
 > Never global pkill — slot boots only via `SheepShaver/tools/ss-slot-boot.sh`.
 

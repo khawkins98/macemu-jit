@@ -2,9 +2,10 @@
 
 > **Status:** ⏸ PAUSED 2026-06-13 (resume entry: `docs/HANDOFF.md`) · **Created:** 2026-06-04
 > **Current state (header budget = 5 lines):** SheepShaver boots 8.6 to Finder, full native
-> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL. **M13 DIAGNOSED (2026-06-13):**
-> 68k handler 0x5000ED08 never runs (delivery gated on uninstalled NK CGRP handler); host injection
-> falsified 5×. Findings: `docs/planning/M13-FINDINGS-interrupt-delivery.md`. Frontier: `docs/AGENT-CONTEXT.md`.
+> JIT (stable). Machine Layer: M10+M11a+M11 COMPLETE; M12 PARTIAL. **M13 STRATEGY DECIDED (2026-06-13):**
+> complete our own — keep SheepShaver + Apple's NanoKernel; gap = unwired eager interrupt delivery +
+> the EXT-fallback→DR-autovector handoff (`0x50325f00`). Host injection falsified 5× (ruled out).
+> Plan: `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`. Frontier: `docs/AGENT-CONTEXT.md`.
 
 ---
 
@@ -30,7 +31,7 @@ fidelity (interpreter-only; GPLv3 reuse feasible — cite per backport hygiene; 
 | **A** | Correctness & verification | 🔜 active | `docs/TESTING.md` |
 | **B** | JIT perf optimization | 🟡 levers open | `docs/planning/OPTIMIZATION-PLAN.md` |
 | **C** | Desktop integration (Silicon Sheep) | ⏸ deferred | `docs/planning/DESKTOP_INTEGRATION_PLAN.md` |
-| **D** | Machine Layer / platform breadth | 🟡 active (M9) | `docs/planning/MACHINE-LAYER-PLAN.md` |
+| **D** | Machine Layer / platform breadth | 🟡 active (M13) | `docs/planning/MACHINE-LAYER-PLAN.md` |
 
 ---
 
@@ -94,27 +95,38 @@ Plan: `docs/planning/superpowers/plans/2026-06-13-m12-display-pixels.md`.
 
 Harness: 353/353. Gates: machine tests ALL PASS, e2e-test 122 passed, make e2e PASS. `[FB-DIRTY]=0`.
 
-## M13: 68k interrupt delivery — DIAGNOSED, re-scoped (2026-06-13) 🔬
+## M13: NewWorld 68k interrupt delivery — STRATEGY DECIDED, redrafted (2026-06-14) 🔬
 
-**Goal:** the 68k handler `0x5000ED08` runs → boot passes the ~15s dead-end → `[FB-DIRTY]>0`.
-**Authoritative findings:** `docs/planning/M13-FINDINGS-interrupt-delivery.md` (read this first).
+**Plan:** `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md` (house template).
+**Strategy (settled):** `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` → "COMPLETE OUR OWN".
+**Findings:** `docs/planning/M13-FINDINGS-interrupt-delivery.md` (the verified 3-stage diagnosis).
 
-**Verified diagnosis (supersedes the old "A-trap 0xA9A8 at ED06" framing — that was wrong):**
-The 68k handler `0x5000ED08` never runs; the 68k world spins starved for VBL/Time-Manager ticks.
-Delivery is a 3-stage chain — NK EXT consume (works) → NK→DR handoff (missing) → DR autovector
-(never fires). The handoff needs a **registered CGRP interrupt handler that is never installed**
-(`CGRP+0x20=1`, table empty) because the boot wedges before driver/interrupt registration.
+**Goal:** a periodic hardware-modeled interrupt reaches the 68k world the way a healthy boot does →
+the NK's CGRP registration self-sustains (kcall selector 1 at `0x5031b290` fires naturally) → the 68k
+handler `0x5000ED08` runs → boot advances past the wall → `[FB-DIRTY]>0`.
 
-**Falsified — 5 independent confirmations, do NOT retry:** host-side hand-injection of a 68k
-interrupt is architecturally impossible (CGRP-STUB→DR_WARM crash; any-DR-PC incoherent; resume-
-prologue; DR save-vectors; DR_WARM ROM-patch; "pending-IPL latch" — the DR's trigger is register/
-context state, not a pokable memory latch). `irq_fired` is MISLEADING (NK-level consume, not 68k
+**Decided model (do NOT relitigate):** keep SheepShaver + Apple's NanoKernel. Do NOT fork the NK,
+switch base (DingusPPC = wrong OldWorld path), or borrow device models (we already model
+SCC/VIA/Cuda/OpenPIC). The gap is **unwired eager interrupt delivery** + the **unmodeled
+EXT-fallback→DR-autovector handoff** — wiring + RE, not silicon.
+
+**Three tasks (mirror the strategy doc's three steps):**
+- **Task 0 / step-0** — ✅ RESOLVED (2026-06-14): wall = **idle spin `0x50468ae4`** (not the MMU
+  fly-by `0x50326050`); **eager delivery FALSIFIED** — EXT already saturates the fallback `0x50325f00`
+  ≥10000× in baseline; forcing 7× more EXT does NOT advance the boot. Gap = the NK→DR handoff, not the
+  EXT source. (See plan Rev 2 + M13-FINDINGS "Step-0 recon".)
+- **Task A** (`SS_NW_EAGER_TICK`) — **DEMOTED to a thin EXT precondition** (just ensure the `SS_NW_PIC`
+  leg delivers EXT to the NK; the eager-VIA/dec timer lever is dropped, falsified by step-0).
+- **Task B** (QEMU mac99 oracle, read-only): characterize the registered-handler→DR signal.
+- **Task C** (`SS_NW_DR_AUTOVEC`): HLE that signal at the coherent EXT fallback `0x50325f00` (set the
+  DR `cr2lt` autovector trigger). Acceptance ladder: advance past wall → driver-load → registration
+  self-sustains → ticks → `0x5000ed08` runs → pixels. Flip-last, revert-on-red.
+
+**Ruled out — do NOT retry:** host-side 68k injection (5× falsified — CGRP-STUB→DR_WARM crash,
+any-DR-PC incoherent, resume-prologue, DR save-vectors, DR_WARM ROM-patch, "pending-IPL latch") and
+forging the CGRP table (= M10's crash). `irq_fired` is MISLEADING (NK-level consume, not 68k
 delivery). NewWorld is paravirtual (software interrupt struct at `*(0x68ffefd0)`, not VIA IFR/IER).
-
-**Forward (next milestone pass):** the NK code-group **registration** the boot performs — what
-installs the CGRP handler, at what stage, and whether it's circular with tick-starvation (and if so,
-the minimal one-shot bootstrap to break the loop). Process: MILESTONE-WORKFLOW.md.
-**Strategic fork (whether to keep fighting the NK at all):** `docs/planning/NANOKERNEL-STRATEGY-DECISION.md`.
+Route-around held in reserve (ROM/OS-version sweep) only if step-0 shows eager delivery insufficient.
 
 ## M11+: CFM / Process Manager / drivers (unscoped)
 

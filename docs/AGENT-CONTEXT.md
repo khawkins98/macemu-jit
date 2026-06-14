@@ -25,16 +25,29 @@ FALSIFIED (crashes the DR); retained as a negative result, not a working deliver
 - Gate: `SS_M11_FB=1 SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1` (NOT SS_M10_CGRP — it kills the boot).
 - Harness 353/353. Machine tests ALL PASS. e2e-test 122 passed. make e2e PASS.
 
-**M13 DIAGNOSED (2026-06-13) — authoritative: `docs/planning/M13-FINDINGS-interrupt-delivery.md`.**
-The above "A-trap 0xA9A8 at ED06" wall framing (line 21) is **WRONG/superseded.** Verified: the 68k
-handler `0x5000ED08` never runs; the 68k world spins starved for VBL/Time-Manager ticks → ~15s
-dead-end. Delivery is a 3-stage chain (NK EXT consume works → NK→DR handoff missing → DR autovector
-never fires); the handoff needs a **registered CGRP handler that is never installed** (CGRP+0x20=1,
-table empty). **Host-side hand-injection falsified 5× — do NOT retry** (warnings in the STUB code).
-`irq_fired` is MISLEADING (NK-level consume, not 68k delivery). NewWorld is **paravirtual**
-(software interrupt struct at `*(0x68ffefd0)`, NOT VIA IFR/IER). The DR's interrupt trigger is
-register/context state (no pokable memory latch). **Next:** RE the NK code-group registration the
-boot performs (what installs it / whether circular with tick-starvation → minimal bootstrap).
+**M13 STRATEGY DECIDED (2026-06-13), REDRAFTED (2026-06-14).**
+Decision: `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` ("COMPLETE OUR OWN"). Findings:
+`docs/planning/M13-FINDINGS-interrupt-delivery.md` (verified 3-stage diagnosis). Plan:
+`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`.
+The "A-trap 0xA9A8 at ED06" wall framing (line 21) is **WRONG/superseded.** Verified: the 68k handler
+`0x5000ED08` never runs; the 68k world spins starved for ticks. Delivery is a 3-stage chain (NK EXT
+consume works → NK→DR handoff missing → DR autovector never fires); the handoff needs a registered
+CGRP handler never installed (CGRP+0x20=1, table empty) — **circular** (registration needs the boot
+to advance past the tick-starved spin).
+**Decided model:** keep SheepShaver + Apple's NanoKernel; the gap is **unwired eager interrupt
+delivery** + the **unmodeled EXT-fallback→DR-autovector handoff** at `0x50325f00` (set DR `cr2lt`) —
+wiring + RE, not silicon. Do NOT fork the NK / switch base (DingusPPC = wrong OldWorld path) / borrow
+device models (we have them). **Host-side 68k injection falsified 5× AND forging the CGRP table
+(= M10 crash) — do NOT retry** (warnings in the STUB code). `irq_fired` is MISLEADING (NK-level
+consume, not 68k delivery). NewWorld is **paravirtual** (software interrupt struct at `*(0x68ffefd0)`,
+NOT VIA IFR/IER). The DR's interrupt trigger is register/context state (no pokable memory latch).
+**Plan tasks (step-0 RESOLVED 2026-06-14 — plan Rev 2):** wall = **idle spin `0x50468ae4`** (NOT the
+MMU fly-by `0x50326050`); **eager delivery FALSIFIED** — EXT already saturates the fallback `0x50325f00`
+≥10000× in baseline, forcing 7× more EXT does NOT advance the boot (`0x5000ED08` never runs). So
+**Task A is demoted to a thin EXT precondition (`SS_NW_PIC` leg); Task C is the sole lever** = HLE the
+NK→DR handoff at `0x50325f00` (`SS_NW_DR_AUTOVEC`, set DR `cr2lt`). B = QEMU oracle (handler→DR signal).
+Keystone open test: does running `0x5000ED08` advance the boot to where registration (`0x5031b290`,
+kcall sel 1) self-sustains? — eager EXT did NOT break that circularity. Flip-last.
 
 **Tooling added (2026-06-13):** `make nw-northstar` — repeatable NewWorld boot-progress
 snapshot. Boots all-on cluster, emits `[NW-PROG verdict]`. Report-only by default.
@@ -229,8 +242,11 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: M11 framebuffer.** Plan: `docs/planning/superpowers/plans/2026-06-13-m11-framebuffer.md`.
-Recon (complete): `docs/planning/machine/FRAMEBUFFER-RECON.md`.
+**Next task: M13 NewWorld interrupt delivery (redrafted).** Plan:
+`docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`. Strategy:
+`docs/planning/NANOKERNEL-STRATEGY-DECISION.md`. Findings: `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
+Step-0 recon (pin the wall + eager-delivery experiment) runs in parallel — the plan consumes its result.
+Prior recon (complete): `docs/planning/machine/FRAMEBUFFER-RECON.md`.
 Keep-active machine docs: `CORE99-MACHINE-DESCRIPTION.md`, `M1-DEVICE-CONFORMANCE.md`,
 `ROM-PATCH-AUDIT.md`, `FRAMEBUFFER-RECON.md`.
 Archived milestone recon: `docs/archive/2026-06/machine/`.

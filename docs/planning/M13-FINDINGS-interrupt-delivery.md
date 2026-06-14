@@ -92,6 +92,29 @@ boot passes the ~15s dead-end (blocks compile after 15s, dec keeps climbing, han
 
 ---
 
+## Step-0 recon (M13 redraft, 2026-06-14) — wall pinned + eager-delivery FALSIFIED
+
+- **Q-0a — the real wall is the tick-starved idle spin `0x50468ae4`** (≥10000 probe visits), NOT an
+  MMU fault at `0x50326050` (single fly-by, visit=1; zero DSI/ISI/fault/slow-path signatures). The
+  "MMU wall" framing from the M13 inventory is refuted. [PROBE✓]
+- **Q-0b — eager interrupt delivery does NOT advance the boot (lever FALSIFIED).** A gated 60Hz forced
+  VIA assert (`SS_M13_EAGER`, +33 lines, harness 353/353) drove EXT 7× harder (host-irq edges 1→2481,
+  `irq_fired` 82→592) — but every one landed in the fallback `0x50325f00` and returned; **`0x5000ED08`
+  never ran, CGRP registration `0x5031b290` never reached, the kcall funnel `0x5031aca0` fired once,
+  the wall/`[ALARM]`/zero-pixels were unchanged.** Critically, the fallback **already fires ≥10000× in
+  plain baseline** — EXT is NOT starved at the NK. [PROBE✓]
+- **Consequence (BINDING for the redraft):** the gap is purely the **missing NK→DR handoff**, not the
+  EXT source. **Task A (eager delivery) is demoted** to a precondition (just ensure EXT reaches the NK
+  via the PIC leg — already true under `SS_NW_PIC=1`); the eager-VIA-timer lever is dead. **Task C (HLE
+  the handler→DR signal at `0x50325f00`) is the sole lever.** And eager EXT does **not** break the
+  registration circularity (registration still 0 hits under 2481 EXTs) → the open keystone test is
+  whether Task C's delivery to `0x5000ED08` advances the boot to where registration self-sustains; if
+  not, the circularity is deeper than any delivery mechanism and the ROM/OS-version route-around rises.
+  (The `SS_M13_EAGER` experiment harness is preserved on branch `worktree-agent-a930ae477fe328489`,
+  gated default-OFF, as a negative-result record — not for merge.)
+
+---
+
 ## Provenance (archived process trail — `docs/archive/2026-06/planning/`)
 
 - `2026-06-13-m13-atrap-bootstrap.md` — original M13 plan (Task A as injection) + Task-0 recon addenda.
@@ -100,4 +123,3 @@ boot passes the ~15s dead-end (blocks compile after 15s, dec keeps climbing, han
 - `2026-06-13-m13-rescope-dr-autovector.md` — the autovector re-scope + the RE verdict.
 - `M13-SUMMARY-REPORT.md` — running status report (supersedes a wrong session-1 draft).
 - Durable lessons: `LEARNINGS.md` (top entry, 2026-06-13 M13). Code warnings at the STUB sites.
-</content>

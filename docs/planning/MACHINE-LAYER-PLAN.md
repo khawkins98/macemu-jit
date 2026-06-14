@@ -1,9 +1,11 @@
 # The Machine Layer — a designed NewWorld fidelity profile
 
 > **Status:** 🟢 Approved architecture (rev 4) · ⏸ project PAUSED 2026-06-12 (resume: `docs/HANDOFF.md`)
-> **Current state (header budget = 5 lines):** M0–M9 partial. M9 stall fixed (ROM patch
-> removed; dec_expiries≈1577 baseline). Probe criterion `SS_PROBE_68K=0x5000ed08` → M10:
-> NK EXT requires PR=1 (user-mode DR, quarantined) + CGRP init. Active: M10 scoped.
+> **Current state (header budget = 5 lines):** M0–M13. ⚠️ **M13 RETRACTION (2026-06-14):** the
+> M9→M13 "`SS_PROBE_68K=0x5000ed08` never fires / interrupts never reach 68k" criterion was a
+> PROBE-GRANULARITY ARTIFACT (exact-match on `ed08` vs the post-`lhau` `ed0a`, which matches 8/8 in
+> baseline — genuine vector-$64 delivery). **Native interrupt delivery WORKS.** New frontier (M14) =
+> the downstream model-rejection / pre-System gate. Do NOT re-chase interrupt delivery / CGRP / injection.
 > Re-scores: #3 CONFIRMED, #4 trigger recorded (§9). Live frontier: `docs/AGENT-CONTEXT.md`.
 > Full arc: `CHANGELOG.md` + §"Archived status narratives" below.
 > · **Created:** 2026-06-10 · **Updated:** 2026-06-12
@@ -15,18 +17,24 @@
 >
 > **This is the new primary approach for ROADMAP D3** ("break the 9.0.4 ceiling").
 >
-> **Refinement (M13, 2026-06-14) — sharpens, does NOT overturn this plan.** The M13 investigation
-> confirmed this plan's own rev-2 correction (line 28: "device models alone were never the blocking
-> walls on the 9.0.1 path") and pinned the actual 9.0.1 NewWorld blocker: **not device-model fidelity**
-> (we already model SCC/VIA/Cuda/OpenPIC, and a forced-eager hardware tick was empirically shown NOT to
-> advance the boot — EXT already saturates the NK fallback), **but the unwired NK→DR interrupt handoff**
-> — the registered-CGRP-handler signal that translates the NK pending-bitmask into the DR's 68k
-> autovector trigger (`cr2lt` at the coherent EXT fallback `0x50325f00`). So the Machine Layer's
-> "fidelity profile" thesis holds, but for the interrupt path the decided work is **HLE-ing one missing
-> NK-interaction signal, not adding silicon**. Decided strategy + verified diagnosis + the active plan:
-> `docs/planning/NANOKERNEL-STRATEGY-DECISION.md` ("COMPLETE OUR OWN"),
-> `docs/planning/M13-FINDINGS-interrupt-delivery.md`,
-> `docs/planning/superpowers/plans/2026-06-14-m13-nk-interrupt-delivery.md`.
+> **Refinement (M13 CLOSE-OUT, 2026-06-14) — RETRACTS the interrupt sub-thesis; the fidelity-profile
+> plan still holds.** M13 set out to HLE an "unwired NK→DR interrupt handoff" (`cr2lt` at the EXT
+> fallback `0x50325f00`) believed to be the 9.0.1 blocker. That whole premise was **falsified as a
+> measurement artifact**: native 68k interrupt delivery already works — genuine level-1 vector-$64
+> autovectors fire in plain baseline (proven by re-targeting the blind exact-match probe `ed08`→`ed0a`,
+> 8/8; saved SR IPL=0; handler + VBL/deferred pass run; scheduler healthy). So device-model fidelity
+> was never the wall on 9.0.1 (rev-2 was right about that) AND neither was the interrupt handoff. The
+> **actual remaining 9.0.1 blocker is downstream: the `[ALARM]` model-rejection / pre-System gate**
+> (~15s, a Gestalt/model-ID or System-file boot gate). The Machine Layer's fidelity-profile thesis is
+> intact; the interrupt-delivery work (M9→M13, incl. the now-reverted `SS_NW_DR_AUTOVEC` and
+> `SS_M10_CGRP` mechanisms) targeted a non-problem. **Do NOT re-chase interrupt delivery / CGRP
+> registration / 68k injection.** M14 = characterize the model-rejection gate (leverage
+> `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` + the archived Upgrade-Card gate-bypass);
+> one early cross-version boot decides whether a ROM/OS-version route-around is even viable. Evidence:
+> `docs/planning/M13-FINDINGS-interrupt-delivery.md` (top retraction banner + §C-pin.7/8);
+> `docs/HANDOFF.md` (headline). The `2026-06-14-m13-nk-interrupt-delivery.md` plan is now HISTORICAL
+> (it planned the non-problem); `NANOKERNEL-STRATEGY-DECISION.md`'s "complete the NK interaction" framing
+> is superseded for the interrupt path by this retraction.
 
 ---
 

@@ -6,16 +6,21 @@
 > NK slot-4 service `0x50314660`); NK routing structs stay **frozen-zero across obs=1e9**
 > (zero struct-populating writes); `SC#1=0x0d` is a PIC-off artifact (absent under
 > `SS_NW_PIC=1`). Two independent pillars; verdict does NOT rest on a single chain.
-> **Misroute-why diagnostic COMPLETE (2026-06-14): STRUCTURAL → oracle-first forge.** The
-> EXT edge IS delivered correctly to the published NK EXT entry `0x50314880`; the misroute is
-> DOWNSTREAM, inside the NK dispatcher — onward routing keys on uninitialized NK structs (saved
-> `r11` bit 0x8000 + `*(r8-0x338)+0x20`) at `50314898 blt 0x50314660`. (`0x50325fd0` was only
-> `pc()` at latch-release telemetry, not a branch target; `0x50314660` is an early-return stub,
-> not a "service".) No edit to our delivery path fixes it. **Next milestone = oracle-first forge
-> (M14 §7 step 5)** — extract correct `hnfo+0x14`/`hnfo+0x28`/`KDP+0x674` (+ the `r11` bit and
-> `*(r8-0x338)+0x20` semantics) from a working paravirtual/QEMU mac99 boot, seed them. See
-> `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic". Does
-> NOT reopen the verdict.
+> **Misroute-why diagnostic COMPLETE (2026-06-14): STRUCTURAL.** EXT IS delivered correctly to
+> the published NK EXT entry `0x50314880`; the misroute is DOWNSTREAM, in the NK dispatcher.
+> See `docs/planning/M15-FINDINGS-consumption-recon.md` "Addendum — misroute-why diagnostic".
+>
+> **M16 Task-0 RE COMPLETE (2026-06-14) — minimal forge is NO-GO; re-scope to CGRP-table
+> synthesis.** Pinned the dead-end to one field, live: SPRG0=KDP=`0x68ffe000`; the EXT body
+> reads `*(KDP-0x338)=0x68ffc1c0` (the **"CGRP"** interrupt-group descriptor) and gates on
+> `[0x68ffc1e0]=1` (`cmpwi 2; blt` → 1<2 → early-return → EXT unserviced; THIS is M15's 0/510).
+> The `r11`/SRR1 `0x8000` gate is already satisfied (srr1=0x9040) — not a blocker. **But the
+> CGRP handler table is empty** (`+0x38`=0 guard, `+0x3c`=0 base, `+0x44`=0 count), and the
+> service routine `0x503148e0` self-guards (`beqlr`/`bgelr`) on it. So forging `[0x68ffc1e0]≥2`
+> is SAFE but INERT — the real fix must populate the full CGRP handler table (the M10-class
+> work), whose correct contents need IM-init RE and/or a QEMU oracle (format only). **Next:
+> fresh planning pass to re-scope M16 to CGRP-table synthesis.** Full RE + verdict:
+> `docs/planning/M16-FINDINGS-oracle-forge.md` (Q5/Q6). Plan/spec: `docs/superpowers/{plans,specs}/2026-06-14-m16-oracle-forge*`. Does NOT reopen the FORGE verdict.
 > Standing fact: ring tool path is **`tools/ring-walk.py`** (repo-root `tools/`, NOT
 > `SheepShaver/tools/`).
 > For session logs: `docs/archive/2026-06/LEARNINGS-2026-06.md` + `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`.

@@ -17,15 +17,26 @@ refusal was gated on an unreachable config. **Verdict pivot:** NK routing struct
 (`hnfo+0x00/0x14/0x28`, `KDP+0x674`) stay **frozen-zero across obs=1e9** — zero
 struct-populating guest writes. The verdict does NOT rest on a single chain. Canonical:
 `docs/planning/M15-FINDINGS-consumption-recon.md` "Verdict (Task 4)".
-- **Next = misroute-first time-boxed gate → oracle-first forge fallback** (does NOT reopen
-  the verdict). Task 0: pin WHY the EXT edge selects `0x50325fd0` over `0x50314660` (the
-  branch decision register/condition) via `--find-pc`/`--regs-at` on a fresh
-  `SS_NW_PIC=1 SS_NW_IRQ_CONSUME=1 SS_DR_R24_RING=1` boot (NOT `SS_JIT_WATCH_DUMPS=0`).
-  Obvious one-line wrong branch → fix + real init (forge unnecessary); structural/non-obvious
-  within the box → fall through to oracle-first forge (M14 §7 step 5): extract correct
-  `hnfo+0x14`/`hnfo+0x28`/`KDP+0x674` from a working paravirtual or QEMU mac99 boot, then seed.
+**M16 — Task-0 RE COMPLETE (2026-06-14). Minimal forge NO-GO; re-scope to CGRP-table
+synthesis.** The misroute-why diagnostic (M15 addendum) found EXT delivery is correct
+(reaches `0x50314880`); the misroute is downstream. M16 Task-0 RE then pinned it to ONE
+field, live: SPRG0=KDP=`0x68ffe000`; the EXT body reads `*(KDP-0x338)=0x68ffc1c0` (the
+**"CGRP"** interrupt-group descriptor, `[+0x04]='CGRP'`) and gates on `[0x68ffc1e0]=1`
+(`50314894 cmpwi 2; blt 0x50314660` → 1<2 → early-return → EXT unserviced = M15's 0/510).
+The `r11`/SRR1 `0x8000` gate is **already satisfied** (srr1=0x9040), NOT a blocker. The CGRP
+handler table is **empty** (`+0x38`=0 guard, `+0x3c`=0 base, `+0x44`=0 count); the service
+routine `0x503148e0` **self-guards** (`beqlr`/`bgelr`) on it. ⇒ forging `[0x68ffc1e0]≥2` is
+SAFE but **inert** (empty table → no dispatch to `0x5000ec50`). The real fix must populate
+the full CGRP handler table (M10-class work); correct contents need IM-init RE and/or a QEMU
+oracle (format only — QEMU rig is 512MB/9.2.1, weak for literal values).
+- **Next = fresh planning pass to re-scope M16 to CGRP-table synthesis.** Findings (Q1–Q6):
+  `docs/planning/M16-FINDINGS-oracle-forge.md`; plan/spec: `docs/superpowers/{plans,specs}/2026-06-14-m16-oracle-forge*`.
 - **STANDING FACT (tool path):** the ring-walk tool is **`tools/ring-walk.py`** — repo-root
   `tools/`, NOT `SheepShaver/tools/`. The wrong path cost the misroute capture in M15 Boot C.
+- **STANDING FACT (probe):** `SS_PROBE_PC` DID fire at the EXT vector-entry PC `0x50314880`
+  in M16 (the M15 "vector dispatch bypasses the block-entry hook" caveat did not bite) — the
+  block is genuinely JIT-entered. Treat the M15 "never fires at vector entry" caveat as
+  context-specific, not absolute; re-verify per use.
 
 **M13 — COMPLETE (2026-06-14). The load-bearing fact: NewWorld 68k interrupt delivery WORKS** — the
 M9→M13 keystone ("`0x5000ED08` never runs / interrupts never delivered") was a **probe-granularity

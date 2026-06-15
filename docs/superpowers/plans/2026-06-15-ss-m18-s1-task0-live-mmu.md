@@ -513,3 +513,22 @@ marshaller expects — for the call-method path, the cell routed to the caller's
 its `( virt -- false|phys mode true )` layout. VERIFY: watch `011830a8` settles to `0x1587000`, `0x2031e4`
 no longer traps. (The real IC node from the QEMU recon is still worth building as the content layer, but is
 NOT what this wall needs.)
+
+### /memory base=0 — FALSIFIED no-op (2026-06-15); the real wall = the Trampoline→NK handoff fails into Start68k
+A clean A/B proved publishing OF `/memory` reg base `0x10000000`→`0x0` is **byte-identical** (same fault
+`ea=0x400020000000`, same `[DR68K] r24=1 ppc_block=0x1fffffd0`, iNK=0). **The `0x20000000` boundary is
+`RAMBase(0x10000000)+RAMSize(0x10000000)` = the native V=P aperture / host RAM placement, NOT the OF
+`/memory` base+size** — changing the advertised base doesn't touch it. Reverted (not committed).
+
+**The real wall (precise, and it reframes the endgame):** after the relocation copy (which runs ~117M
+blocks of the relocated stage), control reaches SheepShaver's **68k DR emulator / Start68k with a GARBAGE
+entry PC** (`r24=0x00000001`), and walks zero-fill off the top of the V=P aperture to `0x20000000` →
+SIGSEGV. **iNK=0 throughout — the NanoKernel never executes; NanoKernelEntry `0x50310000` + the SR-install
+probes never fire.** Critically, `[DR68K] first instruction r24=1` is present in the BASELINE too, so the
+gated boot has been falling through to SheepShaver's own Start68k machinery — WITHOUT the NK having run.
+Under `SS_M18_NK_SUPERVISOR` S3-T4 retired the Execute68k forge, so this Start68k entry with a bogus PC is
+the real Trampoline's final handoff landing WRONG (garbage `r24=1`/`ctr=0xfffffffe`), not the legacy forge.
+**NEXT RE (the endgame): trace where the post-relocation execution (the ~117M-block relocated stage) goes +
+why its final jump computes a garbage target (r24=1 / ctr=-2) instead of NanoKernelEntry `0x50310000`** —
+i.e. what the real Trampoline's last hand-off reads, and which still-stubbed/wrong input poisons it. This is
+the wall between "the Trampoline runs its whole bringup" and "the NanoKernel executes."

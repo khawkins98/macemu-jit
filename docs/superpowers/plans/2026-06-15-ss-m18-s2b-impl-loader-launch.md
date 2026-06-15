@@ -1,6 +1,22 @@
 # SS_M18 Stage 2b — Trampoline loader + CHRP launch + OF-CI wiring: S2b-IMPL — IMPLEMENTATION milestone
 
-> **Status:** rev-1 DRAFT (2026-06-15) — pending red-team. **This is the S2b-impl build plan.** It executes
+> **Status:** rev-2 (2026-06-15) — red-team FOLDED (PROCESS + TECHNICAL + ADVERSARY, consensus
+> GO-WITH-FIXES; ADVERSARY BLOCK-as-written on item 3 → CLEARED by the ROM-identity guard below). Must-fixes
+> folded (inline ★rev-2 marks): (A-1/item 3) **the gate REFUSES to launch on any non-9.0.1 ROM** — md5
+> `66210b4f…`/component-table identity guard, STOP on mismatch (closes the silent 1.1-vs-9.0.1 footgun:
+> both ROMs satisfy `MachineProfileIsNewWorld()`, so staging the 9.0.1 ELF against 1.1 ROM bytes would yield
+> an undetectable mismatched `NanoKernelEntry`); (T-1/item 7) **a per-service/per-method pointer-arg
+> descriptor SCHEMA** — the generic shim cannot identify which cells are pointers without it, and the
+> "backend re-translates" claim was inconsistent with the actual `of_ci_callback` decode; (T-2/item 1) **the
+> guest→host bridge MECHANISM is named** (EMUL_OP/intercept opcode for the shim's PPC-callable entry);
+> (P-1/A-2/items 5,2) **T2/T4 micro-tests extended to exercise the shim THROUGH its r5 entry path + drive a
+> `call-method` array end-to-end into each backend** (incl. the `/mmu` recording stub) — so the wiring, not
+> just isolated components, is verified pre-S1. Should-fixes folded: T-3 (the `/mmu` stub asserts-fail on any
+> claim/map of the shim's reserved range — collision tripwire); P-3 (the two-gate forge predicate pinned as
+> a coordinator-reviewed interface); T-5 (r3/r4 env-overridable); A-4 (stage the asset reproducibly).
+> **Line-cite correction:** the `[KDP+0x1074/0x1078]` writes are at **`glue:3271-3272`** (NOT `:3140-3141`,
+> which is the `kdp+0x648` entry-vector write) — fixed here AND owed in the S3-impl plan. **This is the
+> S2b-impl build plan.** It executes
 > the BINDING contracts from `FINDINGS-s2b-loader-handoff.md` (RESIDUE-PASS — the *expected* case): stage the
 > md5-verified 9.0.1 `MacOS.elf`, place its 2 PT_LOAD at ELF vaddrs under the gate, build the guest-callable
 > r5 marshalling shim, wire the committed-inert `of_ci_callback`, and launch the real Trampoline from the
@@ -135,9 +151,9 @@ guest address/handle is expected is ESCALATED.
   collision surface** (S3-impl T4 RETIREs the same reg-fixup forge `:716`).
 - **The launch seam (verified):** `kpx_cpu/sheepshaver_glue.cpp` `MachineProfileIsNewWorld()` init block
   (`:2747`+) — the SAME block that today stages `[KDP+0x1074]=0x50480000`/`[KDP+0x1078]=0x50460000` at
-  `:3140-3141` and the sub-KDP map at `:2762`. The gated CHRP launch (load `MacOS.elf`, set r5/r2/r3/r4, jump
+  `:3271-3272` (★rev-2 corrected from `:3140-3141`, which is the `kdp+0x648` entry-vector write) and the sub-KDP map at `:2762`. The gated CHRP launch (load `MacOS.elf`, set r5/r2/r3/r4, jump
   `0x20f078`) is sited here. **This is the S3-impl collision surface** (S3-impl T4 RETIREs the Execute68k
-  pair `:3140-3141` + forge `:2806/2804/2918`).
+  pair `:3271-3272` + forge `:2806/2804/2918`).
 - **The committed-inert OF-CI artifact (verified):** `SheepShaver/src/machine/openfirmware_ci.cpp` (24811 B)
   + `include/openfirmware_ci.h` (5586 B), commits `14c9384e`+`6c892840`; compiled ONLY by
   `machine/Makefile:87-88` `test_openfirmware_ci` target, **NOT linked into the SheepShaver binary**. S2b
@@ -175,13 +191,34 @@ code, a hidden G2b.a prerequisite.** Its pinned I/O contract:
 4. **Outbound (host→guest):** after `of_ci_callback` writes `rets[]`, write each return cell back BE-32 via
    `htonl`+`Mac2HostAddr`; returned pointers/handles that are guest-visible translated host→guest
    (phandles/ihandles/lengths are scalars — truncated 32-bit). Return the callback's int as r3.
-5. **Pointer-direction discipline:** every semantically-pointer cell crosses with explicit translation; the
-   `call-method` backends receive HOST-decoded args from `of_ci_callback`'s `of_call_method_fn` — the shim
-   does NOT re-translate those (the backend owner does).
+5. **Pointer-direction discipline (★rev-2 T-1 CORRECTED):** the original "the shim does NOT re-translate
+   call-method args (the backend owner does)" was WRONG — `of_ci_callback`'s consumers expect HOST pointers
+   in the arg cells they hand to backends (e.g. `getprop` `buf=cell_ptr(args[2])`, disk `read-blocks` buffer
+   `&args[2]→backend`), so the shim MUST translate those pointer cells at marshal time. A GENERIC shim cannot
+   know per-(service,arg-index) which cells are pointers — so **T2 pins an explicit POINTER-ARG DESCRIPTOR
+   SCHEMA** (★rev-2 T-1, must-fix): a table `service/method → {arg-index: ptr|scalar, ret-index: ptr|scalar}`
+   covering every service in the bounded OF inventory AND every call-method shape — `getprop` (args[0]
+   phandle=scalar, args[1] name=ptr, args[2] buf=ptr, args[3] buflen=scalar), `finddevice`/path=ptr,
+   `read-blocks`/`write-blocks` buffer=ptr + block/count=scalar, RTAS handles=scalar, `interpret`
+   literal=ptr, etc. Without this schema T2 is underspecified and item 7 is not closeable.
+6. **★rev-2 T-1b — outbound is lighter than first stated:** because `Mac2HostAddr(guest_buf)` ALIASES guest
+   memory, a backend's host-side `memcpy(buf,…)` writes through to the guest buffer with NO copy-back. So
+   outbound marshal only `htonl`s the `rets[]` **value** cells (+ translates any returned guest-visible
+   handle/pointer) — it does NOT copy buffer contents back.
 
-**Where the shim's guest entry + scratch live is a RED-TEAM tension (see Self-review #1).** Provisional: a
-loader-owned guest region carved inside the staged-ELF aperture footprint or a reserved scratch page the
-launch seam allocates and records — NOT an arbitrary guess into live guest memory.
+**★rev-2 T-2 — the guest→host bridge MECHANISM (must-fix; was unnamed).** The Trampoline calls r5 via
+`bctrl` through glue `0x21024c`. For a guest PPC `bctrl` to land in host C, the shim's guest entry must be an
+**instruction the JIT/interpreter intercepts** — an EMUL_OP / magic illegal-opcode pattern (the same
+mechanism SS already uses for its EMUL_OP traps). T2 pins WHICH opcode + WHERE the JIT recognizes it before
+coding; the loader writes that opcode at the shim's guest entry address (= r5). This is load-bearing NEW code.
+
+**★rev-2 T-2/T-3 — where the shim's guest entry + scratch live (must-fix; was Self-review #1).** Provisional:
+a loader-owned guest region OUTSIDE both the staged-ELF footprint (data `0x100000`–`0x119920`, exec
+`0x200000`–`0x210260`) AND the recording-stub's logged `/mmu` claim set — NOT an arbitrary guess. **The T4
+recording `/mmu` stub ASSERTS-FAIL if the Trampoline ever `claim`s/`map`s the shim's reserved range**
+(★rev-2 T-3 collision tripwire) — converting a silent post-S1 collision fault into a logged `[S2B-SHIM-COLLIDE]`
+tripwire. Whether a provably-free region exists statically, or this is owed a first-boot memory-map probe,
+is recorded as the named T2 residue.
 
 ## Task breakdown (SERIALIZED, gated, LOWEST-RISK-FIRST; one task in flight per file set)
 
@@ -199,7 +236,10 @@ launch seam allocates and records — NOT an arbitrary guess into live guest mem
 ### T1 — the staged-asset ELF loader (LOWEST RISK; inert when off)
 - [ ] Re-verify the staged `MacOS.elf` md5 `1300a95e…`/94144 B + the 2 PT_LOAD ELF headers (data vaddr
       `0x100000` filesz `0x6bc0` memsz `0x19920`; exec vaddr `0x200000` filesz `0x10260`). Add a manifest
-      entry pinning the asset (size + md5).
+      entry pinning the asset (size + md5). **★rev-2 A-4 — stage the 94144 B asset REPRODUCIBLY** (a tracked
+      location or a build prerequisite that FAILS LOUD on a clean checkout/CI where `/tmp/newsheep/` + the
+      tbxi venv are absent); co-pin it with the REQUIRED 9.0.1 ROM (the A-1 ROM-identity guard) so the gated
+      build is reproducible and the asset/ROM pair is consistent.
 - [ ] Under the gate, parse the ELF program headers and copy each PT_LOAD's `filesz` bytes from the asset to
       guest `Mac2HostAddr(p_vaddr)`; zero-fill `memsz − filesz` (the data BSS tail `0x19920 − 0x6bc0`).
       **NO relocation off vaddrs** (ET_EXEC fixed; the PIC stub `0x20f078` self-relocates — Stop-rule #6).
@@ -226,20 +266,24 @@ launch seam allocates and records — NOT an arbitrary guess into live guest mem
   **★ G2b.shim is a PLANTED-ARRAY micro-test, NOT the live boot (which needs S1):** plant a synthetic guest
   BE-32 CHRP array (a `getprop`-shaped call with a guest string ptr + a guest buffer ptr + scalar lengths) at
   a known guest address, invoke the shim, and assert (a) array[0] reaches `of_ci_callback` as a valid host
-  `const char*`, (b) each pointer cell was translated guest→host, (c) scalars zero-extended, (d) rets[]
-  written back BE-32 with handle/pointer translation, (e) the int return lands in r3. This makes G2b.shim
-  non-vacuous without the live install. The LIVE confirmation (the Trampoline's real r5 calls) is **carried
-  as OPEN residue to GREEN-PASS behind S1**.
+  `const char*`, (b) each pointer cell was translated guest→host **per the descriptor schema**, (c) scalars
+  zero-extended, (d) rets[] value cells written back BE-32 with handle/pointer translation, (e) the int
+  return lands in r3. **★rev-2 P-1/A-2 — the micro-test must invoke the shim THROUGH its r5 guest-entry
+  mechanism** (the EMUL_OP intercept, exactly as the launch path will), NOT by calling the host function
+  directly — so the guest-`bctrl`→intercept→host bridge is exercised, not just the marshalling in isolation.
+  This makes G2b.shim non-vacuous without the live install. The LIVE confirmation (the Trampoline's real r5
+  calls) is **carried as OPEN residue to GREEN-PASS behind S1**.
 
 ### T3 — the CHRP launch seam (DEPENDS ON T1+T2)
-- [ ] Re-verify the glue `MachineProfileIsNewWorld()` block `:2747`+ and the Execute68k pair `:3140-3141`.
+- [ ] Re-verify the glue `MachineProfileIsNewWorld()` block `:2747`+ and the Execute68k pair `:3271-3272` (KDP 0x1074/0x1078 writes).
 - [ ] Under the gate, in that block: after T1 loads `MacOS.elf`, set **r5 = the T2 shim's guest address**,
       **r2 = `0x1001e8`**, **r3/r4 = documented provisional (default 0), LOGGED — never a hidden ABI**
-      (carried S2a residue; confirm at the first post-S1 gated boot). Enter PPC execution at **`0x20f078`**
-      instead of running the forge path.
+      (carried S2a residue; confirm at the first post-S1 gated boot). **★rev-2 T-5 — make r3/r4
+      env-overridable (`SS_M18_R3`/`SS_M18_R4`)** so first-boot bringup can sweep the ABI without a recompile.
+      Enter PPC execution at **`0x20f078`** instead of running the forge path.
 - [ ] Emit a `[S2B-LAUNCH]` log line recording the r3/r4 provisional values + r5/r2/entry, so the first-boot
       confirmation is auditable (Stop-rule #3 — no guessed ABI claimed as fact).
-- [ ] Gate-OFF: the seam is unreachable; the forge stages `:3140-3141`/`:2762` exactly as today. Audit
+- [ ] Gate-OFF: the seam is unreachable; the forge stages `:3271-3272`/`:2762` exactly as today. Audit
       `MachineProfileIsNewWorld()==false` AND `SS_M18_TRAMPOLINE` OFF at the gate SITE. CLEAN PPC recompile.
 - **G(T3):** `make test-jit`=100; paravirtual byte-identical (gate OFF) via real `make e2e` A/B + soak.
   **★ The gated-ON "enters at `0x20f078` + PIC stub self-relocates + reaches the first OF-CI wrapper"
@@ -270,8 +314,12 @@ launch seam allocates and records — NOT an arbitrary guess into live guest mem
       RETURNING the provisional (query resolves, `getproplen` NON-FINAL); VALUE confirmation owed to the first
       integration boot — NOT closed here, NOT fabricated. CLEAN PPC recompile.
 - **G(T4):** `make test-jit`=100; paravirtual byte-identical (gate OFF) via real `make e2e` A/B + soak.
-  Gated-ON unit/build assertion: the backend dispatcher routes each call-method to the pinned owner and the
-  `/mmu` recording stub logs (NOT a live boot). **★ G2b.d (real `/mmu`) + G2b.handoff
+  **★rev-2 P-1/A-2 — the gated-ON micro-test drives a planted `call-method` array (a `/mmu` `translate` AND a
+  `getprop`) END-TO-END through `of_ci_callback`'s `of_call_method_fn` into the dispatcher**, asserting (i)
+  the dispatcher routes by service/method name to the pinned owner, (ii) the `/mmu` recording stub LOGS the
+  request (`[S2B-MMU-STUB]`) and returns its identity claim, (iii) the shim's reserved range never appears in
+  a claim (the T-3 tripwire). This exercises the WIRING (not just isolated components), isolating "stub
+  insufficient" from "stub never reached" at the post-S1 boot. **★ G2b.d (real `/mmu`) + G2b.handoff
   (`of_ci_unresolved_count()==0` at `0x50310000`) are DEFERRED behind S1** — recorded as the owed GREEN-PASS
   probes, NOT T4-now gates. Satisfies the OF-CI wiring contract structurally; `/mmu` stub = NON-ACCEPTANCE.
 
@@ -285,7 +333,11 @@ launch seam allocates and records — NOT an arbitrary guess into live guest mem
 - [ ] **★ Sequencing LAW:** this edit collides with S3-impl T4's forge-RETIRE on the SAME function. **S2b
       lands FIRST** (gates the forge behind `SS_M18_TRAMPOLINE`); S3-impl later RETIRES it behind
       `SS_M18_NK_SUPERVISOR`, rebasing on S2b's gate structure. **S2b and S3-impl T3/T4 MUST NOT be in flight
-      on `rom_patches.cpp`/`glue` concurrently** (Stop-rule #7). CLEAN PPC recompile.
+      on `rom_patches.cpp`/`glue` concurrently** (Stop-rule #7). **★rev-2 P-3 — pin the COMBINED two-gate
+      predicate shape now as a coordinator-reviewed PINNED INTERFACE:** S2b wraps `PatchROM_NW_trampoline` as
+      `if (!s2b_loader_ran) { …forge… }`; S3's later retire is an ADDITIVE clause
+      (`if (!s2b_loader_ran && !nk_supervisor) { …forge… }`), NOT a rewrite — so the rebase is a clean
+      one-line guard extension, not a thrash. CLEAN PPC recompile.
 - **G(T5):** `make test-jit`=100; paravirtual byte-identical via REAL `make e2e` A/B + `SS_E2E_RUNS=N` soak
   (gate OFF — the forge runs exactly as today). Gated-ON assertion: the forge is bypassed when the loader
   ran. **★ The full live boot (loader→launch→wiring→handoff reaching `0x50310000` with
@@ -304,12 +356,23 @@ tripwire ⇒ STOP.
 
 ## Env-gate
 
-`SS_M18_TRAMPOLINE` (default OFF) ∧ `MachineProfileIsNewWorld()`; selected ONCE at boot (reuse a
-profile-gating precedent — `sheepshaver_glue.cpp:1082/1554/1614/1645/1984/2747` or the S3-T1
-`NkSupervisorEnabled()` boot-latch; never a per-access branch). When OFF, `PatchROM_NW_trampoline` runs
-byte-identical to today and the loader/launch/wiring are unreachable. **Proof obligation:** "paravirtual
-provably unreachable" = `MachineProfileIsNewWorld()==false` ∨ `SS_M18_TRAMPOLINE==OFF` audited at every gate
-SITE + G2b.e real-`make e2e` byte-identity at every task gate.
+`SS_M18_TRAMPOLINE` (default OFF) ∧ `MachineProfileIsNewWorld()` **∧ a 9.0.1-ROM-identity guard** (★rev-2
+A-1, BLOCK-clearer); selected ONCE at boot (reuse a profile-gating precedent —
+`sheepshaver_glue.cpp:1082/1554/1614/1645/1984/2747` or the S3-T1 `NkSupervisorEnabled()` boot-latch; never
+a per-access branch). When OFF, `PatchROM_NW_trampoline` runs byte-identical to today and the
+loader/launch/wiring are unreachable. **Proof obligation:** "paravirtual provably unreachable" =
+`MachineProfileIsNewWorld()==false` ∨ `SS_M18_TRAMPOLINE==OFF` audited at every gate SITE + G2b.e
+real-`make e2e` byte-identity at every task gate.
+
+**★rev-2 (A-1) — the ROM-identity guard (BINDING; closes the silent 1.1-vs-9.0.1 footgun).** Both the active
+project boot ROM (1.1, md5 `e0fc03faa…`) AND the RE'd 9.0.1 ROM (md5 `66210b4f…`) satisfy
+`MachineProfileIsNewWorld()`. But the staged `MacOS.elf` is the **9.0.1** Trampoline, and it computes
+`NanoKernelEntry` from the **live ROM's** Configfile-1 component table at runtime — so launching it against
+a 1.1 ROM image at `0x50000000` yields a mismatched, undetectable `NanoKernelEntry`. Therefore the gate
+additionally REQUIRES the loaded ROM to be the 9.0.1 (md5 `66210b4f71df8a580eb175f52b9d0f88`, or an
+equivalent parcel-identity/component-table signature checked at boot). **On any non-9.0.1 ROM with
+`SS_M18_TRAMPOLINE` ON: emit `[S2B-ROM-MISMATCH]` and STOP — do NOT launch** (Stop-rule #12). This makes the
+gate safe to flip on the project's default ROM (it refuses rather than silently mismatching).
 
 ## File ownership (LAW, sole-in-flight + S3 collision)
 
@@ -347,6 +410,12 @@ depends on S1 landed.
 10. **Flip the gate before T1–T5 are merged-green at default-OFF AND S1 has landed** — flip-LAST is BINDING.
 11. **Claim a fictional boot.** Pre-S1, the gated boot is not run for acceptance; do NOT fabricate a handoff
     sample. The post-handoff NK fault (once S1 lands) is EXPECTED, recorded honestly, NOT a falsification.
+12. **★rev-2 (A-1) — Launch on a non-9.0.1 ROM.** The gate REQUIRES the loaded ROM = 9.0.1 (md5 `66210b4f…`
+    / component-table signature). On the active 1.1 ROM (or any mismatch) with `SS_M18_TRAMPOLINE` ON: emit
+    `[S2B-ROM-MISMATCH]` and STOP — never stage the 9.0.1 ELF against mismatched ROM bytes.
+13. **★rev-2 (T-3) — The shim's reserved guest range is `claim`ed/`map`ed by the Trampoline.** The recording
+    `/mmu` stub asserts-fail (`[S2B-SHIM-COLLIDE]`) — a placement collision is a logged STOP, never a silent
+    post-S1 fault.
 
 **One-iteration rule.** Falsified pin → dated entry in the close-out → ONE bounded re-pin → resume. SECOND
 falsification of the same answer ⇒ STOP, re-plan.
@@ -387,6 +456,43 @@ falsification of the same answer ⇒ STOP, re-plan.
 
 No residual self-review tension beyond these five.
 
-## Red-team record
+## Red-team record (rev-2 FOLD — 2026-06-15; PROCESS + TECHNICAL + ADVERSARY, consensus GO-WITH-FIXES)
 
-*(empty — to be filled by the three-reviewer pre-implementation red-team: PROCESS + TECHNICAL + ADVERSARY. 8-item voting list submitted alongside.)*
+No reviewer blocked the milestone outright; ADVERSARY blocked **item 3 as written** pending a ROM-identity
+refusal (now folded → cleared). Per-item net: items 4/6/8 GO; items 1/2/3/5/7 GO-WITH-FIX. The S2b-first
+serialization is confirmed sound — **no circular S1↔S2b↔S3 deadlock** (all three restructures independently
+mergeable now: S2b-BUILD-RESIDUE needs Task-0+S2a+S3-T1/T2+asset, NOT S1; S3-RESTRUCTURE needs S1-mechanism
+not live-S1; S1 needs neither — both GREEN-PASSes converge AFTER S1). flip-LAST/revert-on-red=branch-revert
+and the BUILD-RESIDUE taxonomy (Stop-rule #7-defended) are non-gameable; no fabricated-boot vector.
+
+**Must-fixes folded (inline ★rev-2 marks):**
+- **A-1 (item 3, BLOCK-clearer) — ROM-identity guard.** The gate now REQUIRES the 9.0.1 ROM (md5
+  `66210b4f…`); STOPs (`[S2B-ROM-MISMATCH]`, Stop-rule #12) on the 1.1 ROM or any mismatch. Closes the silent
+  footgun (both ROMs pass `MachineProfileIsNewWorld()`; the 9.0.1 ELF reads `NanoKernelEntry` from the live
+  ROM's component table → a 1.1 ROM yields an undetectable mismatch).
+- **T-1 (item 7) — pointer-arg descriptor SCHEMA.** Pinned a per-service/per-method `{arg-idx: ptr|scalar}`
+  table; corrected the inconsistent "backend re-translates" claim (the shim MUST translate pointer args at
+  marshal time — `getprop` `cell_ptr(args[2])`, `read-blocks` buffer). T-1b: outbound only htonl's rets value
+  cells (buffer aliasing writes through, no copy-back).
+- **T-2 (item 1) — bridge mechanism named.** The shim's guest entry is an EMUL_OP/intercept opcode (guest
+  `bctrl`→intercept→host C); the loader writes it at the shim's guest address (= r5).
+- **P-1/A-2 (items 5,2) — micro-tests exercise the WIRING.** T2 invokes the shim THROUGH its r5 EMUL_OP entry
+  (not the host fn directly); T4 drives a `call-method` array (`/mmu translate` + `getprop`) END-TO-END
+  through the dispatcher into the pinned backends — isolating "stub insufficient" from "stub never reached"
+  pre-S1.
+
+**Should-fixes folded:** T-3 (the `/mmu` stub asserts-fail `[S2B-SHIM-COLLIDE]` on any claim/map of the
+shim's reserved range — Stop-rule #13); P-3 (the two-gate forge predicate pinned as an additive-clause
+interface, not a rewrite); T-5 (r3/r4 env-overridable `SS_M18_R3`/`R4`); A-4 (stage the asset reproducibly +
+co-pin with the required ROM).
+
+**Line-cite correction (folded both plans):** `[KDP+0x1074/0x1078]` writes at **`glue:3271-3272`** (NOT
+`:3140-3141`, the `kdp+0x648` entry-vector write).
+
+**Self-review tensions 1–5 disposition:** #1 (shim placement) → T-2/T-3 fold (provably-outside region +
+collision tripwire; residual "provably-free vs first-boot-probe" recorded); #2 (`/mmu` stub sufficiency) →
+P-1/A-2 wiring micro-test (sufficiency itself owed to post-S1); #3 (asset vs forced-ROM) → A-1 (BOTH: stage
+the asset AND require the 9.0.1 ROM); #4 (serialization) → confirmed sound, no deadlock; #5 (BUILD-RESIDUE
+merge) → P-2/A-3 (honest: merge is SAFE via branch-revert+byte-identity, active path UNVERIFIED-but-inert,
+banded as one residue behind S1; sub-gates renamed "constants-set, path-unexercised"). **GO-WITH-FIXES folded
+→ T1 may start.**

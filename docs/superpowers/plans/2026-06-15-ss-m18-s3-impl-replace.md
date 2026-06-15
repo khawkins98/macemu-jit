@@ -109,7 +109,8 @@ gated NK boot got; remap counts at T5. `0xDEADBEEF` where a real PA/vector is ex
 - **`sheepshaver_glue.cpp`:** `g_exc_entry_table:142` (RETIRE/bypass under gate; consumed at EXT `:1254`);
   `deliver_pending_dec_exception():1122` (RETIRE; polled `:1689`; DEC ExcEnter `:1342`);
   `SheepExcExtSetPending`/host-IRQ latch `:270,325` (the device-IRQ source T2 re-routes — M14 wall);
-  `execute_68k:1461`, pair read `:1504-1505` (forged `:3140-3141` → `0x50480000/0x50460000`, SS's own JIT
+  `execute_68k:1461`, pair read `:1504-1505` (forged `:3271-3272` [★ corrected from `:3140-3141`, the
+  `kdp+0x648` entry-vector write; re-verify at impl] → `0x50480000/0x50460000`, SS's own JIT
   emulator, NOT ROM `0x50360000`) RETIRE; forge `:2806/2804/2918` RETIRE; `interrupt():1002` MUTE;
   `ppc_cpu` static `:1683` KEEP; `SheepExcDeliverPending():1687` lives HERE not ppc-cpu.cpp.
 - **`ppc-cpu.cpp` hook:** `check_spcflags()` body `:1972`; newworld arm `:1991`; the
@@ -205,7 +206,7 @@ polled host flag). **T2 is load-bearing; sequence it BEFORE any retirement (T3) 
       stick; INHERIT `SS_NW_MM_SWITCH`/`MM_POOL` iff NK respects `0x68ff5800`.
 - [ ] Retire the SDR1/HTAB/MSR forge (`glue:2806/2804/2918`) — the NK programs SDR1/BAT/SR live
       (`mtsrin`@`0x50315290`, BAT@`0x503152c4`, SR-swap MMIO@`0x50325894`).
-- [ ] Retire the Execute68k pair (`glue:3140-3141`) + `execute_68k:1461` — the NK reaches 68k via
+- [ ] Retire the Execute68k pair (`glue:3271-3272` [★ corrected from `:3140-3141`]) + `execute_68k:1461` — the NK reaches 68k via
       `bctr`@`0x5031a8b8`; account for the `:1504-1505` read (must not fire under the gate).
 - [ ] Confirm NK SC `0x50314ac0` owns `sc`; retire SS `sc`-as-illegal (NOT the double-increment fix alone).
       CLEAN PPC recompile.

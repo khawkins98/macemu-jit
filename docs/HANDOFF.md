@@ -2,58 +2,21 @@
 
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
-> - **State (2026-06-14):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION (re-banded 2026-06-15):** **S1's live paged MMU is INSEPARABLE FROM S3.** Both the
->   window AND the softmmu-first milestones were drafted, 3-reviewer red-teamed, and **DEFERRED**: the
->   window for WRONG-BUILD-ORDER (`vm_remap VM_FLAGS_OVERWRITE`-on-live-NATMEM unproven + topology-
->   mismatched), the softmmu because the adversary **falsified its premise from code** — SheepShaver runs
->   the `SS_NW_TRAMPOLINE` *output-forge*, NOT the NK MMU-install (SDR1 set in C @`sheepshaver_glue.cpp:2806`,
->   SRs reset to 0 + never programmed @`:566`, the NK `mtsrin` install loop `0x50315290` NEVER executes),
->   so **there is no live `(SR/BAT/SDR1)` map to harvest**, and arming a softmmu against the empty forged
->   HTAB (boot MSR DR=1) would fault every access and kill the one working boot. **This confirms the
->   original S1→S3 sequencing from the code: a live paged MMU needs a guest that actually programs
->   SR/BAT/SDR1, which only the real NK install (Route A / S3 two-supervisor reconciliation) provides.**
->   **The autonomously-completable S1 work is DONE-or-small:** Task A (`paged_mmu_translate()` + oracle
->   test) is committed; the remaining low-risk step is the STATIC derivation of the genuine NK MMU
->   constants from the md5-verified parcel + oracle validation (live retirement owed to G1.e/S3) + a cheap
->   `SS_PROBE_PC` forge-state instrumentation pass (documents the forge, confirms M16). **After that, S1
->   is at its honest ceiling until S3.** **★ The full reasoning (why the live MMU ⟺ S3) is the canonical
->   doc `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md`** — read it before any future S1
->   live-MMU attempt (it is the kill-switch for re-deriving this a fourth time). Plans:
->   `…2026-06-15-ss-m18-s1-softmmu-first.md` rev-2 (DEFERRED,
->   reasons) + `…s1-taskB-window-build.md` rev-2 (DEFERRED) + `…ss-m18-s1-impl-paged-mmu.md`.
->   *(superseded softmmu-first next-action below):* Task A
->   is DONE + committed (`fc3ca256` high-BAT insurance, `2bf1526b` translation core + test, `191fe67c`
->   adversary real-mode/BAT fix; `make test-jit` score=100, `test_paged_mmu` 36/36). The window-build
->   plan was drafted + 3-reviewer red-teamed → **DEFERRED (WRONG-BUILD-ORDER)**: its
->   `vm_remap VM_FLAGS_OVERWRITE`-on-live-NATMEM primitive is unproven + topology-mismatched (macemu's
->   single `vm_allocate` reservation is BOTH store and bare-access window, unlike Dolphin's separate
->   arena → "mirror Dolphin unmap/remap" would hole the foundation), AND "softmmu-default-until-measured"
->   (the parent plan's own discipline) is un-implementable while softmmu is unwritten.
->   **▶ Open the SOFTMMU-FIRST milestone** (own plan→3-reviewer→gated impl): a softmmu walker reusing the
->   committed `paged_mmu_translate()` at the interpreter chokepoint `vm.hpp:225` (gated
->   `SS_M18_PAGED_MMU ∧ MachineProfileIsNewWorld()`, lower-risk — NO NATMEM surgery, NO vm_remap) → a
->   real paged NK boot at **zero foundation risk** → HARVEST the live `(SR/BAT/SDR1,EA)` map + DBAT
->   descriptors as measured constants (retires the window's owed coverage predicate as DATA) → THEN the
->   window as a pure A/B-validatable optimization (deferred plan `…2026-06-15-ss-m18-s1-taskB-window-build.md`
->   rev-2; re-validate against harvested constants + an overwrite-under-concurrency `vm_remap` spike).
->   **OWED (subsumed by softmmu):** the external PearPC/QEMU oracle becomes the softmmu walker itself;
->   the Vs/Vp-vs-MSR[PR] gate (paged_mmu adversary Finding 3) folds into the softmmu plan.
->   S1-impl plan: `docs/superpowers/plans/2026-06-14-ss-m18-s1-impl-paged-mmu.md`.
->   **Two decisive red-team findings reshaped it:** **(AD-2 FALSIFIED)** the NK's high-BAT writes
->   (SPR 560–575) are **feature-gated dead code** on every PVR SS presents (7400 `0x000c0000`; gate bit
->   `0x20` never set) → `high_bat[16]` is cheap INSURANCE, not a decision input; the recon-adversary's
->   AD-2 re-band over-weighted a dead premise. **(AD-1 CONFIRMED + deepened)** the live 4 KB PTE engine
->   remaps via **HTAB stores + `tlbie`, NOT `mtspr`** → a window hooking only `mtspr`/`mtsr`/`mtsrin`
->   silently desyncs; **window adequacy is owed to G1.e (a real boot); softmmu is the DEFAULT until
->   then.** **Task A (AUTHORIZED, gated, structurally inert):** append `high_bat[16]` at the struct TAIL
->   (after `msr` — JIT-safe per the static_asserts `ppc-cpu.cpp:861/866/868`; clean PPC recompile) +
->   `case 560…575` capture; build `machine/paged_mmu.cpp` (mechanism-agnostic segment+BAT+HTAB
->   translation) + `machine/test_paged_mmu.cpp` (SPEC-derived oracle; high-BAT rows dropped as dead).
->   Gates: build-ss + `make test-jit` score=100 (authoritative) + machine test. **Task B (the window)
->   PARKED** — needs a tlbie/HTAB-store interception design OR a G1.e PTE-engine-disjointness proof
->   (SURFACE to user). Off-path: S2a-impl cleared (deferred). Do NOT re-run the gating Task-0 /
->   Discriminator-A. Do NOT relitigate Route A.
+> - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
+> - **▶ NEXT ACTION (re-banded 2026-06-15):** **S1's mechanism is DONE; S1's LIVE paged MMU is DEFERRED
+>   and INSEPARABLE FROM S3 — the next real work is S3 (months-scale, a user decision).** S1 mechanism =
+>   DONE: Task A `paged_mmu_translate()` + oracle test committed (`fc3ca256`/`2bf1526b`/`191fe67c`+fix;
+>   `make test-jit`=100, `test_paged_mmu` 36/36) and the static NK-MMU constants derived
+>   (`FINDINGS-s1-mmu-constants.md`, `f77702d9`). **Verdict:** there is no live `(SR/BAT/SDR1)` map until
+>   the real NK install runs, which only S3 (two-supervisor reconciliation) provides — so a standalone S1
+>   live MMU (window OR softmmu) is not buildable/validatable. **★ The full reasoning (why the live MMU ⟺
+>   S3) is the canonical doc `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md`** — read it before
+>   any future S1 live-MMU attempt (the kill-switch for re-deriving this a fourth time). Both live-MMU
+>   plans are DEFERRED (re-validate at S3 against the NK-installed tables):
+>   `…2026-06-15-ss-m18-s1-taskB-window-build.md` rev-2 + `…2026-06-15-ss-m18-s1-softmmu-first.md` rev-2
+>   (impl plan `…ss-m18-s1-impl-paged-mmu.md`). **The only truly-S1 work remaining pre-S3** is a cheap
+>   `SS_PROBE_PC` forge-state instrumentation pass. S2a-impl is DONE (inert). Do NOT re-run the gating
+>   Task-0 / Discriminator-A. Do NOT relitigate Route A. *(The prior softmmu-first/window-build next-action detail is preserved in the two DEFERRED plans + the canonical doc; removed here to keep the live box current.)*
 
 ## Resume chain (read in this order; see CONTRIBUTING §0b for the discipline)
 
@@ -104,6 +67,9 @@ only via `SheepShaver/tools/ss-slot-boot.sh`.** Baseline tag: `newsheep-baseline
   `SheepShaver/tools/ss-reap.sh`.
 - All new code behind an env gate + `MachineProfileIsNewWorld()`; paravirtual byte-identical;
   `make test-jit` = 100. `0xDEADBEEF` (M10 DR-reentry) = immediate stop.
+- **Gate cwd (canonical):** ALL `make build-ss|test-jit|e2e|nw-northstar` run from `SheepShaver/` (the
+  353-vector authoritative harness); the repo-root `make test-jit` is the BasiliskII 301-vector harness —
+  NOT this.
 - Queued ideas: `docs/planning/BACKLOG.md`.
 - Session logs / older history: `docs/archive/2026-06/LEARNINGS-2026-06.md`,
   `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`; current interrupt-delivery diagnosis (reframes the

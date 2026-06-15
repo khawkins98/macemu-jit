@@ -4,7 +4,7 @@
 > coordinator; facts here are current as of the last commit touching this file. When a
 > task prompt conflicts with this pack, the prompt wins (it's newer).
 
-## Current frontier (2026-06-14)
+## Current frontier (2026-06-15)
 
 > **MAIN AIM = Operation NewSheep** (run/reproduce the Trampoline producer; charter
 > `docs/planning/newsheep/README.md`). The full NewSheep frontier block is below, after the recent
@@ -35,8 +35,12 @@
 > ISO). **Critical path S1→S3→S4 strictly sequential ≈ multiple quarters.** Kickoff recon DONE
 > (2026-06-14): Discriminator-A=COARSE → Stage-1 path a (Dolphin shadow-arena) indicated
 > (`FINDINGS-discriminator-a.md`); donors extracted (`DONOR-NOTES.md`); 9.2.x ISOs found (S4 block cleared,
-> `ASSETS-AND-TOOLING.md` R2). NEXT = open Stage 1's own deep Task-0 + red-team (now leaning tractable)
-> before any S1 code.
+> `ASSETS-AND-TOOLING.md` R2). **NEXT (re-banded 2026-06-15): S1's MECHANISM is DONE (Task A
+> `paged_mmu_translate()` + oracle test; static NK-MMU constants derived). S1's LIVE paged MMU (window +
+> softmmu) is DEFERRED and is INSEPARABLE FROM S3** — no live `(SR/BAT/SDR1)` map until the real NK install
+> runs (S3). **S1 live MMU ⟺ S3; do NOT attempt a standalone S1 live MMU — see
+> `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md`.** The next real work is **S3** (months-scale,
+> user decision); only a cheap `SS_PROBE_PC` forge-state pass remains truly-S1. S2a-impl is DONE (inert).
 
 **M15/M16/M17 — the forge arc (CLOSED/banked). Canonical per-milestone detail:
 `docs/planning/newsheep/GLOSSARY.md` "The M8→M17 lineage" — do NOT restate it here** (restating it
@@ -253,12 +257,14 @@ falsified contract → dated addendum entry → ONE re-pin → resume; second fa
 
 ## Where things are
 
-**Next task: OPERATION NEWSHEEP — `SS_M18` Stage 1 (NewWorld paged MMU): open its OWN deep Task-0 +
-red-team.** Both Task-0s are DONE (Trampoline RE + SS_M18 gating → Route A GO but MONTHS); the staged
-program is planned (rev-4 plan, per-stage STATUS table at its top); kickoff recon is done (Discriminator-A
-COARSE → S1 Dolphin shadow-arena; donors extracted; 9.2 ISOs in hand). **Do NOT re-run the SS_M18 gating
-Task-0 (done) — open Stage 1's paged-MMU Task-0** (Q-S1.1/2/3 + the MMU-oracle test in the program plan's
-Stage 1 section). 9.2 NewWorld is a HARD requirement. Charter `docs/planning/newsheep/README.md` §9;
+**Next task: OPERATION NEWSHEEP — S3 (two-supervisor reconciliation), a months-scale user decision.**
+S1's MECHANISM is DONE (Task A `paged_mmu_translate()` + oracle test; static NK-MMU constants derived) and
+S2a-impl is DONE (inert). **S1's LIVE paged MMU (window + softmmu) is DEFERRED and is INSEPARABLE FROM S3**
+— there is no live `(SR/BAT/SDR1)` map until the real NK install runs. **S1 live MMU ⟺ S3; do NOT attempt a
+standalone S1 live MMU — see `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md`.** Both Task-0s are
+DONE (Trampoline RE + SS_M18 gating → Route A GO but MONTHS); the staged program is planned (rev-4 plan,
+per-stage STATUS table at its top); kickoff recon is done. Only a cheap `SS_PROBE_PC` forge-state pass
+remains truly-S1 pre-S3. 9.2 NewWorld is a HARD requirement. Charter `docs/planning/newsheep/README.md` §9;
 program plan `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md`; findings
 `…/FINDINGS-trampoline-re.md` + `…/FINDINGS-discriminator-a.md` + `…/DONOR-NOTES.md`. Do not relitigate
 Route A. M14–M17 RE banked (canonical lineage + links:

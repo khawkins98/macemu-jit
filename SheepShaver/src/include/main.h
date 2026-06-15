@@ -30,6 +30,7 @@ extern uint32 PVR;				// Theoretical PVR
 extern int64 CPUClockSpeed;		// Processor clock speed (Hz)
 extern int64 BusClockSpeed;		// Bus clock speed (Hz)
 extern int64 TimebaseSpeed;		// Timebase clock speed (Hz)
+extern char* vde_sock;					// vde switch variable
 
 #ifdef __BEOS__
 extern system_info SysInfo;		// System information
@@ -39,8 +40,18 @@ extern system_info SysInfo;		// System information
 struct M68kRegisters {
 	uint32 d[8];
 	uint32 a[8];
+	uint32 pc;	// settable in EMUL_OP handlers to redirect 68k PC on return (kpx_cpu only)
 };
 
+
+// Shutdown/restart flags (set by emul_op handlers, read by main loop)
+extern bool power_off_requested;
+extern bool restart_requested;
+
+// E2E harness (ROADMAP A5): host-requested clean guest shutdown. Set by the SIGUSR1
+// handler (async-signal-safe), read by the guest idle hook (OP_IDLE_TIME), which injects the
+// ADB Power key (with dwell) so the guest shuts down from its own top-level event loop.
+extern volatile int host_shutdown_requested;
 
 // Functions
 extern bool InitAll(const char *vmdir);

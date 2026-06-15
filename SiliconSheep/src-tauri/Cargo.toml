@@ -1,0 +1,23 @@
+[package]
+name = "silicon-sheep"
+version = "0.1.0"
+edition = "2021"
+description = "A modern launcher and VM manager for SheepShaver"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+sha2 = "0.10"
+libc = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

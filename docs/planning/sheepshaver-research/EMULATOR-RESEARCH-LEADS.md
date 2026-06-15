@@ -1,0 +1,342 @@
+# Research Leads: Borrowing from Dolphin and Other PPC JITs
+
+> **Status:** 📖 Reference / archive · **Created:** 2026-06-02 · **Updated:** 2026-06-04
+> **Why this doc exists:** Research narrative — what was investigated in other PPC JITs and why each verdict landed (actionable items live in IMPLEMENTATION-BACKLOG).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
+> **Role of this document: research narrative.** It records *what was investigated and why
+> the verdicts came out the way they did* (2026-06-02). It is not the to-do list.
+> - **Current work items / source of truth:** [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md)
+> - **Instructions for implementing agents:** [`research/RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md)
+> - **Index of all research documents:** [`research/README.md`](research/README.md)
+>
+> Action lists that used to live in this file have been superseded by the backlog; sections
+> below that contain later-refuted conclusions are marked inline.
+
+Leads for improving the SheepShaver PPC→ARM64 JIT (and emulation layer) by studying — and
+where license-compatible, reusing — code from mature emulators, primarily **Dolphin**
+(GameCube/Wii). Compiled 2026-06-02.
+
+> **Caveat on code snippets:** the snippets below were gathered by web research against the
+> Dolphin master branch and are illustrative. Verify each against the actual source before
+> acting on it — file paths and URLs are given for that purpose.
+
+---
+
+## Why Dolphin is the right cousin
+
+- The GameCube/Wii CPUs (**Gekko/Broadway**) are **PowerPC 750** derivatives — the same family
+  as the G3 Macs SheepShaver emulates. Same ISA generation, same CR/XER semantics.
+- Dolphin's **JitArm64** backend has full feature parity with its x86-64 JIT: it is the most
+  mature PPC→ARM64 JIT in existence.
+- It runs natively on Apple Silicon and solved the **same MAP_JIT / W^X problem** we did
+  (Dolphin PR [#9441](https://github.com/dolphin-emu/dolphin/pull/9441), blog post
+  ["Temptation of the Apple"](https://dolphin-emu.org/blog/2021/05/24/temptation-of-the-apple-dolphin-on-macos-m1/)).
+- **Licensing:** Dolphin is GPL-2.0-or-later; SheepShaver is GPLv2. Code is **combinable**, not
+  just study-only. The practical constraint is dependency tails (see Lead 5), not the license.
+- **Historical note:** Dolphin and SheepShaver share no code or contributors — different
+  communities entirely. The connection is purely that both target PPC750-class CPUs. (Fun
+  confirmation of the hardware kinship: Mac OS 9.2 was run on an unmodified Wii in 2022 via
+  Linux + Mac-on-Linux — virtualization on real PPC silicon, not emulation.
+  [Hackaday writeup](https://hackaday.com/2022/11/24/its-macos-on-an-unmodified-wii/).)
+
+Dolphin JIT layout: `Source/Core/Core/PowerPC/JitArm64/` —
+[browse on GitHub](https://github.com/dolphin-emu/dolphin/tree/master/Source/Core/Core/PowerPC/JitArm64).
+
+| File | Covers |
+|------|--------|
+| `Jit.cpp` / `Jit.h` | Block compile loop, per-instruction dispatch, `JitState` |
+| `JitArm64_Integer.cpp` | Integer ALU, XER CA/OV handling |
+| `JitArm64_LoadStore*.cpp` | Loads/stores (integer, FP, paired-single) |
+| `JitArm64_Branch.cpp` | Branches, exits to dispatcher |
+| `JitArm64_SystemRegisters.cpp` | mtspr/mfspr, CR/XER/FPSCR ops |
+| `JitArm64_FloatingPoint.cpp` / `_Paired.cpp` | FP and paired-single arithmetic |
+| `JitArm64_RegCache.cpp/h` | Register allocator |
+| `JitArm64_BackPatch.cpp` | Fastmem + SIGSEGV fault backpatching |
+| `JitArm64Cache.cpp` | Block linking and invalidation |
+| `JitAsm.cpp` | Hand-emitted dispatcher / entry trampoline |
+| `JitArm64_Tables.cpp` | Opcode → handler tables |
+
+Reserved host registers (compare with our x27/x28 convention in BasiliskII and the regs
+pinned in `ppc-jit.cpp`):
+
+```cpp
+// JitArm64_RegCache.h
+constexpr ARM64Reg MEM_REG       = ARM64Reg::X28;  // guest memory base
+constexpr ARM64Reg PPC_REG       = ARM64Reg::X29;  // &ppcState
+constexpr ARM64Reg DISPATCHER_PC = ARM64Reg::W26;  // PC handed to dispatcher
+```
+
+---
+
+## Prioritized leads
+
+### Lead 1 — CR fields as 64-bit values (the `cr_val` trick)
+
+**Source:** [`Source/Core/Core/PowerPC/ConditionRegister.h`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Core/PowerPC/ConditionRegister.h)
+
+**What it is:** Dolphin stores each of the 8 CR fields as a `u64` instead of a 4-bit
+LT/GT/EQ/SO nibble. The encoding is chosen so that the *sign-extended result of an ALU op is
+itself a valid CR value*:
+
+```
+SO  iff. bit 59 set
+EQ  iff. lower 32 bits == 0
+GT  iff. (s64)cr_val > 0
+LT  iff. bit 62 set
+```
+
+A record-form instruction (`addi.`, `cmpw`, etc.) just sign-extends the 32-bit result into the
+CR field slot — no per-bit packing. The 4-bit PPC view is only materialized on `mfcr` /
+`mcrf` / serialization (`PPCToInternal()` / `GetField()` conversion helpers).
+
+**What it buys us:** Our JIT currently computes and packs CR bits on every record-form op.
+This is the single biggest structural idea in Dolphin's JIT — it makes the hottest PPC idiom
+(compare + record) nearly free.
+
+**How it maps to our code:** This is invasive — it changes the in-memory CR representation in
+`powerpc_cpu`, so the interpreter, JIT, and any state serialization all need the conversion
+helpers. Best treated as a measured experiment after profiling shows CR packing is hot.
+
+**Effort/risk:** High effort, high payoff potential. Do last, after Leads 2–4.
+
+### Lead 2 — Nesting-counter W^X toggle
+
+**Source:** [`Source/Core/Common/MemoryUtil.cpp`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Common/MemoryUtil.cpp)
+
+**What it is:** Dolphin wraps all code emission in
+`JITPageWriteEnableExecuteDisable()` / `JITPageWriteDisableExecuteEnable()` guarded by a
+**thread-local nesting counter** — `pthread_jit_write_protect_np()` is only called when the
+counter crosses 0, so nested emit regions (e.g. compiling a block that patches chain sites)
+toggle protection exactly once.
+
+```cpp
+void JITPageWriteEnableExecuteDisable() {
+  if (JITPageWriteNestCounter() == 0)
+    pthread_jit_write_protect_np(0);
+  JITPageWriteNestCounter()++;
+}
+```
+
+**What it buys us:** We just fought W^X toggle overhead (commit 8f2acc9b eliminated it for
+out-of-range blocks). A nesting counter is the general fix: emit helpers can be written
+defensively (each brackets its own toggle) without paying per-call syscall cost.
+
+**How it maps to our code:** `jit-target-cache.hpp` owns write-protect toggling;
+`ppc-jit.cpp` compile + `patch_chain_sites()` are the nested callers. Small, self-contained
+change.
+
+**Effort/risk:** Low effort, low risk. **Do this first.**
+
+### Lead 3 — Lazy carry state machine (XER CA)
+
+**Source:** [`Source/Core/Core/PowerPC/JitArm64/JitArm64_Integer.cpp`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Core/PowerPC/JitArm64/JitArm64_Integer.cpp) and `Jit.h` (`js.carryFlag`)
+
+**What it is:** Carry is tracked in a 4-state enum — `InPPCState`, `InHostCarry`,
+`ConstantTrue`, `ConstantFalse`. A carry-producing op leaves carry in the **host C flag**
+(`ADDS`/`ADCS`); the store to `ppcState.xer_ca` (`CSET` + `STRB`) only happens when something
+forces a flush (block exit, call, or an op that clobbers flags). Carry-consuming ops
+(`adde`/`subfe`) load from whichever location the state machine says is current. A
+`CARRY_IF_NEEDED` macro only emits the flag-setting variant when a later instruction in the
+block actually wants CA.
+
+**What it buys us:** `addc`/`adde`/`subfc`/`subfe` chains (common in 64-bit arithmetic and
+Toolbox math) currently do LDRB/STRB on our XER struct (`ca` at offset 902) per instruction.
+Within a block this collapses to pure register/flag operations.
+
+**How it maps to our code:** This is a *deliberate* contrast with our immediate-writeback
+style (see `docs/planning/JIT-STYLE-DECISION.md`). The contained version: keep immediate writeback as the
+default, allow lazy carry **within a block only**, always flushed at block exit — preserving
+our "no lazy state across block boundaries" rule.
+
+**Effort/risk:** Medium effort, medium risk (must be airtight at exits/exceptions). Profile first.
+
+### Lead 4 — Punt OE-form overflow to the interpreter
+
+**Source:** same file, `FALLBACK_IF(inst.OE)` pattern throughout `JitArm64_Integer.cpp`.
+
+**What it is:** Dolphin does **not** emit overflow (XER OV/SO) logic inline — OE-form
+instructions (`addo`, `mullwo`, …) fall back to the interpreter. They're rare enough that
+inline codegen isn't worth the complexity.
+
+**What it buys us:** Permission to simplify. If our JIT emits OV/SO computation inline
+(LDRB/STRB at offset 900), we can audit whether the OE forms even appear in hot paths
+(rom-harness counters can answer this) and consider falling back instead — fewer emit paths
+to keep correct.
+
+**Effort/risk:** Trivial. Mostly a *deletion* opportunity.
+
+### Lead 5 — Vendor or crib from `Arm64Emitter`
+
+**Source:** [`Source/Core/Common/Arm64Emitter.h`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Common/Arm64Emitter.h) / `.cpp` (~50KB header; classes `ARM64XEmitter`, `ARM64FloatEmitter`)
+
+**What it is:** The battle-tested standalone ARM64 emitter shared (by ancestry) with PPSSPP —
+hundreds of emit methods, NEON support, `LogicalImm` encoding, fixup branches.
+
+**License note:** GPL-2.0-or-later → vendorable into SheepShaver (GPLv2). The real cost is the
+dependency tail: it includes Dolphin's `Common/CodeBlock.h`, `BitSet.h`, `BitUtils.h`,
+`Assert.h`, `SmallVector.h`, which would need vendoring or stubbing.
+
+**What it buys us:** Probably *not* a wholesale replacement — our hand-written emitter in
+`ppc-jit.cpp` works and is small. Value is as a **reference implementation**: when we need a
+new instruction encoding (NEON for AltiVec someday, `LogicalImm` for `rlwinm` masks), crib the
+encoding logic from here rather than the ARM ARM.
+
+**Effort/risk:** Use as reference: zero risk. Vendoring: medium effort, questionable payoff.
+
+### Lead 6 — Fastmem fault backpatching
+
+**Source:** [`Source/Core/Core/PowerPC/JitArm64/JitArm64_BackPatch.cpp`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Core/PowerPC/JitArm64/JitArm64_BackPatch.cpp)
+
+**What it is:** Guest loads/stores emit a bare `LDR/STR [MEM_REG + addr]` fast path. MMIO /
+unmapped accesses SIGSEGV; the handler looks up the faulting PC in a `m_fault_to_handler` map
+and **patches the faulting instruction into a `BL slow_path`** (one-shot — never faults
+again). Slow paths live in pre-emitted "far code."
+
+**What it buys us:** Our DIRECT_ADDRESSING (`NATMEM_OFFSET + guest`) already gives us the fast
+path. The backpatch idea matters if/when we want JIT-direct hardware/MMIO access instead of
+exiting to C++ for non-RAM addresses.
+
+**How it maps to our code:** Note the interaction with W^X — patching executable code from a
+signal handler requires the write-protect toggle inside the handler. Defer until profiling
+shows MMIO exits are hot.
+
+**Effort/risk:** High effort, signal-handler subtlety. Long-term lead only.
+
+### Lead 7 — Block linking / dispatcher details
+
+**Source:** [`JitArm64Cache.cpp`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Core/PowerPC/JitArm64/JitArm64Cache.cpp), [`JitAsm.cpp`](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/Core/PowerPC/JitArm64/JitAsm.cpp)
+
+**What it is:** Comparable to our `jit_bc_heads[]` + `patch_chain_sites()`:
+- Exit sites for unknown targets emit `MOVI2R(DISPATCHER_PC, addr); BL dispatcher`, padded
+  with `BRK` so they can be re-patched into direct branches once the target exists.
+- Destroyed blocks have their entry overwritten with `BRK` to trap stale linked-from code.
+- The dispatcher does inline hash lookup in emitted asm (PC + feature flags → block pointer),
+  only calling C++ on a miss.
+
+**What it buys us:** A correctness cross-check on our chain-patching design, plus two ideas:
+`BRK`-on-destroy as a debugging tripwire for stale chains, and the inline asm dispatcher
+lookup (we currently return to C++ for every non-chained dispatch).
+
+**Effort/risk:** `BRK` tripwire: trivial. Inline dispatcher: medium; measure dispatch overhead
+first (T2 counters from commit 7030a441 are the starting point).
+
+---
+
+## Contrasts & references (non-Dolphin)
+
+| Project | Guest CPU | ARM64 JIT | License | Relevance |
+|---------|-----------|-----------|---------|-----------|
+| **QEMU** [`target/ppc/translate.c`](https://github.com/qemu/qemu/blob/master/target/ppc/translate.c) | Any PPC | TCG IR → aarch64 | GPLv2 | **Correctness oracle.** The most-reviewed PPC semantics reference (XER CA/OV, rlwinm masks, CR updates). Use when a vector fails and the ISA manual is ambiguous. |
+| **RPCS3** ([arm64 blog](https://blog.rpcs3.net/2024/12/09/introducing-rpcs3-for-arm64/), PRs [#12115](https://github.com/RPCS3/rpcs3/pull/12115), [#15992](https://github.com/RPCS3/rpcs3/pull/15992)) | Cell PPU (PPC64) | LLVM-based; IR transformed from amd64 reference | GPLv2 | The "use LLVM" school — contrast with our hand-written approach. PR #12115 has per-thread W^X compliance notes for macOS. |
+| **Cemu** ([PR #641](https://github.com/cemu-project/Cemu/pull/641)) | Espresso (PPC750-class!) | x86-64 only; portable-IR rework in progress | MPL-2.0 | Closest *guest* match after Dolphin. PR #641 is a case study in restructuring a PPC dynarec (typed registers, CR-as-bool-regs, DCE) to make a second backend tractable. |
+| **Xenia** ([repo](https://github.com/xenia-project/xenia)) | Xenon (PPC64) | Incomplete arm64 backend | **BSD** | Permissive license — snippets freely reusable — but the arm64 backend is immature. |
+| **PPSSPP** ([Arm64Emitter](https://github.com/hrydgard/ppsspp/blob/master/Common/Arm64Emitter.cpp)) | MIPS | Mature | GPLv2+ | Same emitter family as Dolphin's (shared author). Second reference copy of the emitter. |
+| **Mac-on-Linux** | — | — (virtualization) | GPL | Historical only: how Mac OS 9 ran on a real Wii. Nothing to borrow. |
+
+---
+
+## Suggested investigation order
+
+*(Superseded — this pre-investigation ordering was revised twice. The current prioritized
+work items live in [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md).)*
+
+---
+
+## Post-investigation findings (2026-06-02)
+
+Each lead was studied in depth by a dedicated agent that verified the actual Dolphin source
+and read our code. Full analyses live in `docs/research/lead-*.md`. The investigations
+**overturned several of the assumptions above**:
+
+### Verdicts
+
+| Lead | Verdict | Detail |
+|------|---------|--------|
+| 1 — CR 64-bit | **Defer; do the cheap cleanup instead** | Dolphin's 1-insn record form depends on a CR *register cache* we don't have; with CR in memory, mfcr regresses ~3→~40 insns. Tier-1 win available now: `emit_update_cr0` can go ~18→~8 insns with CSET/BFI, zero risk. |
+| 2 — W^X nesting counter | **Downgraded to hygiene** | Our toggles are sequential, not nested — the counter solves a problem we don't have. Real win: hoist the per-word toggle out of the `patch_chain_sites()` loop. Caution: our `end_write` couples icache invalidation; a naive counter would drop it. |
+| 3 — Lazy carry | **Not yet** | Payoff capped (our GPRs are memory-resident; no reg cache). Blocked behind the open truncation-epilogue corruption that forced lazy-CR0 off. Fix the `adde` bug first (see below). |
+| 4 — OE-form punt | **REJECTED** | Workload inversion: Mac OS's ROM 68K emulator makes OE forms *hot* for us (they were ~95% of compile failures pre-8f2acc9b). Dolphin's punt is a maturity artifact — its x86-64 backend inlines OE. We already run the optimal hybrid. |
+| 5 — Arm64Emitter | **Reference only + one targeted crib** | Port Dolphin's dependency-free `LogicalImm` encoder → rewrite `rlwinm`/`rlwimi` mask paths (3-6 insns → 1). Defer NEON until AltiVec. |
+| 6 — Fastmem backpatch | **CLOSED — already satisfied / not applicable** | We already emit Dolphin's fast path. Mac hardware access is EMUL_OP traps, not MMIO faults — nothing to backpatch. One real gap: unmapped JIT access crashes instead of raising guest DSI. |
+| 7 — Dispatch/linking | **BRK tripwire yes; inline dispatcher premature** | T2 data shows ~zero JIT-cache residency at steady state — execution falls back to the interpreter after ~15 s. Fix *residency* before optimizing dispatch. Chain-site pool exhausts silently (capacity 16384, dropped when full). |
+
+### Bugs found during investigation
+
+1. **`mullwo` silently ignores OE** (ppc-jit.cpp:1068, case 715) — accepted by the JIT but never
+   sets XER OV/SO. Fix: punt to interpreter like `divwo`. *(Lead 4)*
+2. **`adde` carry-out likely wrong** (ppc-jit.cpp:1401, case 138) — dead `MRS NZCV` + non-flag
+   `ADD` for carry-in. Fix: immediate-writeback `ADCS` (correct *and* faster). *(Lead 3)*
+3. **Chain-site pool exhaustion is silent** (ppc-jit.cpp:147) — sites dropped when the 16384-entry
+   pool fills; only reset on full flush. Runtime chaining can silently stop on long runs.
+   Fix: instrument now, then decide. *(Lead 7)*
+4. **Doc drift**: CLAUDE.md says 8192-bucket block cache; source is 32768 buckets / 65536 pool.
+   XER byte offsets in CLAUDE.md (900/902) are also stale — CA is at offset 1030. *(Leads 3, 7)*
+
+### Action list
+
+*(Superseded — maintained as Tiers A/B/C in
+[`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md).)*
+
+---
+
+## Landscape findings (2026-06-02, second survey round)
+
+Two follow-up surveys looked beyond Dolphin: ARM64 dynarec projects of any guest ISA
+(`docs/research/landscape-2-arm64-dynarec-projects.md`) and the classic Mac OS video
+acceleration scene (`docs/research/landscape-3-classic-mac-video-accel.md`). Three findings
+rise above everything in the Dolphin lead list:
+
+### 1. MAME's PPC DRC — BSD-licensed, vendorable, closer guest match than Dolphin
+
+MAME's PowerPC dynamic recompiler (`src/devices/cpu/powerpc/ppcdrc.cpp`) and its ARM64
+backend (`src/devices/cpu/drcbearm64.cpp`) are **BSD-3-Clause** (verified at the file/SPDX
+level — repo-level metadata misleadingly says GPL). That means the code is legally
+*vendorable* into our GPLv2 tree, not just readable. And MAME targets PPC603/604/750 — the
+actual CPUs SheepShaver emulates, a closer match than Dolphin's Gekko. This is the single
+best source of liftable PPC→ARM64 translation code found in the entire research effort.
+
+Also notable from the same survey:
+- **oaknut** (MIT, header-only ARM64 emitter): its `DualCodeBlock` keeps a writable and an
+  executable mapping of the same code cache simultaneously — a candidate to eliminate
+  W^X toggling entirely. Worth a MAP_JIT compatibility spike.
+- **dynarmic** (0BSD): compact register allocator + fastmem, the reference for adding a
+  per-block register cache.
+- **Box64** (MIT): deferred-flag state machine — the shippable form of Dolphin's lazy carry.
+
+### 2. Rosetta 2's AOT idea ~~is the likely answer to JIT residency~~ — REFUTED
+
+> **⚠ This conclusion was refuted by the subsequent root-cause analysis**
+> ([`research/c1-residency-root-cause.md`](research/c1-residency-root-cause.md)): the
+> residency problem is a *dual-cache trap* (the interpreter never consults the JIT block
+> cache once its own cache is warm), so AOT-compiled blocks would be ignored just like
+> on-demand ones. The fix is a gate restructure (backlog item C1). AOT-the-ROM survives only
+> as a deferred warm-start optimization inside item C5.
+
+Original reasoning (kept for the record): Rosetta 2 translates static code ahead-of-time and
+JITs only the dynamic remainder. The Mac ROM is immutable and is the dominant execution
+target — it could be translated ahead of time, in full, instead of block-by-block on demand.
+
+### 3. Video acceleration: extend our `.ndrv`, don't emulate silicon
+
+SheepShaver's `src/video.cpp` is already a paravirtual display driver — the same
+architecture (guest driver + host rendering) that Mac-on-Linux used to ship real
+accelerated video for Mac OS 9, and that the QEMU community's `qemu_vga.ndrv`
+(GPL-2.0, link-compatible) uses today. The alternative — emulating real ATI silicon so
+native drivers work — is unproven everywhere (DingusPPC boots with acceleration disabled)
+and license-encumbered (GPL-3.0).
+
+First wins requiring zero guest-side changes:
+- **Host hardware cursor** — decouple the mouse pointer from framebuffer redraw
+- **Tighter VOSF dirty-rect blitting** — narrower rectangles per update
+
+Longer term: extend our existing control/status `.ndrv` protocol with accelerated
+primitives (rect fill, blit, scroll), rendered host-side — MoL's proven design.
+
+### Strategic priorities
+
+*(Superseded — see [`research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md)
+Tiers A-C. Note that priority #1 as originally written here — "AOT-compile the ROM" — was
+refuted by the C1 root-cause analysis; the current strategic chain is C1 gate restructure →
+C4 dual-mapping W^X → C5 background compilation.)*

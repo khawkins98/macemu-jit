@@ -67,6 +67,7 @@ enum {
   NATIVE_NAMED_CHECK_LOAD_INVOC,
   NATIVE_GET_NAMED_RESOURCE,
   NATIVE_GET_1_NAMED_RESOURCE,
+  NATIVE_OF_CI_SHIM,   // SS_M18 S2b T2: guest-callable r5 OF-CI marshalling shim (append-only)
   NATIVE_OP_MAX
 };
 

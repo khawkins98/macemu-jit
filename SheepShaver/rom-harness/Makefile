@@ -16,7 +16,7 @@ ROM      ?= /workspace/tmp/rpi-basilisk-assets/ppc-roms/PowerMac-9500-OldWorld.r
 SRCS     = rom-harness.cpp $(JITDIR)/ppc-jit.cpp
 OBJS     = rom-harness.o ppc-jit.o
 
-.PHONY: all clean run test quick
+.PHONY: all clean run test quick bench
 
 all: rom-harness
 
@@ -37,6 +37,19 @@ test: rom-harness
 
 quick: rom-harness
 	./rom-harness $(ROM) --count=500 --min-insns=2 --max-insns=16 --verbose --stop-on-fail
+
+# Microbenchmark: per-instruction ns for the codegen kernels (no ROM needed).
+# A/B an optimization: `make bench BARGS=--save-baseline=/tmp/bb.txt` before, then
+# `make bench BARGS=--compare=/tmp/bb.txt` after. Baselines are per-machine — do
+# not commit them; the tool warns if a baseline predates ppc-jit.cpp.
+#
+# stderr (the JIT engine's PPC-JIT-A64:/[JIT ...] chatter) is shown by default;
+# masking is opt-in via `make bench BENCH_QUIET=1`. The bench's own warnings and
+# errors (baseline-stale, init-fail, compile-fail) are deliberately on STDOUT, so
+# they stay visible even under BENCH_QUIET=1 — do not "simplify" them back onto
+# stderr (that's the masking-hides-errors bug this guards against).
+bench: rom-harness
+	@./rom-harness --bench $(BARGS) $(if $(BENCH_QUIET),2>/dev/null,)
 
 clean:
 	rm -f rom-harness $(OBJS)

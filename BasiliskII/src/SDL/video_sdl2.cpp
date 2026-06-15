@@ -69,6 +69,9 @@
 
 #include <cpu_emulation.h>
 #include "main.h"
+#if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
+#include "cpu/jit/aarch64/ppc-jit.h"
+#endif
 #include "adb.h"
 #include "macos_util.h"
 #include "prefs.h"
@@ -704,7 +707,7 @@ static void set_mac_frame_buffer(SDL_monitor_desc &monitor, int depth, bool nati
 }
 
 // Set window name and class
-static void set_window_name() {
+static void set_window_name(const char *status_suffix = NULL) {
 	if (!sdl_window) return;
 	const char *title = PrefsFindString("title");
 	std::string s = title ? title : GetString(STR_WINDOW_TITLE);
@@ -718,6 +721,8 @@ static void set_window_name() {
         if (hotkey & 4) s += GetString(STR_WINDOW_TITLE_GRABBED4);
         s += GetString(STR_WINDOW_TITLE_GRABBED_POST);
 	}
+	if (status_suffix)
+		s += status_suffix;
 	SDL_SetWindowTitle(sdl_window, s.c_str());
 }
 
@@ -1518,12 +1523,24 @@ static void update_mouse_grab()
 	}
 }
 
+// Sync keyboard grab to match current mouse grab state.
+// Requires SDL 2.0.16+. Without this, host shortcuts (e.g. Super/Win key on
+// Linux desktops) can fire while the emulator has mouse focus.
+// Source: https://github.com/robxnano/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037
+static void update_keyboard_grab()
+{
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+	SDL_SetWindowKeyboardGrab(sdl_window, mouse_grabbed ? SDL_TRUE : SDL_FALSE);
+#endif
+}
+
 // Grab mouse, switch to relative mouse mode
 void driver_base::grab_mouse(void)
 {
 	if (!mouse_grabbed) {
 		mouse_grabbed = true;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		disable_mouse_accel();
 		ADBSetRelMouseMode(true);
@@ -1536,6 +1553,7 @@ void driver_base::ungrab_mouse(void)
 	if (mouse_grabbed) {
 		mouse_grabbed = false;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		restore_mouse_accel();
 		ADBSetRelMouseMode(false);
@@ -1954,6 +1972,10 @@ void SDL_monitor_desc::video_close(void)
 
 void VideoExit(void)
 {
+	static bool done = false;
+	if (done) return;
+	done = true;
+
 	VNCServerShutdown();
 
 	// Shutdown evdev input
@@ -2420,12 +2442,8 @@ void video_set_cursor(void)
 				if (visible) {
 					bool cursor_in_window = is_cursor_in_mac_screen();
 
-					if (cursor_in_window) {
-						int x, y;
-						SDL_GetMouseState(&x, &y);
-						D(bug("WarpMouse to {%d,%d} via video_set_cursor\n", x, y));
-						SDL_WarpMouseInWindow(sdl_window, x, y);
-					}
+					// SDL_WarpMouseInWindow omitted — it goes through Quartz on macOS
+					// adding ~16ms latency per cursor-image change. Not needed here.
 				}
 			}
 		}
@@ -2642,6 +2660,19 @@ static int SDLCALL on_sdl_event_generated(void *userdata, SDL_Event * event)
 			}
 		} break;
 			
+		case SDL_MOUSEMOTION:
+			// Process mouse motion synchronously in the event watch (fires inside
+			// SDL_PumpEvents on the main thread) rather than draining from the queue
+			// in the redraw thread. Eliminates the second 60Hz pipeline stage, cutting
+			// worst-case input latency from ~33ms to ~17ms.
+			if (drv) {
+				if (mouse_grabbed)
+					drv->mouse_moved(event->motion.xrel, event->motion.yrel);
+				else
+					drv->mouse_moved(event->motion.x, event->motion.y);
+			}
+			return EVENT_DROP_FROM_QUEUE;
+
 		case SDL_DROPFILE:
 			CDROMDrop(event->drop.file);
 			SDL_free(event->drop.file);
@@ -3301,6 +3332,12 @@ static inline void do_video_refresh(void)
 	// Update display
 	video_refresh();
 
+	// NOTE: the live-JIT-stats window-title update was removed here. do_video_refresh()
+	// runs on the "Redraw Thread" (see redraw_func), and SDL_SetWindowTitle calls into
+	// Cocoa, which asserts "NSWindow ... should only be modified on the main thread!" and
+	// aborts on macOS (and stalls the redraw thread → VBL stops → guest boot hangs). The
+	// ppc_jit_aarch64_get_stats() API and set_window_name()'s status_suffix param are kept
+	// for a future reimplementation that applies the title on the main thread.
 
 	// Set new palette if it was changed
 	handle_palette_changes();

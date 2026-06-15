@@ -47,6 +47,7 @@
 #include <errno.h>
 #include <vector>
 #include <string>
+#include <atomic>
 #include <math.h>
 
 #ifdef SDL_PLATFORM_MACOS
@@ -59,6 +60,12 @@
 
 #include <cpu_emulation.h>
 #include "main.h"
+#if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
+#include "cpu/jit/aarch64/ppc-jit.h"
+#endif
+#ifdef SHEEPSHAVER
+#include "rpc.h"
+#endif
 #include "adb.h"
 #include "macos_util.h"
 #include "prefs.h"
@@ -66,8 +73,12 @@
 #include "video.h"
 #include "video_defs.h"
 #include "video_blit.h"
+#include "vnc_server.h"		// VNC server (ported to SDL3 2026-06-05; mirrors video_sdl2.cpp)
 #include "vm_alloc.h"
 #include "cdrom.h"
+#ifdef SHEEPSHAVER
+#include "machine_profile.h"   // ss_m11_fb, fb_aperture_base (M11 framebuffer aperture)
+#endif
 
 #define DEBUG 0
 #include "debug.h"
@@ -107,7 +118,7 @@ const char KEYCODE_FILE_NAME2[] = DATADIR "/BasiliskII_keycodes";
 
 
 // Global variables
-static uint32 frame_skip;							// Prefs items
+uint32 frame_skip;									// Prefs items (non-static for C2.0 RPC)
 static int16 mouse_wheel_mode;
 static int16 mouse_wheel_lines;
 static bool mouse_wheel_reverse;
@@ -146,6 +157,10 @@ static int keycode_table[256];						// X keycode -> Mac keycode translation tabl
 SDL_Window * sdl_window = NULL;				        // Wraps an OS-native window
 static SDL_Surface * host_surface = NULL;			// Surface in host-OS display format
 static SDL_Surface * guest_surface = NULL;			// Surface in guest-OS display format
+// Referenced by vnc_server.cpp's VNCServerUpdate to skip surface access during a mode switch.
+// video_sdl2.cpp defines its own; the SDL3 backend needs this copy to link. (The SDL3 redraw thread
+// is paused during mode changes too, so this is belt-and-suspenders against a host_surface UAF.)
+std::atomic<bool> video_mode_changing{false};
 static SDL_Renderer * sdl_renderer = NULL;			// Handle to SDL2 renderer
 static SDL_ThreadID sdl_renderer_thread_id = 0;		// Thread ID where the SDL_renderer was created, and SDL_renderer ops should run (for compatibility w/ d3d9)
 static SDL_Texture * sdl_texture = NULL;			// Handle to a GPU texture, with which to draw guest_surface to
@@ -161,6 +176,12 @@ static bool toggle_fullscreen = false;
 static bool did_add_event_watch = false;
 
 static bool mouse_grabbed = false;
+
+// SS_INPUT_LOCKOUT: when set (non-empty, non-"0"), the SDL3 window ignores all host
+// mouse + keyboard input and never grabs/captures the cursor.  VNC-injected events
+// (tagged with VNC_SYNTHETIC_INPUT_ID) still pass through so an automated VNC-driven
+// test cannot be disturbed by the host.  SDL2 parity is a follow-up.
+bool input_lockout = false;  // non-static for C2.0 RPC
 
 // Mutex to protect SDL events
 static SDL_Mutex *sdl_events_lock = NULL;
@@ -543,7 +564,7 @@ static void set_mac_frame_buffer(SDL_monitor_desc &monitor, int depth, bool nati
 }
 
 // Set window name and class
-static void set_window_name() {
+static void set_window_name(const char *status_suffix = NULL) {
 	if (!sdl_window) return;
 	const char *title = PrefsFindString("title");
 	std::string s = title ? title : GetString(STR_WINDOW_TITLE);
@@ -557,6 +578,8 @@ static void set_window_name() {
         if (hotkey & 4) s += GetString(STR_WINDOW_TITLE_GRABBED4);
         s += GetString(STR_WINDOW_TITLE_GRABBED_POST);
 	}
+	if (status_suffix)
+		s += status_suffix;
 	SDL_SetWindowTitle(sdl_window, s.c_str());
 }
 
@@ -808,11 +831,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
     }
 
 	SDL_assert(sdl_texture == NULL);
-#ifdef ENABLE_VOSF
 	sdl_texture = SDL_CreateTexture(sdl_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
-#else
-	sdl_texture = SDL_CreateTexture(sdl_renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_STREAMING, width, height);
-#endif
     if (!sdl_texture) {
         shutdown_sdl_video();
         return NULL;
@@ -862,14 +881,7 @@ static SDL_Surface *init_sdl_video(int width, int height, int depth, Uint32 flag
     if (!host_surface) {
 		SDL_PropertiesID props = SDL_GetTextureProperties(sdl_texture);
 		SDL_PixelFormat texture_format = (SDL_PixelFormat)SDL_GetNumberProperty(props, SDL_PROP_TEXTURE_FORMAT_NUMBER, 0);
-    	int bpp;
-    	Uint32 Rmask, Gmask, Bmask, Amask;
-    	if (!SDL_GetMasksForPixelFormat(texture_format, &bpp, &Rmask, &Gmask, &Bmask, &Amask)) {
-    		printf("ERROR: Unable to determine format for host SDL_surface: %s\n", SDL_GetError());
-    		shutdown_sdl_video();
-    		return NULL;
-    	}
-        host_surface = SDL_CreateSurface(width, height, SDL_GetPixelFormatForMasks(bpp, Rmask, Gmask, Bmask, Amask));
+        host_surface = SDL_CreateSurface(width, height, texture_format);
         if (!host_surface) {
         	printf("ERROR: Unable to create host SDL_surface: %s\n", SDL_GetError());
             shutdown_sdl_video();
@@ -932,37 +944,51 @@ static int present_sdl_video()
 		}
 	}
 	UNLOCK_PALETTE; // passed potential deadlock, can unlock palette
-	
-	// Update the host OS' texture
-	uint8_t *srcPixels = (uint8_t *)host_surface->pixels +
-		sdl_update_video_rect.y * host_surface->pitch +
-		sdl_update_video_rect.x * SDL_GetPixelFormatDetails(host_surface->format)->bytes_per_pixel;
 
-	uint8_t *dstPixels;
+	// Backported from kanjitalk755/macemu e596e215 "SDL3: blit not required in SDL_UnlockTexture()":
+	// texture is unified to ARGB8888 and the big-endian->host swap is done in software below,
+	// removing the SDL_GetMasksForPixelFormat round-trip / blit.
+	// PROSPECTIVE: the SDL3 backend is BUILD-VERIFIED ONLY on this fork — not yet boot-tested.
+	// Update the host OS' texture
+	uint32_t *dstPixels, *srcPixels = (uint32_t *)((uint8_t *)host_surface->pixels +
+		sdl_update_video_rect.y * host_surface->pitch +
+		sdl_update_video_rect.x * SDL_GetPixelFormatDetails(host_surface->format)->bytes_per_pixel);
 	int dstPitch;
 	if (!SDL_LockTexture(sdl_texture, &sdl_update_video_rect, (void **)&dstPixels, &dstPitch)) {
 		SDL_UnlockMutex(sdl_update_video_mutex);
 		return -1;
 	}
 #ifdef VIDEO_CHROMAKEY
-	if (display_type == DISPLAY_CHROMAKEY)
+	if (display_type == DISPLAY_CHROMAKEY && host_surface == guest_surface)
 		for (int y = 0; y < sdl_update_video_rect.h; y++) {
-			uint32_t *src = (uint32_t *)srcPixels, *dst = (uint32_t *)dstPixels;
-			for (int i = 0; i < sdl_update_video_rect.w; i++) {
-				uint32 d = *src++;
-				*dst++ = d | (d == VIDEO_CHROMAKEY ? 0 : 0xff); // alpha value
+			for (int x = 0; x < sdl_update_video_rect.w; x++) {
+				uint32 d = srcPixels[x];
+				dstPixels[x] = __builtin_bswap32(d | (d == VIDEO_CHROMAKEY ? 0 : 0xff)); // alpha value
 			}
-			srcPixels += host_surface->pitch;
-			dstPixels += dstPitch;
+			srcPixels += host_surface->pitch >> 2;
+			dstPixels += dstPitch >> 2;
 		}
 	else
 #endif
-		for (int y = 0; y < sdl_update_video_rect.h; y++) {
-			memcpy(dstPixels, srcPixels, sdl_update_video_rect.w << 2);
-			srcPixels += host_surface->pitch;
-			dstPixels += dstPitch;
-		}
+		if (host_surface == guest_surface)
+			for (int y = 0; y < sdl_update_video_rect.h; y++) {
+				for (int x = 0; x < sdl_update_video_rect.w; x++)
+					dstPixels[x] = __builtin_bswap32(srcPixels[x]);
+				srcPixels += host_surface->pitch >> 2;
+				dstPixels += dstPitch >> 2;
+			}
+		else
+			for (int y = 0; y < sdl_update_video_rect.h; y++) {
+				memcpy(dstPixels, srcPixels, sdl_update_video_rect.w << 2);
+				srcPixels += host_surface->pitch >> 2;
+				dstPixels += dstPitch >> 2;
+			}
 	SDL_UnlockTexture(sdl_texture);
+
+	// Mirror the freshly-updated region to any connected VNC clients. host_surface holds the
+	// current frame for sdl_update_video_rect, and we're still under sdl_update_video_mutex so the
+	// rect is stable. No-op unless vncserver=true. (Mirrors video_sdl2.cpp's VNCServerUpdate call.)
+	VNCServerUpdate(host_surface, sdl_update_video_rect);
 
     // We are done working with pixels in host_surface.  Reset sdl_update_video_rect, then let
     // other threads modify it, as-needed.
@@ -1115,6 +1141,25 @@ void driver_base::init()
 	if (!s)
 		return;
 
+	// M11: framebuffer aperture (quiet mode — real RAM at fb_aperture_base).
+	// Point the_buffer at the guest aperture so update_display_static_bbox reads
+	// directly from 0x81000000.  Mac OS draws to fb_aperture_base (the frame base
+	// set below), so pixels reach the host pointer without a copy.
+	// The_buffer_copy shadow is already allocated above and sized for the current mode.
+#ifdef SHEEPSHAVER
+	// fb_aperture_mapped is only true in quiet mode (real RAM mapped).
+	// LOUD mode (fault-trap diagnostic) leaves the aperture unmapped and must
+	// not call Mac2HostAddr on it (would abort — address in MMIO hull).
+	if (ss_m11_fb && MachineProfileIsNewWorld() && fb_aperture_mapped && fb_aperture_base) {
+		uint8 *aperture_host = (uint8 *)Mac2HostAddr(fb_aperture_base);
+		if (aperture_host) {
+			the_buffer = aperture_host;
+			fprintf(stderr, "[M11-FB] SDL: the_buffer -> aperture host %p (guest 0x%08x)\n",
+			        (void *)the_buffer, fb_aperture_base);
+		}
+	}
+#endif
+
 	// Set frame buffer base
 	set_mac_frame_buffer(monitor, VIDEO_MODE_DEPTH, true);
 
@@ -1258,12 +1303,23 @@ static void update_mouse_grab()
 	SDL_SetWindowRelativeMouseMode(sdl_window, mouse_grabbed);
 }
 
+// Sync keyboard grab to match current mouse grab state.
+// Prevents host keyboard shortcuts (e.g. Cmd-Tab on macOS, Super on Linux)
+// from firing while the emulator has mouse focus.
+// Source: https://github.com/robxnano/macemu/commit/e2a210ef3d7e6bf8d78323570f8c3b3ba4f8c037
+static void update_keyboard_grab()
+{
+	SDL_SetWindowKeyboardGrab(sdl_window, mouse_grabbed);
+}
+
 // Grab mouse, switch to relative mouse mode
 void driver_base::grab_mouse(void)
 {
+	if (input_lockout) return;		// never grab when SS_INPUT_LOCKOUT is set
 	if (!mouse_grabbed) {
 		mouse_grabbed = true;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		disable_mouse_accel();
 		ADBSetRelMouseMode(true);
@@ -1276,6 +1332,7 @@ void driver_base::ungrab_mouse(void)
 	if (mouse_grabbed) {
 		mouse_grabbed = false;
 		update_mouse_grab();
+		update_keyboard_grab();
 		set_window_name();
 		restore_mouse_accel();
 		ADBSetRelMouseMode(false);
@@ -1446,6 +1503,12 @@ bool VideoInit(bool classic)
 	mouse_wheel_lines = PrefsFindInt32("mousewheellines");
 	mouse_wheel_reverse = mouse_wheel_lines < 0;
 	if (mouse_wheel_reverse) mouse_wheel_lines = -mouse_wheel_lines;
+	VNCServerInitFromPrefs();		// start the VNC server if vncserver=true (mirrors video_sdl2.cpp)
+
+	// SS_INPUT_LOCKOUT: ignore all host mouse/keyboard; VNC-injected events still pass.
+	{ const char *e = getenv("SS_INPUT_LOCKOUT"); input_lockout = (e && e[0] && e[0] != '0'); }
+	if (input_lockout)
+		fprintf(stderr, "[input] SS_INPUT_LOCKOUT: host mouse/keyboard ignored — VNC-only control.\n");
 
 	// Get screen mode from preferences
 	migrate_screen_prefs();
@@ -1669,18 +1732,30 @@ void SDL_monitor_desc::video_close(void)
 
 void VideoExit(void)
 {
+	VNCServerShutdown();	// stop the VNC server + its thread first (idempotent; safe on the 2nd call)
+
 	// Close displays
 	vector<monitor_desc *>::iterator i, end = VideoMonitors.end();
 	for (i = VideoMonitors.begin(); i != end; ++i)
-		dynamic_cast<SDL_monitor_desc *>(*i)->video_close();
+		static_cast<SDL_monitor_desc *>(*i)->video_close();
 
 	// Destroy locks
-	if (frame_buffer_lock)
+	// NULL the pointers after destroying: Quit() calls VideoExit() twice (directly, then via
+	// ExitAll()), so without this the second pass double-destroys already-freed mutexes. On SDL3
+	// (os_unfair_lock-backed mutexes) that aborts: "os_unfair_lock is corrupt" in pthread_mutex_destroy
+	// during the E2E shutdown. The existing `if (lock)` guards already intend idempotency; complete it.
+	if (frame_buffer_lock) {
 		SDL_DestroyMutex(frame_buffer_lock);
-	if (sdl_palette_lock)
+		frame_buffer_lock = NULL;
+	}
+	if (sdl_palette_lock) {
 		SDL_DestroyMutex(sdl_palette_lock);
-	if (sdl_events_lock)
+		sdl_palette_lock = NULL;
+	}
+	if (sdl_events_lock) {
 		SDL_DestroyMutex(sdl_events_lock);
+		sdl_events_lock = NULL;
+	}
 }
 
 
@@ -2292,6 +2367,32 @@ enum {
 // added to SDL's event queue (and retrieve-able via SDL_PeepEvents(), etc.)
 static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 {
+	// Host-input lockout: drop all non-VNC mouse/keyboard events so an automated
+	// VNC-driven test cannot be disturbed by physical host input.  VNC events are
+	// tagged with VNC_SYNTHETIC_INPUT_ID in the `which` field and fall through.
+	if (input_lockout) {
+		switch (event->type) {
+			case SDL_EVENT_MOUSE_MOTION:
+				if (event->motion.which != VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+			case SDL_EVENT_MOUSE_BUTTON_DOWN:
+			case SDL_EVENT_MOUSE_BUTTON_UP:
+				if (event->button.which != VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+			case SDL_EVENT_MOUSE_WHEEL:
+				if (event->wheel.which != VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+			case SDL_EVENT_KEY_DOWN:
+			case SDL_EVENT_KEY_UP:
+				if (event->key.which != (SDL_KeyboardID)VNC_SYNTHETIC_INPUT_ID)
+					return EVENT_DROP_FROM_QUEUE;
+				break;
+		}
+	}
+
 	switch (event->type) {
 		case SDL_EVENT_KEY_UP: {
 			SDL_KeyboardEvent const &key = event->key;
@@ -2310,7 +2411,7 @@ static bool SDLCALL on_sdl_event_generated(void *userdata, SDL_Event *event)
 			return EVENT_DROP_FROM_QUEUE;
 			break;
 	}
-	
+
 	return EVENT_ADD_TO_QUEUE;
 }
 
@@ -2816,6 +2917,88 @@ static inline void do_video_refresh(void)
 	// Update display
 	video_refresh();
 
+	// Periodically update window title with JIT stats (~every 2s at 60 Hz).
+	// SDL_SetWindowTitle must run on the main thread (Cocoa NSWindow constraint);
+	// SDL_RunOnMainThread dispatches it safely from this redraw thread.
+#if defined(SHEEPSHAVER) && defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	{
+		static int title_counter = 0;
+		if (++title_counter >= 120) {
+			title_counter = 0;
+			int blocks = 0;
+			size_t cache_used = 0, cache_total = 0;
+			ppc_jit_aarch64_get_stats(&blocks, NULL, &cache_used, &cache_total);
+			if (cache_total > 0) {
+				static char title_buf[128];
+				snprintf(title_buf, sizeof(title_buf), " — JIT: %d blocks, cache %zuK/%zuK (%d%%)",
+				         blocks, cache_used / 1024, cache_total / 1024,
+				         (int)(cache_used * 100 / cache_total));
+				SDL_RunOnMainThread([](void *userdata) {
+					set_window_name((const char *)userdata);
+				}, title_buf, false);
+			}
+		}
+	}
+#endif
+
+	// C2.0: non-blocking poll for launcher RPC commands (sub-16ms latency)
+#ifdef SHEEPSHAVER
+	{
+		extern rpc_connection_t *ss_rpc_server;
+		extern bool ss_rpc_client_connected;
+		extern void ss_rpc_try_accept(void);
+		if (ss_rpc_server) {
+			if (!ss_rpc_client_connected)
+				ss_rpc_try_accept();
+			if (ss_rpc_client_connected) {
+				int ret = rpc_wait_dispatch(ss_rpc_server, 0);
+				if (ret > 0) rpc_dispatch(ss_rpc_server);
+			}
+		}
+	}
+#endif
+
+	// Runtime control: poll a .sheepvm/runtime_control file every ~5s for live toggles.
+	// SiliconSheep writes this file; the emulator re-reads it. Cheap stat() + small read.
+	{
+		static int control_counter = 0;
+		if (++control_counter >= 300) { // ~5s at 60 Hz
+			control_counter = 0;
+			// The control file lives next to the prefs file in the .sheepvm bundle.
+			// Format: one "key value" per line (same as prefs, subset of toggleable keys).
+			FILE *cf = fopen("runtime_control", "r");
+			if (cf) {
+				char line[256];
+				while (fgets(line, sizeof line, cf)) {
+					char key[64], val[64];
+					if (sscanf(line, "%63s %63s", key, val) == 2) {
+						if (!strcmp(key, "input_lockout")) {
+							bool new_val = (val[0] == '1' || !strcmp(val, "true"));
+							if (new_val != input_lockout) {
+								input_lockout = new_val;
+								fprintf(stderr, "[input] input_lockout toggled to %s\n",
+								        input_lockout ? "ON (host input ignored)" : "OFF");
+							}
+						} else if (!strcmp(key, "frameskip")) {
+							uint32 new_fs = atoi(val);
+							if (new_fs != frame_skip) {
+								frame_skip = new_fs;
+								fprintf(stderr, "[video] frameskip changed to %u\n", frame_skip);
+							}
+						} else if (!strcmp(key, "mouse_grab")) {
+							bool want = (val[0] == '1' || !strcmp(val, "true"));
+							if (want && !mouse_grabbed) {
+								if (drv) drv->grab_mouse();
+							} else if (!want && mouse_grabbed) {
+								if (drv) drv->ungrab_mouse();
+							}
+						}
+					}
+				}
+				fclose(cf);
+			}
+		}
+	}
 
 	// Set new palette if it was changed
 	handle_palette_changes();

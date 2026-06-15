@@ -1,0 +1,609 @@
+"""P1 lifecycle scenario: boot -> host->guest shutdown hook -> assert clean exit."""
+from __future__ import annotations
+
+import os
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from . import drive, imagecmp, observe, uidump, workload
+from .runner import Runner
+from .vnc import Vnc
+from .workload import WorkloadResult, WorkloadSpec
+
+
+@dataclass
+class Result:
+    ok: bool
+    reason: str
+    log: str
+
+
+def run_lifecycle(
+    *,
+    emulator: str,
+    prefs: str,
+    vncport: int,
+    boot_timeout: float = 90.0,
+    shutdown_timeout: float = 30.0,
+    artifact_dir: Path | None = None,
+) -> Result:
+    dump_dir = tempfile.mkdtemp(prefix="ss-ui-")
+    os.environ["SS_UI_DUMP_DIR"] = dump_dir
+
+    runner = Runner(argv=[emulator, "--config", prefs])
+    runner.start()
+    try:
+        # 1. Wait for the deterministic boot-ready signal.
+        ev = _await_boot_ready(runner, boot_timeout)
+        if ev is None:
+            return Result(False, "boot timed out (no [BOOT] idle) — if the guest shows the '?' "
+                          "no-boot-disk icon, a stray SheepShaver likely holds the disk image "
+                          "(check `pgrep SheepShaver`)", runner.log_text())
+        if not observe.is_desktop_ready(ev):
+            return Result(
+                False,
+                f"boot blocked on dialog (frontApp={ev.front_app!r} modal={ev.modal})",
+                runner.log_text(),
+            )
+
+        # 2. Wait for the SETTLED-desktop signal ([READY]) before shutting down — more robust than the
+        #    first [BOOT] idle, which can fire while the Finder is still drawing / startup items launch.
+        #    Fall back to a short blind settle if [READY] doesn't arrive (e.g. a medium that never
+        #    fully settles), so the smoke can't hang waiting on it.
+        if not _await_ready(runner, READY_TIMEOUT):
+            time.sleep(2.0)
+
+        # Introspection corroboration (non-fatal): log the actual on-screen window list at the
+        # settled desktop. Proves the harness can "see" the guest UI; does not gate the result yet.
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=10.0)
+            wins = ", ".join(f"[{w.index}]{w.title!r}({w.window_class})" for w in snap.windows) or "(none)"
+            print(f"  [ui] desktop snapshot: {len(snap.windows)} windows, modal={snap.modal_active}: {wins}",
+                  flush=True)
+            # The Finder installs File/Edit/View incrementally after the desktop settles, so poll a
+            # few seconds for the full menu bar before the self-check (non-fatal).
+            mb = snap.menu_bar
+            deadline = time.monotonic() + 20.0
+            while (mb is None or mb.menu("File") is None) and time.monotonic() < deadline:
+                time.sleep(1.0)
+                try:
+                    mb = uidump.snapshot(dump_dir, timeout=8.0).menu_bar
+                except TimeoutError:
+                    pass  # emulator briefly non-idle; keep polling
+            if mb is not None:
+                titles = [m.title for m in mb.menus]
+                fm = mb.menu("File")
+                fkeys = {it.text: it.cmd_key for it in fm.items if it.cmd_key} if fm else {}
+                file_ok = (len(titles) >= 3 and titles[1] == "File" and titles[2] == "Edit")
+                print(f"  [ui] menu bar: {len(mb.menus)} menus {titles} | File/Edit_ok={file_ok} "
+                      f"File keys={fkeys}", flush=True)
+        except Exception as e:
+            print(f"  [ui] snapshot unavailable (non-fatal): {e}", flush=True)
+
+        # 3. Request a clean shutdown via the host->guest hook (SIGUSR1 -> the emulator injects
+        #    the ADB Power key + Return; the guest runs its real shutdown from its own event loop).
+        #    No VNC menu-clicking — the only VNC use is an optional, best-effort boot screenshot.
+        if artifact_dir:
+            try:
+                v = Vnc(port=vncport)
+                v.capture(str(artifact_dir / "01-desktop.png"))
+            except Exception:
+                pass  # screenshot is a debugging artifact, not on the critical path
+            finally:
+                # ALWAYS stop vncdotool's reactor — even if connect/capture raised. Otherwise the
+                # orphaned non-daemon reactor thread blocks interpreter exit (process hangs after the
+                # PASS line). api.shutdown() is safe to call whether or not the reactor came up.
+                drive.reactor_shutdown()
+        runner.request_shutdown()
+
+        # 3. Assert clean exit: process exits on its own, log shows both signatures.
+        code = runner.wait(timeout=shutdown_timeout)
+        if code is None:
+            return Result(False, "shutdown timed out — process did not exit (had to kill)", runner.log_text())
+        text = runner.log_text()
+        if drive.clean_shutdown(code, text):
+            return Result(True, "clean lifecycle: booted to Finder, clean shutdown, exit 0", text)
+        return Result(
+            False,
+            f"unclean exit (code={code}, clean_signatures={observe.saw_clean_shutdown(text)})",
+            text,
+        )
+    finally:
+        runner.terminate()
+
+
+# Aliases for the moved primitives — kept for any import that references scenario.READY_TIMEOUT
+# (harness.py, tests). All gate/drive logic now lives in drive.py.
+READY_TIMEOUT = drive.READY_TIMEOUT
+_nlines = drive._nlines
+_await_boot_ready = drive._await_boot_ready
+_await_ready = drive._await_ready
+_await_since = drive._await_since
+_drive_until = drive._drive_until
+_await_front_app = drive._await_front_app
+_await_app = drive._await_app
+
+
+# --- Benchmark scenario (Speedometer) -------------------------------------------------
+
+# Speedometer auto-launches from the guest Startup Items; we wait for its [APP] signal (deterministic)
+# to detect both the launch AND the "tests are done!" dialog (modal=1) — no fixed benchmark sleep.
+SPEEDO_LAUNCH_TIMEOUT = 90.0   # max wait for Speedometer to launch + idle on its splash
+BENCH_DONE_TIMEOUT = 240.0     # max wait for the "tests are done!" dialog (suite is ~90s)
+
+
+@dataclass
+class BenchResult:
+    ok: bool
+    reason: str
+    log: str
+    result_image: str | None = None
+    duration_s: float | None = None  # measured suite runtime (a coarse perf signal)
+    report_saved: bool = False       # whether the in-guest Cmd-T text-report save was driven
+
+
+def run_benchmark(
+    *,
+    emulator: str,
+    prefs: str,
+    vncport: int,
+    boot_timeout: float = 90.0,
+    shutdown_timeout: float = 30.0,
+    artifact_dir: Path,
+) -> BenchResult:
+    """Boot the benchmark disk, drive Speedometer's full suite, capture results, shut down.
+
+    Sequence (Speedometer auto-launches from the guest Startup Items):
+      splash -> Return; registration -> Esc; Cmd+A (run all) -> "choose drive" dialog ->
+      Return (OK = the main Desktop disk) -> ~90 s benchmark -> screenshot results.
+    """
+    dump_dir = tempfile.mkdtemp(prefix="ss-ui-")
+    os.environ["SS_UI_DUMP_DIR"] = dump_dir
+
+    runner = Runner(argv=[emulator, "--config", prefs])
+    runner.start()
+    try:
+        ev = _await_boot_ready(runner, boot_timeout)
+        if ev is None:
+            return BenchResult(False, "boot timed out (no [BOOT] idle) — if the guest shows the '?' "
+                               "no-boot-disk icon, a stray SheepShaver likely holds the disk image "
+                               "(check `pgrep SheepShaver`)", runner.log_text())
+
+        # Wait DETERMINISTICALLY for Speedometer to auto-launch and idle on its splash (the [APP]
+        # signal), instead of a fixed sleep — boot+launch time is highly variable.
+        if not _await_app(runner, "Speedometer", SPEEDO_LAUNCH_TIMEOUT):
+            return BenchResult(False, "Speedometer did not launch (no [APP] frontApp='Speedometer')",
+                               runner.log_text())
+        vnc = Vnc(port=vncport)
+
+        # Every drive step is SIGNAL-GATED on the actual guest window transition (the enriched [APP]
+        # title=/modal= signals) instead of a fixed sleep: we proceed the instant the guest reaches
+        # the next state, each gate prints its elapsed time (perf instrumentation), and a key that
+        # didn't take is resent (_drive_until). Faster than fixed sleeps when the guest is quick, and
+        # robust — never races ahead, self-corrects if a key lands before the window is input-ready.
+        timings: dict[str, float] = {}
+
+        # Splash -> main window. Predicate is sound because the splash is the ONLY Speedometer state
+        # before the main window, and it is modal — so the first non-modal Speedometer event is the
+        # main window. Resend Enter every 3 s until then (the splash drops input for a variable
+        # ~10-24 s).
+        t = _drive_until(runner, vnc, "enter", lambda e: "Speedometer" in e.app and not e.modal,
+                         "splash->main", timeout=40.0, resend=3.0)
+        if t is None:
+            return BenchResult(False, "splash did not dismiss to Speedometer's main window",
+                               runner.log_text())
+        timings["splash"] = t
+
+        vnc.key("esc"); time.sleep(0.5)          # dismiss the optional registration prompt (absent on
+                                                 # this build, so there's no signal to gate on — brief)
+
+        # Cmd+A = "run all" -> "choose a disk" dialog. Predicate `e.modal` is sound here because the
+        # main window (just reached) is non-modal, so the first modal event AFTER Cmd+A is this dialog.
+        t = _drive_until(runner, vnc, "super-a", lambda e: e.modal, "choose-disk dialog",
+                         timeout=20.0, resend=4.0)
+        if t is None:
+            return BenchResult(False, "choose-disk dialog did not appear after Cmd+A",
+                               runner.log_text())
+        timings["choose"] = t
+
+        # [Plan 2a] Live verification + de-facto dialog identity: log the choose-disk dialog's DITL
+        # items. Non-fatal — a hiccup here must not fail the benchmark.
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=8.0)
+            dlg = snap.front_dialog()
+            if dlg is not None:
+                def _fmt(it):
+                    s = f"{it.type}:{it.text!r}@({it.rect.left},{it.rect.top})"
+                    if it.value is not None:
+                        ok = (it.crect is not None
+                              and it.crect.left == it.rect.left and it.crect.top == it.rect.top
+                              and it.crect.right == it.rect.right and it.crect.bottom == it.rect.bottom)
+                        s += f" val={it.value} hil={it.hilite} crect_ok={ok}"
+                    return s
+                items = ", ".join(_fmt(it) for it in dlg.items) or "(none)"
+                print(f"  [ui] choose-disk dialog: refCon={dlg.ref_con} default={dlg.default_item} "
+                      f"{len(dlg.items)} items: {items}", flush=True)
+            else:
+                _fw = snap.front_window()
+                _ft = _fw.title if _fw is not None else None
+                print(f"  [ui] choose-disk: front is not a dialog (front={_ft!r})", flush=True)
+        except Exception as e:
+            print(f"  [ui] dialog snapshot unavailable (non-fatal): {e}", flush=True)
+
+        since = _nlines(runner)
+        vnc.key("enter")                         # OK = the main Desktop disk -> benchmark runs
+        # The benchmark-finished signal is Speedometer's "All Done!" alert (title=) — unambiguous,
+        # unlike the older modal=1 count, which also matched the choose-disk dialog.
+        duration_s = _await_since(runner, since, lambda e: "All Done" in e.title,
+                                  BENCH_DONE_TIMEOUT, "benchmark")
+        if duration_s is None:
+            return BenchResult(False, "benchmark did not finish (no 'All Done!' alert within timeout)",
+                               runner.log_text())
+
+        time.sleep(1.0)                          # let the alert settle before the screenshot
+        img = str(artifact_dir / "benchmark-result.png")
+        try:
+            vnc.capture(img)                     # capture the results (with the "All Done!" alert up)
+        except Exception:
+            pass                                 # the screenshot is a debugging artifact, not critical
+        vnc.key("enter"); time.sleep(1.5)        # dismiss "All Done!" -> guest returns to idle
+
+        # Save the text report onto the (throwaway) run-copy disk so the host can extract it after
+        # shutdown, then quit Speedometer back to the Finder (the Power-key shutdown hook only raises
+        # the Shut Down dialog at the Finder, not over a frontmost app). Both are extracted, unit-
+        # tested helpers. All best-effort: a hiccup here must NOT fail the benchmark — the real gate
+        # is the clean shutdown asserted below.
+        report_saved = False
+        try:
+            report_saved = _save_text_report(runner, vnc)
+            _quit_to_finder(runner, vnc, dump_dir=dump_dir)
+            time.sleep(1.5)                               # let the Finder settle before shutdown
+        except Exception:
+            pass                                          # leave report_saved False; PASS unaffected
+        vnc.close()
+
+        runner.request_shutdown()
+        code = runner.wait(timeout=shutdown_timeout)
+        log = runner.log_text()
+        gates = " ".join(f"{k}={v:.1f}s" for k, v in timings.items())
+        ok, reason = _benchmark_verdict(code, log)   # honest PASS: requires a real clean shutdown
+        if not ok:
+            return BenchResult(False, reason, log, img, duration_s, report_saved=report_saved)
+        return BenchResult(True,
+                           f"benchmark complete in {duration_s:.0f}s (gates: {gates}); results + log captured",
+                           log, img, duration_s, report_saved=report_saved)
+    finally:
+        # ALWAYS tear down vncdotool's Twisted (non-daemon) reactor. A benchmark that returns early
+        # (a drive gate timed out) or raises mid-drive would otherwise leave the reactor thread alive
+        # and HANG the process after printing the result line — the exact trap vnc.py / run_smoke.py
+        # warn about. api.shutdown() is safe on every path (whether or not a Vnc was created / the
+        # reactor came up); the happy path already closed it, so this is the catch-all. (run_lifecycle
+        # does the same in its finally — keep them consistent.)
+        drive.reactor_shutdown()
+        # Always save the emulator log (even on early failure) — terminal output for analysis.
+        try:
+            (artifact_dir / "benchmark-emulator.log").write_text(runner.log_text())
+        except Exception:
+            pass
+        runner.terminate()
+
+
+def _benchmark_verdict(code: int | None, log: str) -> tuple[bool, str]:
+    """Decide PASS/FAIL from the emulator's exit code + log. HONEST PASS: a clean exit *code* alone
+    isn't enough — require the guest's real clean-shutdown signatures (`observe.saw_clean_shutdown`:
+    "Shutdown complete." + the atexit session line), so a green benchmark means the harness genuinely
+    drove an unattended shutdown, not that the process merely exited. Returns (ok, reason)."""
+    if code is None:
+        return False, "shutdown timed out after benchmark (had to kill)"
+    if not drive.clean_shutdown(code, log):
+        clean = observe.saw_clean_shutdown(log)
+        return False, (f"benchmark ran but the shutdown was not clean "
+                       f"(exit={code}, clean_signatures={clean})")
+    return True, "shutdown clean"
+
+
+def _save_text_report(runner: Runner, vnc: Vnc) -> bool:
+    """Drive Cmd-T "Save Text Report" and accept the default name ("Power Macintosh Report").
+
+    Typing a custom name proved unreliable (keys dropped/leaked and it saved under the default name
+    anyway), so we don't type — the host matches the default name. Returns True if the modal save
+    dialog opened and committed; best-effort — the caller must not fail the benchmark on a False.
+    """
+    since = _nlines(runner)
+    vnc.key("super-t")                                # File > Save Text Report...
+    if _await_since(runner, since, lambda e: e.modal, 8.0, "save-dialog") is None:
+        return False                                  # no save dialog appeared
+    since = _nlines(runner)
+    vnc.key("enter")                                  # Return = Save (accept the default name)
+    if _await_since(runner, since, lambda e: not e.modal, 8.0, "save-commit") is not None:
+        return True
+    since = _nlines(runner)                            # dialog stuck — Escape it so it can't block quit
+    vnc.key("esc")
+    _await_since(runner, since, lambda e: not e.modal, 5.0, "save-cancel")
+    return False
+
+
+def _await_finder_via_ui(runner: Runner, dump_dir: str, timeout: float):
+    """Definitive 'back at the Finder' check via UI introspection: Speedometer has no window left
+    and the front window is a non-dialog (the Desktop / a Finder window). Returns True if reached,
+    False if it timed out with Speedometer still present, or None if introspection produced no
+    snapshot at all (so the caller can fall back to the front-app settle heuristic)."""
+    deadline = time.monotonic() + timeout
+    first = True
+    while time.monotonic() < deadline:
+        try:
+            snap = uidump.snapshot(dump_dir, timeout=min(3.0, max(0.5, deadline - time.monotonic())))
+        except TimeoutError:
+            if first:
+                return None            # no snapshots at all -> let the caller fall back
+            time.sleep(0.3); continue
+        first = False
+        if not snap.find(title_contains="Speedometer"):
+            fw = snap.front_window()
+            if fw is not None and not fw.is_dialog:
+                print(f"  [gate] ui:Finder (Speedometer gone, front={fw.title!r})", flush=True)
+                return True
+        time.sleep(0.3)
+    return False
+
+
+def _quit_to_finder(runner: Runner, vnc: Vnc, timeout: float = 12.0, dump_dir: str | None = None) -> bool:
+    """Quit Speedometer back to the Finder, KEYBOARD-ONLY. Cmd-Q, then answer each modal that follows
+    ("Save before quitting?" -> Yes -> the record save dialog -> accept -> any replace prompt) with
+    Return, until Speedometer has reliably VANISHED from the front-app stream. When `dump_dir` is
+    supplied, uses UI introspection (`_await_finder_via_ui`) as a definitive check; falls back to the
+    noisy-'Finder'-frame settle heuristic (`_await_front_app`) when introspection is unavailable.
+    Returns True if the Finder was reached. The Power-key shutdown hook only raises the Shut Down
+    dialog at the Finder, not over a frontmost app.
+    """
+    since = drive.quit_app(runner, vnc)
+    # Prefer a definitive introspection check; fall back to the front-app settle heuristic if
+    # introspection is unavailable (no SS_UI_DUMP_DIR / no snapshot).
+    if dump_dir is not None:
+        ok = _await_finder_via_ui(runner, dump_dir, timeout)
+        if ok is not None:
+            return ok
+    return _await_front_app(runner, since, want="Finder", avoid="Speedometer",
+                            timeout=timeout) is not None
+
+
+# --- Generic real-world workload scenario (S4-S5) ----------------------------------------
+#
+# Unlike the Speedometer benchmark (which auto-launches + reads a text report), a workload app is
+# launched by Finder type-select and its progress is read from the SCREEN, not the window list: a
+# Carbon/fullscreen app doesn't present a standard WindowRecord while it renders (LEARNINGS 2026-06-06),
+# so launch/render/quit are gated on the screenshot perceptual hash. See sse2e/workload.py.
+
+
+def _phash_dist(frame_path, baseline_hash) -> int:
+    """Masked-pHash hamming distance from a freshly captured frame to a precomputed baseline hash."""
+    return imagecmp.phash_masked(frame_path) - baseline_hash
+
+
+def _screen_size(dump_dir: str) -> tuple[int, int]:
+    try:
+        scr = uidump.snapshot(dump_dir, timeout=8.0).raw.get("screen") or {}
+        w, h = int(scr.get("width", 0)), int(scr.get("height", 0))
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    return 800, 600
+
+
+
+def _await_launch(runner: Runner, vnc: Vnc, spec: WorkloadSpec, baseline_hash, baseline_mb,
+                  artifact_dir: Path, since: int) -> tuple[float | None, str | None]:
+    """Wait for the app to take the screen. Returns (launch_elapsed, error_text).
+
+    The discriminator is the MENU BAR: classic Mac OS gives it to the frontmost app, so a changed
+    menu-bar strip = an app launched, while a Finder error dialog (e.g. CarbonLib 'could not be
+    found') leaves the Finder menu bar intact. This is the ONLY reliable signal here: that modal
+    alert services no idle hook, so it emits no [APP] modal=1 and introspection of it times out
+    (verified 2026-06-06) -- the screenshot is the sole evidence. A 'dialog' verdict must persist a
+    couple of polls before it is called a failure (the alert takes a moment to draw)."""
+    poll = artifact_dir / f"{spec.name}-launch-poll.png"
+    t0 = time.monotonic()
+    dialog_polls = 0
+    while time.monotonic() - t0 < spec.launch_timeout:
+        # Bonus early-confirm for NON-Carbon apps (whose CurApName changes); Carbon/fullscreen apps
+        # keep CurApName='Finder', so the menu-bar check below is the real signal for them.
+        if spec.app_signal:
+            for ln in runner.log_text().splitlines()[since:]:
+                fa = observe.front_app(ln)
+                if fa is not None and spec.app_signal in fa:
+                    return time.monotonic() - t0, None
+        try:
+            vnc.capture(str(poll))
+            mb_dist = imagecmp.region_phash(str(poll)) - baseline_mb
+            full_dist = _phash_dist(str(poll), baseline_hash)
+        except Exception:
+            time.sleep(1.0); continue
+        verdict = workload.classify_launch(mb_dist, full_dist, spec.menubar_change, spec.launch_diverge)
+        if verdict == "launched":
+            print(f"  [gate] launch: app owns the menu bar (menu-bar Δ={mb_dist}) at "
+                  f"{time.monotonic() - t0:.1f}s", flush=True)
+            return time.monotonic() - t0, None
+        if verdict == "dialog":
+            dialog_polls += 1
+            if dialog_polls >= 2:                       # sustained Finder dialog -> launch failure
+                try:
+                    vnc.capture(str(artifact_dir / f"{spec.name}-launch-error.png"))
+                except Exception:
+                    pass
+                return None, (f"app did not take the menu bar; a Finder dialog is up "
+                              f"(menu-bar Δ={mb_dist}, screen Δ={full_dist}) -- likely a launch "
+                              f"failure. See {spec.name}-launch-error.png")
+        else:
+            dialog_polls = 0
+        time.sleep(1.0)
+    return None, None
+
+
+def _await_render_stable(vnc: Vnc, spec: WorkloadSpec, artifact_dir: Path) -> tuple[float, bool]:
+    """Poll screenshots until the render settles (pHash stops changing) or `max_render_s`.
+    Returns (elapsed_s, stabilized). A render that animates forever returns (max, False) — not a
+    failure, just an uncaptured-stable workload."""
+    poll = artifact_dir / f"{spec.name}-render-poll.png"
+    distances: list[int] = []
+    prev = None
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < spec.max_render_s:
+        time.sleep(spec.poll_interval)
+        try:
+            vnc.capture(str(poll))
+            h = imagecmp.phash_masked(str(poll))
+        except Exception:
+            continue
+        if prev is not None:
+            distances.append(h - prev)
+        prev = h
+        if workload.stable_run(distances, spec.stable_threshold, spec.stable_frames):
+            print(f"  [gate] render stable: {time.monotonic() - t0:.1f}s "
+                  f"(last distances {distances[-spec.stable_frames:]})", flush=True)
+            return time.monotonic() - t0, True
+    print(f"  [gate] render did not stabilize within {spec.max_render_s:.0f}s "
+          f"(distances {distances[-4:]})", flush=True)
+    return time.monotonic() - t0, False
+
+
+def _quit_workload(runner: Runner, vnc: Vnc, spec: WorkloadSpec, baseline_hash,
+                   artifact_dir: Path) -> bool:
+    """Cmd-Q, answer the save/confirm chain with Return, then confirm the screen converges back to the
+    Finder baseline (the fullscreen app vanished). Front-app settle is the fallback."""
+    since = drive.quit_app(runner, vnc)
+    poll = artifact_dir / f"{spec.name}-quit-poll.png"
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < spec.quit_timeout:
+        try:
+            vnc.capture(str(poll))
+            if _phash_dist(str(poll), baseline_hash) <= spec.quit_converge:
+                print(f"  [gate] quit:Finder (screen back to baseline): "
+                      f"{time.monotonic() - t0:.1f}s", flush=True)
+                return True
+        except Exception:
+            pass
+        time.sleep(1.0)
+    return _await_front_app(runner, since, want="Finder", avoid=spec.app, timeout=4.0) is not None
+
+
+def run_workload(
+    *,
+    emulator: str,
+    prefs: str,
+    vncport: int,
+    spec: WorkloadSpec,
+    boot_timeout: float = 120.0,
+    shutdown_timeout: float = 60.0,
+    artifact_dir: Path,
+) -> WorkloadResult:
+    """Boot -> type-select launch `spec.app` from `spec.volume` -> screenshot/pHash-gated launch,
+    render-timing, and quit-to-Finder -> clean shutdown. The headline perf signal is `render_s`
+    (launch -> pHash-stable); the result frame's pHash is a visual fingerprint."""
+    dump_dir = tempfile.mkdtemp(prefix="ss-ui-")
+    os.environ["SS_UI_DUMP_DIR"] = dump_dir
+    res = WorkloadResult(False, "incomplete", "", workload=spec.name)
+
+    runner = Runner(argv=[emulator, "--config", prefs])
+    runner.start()
+    vnc = None
+    try:
+        ev = _await_boot_ready(runner, boot_timeout)
+        if ev is None:
+            res.reason = "boot timed out (no [BOOT] idle)"; res.log = runner.log_text()
+            return res
+        _await_ready(runner, READY_TIMEOUT)
+        time.sleep(3.0)
+
+        vnc = Vnc(port=vncport)
+        w, h = _screen_size(dump_dir)
+        ex, ey = w // 2, h - 30
+
+        # Finder type-select launch: click empty desktop -> type volume -> Cmd-O (open the volume
+        # window) -> type app -> Cmd-O (launch).
+        since = _nlines(runner)
+        print(f"  [workload] launch {spec.app!r} from volume {spec.volume!r}", flush=True)
+        vnc.click(ex, ey); time.sleep(1.0)
+        vnc.type_text(spec.volume); time.sleep(1.2); vnc.key("super-o"); time.sleep(4.0)
+
+        # Baseline AFTER the volume window is open: launch-divergence then measures the APP taking the
+        # screen, not the volume window we just opened (which also differs from the bare desktop).
+        base = artifact_dir / f"{spec.name}-00-baseline.png"
+        vnc.capture(str(base))
+        baseline_hash = imagecmp.phash_masked(str(base))
+        baseline_mb = imagecmp.region_phash(str(base))   # Finder menu-bar strip (the frontmost-app tell)
+
+        vnc.type_text(spec.app); time.sleep(1.2); vnc.key("super-o")
+
+        launch_s, err = _await_launch(runner, vnc, spec, baseline_hash, baseline_mb,
+                                      artifact_dir, since)
+        if err is not None:
+            res.launch_error = err
+            res.reason = f"launch failed — on-screen alert: {err}"
+            try:
+                vnc.capture(str(artifact_dir / f"{spec.name}-launch-error.png"))
+            except Exception:
+                pass
+            res.log = runner.log_text()
+            return res
+        if launch_s is None:
+            res.reason = f"{spec.app!r} did not take the screen within {spec.launch_timeout:.0f}s"
+            res.log = runner.log_text()
+            return res
+        res.launched = True
+        res.launch_s = launch_s
+        print(f"  [workload] launched in {launch_s:.1f}s", flush=True)
+
+        render_s, stable = _await_render_stable(vnc, spec, artifact_dir)
+        res.render_s = render_s
+        res.stable = stable
+
+        result_img = artifact_dir / f"{spec.name}-result.png"
+        try:
+            vnc.capture(str(result_img))
+            res.result_image = str(result_img)
+            rh = imagecmp.phash_masked(str(result_img))
+            res.result_phash = str(rh)
+            if spec.golden_image and Path(spec.golden_image).exists():
+                _, dist = imagecmp.compare(str(result_img), spec.golden_image,
+                                           threshold=spec.regression_threshold)
+                res.regression_dist = dist
+        except Exception:
+            pass
+
+        try:
+            _quit_workload(runner, vnc, spec, baseline_hash, artifact_dir)
+        except Exception:
+            pass
+        vnc.close(); vnc = None
+
+        runner.request_shutdown()
+        code = runner.wait(timeout=shutdown_timeout)
+        log = runner.log_text()
+        res.log = log
+        res.clean_shutdown = drive.clean_shutdown(code, log)
+
+        reg = "" if res.regression_dist is None else f", regression={res.regression_dist}"
+        stab = "stable" if res.stable else f"capped at {spec.max_render_s:.0f}s"
+        if res.launched and res.clean_shutdown:
+            res.ok = True
+            res.reason = (f"{spec.name}: launched {launch_s:.1f}s, render {render_s:.1f}s ({stab}){reg}; "
+                          f"clean shutdown")
+        else:
+            res.reason = (f"{spec.name}: launched={res.launched} render={render_s:.1f}s "
+                          f"clean_shutdown={res.clean_shutdown} (exit={code})")
+        return res
+    finally:
+        if vnc is not None:
+            try:
+                vnc.close()
+            except Exception:
+                pass
+        drive.reactor_shutdown()
+        try:
+            (artifact_dir / f"{spec.name}-emulator.log").write_text(runner.log_text())
+        except Exception:
+            pass
+        runner.terminate()

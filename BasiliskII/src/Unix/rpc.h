@@ -41,6 +41,7 @@ extern rpc_connection_t *rpc_init_server(const char *ident);
 extern rpc_connection_t *rpc_init_client(const char *ident);
 extern int rpc_exit(rpc_connection_t *connection);
 extern int rpc_listen_socket(rpc_connection_t *connection);
+extern int rpc_listen_socket_nb(rpc_connection_t *connection);
 extern int rpc_listen(rpc_connection_t *connection);
 extern int rpc_dispatch(rpc_connection_t *connection);
 extern int rpc_wait_dispatch(rpc_connection_t *connection, int timeout);
@@ -92,11 +93,31 @@ extern int rpc_method_wait_for_reply(rpc_connection_t *connection, ...);
 extern int rpc_method_get_args(rpc_connection_t *connection, ...);
 extern int rpc_method_send_reply(rpc_connection_t *connection, ...);
 
-// Message Protocol
+// Message Protocol — legacy (emulator → GUI)
 enum {
   RPC_METHOD_ERROR_ALERT = 1,
   RPC_METHOD_WARNING_ALERT,
-  RPC_METHOD_EXIT
+  RPC_METHOD_EXIT,
+
+  // C2.0 bidirectional RPC — SiliconSheep → emulator (launcher commands)
+  RPC_METHOD_SET_PREF       = 10,  // (string key, string value) → ACK
+  RPC_METHOD_INPUT_LOCKOUT  = 11,  // (int32 on_off) → ACK — immediate toggle
+  RPC_METHOD_FRAMESKIP      = 12,  // (int32 value) → ACK — immediate change
+  RPC_METHOD_MOUSE_GRAB     = 13,  // (int32 on_off) → ACK — immediate toggle
+  RPC_METHOD_GET_STATS      = 14,  // () → reply with stats string
+  RPC_METHOD_READ_MEMORY    = 15,  // (uint32 addr, uint32 len) → reply with bytes
+  RPC_METHOD_DUMP_REGISTERS = 16,
+  RPC_METHOD_UI_SNAPSHOT    = 17,  // () → reply with guest UI state JSON
+  RPC_METHOD_GET_PROFILE    = 18,  // () → reply with B1 profiler hot blocks JSON
+  RPC_METHOD_GET_FALLBACKS  = 19,  // () → reply with B1 fallback trace JSON
+  RPC_METHOD_GET_TIMING     = 20,  // () → reply with P3 per-block timing JSON
+  RPC_METHOD_GET_OPCODE_MIX = 21,  // () → reply with instruction mix JSON
+  RPC_METHOD_GET_HEATMAP    = 22,  // () → reply with region heat map JSON
+  RPC_METHOD_MEM_SEARCH     = 23,  // (uint32 value, uint32 start, uint32 end) → reply with JSON {matches,count,truncated}
+  RPC_METHOD_MEM_READ_JSON  = 24,  // (uint32 addr, uint32 count) → reply with JSON {addr,hex}
 };
+
+// C2.0: server-side connection for receiving launcher commands
+extern rpc_connection_t *ss_rpc_server;
 
 #endif /* RPC_H */

@@ -37,6 +37,7 @@ extern void SavePrefs(void);
 
 extern void LoadPrefsFromStream(FILE *f);
 extern void SavePrefsToStream(FILE *f);
+extern void SavePrefsToStreamMerging(const char *original_path, FILE *out);
 
 // Public preferences access functions
 extern void PrefsAddString(const char *name, const char *s);

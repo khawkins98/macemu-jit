@@ -34,9 +34,63 @@
 #include <getopt.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <sys/stat.h>
+#include <math.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>   /* QoS is the only scheduling lever on Apple Silicon (affinity is a no-op) */
+#endif
+
+/* MAP_FIXED_NOREPLACE is Linux-only; on macOS/BSD fall back to 0 so the
+ * fixed-address mmap below degrades to a hint, and the non-fixed fallback
+ * mmap handles relocation. */
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0
+#endif
+
+/* The emulated RAM+ROM region holds PPC data/instructions that the JIT *reads*;
+ * native ARM64 code is executed from the separate JIT code cache (jit_cache_alloc,
+ * MAP_JIT). This region therefore never needs PROT_EXEC. On macOS arm64 a RWX
+ * anonymous mapping is rejected with EPERM (W^X policy), so request only RW there.
+ * Linux keeps the original RWX request unchanged. */
+#if defined(__APPLE__) && defined(__aarch64__)
+#define ROM_HARNESS_MEM_PROT (PROT_READ | PROT_WRITE)
+#else
+#define ROM_HARNESS_MEM_PROT (PROT_READ | PROT_WRITE | PROT_EXEC)
+#endif
 
 /* ---------- Forward declarations for the JIT ---------- */
 #include "ppc-jit.h"
+
+/* Shared guard for unsafe JIT block execution. The run loop arms `jit_guard_jmp`
+ * with sigsetjmp before each block; a SIGSEGV (segv_handler) or an inline-interp
+ * fallback (ppc_jit_interp_one below) longjmps back so the harness can *skip* the
+ * block instead of crashing. `segv_caught`/`fallback_caught` distinguish the cause;
+ * `fallback_opcode`/`fallback_pc` carry diagnostics for --verbose. */
+static sigjmp_buf jit_guard_jmp;
+static volatile sig_atomic_t segv_caught = 0;
+static volatile sig_atomic_t fallback_caught = 0;
+static volatile uint32_t fallback_opcode = 0;
+static volatile uint32_t fallback_pc = 0;
+
+/* The JIT references this bridge for its inline-interpreter fallback path
+ * (emit_inline_interp_call); the real implementation lives in the emulator
+ * (ppc-cpu.cpp), which this standalone harness does not link.  The harness can
+ * only run blocks that execute fully native — but a block the compiler marks
+ * `complete == true` can still emit a fallback call (e.g. a ROM region that was
+ * mis-scanned as code, or an op handled only via fallback; see ppc-jit.cpp
+ * "complete stays true" note). Rather than abort the whole run, longjmp back to
+ * the per-block guard so this one block is counted as skipped. */
+extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val) {
+	fallback_opcode = opcode;
+	fallback_pc = pc_val;
+	fallback_caught = 1;
+	siglongjmp(jit_guard_jmp, 1);
+}
+
+/* Stub for ss_stub_trace_dump — defined in ppc-execute.cpp (introduced in 127d54d8),
+ * which the standalone rom-harness does not link.  Called from ppc_jit_aarch64_exit()
+ * to flush supervisor-stub pressure counters; harmless no-op here. */
+extern "C" void ss_stub_trace_dump(void) {}
 
 /* ---------- PPC instruction decoding helpers ---------- */
 
@@ -63,7 +117,12 @@ static bool is_block_terminator(uint32_t insn) {
 	uint32_t opc = ppc_primary(insn);
 	switch (opc) {
 	case 18: return true; /* b/bl */
-	case 16: return true; /* bc/bcl (conditional branch) */
+	case 16: return true; /* bc/bcl (conditional branch).
+	                         NOTE: the *JIT* does NOT treat bc as a block terminator —
+	                         it runs past it — so a bc-terminated scanner block is
+	                         shorter than the JIT's block, which makes the differential
+	                         comparison structurally mismatched. See the block-model
+	                         TODO at the compare site in the main test loop. */
 	case 19: {
 		uint32_t xo = ppc_xo(insn);
 		if (xo == 16 || xo == 528) return true; /* bclr, bcctr */
@@ -170,9 +229,13 @@ struct PPCRegs {
 	uint32_t padding904;     /* offset 904 */
 	uint32_t padding908;     /* offset 908 */
 	uint32_t fpscr;          /* offset 912 */
-	uint32_t lr;             /* offset 916 */
-	uint32_t ctr;            /* offset 920 */
-	uint32_t pc;             /* offset 924 */
+	uint32_t lr;             /* offset 1044 */
+	uint32_t ctr;            /* offset 1048 */
+	uint32_t pc;             /* offset 1052 */
+	uint32_t spcflags;       /* offset 1056 — the JIT block-entry poll READS this
+	                          * (PPCR_SPCFLAGS); it must exist and be zero or every
+	                          * block bails before its body runs. Added when 0d moved
+	                          * spcflags to offset 1056; was missing here. */
 };
 
 /* Register field offsets — must match ppc-jit.cpp PPCR_* */
@@ -184,6 +247,7 @@ static_assert(offsetof(PPCRegs, fpscr) == 1040, "FPSCR offset mismatch");
 static_assert(offsetof(PPCRegs, lr) == 1044, "LR offset mismatch");
 static_assert(offsetof(PPCRegs, ctr) == 1048, "CTR offset mismatch");
 static_assert(offsetof(PPCRegs, pc) == 1052, "PC offset mismatch");
+static_assert(offsetof(PPCRegs, spcflags) == 1056, "SPCFLAGS offset mismatch");
 
 /* Pack XER bytes into PPC 32-bit format */
 static inline uint32_t pack_xer(const PPCRegs *r) {
@@ -955,13 +1019,12 @@ static int scan_rom_blocks(const uint8_t *rom, size_t rom_size,
 }
 
 /* ---------- SIGSEGV handler for safe JIT execution ---------- */
-
-static sigjmp_buf segv_jmp;
-static volatile sig_atomic_t segv_caught = 0;
+/* Guard state (jit_guard_jmp, segv_caught, fallback_*) is declared near the top
+ * of the file alongside the ppc_jit_interp_one fallback bridge that shares it. */
 
 static void segv_handler(int sig, siginfo_t *si, void *ctx) {
 	segv_caught = 1;
-	siglongjmp(segv_jmp, 1);
+	siglongjmp(jit_guard_jmp, 1);
 }
 
 /* ---------- Comparison ---------- */
@@ -974,6 +1037,9 @@ struct TestResult {
 	int interp_unsupported;
 	int jit_compile_fail;
 	int jit_segv;
+	int jit_fallback;    /* complete-but-fallback block: skipped, not crashed */
+	int span_mismatch;   /* JIT ran more insns than the scanner block (bc not a JIT
+	                        terminator): non-comparable, skipped — see compare site */
 };
 
 static void print_regs(const char *label, const PPCRegs *r) {
@@ -1049,6 +1115,332 @@ static void seed_regs(PPCRegs *r, uint32_t seed, uint32_t rom_base_mac) {
 	r->fpscr = 0;
 }
 
+/* ===================== Microbenchmark mode (--bench / jit-bench) ===========
+ *
+ * Fast, deterministic per-instruction timing of the JIT's codegen, so an
+ * optimization can be A/B'd in seconds without a boot.  Reuses this harness's
+ * memory + JIT-invocation scaffolding (REAL_ADDRESSING: mac_pc == host ptr).
+ *
+ * Methodology — DIFFERENTIAL timing: each kernel is compiled at two sizes
+ * (N_SMALL and N_BIG straight-line body instrs, both ending in blr) and called
+ * many times.  ns/insn = (ns_call_big - ns_call_small) / (N_BIG - N_SMALL),
+ * which cancels the fixed per-call cost (prologue/epilogue + the regs reset).
+ * Reported ns/call is the big kernel; min-of-5 runs after a warm-up.
+ *
+ * Maintenance contract (docs/TESTING.md "Keeping this current"): --compare
+ * warns if the baseline file is older than ppc-jit.cpp, so you never A/B
+ * against a baseline that predates the code you are measuring.  To add a
+ * kernel: add a k_*() emitter + a BENCH_KERNELS[] row, then re-baseline.
+ */
+
+#define BENCH_N_SMALL 16
+#define BENCH_N_BIG   144
+
+static uint32_t enc_xo(int rd, int ra, int rb, int xo, int oe, int rc) {
+	return 0x7C000000u | (rd << 21) | (ra << 16) | (rb << 11) |
+	       (oe << 10) | (xo << 1) | rc;
+}
+static uint32_t enc_d(int op, int rd, int ra, int16_t d) {
+	return ((uint32_t)op << 26) | (rd << 21) | (ra << 16) | (uint16_t)d;
+}
+
+/* Each kernel emits `n` body instrs operating on r3/r4/r1, which seed_regs
+ * initialises to valid values.  The driver appends the blr terminator. */
+static void k_carry(uint8_t *p, int n) {     /* adde r3,r3,r4 (XO=138) — 0b/0f */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_xo(3,3,4,138,0,0));
+}
+static void k_rc1(uint8_t *p, int n) {        /* add. r3,r3,r4 (XO=266,Rc=1) — 0g */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_xo(3,3,4,266,0,1));
+}
+static void k_alu(uint8_t *p, int n) {        /* add/or/xor r3,r3,r4 — RA throughput */
+	static const int xo[3] = {266, 444, 316};
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_xo(3,3,4,xo[i%3],0,0));
+}
+static void k_loadstore(uint8_t *p, int n) {  /* lwz/stw r3,8(r1) — D-form memory */
+	for (int i = 0; i < n; i++)
+		write_be32(p + i*4, (i & 1) ? enc_d(36,3,1,8) : enc_d(32,3,1,8));
+}
+/* FP kernels operate only on FPRs (no guest memory), so they run anywhere the
+ * integer kernels do.  seed_regs zeroes the FPRs, so these compute 0.0 each
+ * iteration — fine: FP unit timing does not depend on the operand value, and the
+ * dependency chain (each op reads the previous result in f1) makes this a
+ * latency measurement.  Encodings are fixed 32-bit big-endian PPC words. */
+static void k_fp_add(uint8_t *p, int n) {     /* fadd f1,f1,f2  (FP add latency chain) */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, 0xFC21102Au);
+}
+static void k_fp_fma(uint8_t *p, int n) {     /* fmadd f1,f1,f1,f1  (FMA latency recurrence) */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, 0xFC21183Au);
+}
+/* Integer-compute kernel modelling the real Speedometer hot block 0x1ed7befc
+ * (P0 profile): a mullw/extsh/divw/add/subf/addi recurrence on r3/r4/r5. This is
+ * the runtime-dominant pattern (heavy mullw+divw latency chain) that large-block
+ * codegen work (P5 const-fold, P6 scheduling, P8 pinning, RA) must move — the
+ * atomics (P3a) were hot by block-count but not by instruction-time. Register-only
+ * (no guest memory), so it runs anywhere the other integer kernels do. divw by a
+ * possibly-zero r5 is SDIV-safe on ARM64 (returns 0, no trap). */
+static void k_compute(uint8_t *p, int n) {
+	const uint32_t grp[6] = {
+		enc_xo(3,3,4,235,0,0),   /* mullw r3,r3,r4 */
+		enc_xo(4,5,0,922,0,0),   /* extsh r5,r4    (rS=4 in rd-slot, rA=5 in ra-slot) */
+		enc_xo(3,3,5,491,0,0),   /* divw  r3,r3,r5 */
+		enc_xo(3,3,4,266,0,0),   /* add   r3,r3,r4 */
+		enc_xo(3,4,3, 40,0,0),   /* subf  r3,r4,r3 (rB-rA = r3-r4) */
+		enc_d (14,4,4,1),        /* addi  r4,r4,1  */
+	};
+	for (int i = 0; i < n; i++) write_be32(p + i*4, grp[i % 6]);
+}
+
+/* slwi/srwi shift kernel — the rlwinm single-instruction fast path (hot: 4× slwi
+ * in the 0x1ed6e310 matrix block). Pre-fast-path each was EXTR+AND (2 insns);
+ * after, each is one UBFM, so a64/op should read ~1.0. */
+static void k_shift(uint8_t *p, int n) {
+	const uint32_t grp[2] = {
+		0x5463103Au,  /* slwi r3,r3,2  (rlwinm r3,r3,2,0,29)  */
+		0x5463F87Eu,  /* srwi r3,r3,1  (rlwinm r3,r3,31,1,31) */
+	};
+	for (int i = 0; i < n; i++) write_be32(p + i*4, grp[i % 2]);
+}
+
+/* AltiVec (VMX) kernels — measure the vector codegen the JIT translates PPC AltiVec -> ARM64
+ * NEON (reachable by real apps via the `altivec` pref). seed_regs zeroes the VRs, so these
+ * compute on 0-vectors — fine for timing (vector-unit throughput/latency don't depend on the
+ * operand value, and 0.0 is a valid FP input). Each op chains through v2 (reads the previous
+ * result) so it's a latency chain, like the integer/FP kernels. NOTE: today each guest AltiVec
+ * op compiles to {load 2 VRs from the regs struct, 1 NEON op, store 1 VR back} — so a64/op runs
+ * higher than register-resident ops; that spill overhead is the future "VR register allocator"
+ * lever (the FP-RA analog), and this benchmark is how we'd A/B it. */
+static uint32_t enc_vx(int vd, int va, int vb, int xo) {   /* VX-form: primary 4, 11-bit XO */
+	return 0x10000000u | (vd << 21) | (va << 16) | (vb << 11) | xo;
+}
+static uint32_t enc_va(int vd, int va, int vb, int vc, int xo) { /* VA-form: vC at bits 6-10 */
+	return 0x10000000u | (vd << 21) | (va << 16) | (vb << 11) | (vc << 6) | xo;
+}
+static void k_av_add(uint8_t *p, int n) {   /* vadduwm v2,v2,v3 (XO=128) — vector int add -> ADD.4S */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_vx(2,2,3,128));
+}
+static void k_av_fma(uint8_t *p, int n) {   /* vmaddfp v2,v2,v2,v2 (VA XO=46) — vector FP FMA -> FMLA.4S */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_va(2,2,2,2,46));
+}
+static void k_av_perm(uint8_t *p, int n) {  /* vperm v2,v2,v3,v4 (VA XO=43) — the AltiVec shuffle -> TBL */
+	for (int i = 0; i < n; i++) write_be32(p + i*4, enc_va(2,2,3,4,43));
+}
+
+struct BenchKernel { const char *name; const char *desc; void (*emit)(uint8_t*,int); };
+static const BenchKernel BENCH_KERNELS[] = {
+	{ "carry-chain", "adde r3,r3,r4  (0b/0f carry ops)", k_carry     },
+	{ "rc1",         "add. r3,r3,r4  (0g lazy-CR0)",     k_rc1       },
+	{ "alu",         "add/or/xor     (RA throughput)",   k_alu       },
+	{ "fp-add",      "fadd f1,f1,f2  (FP add latency)",  k_fp_add    },
+	{ "fp-fma",      "fmadd recurrence (FMA latency)",   k_fp_fma    },
+	{ "compute",     "mullw/divw/add chain (0x1ed7befc Speedometer hot)", k_compute },
+	{ "shift",       "slwi/srwi (rlwinm single-insn fast path)",         k_shift   },
+	{ "av-add",      "vadduwm (AltiVec int add -> NEON ADD.4S)",          k_av_add  },
+	{ "av-fma",      "vmaddfp (AltiVec FP FMA -> NEON FMLA.4S)",          k_av_fma  },
+	{ "av-perm",     "vperm   (AltiVec shuffle -> NEON TBL)",             k_av_perm },
+	/* load-store (k_loadstore) deferred to v2: guest data access goes through
+	 * RMEMBASE, which on macOS needs the DIRECT_ADDRESSING base set up so EAs land
+	 * in `mem` (low 4 GB is unmappable here). The emitter is kept for that work. */
+};
+static const int BENCH_NKERNELS = (int)(sizeof(BENCH_KERNELS)/sizeof(BENCH_KERNELS[0]));
+
+/* Timer clock: CLOCK_THREAD_CPUTIME_ID excludes time the bench thread was
+ * descheduled (e.g. a co-tenant agent preempting us), so a preemption no longer
+ * inflates a sample. It does NOT correct DVFS/thermal frequency shifts — that is
+ * what the per-round CV gate in run_bench() catches. (Methodology: benchmark
+ * subagents, 2026-06-06; macOS has no usable userspace cycle counter.) */
+#ifdef CLOCK_THREAD_CPUTIME_ID
+#define BENCH_CLOCK CLOCK_THREAD_CPUTIME_ID
+#else
+#define BENCH_CLOCK CLOCK_MONOTONIC
+#endif
+
+/* Compile `kern` at `n_body` instrs (+ blr) at mem+off; time `iters` calls
+ * (min of 5 runs after warm-up); return ns/call, or -1 on compile failure.
+ * Also reports the emitted ARM64 code size (bytes) via *code_bytes — a
+ * DETERMINISTIC, zero-noise codegen-quality signal (the JIT knows exactly how
+ * much it emits), used by run_bench() to compute exact ARM64-insns-per-PPC-op. */
+static double bench_time_one(const BenchKernel *kern, int n_body,
+                             uint8_t *mem, size_t total, uint32_t off,
+                             const PPCRegs *seedregs, long iters,
+                             uint32_t *code_bytes) {
+	uint8_t *p = mem + off;
+	kern->emit(p, n_body);
+	write_be32(p + n_body*4, 0x4E800020);          /* blr — block terminator */
+	uint32_t mac_pc = (uint32_t)(uintptr_t)p;
+	ppc_jit_block jblk;
+	if (!ppc_jit_aarch64_compile(mac_pc, mem, total, &jblk) || !jblk.complete) {
+		/* stdout, not stderr: `make bench` masks stderr (JIT library chatter has no
+		 * env gate); the bench's own diagnostics must survive that redirect. */
+		printf("bench: compile failed (%s, n=%d)\n", kern->name, n_body);
+		return -1.0;
+	}
+	if (code_bytes) *code_bytes = jblk.code_size;
+	ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
+	PPCRegs regs;
+	for (int w = 0; w < 1000; w++) { regs = *seedregs; fn((void *)&regs); } /* warm-up */
+	double best = 1e300;
+	for (int run = 0; run < 5; run++) {
+		struct timespec t0, t1;
+		clock_gettime(BENCH_CLOCK, &t0);
+		for (long i = 0; i < iters; i++) { regs = *seedregs; fn((void *)&regs); }
+		clock_gettime(BENCH_CLOCK, &t1);
+		double ns = (t1.tv_sec - t0.tv_sec)*1e9 + (t1.tv_nsec - t0.tv_nsec);
+		if (ns < best) best = ns;
+	}
+	return best / (double)iters;
+}
+
+/* Median + coefficient-of-variation (stddev/mean, %) of a sample set. Sorts in
+ * place. Used to report a robust point estimate and a noise gate: a high CV means
+ * the host was too loaded/thermally-variable to trust the timing this run. */
+static int cmp_double(const void *a, const void *b) {
+	double d = *(const double*)a - *(const double*)b;
+	return (d > 0) - (d < 0);
+}
+static double bench_median(double *v, int n) {
+	qsort(v, n, sizeof(double), cmp_double);
+	return (n & 1) ? v[n/2] : 0.5 * (v[n/2 - 1] + v[n/2]);
+}
+static double bench_cv_pct(const double *v, int n) {
+	if (n < 2) return 0.0;
+	double mean = 0; for (int i = 0; i < n; i++) mean += v[i]; mean /= n;
+	if (mean == 0) return 0.0;
+	double var = 0; for (int i = 0; i < n; i++) { double d = v[i]-mean; var += d*d; }
+	var /= (n - 1);
+	return sqrt(var) / mean * 100.0;
+}
+/* CV above this → the timing number is not trustworthy this run (host too noisy).
+ * The deterministic ARM64-insns/op metric is unaffected and always reported. */
+#define BENCH_CV_NOISE_PCT 3.0
+#define BENCH_ROUNDS 9
+
+/* Baseline file: "name ns_per_instr arm64_per_op" lines (no JSON dep). The 3rd
+ * field is the deterministic ARM64-insns-per-PPC-op metric; older 2-field
+ * baselines still parse (a64 returns -1 = "n/a"). */
+static bool bench_baseline_stale(const char *path) {
+	struct stat sb, sj;
+	if (stat(path, &sb) != 0) return false;        /* no baseline yet */
+	const char *jit = "../src/kpx_cpu/src/cpu/jit/aarch64/ppc-jit.cpp";
+	if (stat(jit, &sj) != 0) return false;          /* source not found — skip */
+	return sj.st_mtime > sb.st_mtime;
+}
+/* Look up a kernel's baseline; returns ns/insn (or -1) and fills *a64 with the
+ * baseline ARM64-insns/op (or -1 if absent). */
+static double bench_baseline_lookup(const char *path, const char *name, double *a64) {
+	if (a64) *a64 = -1.0;
+	FILE *f = fopen(path, "r");
+	if (!f) return -1.0;
+	char ln[256]; double val = -1.0;
+	while (fgets(ln, sizeof ln, f)) {
+		char nm[128]; double v, a = -1.0;
+		int got = sscanf(ln, "%127s %lf %lf", nm, &v, &a);
+		if (got >= 2 && strcmp(nm, name) == 0) { val = v; if (a64) *a64 = (got >= 3) ? a : -1.0; break; }
+	}
+	fclose(f);
+	return val;
+}
+
+static int run_bench(int argc, char **argv) {
+	long iters = 300000;
+	const char *compare_path = NULL, *save_path = NULL;
+	for (int i = 1; i < argc; i++) {
+		if      (!strncmp(argv[i], "--bench-iters=",   14)) iters = atol(argv[i]+14);
+		else if (!strncmp(argv[i], "--compare=",       10)) compare_path = argv[i]+10;
+		else if (!strncmp(argv[i], "--save-baseline=", 16)) save_path = argv[i]+16;
+	}
+
+#if defined(__APPLE__)
+	/* Bias scheduling onto a performance core. On Apple Silicon thread affinity is
+	 * a no-op; QoS is the only lever. A default-QoS bench thread can migrate to an
+	 * E-core mid-run under load — a tens-of-percent swing. (Benchmark subagents.) */
+	pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+
+	const size_t total = 16 * 1024 * 1024;          /* 16 MB scratch */
+	uint8_t *mem = (uint8_t *)mmap((void *)0x10000000UL, total,
+		ROM_HARNESS_MEM_PROT, MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE, -1, 0);
+	if (mem == MAP_FAILED)
+		mem = (uint8_t *)mmap(NULL, total, ROM_HARNESS_MEM_PROT,
+			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+	if (mem == MAP_FAILED) { printf("bench mmap: %s\n", strerror(errno)); return 1; }
+	/* macOS arm64 cannot map below 4 GB (__PAGEZERO), so `mem` lands high — that
+	 * is fine for the register-only kernels: instruction *fetch* is offset-based
+	 * (jit_fetch_ptr keys on low32(ram) and returns ram+offset), and these kernels
+	 * touch only GPRs + the regs struct (via RSTATE), never guest memory through
+	 * RMEMBASE.  Memory kernels (load/store) would need the DIRECT_ADDRESSING base
+	 * configured so guest data addresses land in `mem` — deferred to v2 (see
+	 * k_loadstore). */
+	memset(mem, 0, total);
+
+	if (!ppc_jit_aarch64_init(4096)) {
+		printf("bench: JIT init failed\n");
+		return 1;
+	}
+
+	uint32_t base = (uint32_t)(uintptr_t)mem + 0x800000;  /* mid-buffer */
+	PPCRegs seedregs;
+	seed_regs(&seedregs, 0xB3C0FFEE, base);               /* valid r1/lr; random r3/r4 */
+
+	if (compare_path && bench_baseline_stale(compare_path))
+		printf("WARNING: baseline '%s' is OLDER than ppc-jit.cpp — "
+		       "comparison may be stale; re-baseline with --save-baseline.\n",
+		       compare_path);
+
+	printf("jit-bench: %d kernels, iters=%ld, %d rounds, differential N=%d-%d\n"
+	       "  ns/insn: median of rounds (timing; CV>%.0f%% = host too noisy, *flagged)\n"
+	       "  a64/op:  emitted ARM64 insns per PPC op (DETERMINISTIC, zero-noise codegen metric)\n",
+	       BENCH_NKERNELS, iters, BENCH_ROUNDS, BENCH_N_BIG, BENCH_N_SMALL, BENCH_CV_NOISE_PCT);
+	printf("%-13s %10s %7s %8s", "kernel", "ns/insn", "cv%", "a64/op");
+	if (compare_path) printf(" %9s %9s", "ns base", "a64 base");
+	printf("   description\n");
+
+	FILE *out = save_path ? fopen(save_path, "w") : NULL;
+	int rc = 0;
+	for (int k = 0; k < BENCH_NKERNELS; k++) {
+		const BenchKernel *kn = &BENCH_KERNELS[k];
+		/* unique offset per (kernel,size) so the JIT block cache can't alias PCs */
+		uint32_t off_s = 0x100000 + (uint32_t)(k*2+0)*0x10000;
+		uint32_t off_b = 0x100000 + (uint32_t)(k*2+1)*0x10000;
+		/* Interleave small/big across rounds so both see the same host clock; the
+		 * per-round differential cancels prologue/epilogue, and the spread across
+		 * rounds is the host-noise estimate (CV). */
+		double per_insn_rounds[BENCH_ROUNDS];
+		uint32_t code_s = 0, code_b = 0;
+		int nr = 0; bool failed = false;
+		for (int r = 0; r < BENCH_ROUNDS; r++) {
+			/* Capture code_size only on round 0: that is the real compile; rounds 1+
+			 * hit the block cache at the same PC, which reports code_size=0. */
+			double small = bench_time_one(kn, BENCH_N_SMALL, mem, total, off_s, &seedregs, iters, r ? NULL : &code_s);
+			double big   = bench_time_one(kn, BENCH_N_BIG,   mem, total, off_b, &seedregs, iters, r ? NULL : &code_b);
+			if (small < 0 || big < 0) { failed = true; break; }
+			per_insn_rounds[nr++] = (big - small) / (double)(BENCH_N_BIG - BENCH_N_SMALL);
+		}
+		if (failed) { rc = 1; continue; }
+		double cv = bench_cv_pct(per_insn_rounds, nr);
+		double per_insn = bench_median(per_insn_rounds, nr);   /* sorts in place */
+		/* Deterministic: exact ARM64 insns emitted per extra PPC op (zero noise). */
+		double a64_per_op = (double)((int)code_b - (int)code_s) / 4.0
+		                    / (double)(BENCH_N_BIG - BENCH_N_SMALL);
+		bool noisy = cv > BENCH_CV_NOISE_PCT;
+		printf("%-13s %10.3f %6.1f%s %8.3f", kn->name, per_insn, cv, noisy ? "*" : " ", a64_per_op);
+		if (compare_path) {
+			double ba; double b = bench_baseline_lookup(compare_path, kn->name, &ba);
+			/* timing delta — suppressed when this run is noisy (untrustworthy) */
+			if (noisy)        printf(" %9s", "NOISY");
+			else if (b > 0)   printf(" %+8.1f%%", (per_insn - b) / b * 100.0);
+			else              printf(" %9s", "(new)");
+			/* a64/op delta — always exact, host-independent */
+			if (ba >= 0)      printf(" %+8.3f", a64_per_op - ba);
+			else              printf(" %9s", "(new)");
+		}
+		printf("   %s\n", kn->desc);
+		if (out) fprintf(out, "%s %.6f %.6f\n", kn->name, per_insn, a64_per_op);
+	}
+	if (out) { fclose(out); printf("baseline written: %s\n", save_path); }
+	munmap(mem, total);
+	return rc;
+}
+
 /* ---------- Main ---------- */
 
 static void usage(const char *prog) {
@@ -1068,6 +1460,10 @@ static void usage(const char *prog) {
 }
 
 int main(int argc, char **argv) {
+	/* Microbenchmark mode: self-contained, needs no ROM file. */
+	for (int i = 1; i < argc; i++)
+		if (!strcmp(argv[i], "--bench")) return run_bench(argc, argv);
+
 	/* Parse args */
 	const char *rom_path = NULL;
 	uint32_t start_offset = 0;
@@ -1137,12 +1533,12 @@ int main(int argc, char **argv) {
 	
 	uint8_t *mem = (uint8_t *)mmap(
 		(void *)0x10000000UL, total_size,
-		PROT_READ | PROT_WRITE | PROT_EXEC,
+		ROM_HARNESS_MEM_PROT,
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
 		-1, 0);
 	if (mem == MAP_FAILED) {
 		mem = (uint8_t *)mmap(NULL, total_size,
-			PROT_READ | PROT_WRITE | PROT_EXEC,
+			ROM_HARNESS_MEM_PROT,
 			MAP_PRIVATE | MAP_ANONYMOUS,
 			-1, 0);
 	}
@@ -1307,14 +1703,21 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			
-			/* Run JIT with SIGSEGV protection + timeout */
+			/* Run JIT with SIGSEGV + fallback protection + timeout. A complete
+			   block can still hit the inline-interp fallback bridge at runtime
+			   (ppc_jit_interp_one), which the standalone harness can't execute;
+			   both that and a SIGSEGV longjmp back here so the block is skipped,
+			   not fatal. */
 			segv_caught = 0;
-			if (sigsetjmp(segv_jmp, 1) == 0) {
+			fallback_caught = 0;
+			if (sigsetjmp(jit_guard_jmp, 1) == 0) {
 				ppc_jit_entry_fn fn = (ppc_jit_entry_fn)(void *)jblk.code;
 				alarm(1); /* 1-second timeout per block */
 				fn((void *)&jit_regs);
-				alarm(0); /* cancel timeout */
 			}
+			alarm(0); /* cancel timeout on ALL exit paths — normal return, SIGSEGV,
+			             or the fallback longjmp (which skips the in-body alarm(0)),
+			             so a pending alarm can't fire during a later block */
 			if (segv_caught) {
 				result.jit_segv++;
 				result.skipped++;
@@ -1322,8 +1725,48 @@ int main(int argc, char **argv) {
 					fprintf(stderr, "  ROM+0x%06x: JIT SIGSEGV\n", blk.offset);
 				continue;
 			}
+			if (fallback_caught) {
+				result.jit_fallback++;
+				result.skipped++;
+				if (verbose)
+					fprintf(stderr, "  ROM+0x%06x: JIT fallback (opcode=%08x pc=%08x) "
+						"— skipped\n", blk.offset,
+						(uint32_t)fallback_opcode, (uint32_t)fallback_pc);
+				continue;
+			}
 			
-			/* Compare */
+			/* Compare.
+			 *
+			 * KNOWN FALSE-POSITIVE SOURCE — block-model mismatch (TODO, tracked in
+			 * ROADMAP A1 / OPTIMIZATION-PLAN §0b-extra4):
+			 * the scanner ends a block at the first terminator and treats `bc`
+			 * (opcode 16) as one, so the interpreter above ran exactly `blk.n_insns`.
+			 * But the JIT does NOT treat `bc` as a block terminator — it compiles and
+			 * runs PAST it, so `jblk.n_insns` can exceed `blk.n_insns`. When it does,
+			 * interp and JIT executed DIFFERENT instruction spans from the same start
+			 * PC, and the register diff below is structural, not a codegen bug (the
+			 * exact analog of the SS_JIT_VERIFY fix-(i) block-exit problem). Verified
+			 * example: bc block 42424642 — JIT ran 5 insns, interp ran 1; the bc itself
+			 * is correct (non-vacuous SS_TEST_HEX "38600002 7C6903A6 42424642" gives
+			 * interp==JIT). GPR diffs in multi-insn blocks are largely CASCADE from this.
+			 *
+			 * THE GATE BELOW makes failures trustworthy: it compares only when the
+			 * spans match. This trades raw coverage (drops bc-terminated blocks, where
+			 * the JIT ran further) for a clean signal — the dropped count is reported as
+			 * "Span mismatch" so the coverage cost is visible, not silent. A future
+			 * upgrade (ROADMAP A1) could instead run the interpreter for `jblk.n_insns`
+			 * instructions to RECOVER that coverage; until then, skip. */
+			if ((uint32_t)blk.n_insns != jblk.n_insns) {
+				result.span_mismatch++;
+				result.skipped++;
+				if (verbose)
+					fprintf(stderr, "  ROM+0x%06x: span mismatch (scanner %d insns, "
+						"JIT %d) — non-comparable, skipped\n",
+						blk.offset, blk.n_insns, jblk.n_insns);
+				continue;
+			}
+
+			/* Compare (spans now guaranteed equal) */
 			if (compare_regs(&interp_regs, &jit_regs, blk.offset, verbose)) {
 				result.passed++;
 				if (verbose)
@@ -1370,6 +1813,9 @@ done:
 	fprintf(stderr, "  Interp unsupported: %d\n", result.interp_unsupported);
 	fprintf(stderr, "  JIT compile fail:   %d\n", result.jit_compile_fail);
 	fprintf(stderr, "  JIT SIGSEGV:        %d\n", result.jit_segv);
+	fprintf(stderr, "  JIT fallback:       %d\n", result.jit_fallback);
+	fprintf(stderr, "  Span mismatch:      %d  (bc-terminated: JIT ran past the scanner block)\n",
+		result.span_mismatch);
 	fprintf(stderr, "Time: %.2f sec (%.0f blocks/sec)\n",
 		elapsed, testable > 0 ? testable / elapsed : 0);
 	fprintf(stderr, "Score: %d/%d\n", result.passed, result.passed + result.failed);

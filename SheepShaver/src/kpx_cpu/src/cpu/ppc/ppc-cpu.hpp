@@ -251,6 +251,11 @@ private:
 
 public:
 
+	// M3a Task 4: execute() nesting-depth accessor for the deliverability gate
+	// (depth == 1 means check_spcflags is running inside the outermost execute()).
+	// Trivial public getter only — no powerpc_registers change (no JIT offset impact).
+	int current_execute_depth() const { return execute_depth; }
+
 	// Initialization & finalization
 	void initialize();
 #ifdef SHEEPSHAVER
@@ -286,6 +291,17 @@ public:
 	void execute(uint32 entry);
 	void execute();
 
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	// Inline interpreter-call bridge for the AArch64 JIT: decode+execute one
+	// PPC instruction via the interpreter handler (dyngen do_generic analogue).
+	// Public so the extern "C" shim in ppc-cpu.cpp can reach private decode().
+	void jit_interp_one(uint32 opcode, uint32 pc_val);
+	// Register this cpu as the target of the inline-interpreter-call bridge.
+	// execute() does this automatically; the SS_TEST_JIT harness drives the JIT
+	// without going through execute() and must call this first.
+	void jit_set_active();
+#endif
+
 	// Interrupts handling
 	void trigger_interrupt();
 	
@@ -294,6 +310,16 @@ public:
 
 	// Get register ID
 	any_register get_register(int id);
+
+	// SPRG0-3 direct accessor (public: host-side supervisor-environment setup, e.g. Trampoline
+	// emulation in init_emul_ppc). i in [0,3].
+	uint32 & sprg_reg(int i) { return regs().sprg[i]; }
+	uint32 & sdr1_reg() { return regs().sdr1; }
+	uint32 & bat_reg(int i) { return regs().bat[i]; }
+	uint32 & srr0_reg() { return regs().srr0; }
+	uint32 & srr1_reg() { return regs().srr1; }
+	uint32 & sr_reg(int i) { return regs().sr[i]; }   // Wave 0
+	uint32 & msr_reg() { return regs().msr; }          // Wave 0
 
 	// Set syscall callback
 	void set_syscall_callback(syscall_fn fn) { execute_do_syscall = fn; }
@@ -433,6 +459,11 @@ private:
 	template< class Rc >
 	void execute_mffs(uint32 opcode);
 	void execute_mfmsr(uint32 opcode);
+	void execute_mtmsr(uint32 opcode);   // Wave 0: SR/MSR stored state
+	void execute_mtsr(uint32 opcode);
+	void execute_mtsrin(uint32 opcode);
+	void execute_mfsr(uint32 opcode);
+	void execute_mfsrin(uint32 opcode);
 	template< class SPR >
 	void execute_mfspr(uint32 opcode);
 	template< class TBR >
@@ -455,6 +486,7 @@ private:
 	template< class RA, class RB >
 	void execute_icbi(uint32 opcode);
 	void execute_isync(uint32 opcode);
+	void execute_rfi(uint32 opcode);
 	void execute_invalidate_cache_range();
 	static void call_execute_invalidate_cache_range(powerpc_cpu * cpu);
 	template< class RA, class RB >
@@ -513,6 +545,80 @@ inline void powerpc_cpu::trigger_interrupt()
 
 #ifdef SHEEPSHAVER
 extern void HandleInterrupt(powerpc_registers *r);
+/* M3a Task 4: real DEC exception delivery hook (sheepshaver_glue.cpp).
+ * Called from check_spcflags' HANDLE arm on the newworld profile, BEFORE the
+ * legacy HandleInterrupt path. Returns true iff a pending DEC exception was
+ * delivered in place (live regs mutated; the dispatcher re-derives from pc()).
+ * Returns false when nothing is pending or delivery was deferred (EE off /
+ * execute_depth > 1) — the caller then falls through to the legacy path. */
+extern bool SheepExcDeliverPending(void);
+/* SS_M18 S3 (Operation NewSheep) T2: the host->NK EXT-injection shim
+ * (LOAD-BEARING). Called from check_spcflags' HANDLE arm on the newworld profile
+ * UNDER NkSupervisorEnabled() (default OFF), BEFORE the legacy
+ * SheepExcDeliverPending() path. Polls the KEPT host-IRQ pending flag, resolves
+ * the NK's real EXT vector from the live KDP table (KDP+0x374), and injects via
+ * ExcEnter(EXC_EXTERNAL) re-pointed at the NK vector (NOT g_exc_entry_table).
+ * Returns true iff an EXT was injected; false when nothing pending, deferred, or
+ * the vector is unresolved (install not run — EXPECTED pre-S2b). Inert at
+ * default OFF (never called paravirtual or gated-OFF newworld). */
+extern bool SheepExcDeliverExtInjection(void);
+/* SS_M18 S3 (Operation NewSheep) master gate (defined in ppc-cpu.cpp). True iff
+ * SS_M18_NK_SUPERVISOR is set AND MachineProfileIsNewWorld(); resolved ONCE at
+ * boot (default OFF => false). Consumers OUTSIDE the CPU TU (sheepshaver_glue.cpp
+ * T3 retirement) call this; the pure machine/ modules (virt_clock/event_sched)
+ * stay gate-symbol-free (their standalone unit tests don't link ppc-cpu.o) and
+ * are yielded via setters the gated glue path flips. */
+extern bool NkSupervisorEnabled(void);
+/* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
+ * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions).
+ * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4).
+ * FE1F-service-surface Task A: out[5]=delivered_program (the 6th exc= field).
+ * Wave-2 W2-3: out[6]=delivered_ext (7th field, appended LAST; emitters print
+ * it only when SheepExcExtConfigured() so gated-off tuples stay byte-identical). */
+extern "C" void SheepExcStats(uint64_t out[7]);
+/* Wave-2 W2-3: the level-held EXC_EXTERNAL source (the OpenPIC output flag,
+ * single-copy-atomic — sheepshaver_glue.cpp owns it; main_unix's PIC output
+ * callback writes it via SheepExcExtSetPending + kicks the CPU thread on the
+ * assert edge, rev 2 F5). SheepExcExtPending: lock-free sample for the
+ * delivery hook + the EE-edge re-raise sites. SheepExcExtConfigured: gates
+ * the exc= tuple's 7th field (set once at PIC bring-up / harness knob). */
+extern "C" int SheepExcExtPending(void);
+extern "C" int SheepExcExtConfigured(void);
+extern "C" void SheepExcExtSetPending(int asserted);
+extern "C" void SheepExcExtConfigure(void);
+/* M7 Task A (interrupt-injection): the HOST interrupt source — a dedicated
+ * deliver-once-per-assert-edge latch beside the PIC level (THIRD semantics;
+ * C1 level-held stays PIC-only). sheepshaver_glue.cpp owns the word;
+ * main_unix's SetInterruptFlag newworld arm asserts it (Assert returns 1 on a
+ * true 0->1 edge — the caller kicks on exactly those), ClearInterruptFlag
+ * retires it when InterruptFlags reaches 0, and the delivery hook consumes it
+ * at EXT delivery. Configure() also configures the EXT seam (7th exc= field).
+ * FormatStats returns 0 unless enabled — gated-off output byte-identical. */
+extern "C" int SheepExcHostIrqPending(void);
+extern "C" int SheepExcHostIrqEnabled(void);
+extern "C" int SheepExcHostIrqAssert(void);
+extern "C" void SheepExcHostIrqDeassert(void);
+extern "C" void SheepExcHostIrqConfigure(void);
+extern "C" int SheepExcHostIrqFormatStats(char *buf, int len);
+/* NK-syscall-surface Task A: the sc-side vector-stub shim (sheepshaver_glue.cpp).
+ * Called from execute_syscall's newworld arm when the syscall entry is RESOLVED,
+ * before the architectural transition is applied (the DEC-shim seam precedent —
+ * MACHINE-LAYER-PLAN §2d keeps powerpc_cpu honest). Architectural effect is
+ * exactly two SPR writes (SPRG1:=caller r1, SPRG2:=caller LR — the real 0xC00
+ * vector stub's postconditions, Q-S2); selector_r0 is telemetry only. */
+extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 selector_r0);
+/* FE1F-service-surface Task A: the 0x700-side vector-stub shim (sheepshaver_glue.cpp)
+ * — the sc-shim's sibling. Called from execute_illegal's newworld trap arm when the
+ * program entry is RESOLVED, before the transition is applied. Architectural effect
+ * is exactly the same two SPR writes (SPRG1:=caller r1, SPRG2:=caller LR — the 0x700
+ * handler's save helper 0x50313d40 consumes both, [STATIC] raw==patched);
+ * trap_word/srr0 are telemetry (slot-id decode + the relocated Task-T slot-15
+ * exhaustion diagnostic). */
+extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
+                                    uint32 trap_word, uint32 srr0);
+/* SS_M18 S3-impl T4 (Operation NewSheep): the sc/program LIVE-vector resolvers
+ * (sheepshaver_glue.cpp) are declared in exc_core.h (the ExcTransition home), which
+ * ppc-execute.cpp includes alongside this header. */
 #endif
 
 #endif /* PPC_CPU_H */

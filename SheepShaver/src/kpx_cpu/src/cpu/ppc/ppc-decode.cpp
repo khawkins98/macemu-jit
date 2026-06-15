@@ -510,6 +510,11 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	  PPC_I(ISYNC),
 	  X_form, 19, 150, CFLOW_NORMAL
 	},
+	{ "rfi",
+	  EXECUTE_0(rfi),
+	  PPC_I(RFI),
+	  XL_form, 19, 50, CFLOW_BRANCH
+	},
 	{ "lbz",
 	  EXECUTE_LOADSTORE(nop, RA_or_0, D, true, 1, false, false),
 	  PPC_I(LBZ),
@@ -725,6 +730,33 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	  PPC_I(MFMSR),
 	  X_form, 31, 83, CFLOW_NORMAL
 	},
+	// Wave 0: SR/MSR stored-state ops (previously execute_illegal).
+	// xo numbers verified against in-tree ppc-dis.c.
+	{ "mtmsr",
+	  EXECUTE_0(mtmsr),
+	  PPC_I(MTMSR),
+	  X_form, 31, 146, CFLOW_NORMAL
+	},
+	{ "mtsr",
+	  EXECUTE_0(mtsr),
+	  PPC_I(MTSR),
+	  X_form, 31, 210, CFLOW_NORMAL
+	},
+	{ "mtsrin",
+	  EXECUTE_0(mtsrin),
+	  PPC_I(MTSRIN),
+	  X_form, 31, 242, CFLOW_NORMAL
+	},
+	{ "mfsr",
+	  EXECUTE_0(mfsr),
+	  PPC_I(MFSR),
+	  X_form, 31, 595, CFLOW_NORMAL
+	},
+	{ "mfsrin",
+	  EXECUTE_0(mfsrin),
+	  PPC_I(MFSRIN),
+	  X_form, 31, 659, CFLOW_NORMAL
+	},
 	{ "mfspr",
 	  EXECUTE_1(mfspr, operand_SPR),
 	  PPC_I(MFSPR),
@@ -848,7 +880,7 @@ const powerpc_cpu::instr_info_t powerpc_cpu::powerpc_ii_table[] = {
 	{ "sc",
 	  EXECUTE_0(syscall),
 	  PPC_I(SC),
-	  SC_form, 17, 0, CFLOW_NORMAL
+	  SC_form, 17, 0, CFLOW_TRAP    /* rev 2 F1: absolute-PC sc must end the decoded block */
 	},
 	{ "slw",
 	  EXECUTE_SHIFT(shll, RA, RS, RB, andi<0x3f>, CA_BIT_0, RC_BIT_G),

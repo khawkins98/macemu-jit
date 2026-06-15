@@ -617,7 +617,7 @@ jobs:
 
           cp SheepShaver/COPYING ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/copyright
           cp SheepShaver/NEWS ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/changelog
-          cp SheepShaver/AARCH64_JIT_PLAN.md ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/
+          cp docs/planning/SheepShaver-AARCH64_JIT_PLAN.md ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/
           gzip -9 ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/changelog
 
           cp /usr/local/lib/libSDL2-2.0.so.0 ${PKG_DIR}/usr/lib/
@@ -813,7 +813,7 @@ jobs:
 
           cp SheepShaver/COPYING ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/copyright
           cp SheepShaver/NEWS ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/changelog
-          cp SheepShaver/AARCH64_JIT_PLAN.md ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/
+          cp docs/planning/SheepShaver-AARCH64_JIT_PLAN.md ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/
           gzip -9 ${PKG_DIR}/usr/share/doc/sheepshaver-sdl/changelog
 
           cp /usr/local/armhf/lib/libSDL2-2.0.so.0 ${PKG_DIR}/usr/lib/

@@ -135,6 +135,51 @@ static inline void a64_str_w_imm(int rt, int rn, uint32_t offset) {
     emit32(0xB9000000 | ((offset / 4) << 10) | (rn << 5) | rt);
 }
 
+/* ---- Register-offset loads/stores: <op> Wt/Xt, [Xn, Wm, UXTW] ----
+ *
+ * Guest memory accesses under DIRECT addressing: host = base + guest_EA.
+ * Xn is the base (NATMEM_OFFSET), Wm is the 32-bit guest effective address.
+ *
+ * CRITICAL: option=010 (UXTW) zero-extends the 32-bit Wm offset to 64 bits.
+ * The previous option=011 (LSL/UXTX) used the full 64-bit Xm, which reads
+ * garbage from the upper 32 bits if any prior instruction operated on the
+ * X-register form (e.g., 64-bit arithmetic in subfe/adde, mftb, or
+ * emit_load_imm64). This caused stores to write to wrong addresses,
+ * corrupting guest memory and hanging the boot. */
+
+/* LDR Wt, [Xn, Wm, UXTW] (32-bit load, 32-bit offset zero-extended) */
+static inline void a64_ldr_w_reg(int rt, int rn, int rm) {
+    emit32(0xB8604800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STR Wt, [Xn, Wm, UXTW] (32-bit store) */
+static inline void a64_str_w_reg(int rt, int rn, int rm) {
+    emit32(0xB8204800 | (rm << 16) | (rn << 5) | rt);
+}
+/* LDR Xt, [Xn, Wm, UXTW] (64-bit load) */
+static inline void a64_ldr_x_reg(int rt, int rn, int rm) {
+    emit32(0xF8604800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STR Xt, [Xn, Wm, UXTW] (64-bit store) */
+static inline void a64_str_x_reg(int rt, int rn, int rm) {
+    emit32(0xF8204800 | (rm << 16) | (rn << 5) | rt);
+}
+/* LDRB Wt, [Xn, Wm, UXTW] (8-bit load, zero-extend) */
+static inline void a64_ldrb_reg(int rt, int rn, int rm) {
+    emit32(0x38604800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STRB Wt, [Xn, Wm, UXTW] (8-bit store) */
+static inline void a64_strb_reg(int rt, int rn, int rm) {
+    emit32(0x38204800 | (rm << 16) | (rn << 5) | rt);
+}
+/* LDRH Wt, [Xn, Wm, UXTW] (16-bit load, zero-extend) */
+static inline void a64_ldrh_reg(int rt, int rn, int rm) {
+    emit32(0x78604800 | (rm << 16) | (rn << 5) | rt);
+}
+/* STRH Wt, [Xn, Wm, UXTW] (16-bit store) */
+static inline void a64_strh_reg(int rt, int rn, int rm) {
+    emit32(0x78204800 | (rm << 16) | (rn << 5) | rt);
+}
+
 /* B (unconditional branch, PC-relative) */
 static inline void a64_b(int32_t offset) {
     emit32(0x14000000 | ((offset >> 2) & 0x03FFFFFF));

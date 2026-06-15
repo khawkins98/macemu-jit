@@ -1,0 +1,8 @@
+# Compiled machine-layer test artifacts (built by `make -C src/machine test`).
+# Glob, not an enumerated list — the old per-name list silently leaked each new
+# test (test_mmio_aperture, 2026-06-13). Sources are test_*.cpp and stay tracked.
+test_*
+!test_*.cpp
+!test_*.h
+!test_*.hpp
+*.dSYM/

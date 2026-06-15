@@ -218,8 +218,14 @@ struct powerpc_registers
 		SPR_LR		= 8,
 		SPR_CTR		= 9,
 		SPR_SDR1	= 25,
+		SPR_SRR0	= 26,
+		SPR_SRR1	= 27,
 		SPR_PVR		= 287,
 		SPR_VRSAVE	= 256,
+		SPR_SPRG0	= 272,
+		SPR_SPRG3	= 275,
+		SPR_IBAT0U	= 528,
+		SPR_DBAT3L	= 543,
 	};
 
 	static inline int GPR(int r) { return GPR_BASE + r; }
@@ -247,6 +253,39 @@ struct powerpc_registers
 	static uint32 reserve_addr;
 	static uint32 reserve_data;
 #endif
+	// MUST stay LAST: the JIT hardcodes byte offsets for gpr/lr/ctr/xer/reserve (e.g.
+	// PPCR_RESERVE_VALID=1060). Appending here shifts nothing the JIT references.
+	uint32 sprg[4];				// SPRG0-3 (SPR 272-275) — OS scratch / per-CPU data pointers.
+								// Previously dropped; the New World parcels nanokernel stashes its
+								// per-CPU/KernelData pointer in SPRG0 (mtspr) and reads it back (mfspr),
+								// so dropping them left it reading 0 -> garbage KDP -> spinlock deadlock.
+								// JIT mfspr/mtspr fall back to the interpreter for SPRG, which uses this
+								// field by name — so its exact offset is irrelevant to codegen.
+	uint32 sdr1;				// SDR1 (SPR 25) — HTAB base/mask. Previously returned a sentinel
+								// (0xdead001f); the nanokernel reads SDR1 to locate and zero the HTAB.
+	uint32 bat[16];				// BAT registers (SPR 528-543): IBAT0U/L..IBAT3U/L, DBAT0U/L..DBAT3U/L.
+								// Previously dropped; the nanokernel sets up BATs to map logical→physical
+								// address ranges, then uses those logical addresses for page tables/free lists.
+	uint32 srr0;				// SRR0 (SPR 26) — Save/Restore Register 0 (exception return PC).
+	uint32 srr1;				// SRR1 (SPR 27) — Save/Restore Register 1 (exception return MSR).
+	uint32 sr[16];				// Segment registers SR0-15 (mtsr/mtsrin/mfsr/mfsrin). Previously
+								// dropped via execute_illegal; the NK's MMU/segment-fault service
+								// routines (ROM 0x325c00-0x326160) write an SR and READ IT BACK
+								// (mfsrin after mtsrin) - dropped writes made that read garbage.
+								// Stored state only: nothing consults SRs for translation (V=P).
+	uint32 msr;					// MSR. Previously absent (mfmsr hardcoded 0xf072, mtmsr dropped).
+								// Stored state only in Wave 0 - MSR[DR/EE] semantics land in M3a.
+								// COLD VALUE MUST BE 0xf072 (init in powerpc_cpu init/reset) so
+								// mfmsr-before-any-mtmsr is byte-identical to the old hardcode.
+	uint32 high_bat[16];		// High BAT registers (SPR 560-575): IBAT4U/L..IBAT7U/L,
+								// DBAT4U/L..DBAT7U/L. DEAD-CODE INSURANCE for SPR 560-575: the NK's
+								// 24 high-BAT writes are feature-gated off on every PVR SheepShaver can
+								// present (gate bit 0x20 never set for SS PVR 0x000c0000; see plan AD-2),
+								// so this is never read in production — kept as cheap harmless state
+								// so the dropped writes are captured rather than silently discarded.
+								// MUST stay LAST (see the static_assert in ppc-cpu.cpp). Stored state
+								// only; JIT mtspr/mfspr for these SPRs fall back to the interpreter,
+								// so its exact offset is irrelevant to codegen.
 };
 
 #endif /* PPC_REGISTERS_H */

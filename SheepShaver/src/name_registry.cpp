@@ -25,6 +25,7 @@
 #include "main.h"
 #include "macos_util.h"
 #include "user_strings.h"
+#include "machine_profile.h"
 #include "emul_op.h"
 #include "thunks.h"
 
@@ -91,7 +92,33 @@ void DoPatchNameRegistry(void)
 	if (!RegistryCStrEntryCreate(0, "Devices:device-tree", device_tree.addr())) {
 		u32.set_value(BusClockSpeed);
 		RegistryPropertyCreate(device_tree.addr(), "clock-frequency", u32.addr(), 4);
-		RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
+		// SS_NW_MODEL (experimental, default off): present a recognized New World machine identity
+		// (device-tree root `model` + `compatible`) so Mac OS 9.1/9.2 accepts the OLD 1.1 ROM's
+		// machine ("…will not work on this Macintosh model"). Probes whether 9.2 can boot on the
+		// working 1.1 ROM WITHOUT the parcels-ROM port (the cheap Path B). New World Macs all share
+		// gestaltMachineType 406; the real identity is these OF device-tree properties. Default off
+		// → model stays "Power Macintosh" (1.1 path byte-identical). See NEW-WORLD-ROM-SUPPORT-PLAN.md.
+		//
+		// FINDING (2026-06-07): INSUFFICIENT ALONE. With model="PowerMac3,1" + compatible set, the
+		// 9.2.1 installer ISO booted on the 1.1 ROM STILL shows "…will not work on this Macintosh
+		// model" (confirmed via the [ALARM] boot-stall watchdog: wedges pre-System, WindowManager
+		// never comes up). So 9.2 acceptance needs more than the device-tree identity — it needs the
+		// real New World ROM environment (Path A: re-RE patch_nanokernel_boot for the parcels layout).
+		// Kept default-off as groundwork: the `compatible` injection is still needed alongside Path A,
+		// just not sufficient by itself.
+		if (MachineEnvFlag("SS_NW_MODEL")) {
+			const char *nw_model = getenv("SS_NW_MODEL");  // safe: MachineEnvFlag guarantees non-null/non-empty/non-"0"
+			const char *model = (nw_model[0] == '1' && nw_model[1] == '\0') ? "PowerMac3,1" : nw_model;
+			RegistryPropertyCreateStr(device_tree.addr(), "model", model);
+			// `compatible`: NUL-separated list a G4 (PowerMac3,1) reports.
+			static const char compat[] = "PowerMac3,1\0MacRISC2\0MacRISC\0Power Macintosh";
+			SheepArray<sizeof(compat)> compat_buf;
+			memcpy(Mac2HostAddr(compat_buf.addr()), compat, sizeof(compat));
+			RegistryPropertyCreate(device_tree.addr(), "compatible", compat_buf.addr(), sizeof(compat));
+			fprintf(stderr, "[NW-MODEL] device-tree model='%s' + compatible set (experimental 9.x model-check probe)\n", model);
+		} else {
+			RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
+		}
 
 		// Create "AAPL,ROM"
 		SheepRegEntryID aapl_rom;
@@ -343,6 +370,42 @@ void DoPatchNameRegistry(void)
 			Host2Mac_memcpy(the_video_driver.addr(), video_driver, sizeof(video_driver));
 			RegistryPropertyCreate(video.addr(), "driver,AAPL,MacOS,PowerPC", the_video_driver.addr(), sizeof(video_driver));
 			RegistryPropertyCreateStr(video.addr(), "model", "SheepShaver Video");
+
+			// M11 (SS_M11_FB): publish the five OF display-node harvest properties
+			// that the Trampoline reads via the "screen" alias.  Values from T-F1
+			// (QEMU mac99 display node, 2026-06-13).  `compatible = "cofb"` lets a
+			// future display ndrv match this node (M12 territory; don't add
+			// driver,AAPL,MacOS,PowerPC here — that blocks OS overlay).
+			if (ss_m11_fb) {
+				struct { uint32 address; uint16 width, height, linebytes, depth; } fb_props;
+				fb_props.address   = fb_aperture_base;   // 0x81000000
+				fb_props.width     = 640;
+				fb_props.height    = 480;
+				fb_props.linebytes = 640 * 4;            // 32bpp XRGB
+				fb_props.depth     = 32;
+				SheepVar32 addr_prop; addr_prop.set_value(fb_props.address);
+				RegistryPropertyCreate(video.addr(), "address",   addr_prop.addr(), 4);
+				SheepVar32 w_prop;  w_prop.set_value(fb_props.width);
+				RegistryPropertyCreate(video.addr(), "width",     w_prop.addr(),    4);
+				SheepVar32 h_prop;  h_prop.set_value(fb_props.height);
+				RegistryPropertyCreate(video.addr(), "height",    h_prop.addr(),    4);
+				SheepVar32 lb_prop; lb_prop.set_value(fb_props.linebytes);
+				RegistryPropertyCreate(video.addr(), "linebytes", lb_prop.addr(),   4);
+				SheepVar32 d_prop;  d_prop.set_value(fb_props.depth);
+				RegistryPropertyCreate(video.addr(), "depth",     d_prop.addr(),    4);
+				RegistryPropertyCreateStr(video.addr(), "compatible", "cofb");
+				fprintf(stderr, "[M11-FB] name registry: video node address=0x%08x 640x480x32\n",
+				        fb_aperture_base);
+			}
+		}
+
+		// M11: "screen" alias → "Devices:device-tree:video" so OF finddevice("screen")
+		// resolves to the video node.
+		if (ss_m11_fb) {
+			SheepRegEntryID screen_alias;
+			if (!RegistryCStrEntryCreate(device_tree.addr(), "aliases", screen_alias.addr()))
+				RegistryPropertyCreateStr(screen_alias.addr(), "screen",
+				                          "Devices:device-tree:video");
 		}
 
 		// Create "ethernet"

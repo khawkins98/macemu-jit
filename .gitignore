@@ -41,4 +41,14 @@ BasiliskII/src/Unix/compemu.cpp
 SheepShaver/rom-harness/rom-harness
 SheepShaver/rom-harness/rom-harness
 SheepShaver/rom-harness/*.o
+SheepShaver/rom-inspect/rom-inspect
+SheepShaver/rom-inspect/*.o
+SheepShaver/rom-inspect/*.dSYM
 *.log
+
+# AI
+CLAUDE.md
+docs/superpowers/.claims/*.claim
+.gstack/
+.claude/
+SheepShaver/src/rpc_socket

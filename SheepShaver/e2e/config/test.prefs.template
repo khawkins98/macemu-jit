@@ -1,0 +1,27 @@
+# SheepShaver E2E harness prefs — CHECKED INTO THE REPO (ROADMAP A5).
+#
+# This is the deterministic, version-controlled emulator configuration the E2E harness
+# boots — deliberately NOT your ~/.sheepshaver_prefs. The harness renders this template
+# per run, substituting the system-specific asset paths ({rom}, {disk}) and a {vncport}.
+# Asset paths are resolved at runtime (env vars SS_E2E_ROM / SS_E2E_DISK, or local
+# defaults) so CI can point at its own ROM/disk without editing this file.
+#
+# Pinned for reproducibility: 800x600 / 8-bit, no sound, no CD, headless GUI, VNC on.
+# 256 MB RAM (comfortable for Mac OS 9). idlewait MUST be true — it installs the
+# SynchIdleTime patch that fires the [BOOT] idle signal, and the shutdown hook rides the
+# same idle path. Shutdown is via SIGUSR1 (host->guest hook), not VNC, so no menu coordinates.
+rom {rom}
+disk {disk}
+{appsdisk_line}
+ramsize 268435456
+screen win/800/600
+displaycolordepth 8
+nosound true
+nocdrom true
+nogui true
+idlewait true
+ignoreillegal true
+vncserver true
+vncport {vncport}
+cpuclock 500
+extfs /ss-e2e-no-host-fs

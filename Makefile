@@ -36,7 +36,7 @@ clean: ## Clean build artifacts
 test: test-jit ## Run all tests
 
 test-jit: build ## Run JIT opcode equivalence harness (301 vectors)
-	./jit-test/run.sh
+	./BasiliskII/jit-test/run.sh
 
 test-headless: build ## Headless boot test (no display, no disk, 60s timeout)
 	@echo "=== Headless ROM boot (optlev=0, 60s) ==="

@@ -1,0 +1,27 @@
+{
+  "name": "silicon-sheep",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A modern launcher and VM manager for SheepShaver (Mac OS 8/9 emulation)",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "preview": "vite preview",
+    "vite:dev": "vite",
+    "vite:build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "cd src-tauri && cargo test -- --test-threads=1",
+    "check": "npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "html2canvas": "^1.4.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  },
+  "packageManager": "pnpm@10.12.1+sha512.f0dda8580f0ee9481c5c79a1d927b9164f2c478e90992ad268bbb2465a736984391d6333d2c327913578b2804af33474ca554ba29c04a8b13060a717675ae3ac"
+}

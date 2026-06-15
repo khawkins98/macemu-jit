@@ -1,0 +1,67 @@
+# SheepShaver E2E harness (ROADMAP A5) — system-level boot/shutdown smoke + Speedometer benchmark.
+#
+# NOT auto-triggered: it needs a self-hosted macOS runner with a LOGGED-IN GUI session (SDL opens a
+# real window — there is no headless macOS / Xvfb equivalent) and the large ROM/disk assets, which
+# aren't in git. So this is `workflow_dispatch` (manual). The OFFLINE unit tests run anywhere (see
+# the `e2e-units` job) and are safe to wire into normal CI.
+#
+# Setup the self-hosted runner once: auto-login to a desktop session; install `python3`, the
+# Homebrew `sdl3`/`vde` deps; place the ROM + the small benchmark disk somewhere and point
+# SS_E2E_ROM / SS_E2E_DISK (repo or org secrets / a fetch script) at them.
+name: E2E (SheepShaver)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "smoke (make e2e) or benchmark (make e2e-bench)"
+        type: choice
+        options: [smoke, benchmark]
+        default: smoke
+
+jobs:
+  # Offline unit tests — no emulator, no assets, no GUI. Safe on any runner.
+  e2e-units:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      - name: Unit tests (observe/runner/disk/config/imagecmp)
+        run: |
+          cd SheepShaver/e2e
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+          .venv/bin/pytest -q
+
+  # Full boot/run — requires a self-hosted, logged-in Mac. Manual only.
+  e2e-run:
+    runs-on: [self-hosted, macOS]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure + build SheepShaver
+        run: |
+          cd SheepShaver/src/Unix
+          NO_CONFIGURE=1 ./autogen.sh
+          ./configure --enable-sdl-video --enable-sdl-audio --enable-jit \
+                      --without-gtk --without-x --without-esd \
+                      CPPFLAGS=-I/opt/homebrew/include LDFLAGS=-L/opt/homebrew/lib
+          cd ../.. && make build-ss
+      - name: e2e venv
+        run: cd SheepShaver/e2e && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+      - name: Fetch assets (ROM + disk/ISO) into the runner
+        run: ./scripts/fetch-e2e-assets.sh "$RUNNER_TEMP"   # provide this for your asset store
+      - name: Run E2E (${{ inputs.target }})
+        env:
+          SS_E2E_ROM:  ${{ runner.temp }}/rom.rom
+          SS_E2E_DISK: ${{ runner.temp }}/macos9_mini.dsk
+          SS_E2E_ISO:  ${{ runner.temp }}/macos86.iso
+        run: |
+          cd SheepShaver
+          if [ "${{ inputs.target }}" = "benchmark" ]; then make e2e-bench; else make e2e; fi
+      - name: Upload artifacts (screenshots, logs, results)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ inputs.target }}-artifacts
+          path: SheepShaver/e2e/artifacts/

@@ -179,7 +179,7 @@ static void print_options(const prefs_desc *list)
 					break;
 				case TYPE_INT32:
 					typestr = "NUMBER";
-					sprintf(numstr, "%d", PrefsFindInt32(list->name));
+					snprintf(numstr, sizeof(numstr), "%d", PrefsFindInt32(list->name));
 					defstr = numstr;
 					break;
 				default:
@@ -411,7 +411,14 @@ void LoadPrefsFromStream(FILE *f)
 		while (*p && isspace(*p)) p++;
 		char *keyword = line;
 		char *value = p;
-		int32 i = atol(value);
+		char *endptr;
+		int32 i = strtol(value, &endptr, 0);
+		if (*endptr == 'k' || *endptr == 'K')
+			i *= 1024;
+		else if (*endptr == 'm' || *endptr == 'M')
+			i *= 1024 * 1024;
+		else if (*endptr == 'g' || *endptr == 'G')
+			i *= 1024 * 1024 * 1024;
 
 		// Look for keyword first in prefs item list
 		const prefs_desc *desc = find_prefs_desc(keyword);
@@ -419,6 +426,9 @@ void LoadPrefsFromStream(FILE *f)
 			printf("WARNING: Unknown preferences keyword '%s'\n", keyword);
 			continue;
 		}
+
+		// Log non-default pref values at startup
+		printf("  %s = %s\n", keyword, value);
 
 		// Add item to prefs
 		switch (desc->type) {
@@ -473,4 +483,91 @@ void SavePrefsToStream(FILE *f)
 {
 	write_prefs(f, common_prefs_items);
 	write_prefs(f, platform_prefs_items);
+}
+
+static void write_pref_value(FILE *f, const char *keyword, const prefs_desc *desc)
+{
+	switch (desc->type) {
+		case TYPE_STRING:
+			if (desc->multiple) {
+				int index = 0;
+				const char *str;
+				while ((str = PrefsFindString(keyword, index++)) != NULL)
+					fprintf(f, "%s %s\n", keyword, str);
+			} else {
+				const char *str = PrefsFindString(keyword);
+				if (str) fprintf(f, "%s %s\n", keyword, str);
+			}
+			break;
+		case TYPE_BOOLEAN:
+			fprintf(f, "%s %s\n", keyword, PrefsFindBool(keyword) ? "true" : "false");
+			break;
+		case TYPE_INT32:
+			fprintf(f, "%s %d\n", keyword, PrefsFindInt32(keyword));
+			break;
+		default:
+			break;
+	}
+}
+
+static bool is_in_list(const char *name, const char **written, int count)
+{
+	for (int i = 0; i < count; i++)
+		if (strcmp(written[i], name) == 0) return true;
+	return false;
+}
+
+void SavePrefsToStreamMerging(const char *original_path, FILE *out)
+{
+	const int MAX_WRITTEN = 256;
+	const char *written[MAX_WRITTEN];
+	int written_count = 0;
+
+	FILE *orig = fopen(original_path, "r");
+	if (orig) {
+		char line[256];
+		while (fgets(line, sizeof(line), orig)) {
+			int len = strlen(line);
+			if (len > 0 && line[len-1] == '\n') {
+				line[len-1] = '\0';
+				len--;
+			}
+
+			if (len == 0 || line[0] == '#' || line[0] == ';') {
+				fprintf(out, "%s\n", line);
+				continue;
+			}
+
+			char keyword[256];
+			strncpy(keyword, line, sizeof(keyword));
+			keyword[sizeof(keyword)-1] = '\0';
+			char *p = keyword;
+			while (*p && !isspace(*p)) p++;
+			*p = '\0';
+
+			const prefs_desc *desc = find_prefs_desc(keyword);
+			if (!desc) {
+				fprintf(out, "%s\n", line);
+				continue;
+			}
+
+			if (!is_in_list(keyword, written, written_count)) {
+				write_pref_value(out, keyword, desc);
+				if (written_count < MAX_WRITTEN)
+					written[written_count++] = desc->name;
+			}
+		}
+		fclose(orig);
+	}
+
+	const prefs_desc *lists[] = { common_prefs_items, platform_prefs_items };
+	for (int l = 0; l < 2; l++) {
+		const prefs_desc *list = lists[l];
+		while (list->type != TYPE_ANY) {
+			if (!is_in_list(list->name, written, written_count)) {
+				write_pref_value(out, list->name, list);
+			}
+			list++;
+		}
+	}
 }

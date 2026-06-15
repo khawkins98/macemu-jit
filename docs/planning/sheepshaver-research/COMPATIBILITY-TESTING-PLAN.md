@@ -1,0 +1,220 @@
+# SheepShaver Compatibility Testing Plan
+
+> **Status:** 📖 Reference — framework defined, resume when Machine Layer enables 9.x testing · **Created:** 2026-06-02 · **Updated:** 2026-06-10
+> **Why this doc exists:** Tiered plan for measuring SheepShaver compatibility (JIT vs interpreter, real apps).
+> _Markers: ✅ done · 🟡 in progress · ⏸ blocked/deferred · ☐ todo. Finished an item? Flip its marker, bump **Updated**, and add a `CHANGELOG.md` entry (see [CONTRIBUTING](../../../CONTRIBUTING.md) → "Documentation Lifecycle")._
+
+
+How we will measure correctness and compatibility of the AArch64 JIT — against the
+interpreter, against the legacy x86 SheepShaver JIT, and against real-world Mac OS software.
+Drafted 2026-06-02.
+
+**This plan extends existing infrastructure — it does not replace it:**
+
+| Existing asset | Role in this plan |
+|---|---|
+| [`AARCH64_JIT_GOLDEN_WORKLOADS.md`](../../../SheepShaver/docs/AARCH64_JIT_GOLDEN_WORKLOADS.md) (7 workloads) | The canonical gate. New tiers below feed into it. |
+| [`jit-test/run.sh`](../../../SheepShaver/jit-test/run.sh) ([README](../../../SheepShaver/jit-test/README.md)) (209 vectors, interp-vs-JIT diff) | Tier 1 foundation |
+| [`rom-harness/`](../../../SheepShaver/rom-harness/README.md) (random ROM block exerciser) | Tier 2 foundation |
+| [`SheepShaver/e2e/`](../../../SheepShaver/e2e/README.md) (macOS VNC E2E harness — isolated prefs + pristine disk, `[BOOT]`/`[READY]` boot signals) | **The automation layer to use.** (Superseded the old repo-level `qa/tests/vnc/` Gherkin runner + `BasiliskII/qa/`, both removed 2026-06-05 — Xvfb/Linux-oriented.) |
+| [`JIT-STATUS.md`](../../../JIT-STATUS.md) | Where summary results land |
+| [`docs/planning/JIT-FPU-PLAN.md`](../JIT-FPU-PLAN.md) | Tier 3 (FP) integrates with this |
+| [`docs/research/IMPLEMENTATION-BACKLOG.md`](research/IMPLEMENTATION-BACKLOG.md) | C1 gates Phase 2 of this plan; see also [`RESEARCH-HANDOFF.md`](research/RESEARCH-HANDOFF.md) |
+| [`AARCH64_JIT_PLAN.md`](../SheepShaver-AARCH64_JIT_PLAN.md) / [`JIT-NEXT-PHASE.md`](../../../SheepShaver/JIT-NEXT-PHASE.md) | Overall JIT plan this testing supports |
+| [`src/kpx_cpu/src/test/test-powerpc.cpp`](../../../SheepShaver/src/kpx_cpu/src/test/test-powerpc.cpp) ([original docs](../../../SheepShaver/doc/PowerPC-Testsuite.txt)) | **The original maintainer's PowerPC Emulator Tester** — dormant in-tree, see Tier 1.4 |
+
+---
+
+## The oracle hierarchy
+
+Compatibility is always measured as *agreement with an oracle*. We have four, in increasing
+cost and decreasing precision:
+
+1. **Our interpreter** (kpx_cpu) — cheap, always available, but shares bugs with the JIT
+   when both misread the spec
+2. **The x86 SheepShaver JIT** (dyngen-based) running under Rosetta 2 — independent
+   implementation, same guest environment, catches "we misread the spec" bugs
+3. **QEMU `target/ppc`** — fully independent, most-reviewed PPC implementation in existence
+4. **Real Mac OS behavior** — the only oracle that matters to users; expensive and fuzzy
+   (apps crash for many reasons)
+
+A disagreement between our JIT and *two* oracles is a JIT bug with near certainty.
+A disagreement with only the interpreter requires a third opinion before "fixing."
+
+---
+
+## Tier 1 — Instruction-level parity (exists, extend)
+
+**Now:** `jit-test/run.sh` — 209 vectors, every vector run in interpreter and JIT mode,
+REGDUMPs diffed. Gate: score=100.
+
+**Extensions, in priority order:**
+
+1. **Three-way vectors (adds the x86 JIT oracle).**
+   Build x86_64 SheepShaver (the upstream dyngen JIT) and run it under Rosetta 2 on the same
+   machine. The `SS_TEST_HEX`/`SS_TEST_DUMP` harness mechanism lives in shared CPU-core code
+   (`ppc-cpu.cpp`), so the same vectors drive both builds:
+   ```
+   vector → interp REGDUMP  ─┐
+   vector → arm64-JIT REGDUMP ├─ 3-way diff: any 2-vs-1 split localizes the bug
+   vector → x86-JIT REGDUMP  ─┘  (run via: arch -x86_64 ./SheepShaver-x86 …)
+   ```
+   - Work: an x86_64 configure/build lane + a `run-3way.sh` wrapper that runs both binaries
+     and diffs three dumps. The x86 build needs the same `SS_TEST_*` env plumbing (verify it
+     exists in upstream; if not, it's a small backport).
+   - Where disagreements are most likely (and most valuable): XER CA/OV corner cases, CR
+     flag combinations, FPSCR — exactly where we found bugs A1-A3.
+
+2. **Coverage audit.** Map the 209 vectors against the opcode handler list in `ppc-jit.cpp`
+   (every `case` in `compile_one`). Every handled opcode needs at least: one basic vector,
+   one edge-case vector (carry wrap, sign overflow, zero operand), and — for Rc forms —
+   one CR-checking vector. Output: a coverage table in `jit-test/README.md`; close gaps.
+
+3. **Random differential fuzzing (risu-style).** `rom-harness` already does this against ROM
+   code; add a mode generating *synthetic* random-but-valid instruction sequences (constrained
+   to implemented opcodes, no memory ops or with a scratch page) and diff interp vs JIT for
+   N=100k sequences nightly. QEMU's `risu` tool is the established reference for this
+   methodology but targets ppc64/Linux — we replicate the idea, not the tool.
+
+4. **Revive the original maintainer's PowerPC Emulator Tester.** Gwenolé Beauchesne's
+   self-contained test suite is dormant in our tree at
+   [`src/kpx_cpu/src/test/test-powerpc.cpp`](../../../SheepShaver/src/kpx_cpu/src/test/test-powerpc.cpp)
+   (2,242 lines; documented in [`doc/PowerPC-Testsuite.txt`](../../../SheepShaver/doc/PowerPC-Testsuite.txt)).
+   It is the closest thing to an *established* SheepShaver compatibility tool in existence:
+   - Generates **2M+ tests** with operand values specifically chosen to exercise condition
+     code changes — per-instruction-form generators for add/sub/mul/div, shifts, rotates
+     (rlwinm/rlwimi!), logical ops, compares, CR-logical ops, and AltiVec
+   - Two modes: **record** a golden results file on real PPC hardware, or **verify** an
+     emulator against that file. The maintainer's reference file was recorded on a real
+     PowerPC 7410 (PowerBook G4) — including architecturally *unspecified* result behavior
+   - Terminates blocks with EMUL_OP `0x18000000`, which our CPU core already supports
+   - **The golden results file is recovered and in-tree**:
+     [`ppc-testresults.dat.bz2`](../../../SheepShaver/src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
+     ([provenance](../../../SheepShaver/src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md)) — recorded on a real
+     PowerBook G4 (PPC 7410), verified bit-for-bit against the md5 in `test-powerpc.cpp:21`.
+   - **Usage plan — three validation stages, in order:**
+
+     | Stage | Run | Oracle | What it proves | When |
+     |---|---|---|---|---|
+     | **A. Interpreter vs real G4** | `test-powerpc --verify ppc-testresults.dat` with the **interpreter** core | Real silicon | Our interpreter matches real hardware — including unspecified-behavior cases. Any failure here is an interpreter bug that the JIT inherits as "correct" today. | First — establishes the trusted baseline |
+     | **B. JIT vs real G4** | Same, with the **JIT** path enabled | Real silicon | The JIT matches real hardware directly — bypasses the interpreter entirely as an oracle | After stage A is clean (or its failures are triaged) |
+     | **C. New-CPU record mode** | `test-powerpc --record our-results.dat` under the interpreter, then verify the JIT against it | Our interpreter | Covers instructions/operands added to the tester after 2006 (if we extend it); regenerable any time | Ongoing, for tester extensions |
+
+   - **Caveats for stages A/B:** (1) the 7410 recording includes AltiVec results — our JIT
+     doesn't implement AltiVec, so those tests verify the interpreter only (or are skipped
+     for the JIT run); (2) unspecified-behavior cases where our interpreter intentionally
+     differs from a 7410 (e.g. it may model a 750) need a triage list, not blind failure —
+     expect a small known-diffs file as a stage-A output; (3) the tester predates years of
+     core changes — budget bit-rot fixes before stage A runs at all.
+   - **Work to revive:** (a) add build wiring (it has none in our Unix Makefile — likely a
+     standalone `make test-powerpc` target linking the kpx_cpu core); (b) bunzip the results
+     file as a build step or document the manual step; (c) stage A run + known-diffs triage;
+     (d) add a JIT execution mode (same `SS_TEST_JIT`-style gate the opcode harness uses) for
+     stage B; (e) wire `make test-ppc-golden` into the golden workloads as a new workload.
+   - This likely **supersedes item 1.3** (synthetic fuzzing) — it is exactly that, already
+     written by the person who knew the CPU core best
+
+## Tier 2 — System-level parity (exists, formalize)
+
+**Now:** Golden Workloads 2/3 (boot to desktop interp/JIT), 4 (ROM harness), 5 (VNC smoke).
+
+**Extensions:**
+
+1. **Mac OS version boot matrix.** Boot each supported OS to desktop under interpreter,
+   ARM64 JIT, and x86-JIT-under-Rosetta:
+   | Guest OS | Why it matters |
+   |---|---|
+   | Mac OS 7.5.5 | Smallest, fastest boot; current baseline |
+   | Mac OS 8.1 | Last 68K-bootable; heaviest mixed-mode (68K emulator) use |
+   | Mac OS 8.6 | Common community choice; nanokernel changes |
+   | Mac OS 9.0.4 | Most-used SheepShaver target |
+   | Mac OS 9.2.2 | Latest supported; most demanding |
+   Record per cell: boots? time-to-desktop? errors in console? Store results as a table in
+   `JIT-STATUS.md` as a boot matrix (boots? / time-to-desktop? / console errors per cell).
+
+2. **Boot-time metric as a compatibility canary.** Time-to-desktop regression >20% = treat
+   as failure even if it boots (the >180s JIT boot finding shows timing IS a compat signal —
+   timeouts in guest drivers can turn slowness into hangs).
+
+## Tier 3 — FP/FPSCR correctness (new, integrates with docs/planning/JIT-FPU-PLAN.md)
+
+1. **TestFloat-derived vectors.** Berkeley TestFloat is the established IEEE-754 compliance
+   suite. We don't run it in the guest (no PPC build needed); instead, use `testfloat_gen` on
+   the host to generate input/expected-output pairs for f32/f64 add/sub/mul/div/sqrt/convert,
+   then wrap them as `SS_TEST_HEX` vectors (load operands via `SS_TEST_INIT`-style FPR
+   seeding — needs harness FPR support, currently GPR-only).
+   - Priority: rounding modes × {add, mul, div}, NaN propagation, denormal handling,
+     FPSCR exception bits (FX, OX, UX, ZX, XX).
+2. **Graphing Calculator / Infini-D as guest-level FP smoke** — period apps notoriously
+   sensitive to FP bugs.
+
+## Tier 4 — Application compatibility matrix (formalize Workload 7)
+
+The community-established measure (E-Maculation forum lists) made systematic:
+
+1. **Test set, three rings:**
+   - **Ring 0 (every JIT change):** Finder operations, SimpleText, Calculator, Control Panels
+   - **Ring 1 (weekly / before merge):** Prince of Persia (existing Workload 7), Photoshop 5,
+     Word 98, Internet Explorer 4.5, AppleWorks, Myst
+   - **Ring 2 (release):** the full E-Maculation known-working list for SheepShaver
+     (~30 titles), each launched + basic interaction
+2. **Per-app record:** launches? / basic use OK? / known crash signature? Compare columns:
+   interpreter, ARM64 JIT, x86 JIT (Rosetta). **An app that works under interpreter + x86 JIT
+   but not ours = our bug, by definition.** That column comparison is the whole point.
+3. **Automation:** drive boots and capture through the `SheepShaver/e2e/` harness (isolated
+   prefs + pristine per-run disk, `[BOOT]`/`[READY]` boot signals, VNC screenshots). Extend it
+   for app-launch flows rather than standing up a separate story tree.
+4. **Crash triage protocol:** app crashes under JIT → capture guest PC → `rom-harness
+   --entry=<PC>` the failing block → extract the instruction sequence into a Tier 1 vector →
+   now it's a regression test forever.
+
+## Tier 5 — Performance benchmarks (existing Workload 6, plus)
+
+Not compatibility per se, but regressions here often reveal correctness issues (timing-
+dependent guest code):
+
+- **Speedometer 4.02** (Workload 6 — exists)
+- **MacBench 5.0** (in JIT agent's next-session plan): CPU, FPU, and Disk scores; compare
+  interpreter / ARM64 JIT / x86-JIT-Rosetta columns
+- Track in `JIT-STATUS.md`: score table per build, flag >10% regressions
+
+---
+
+## What "compatibility parity with the x86 JIT" means, concretely
+
+The eventual claim we want to make: *"The ARM64 JIT runs everything the x86 JIT runs."*
+Operationally:
+
+1. Tier 1 three-way diff: zero vectors where x86-JIT + interpreter agree and ARM64-JIT differs
+2. Tier 2 boot matrix: every OS version that boots under x86 JIT boots under ARM64 JIT
+3. Tier 4 Ring 1: every app that passes under x86 JIT passes under ARM64 JIT
+4. Tier 5: ARM64 JIT ≥ x86-JIT-under-Rosetta performance (this should be easy — Rosetta
+   double-translates)
+
+## Sequencing
+
+| Phase | When | Items |
+|---|---|---|
+| 1 | Now (cheap, high value) | **Tier 1.4 revive test-powerpc.cpp** (build wiring + interp baseline); Tier 1.2 coverage audit; Tier 4 crash-triage protocol (document it); Tier 2.2 boot-time canary |
+| 2 | After C1 lands (JIT residency fixed — JIT actually executes enough to test) | Tier 1.4 JIT mode + 2M-test differential run; Tier 1.1 x86 build + 3-way harness; Tier 2.1 OS boot matrix |
+| 3 | After JIT-FPU work begins | Tier 3 TestFloat vectors + harness FPR seeding |
+| 4 | Stabilization / pre-release | Tier 4 Rings 1-2 automation; Tier 5 MacBench |
+
+## Open questions / prerequisites
+
+- ~~Can the original G4-recorded `ppc-testresults.dat.bz2` be recovered?~~ **RESOLVED
+  (2026-06-02): recovered from the Wayback Machine and verified bit-for-bit** (decompressed
+  md5 `3e29432abb6e21e625a2eef8cf2f0840` matches both `test-powerpc.cpp:21` and the wiki doc).
+  Now preserved in-tree:
+  [`src/kpx_cpu/src/test/ppc-testresults.dat.bz2`](../../../SheepShaver/src/kpx_cpu/src/test/ppc-testresults.dat.bz2)
+  with [provenance](../../../SheepShaver/src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md). Tier 1.4 has
+  real-hardware ground truth available from day one.
+- Does `test-powerpc.cpp` still compile against the current kpx_cpu core (it predates years
+  of changes)? Budget for bit-rot fixes.
+- Does upstream x86 SheepShaver build cleanly on current macOS under Rosetta? (configure
+  age, SDL versions). If not, an x86 Linux VM/container is the fallback host for the x86 lane.
+- Harness FPR seeding (`SS_TEST_INIT` covers GPRs only) — needed for Tier 3.
+- ROM/OS image licensing — test assets stay local, paths via env vars (as `SheepShaver/e2e/`
+  already does — assets in-project but gitignored).
+- Where do nightly results live? Proposal: `JIT-STATUS.md` summary table + the
+  `SheepShaver/e2e/artifacts/` per-run directory.

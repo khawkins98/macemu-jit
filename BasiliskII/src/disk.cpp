@@ -445,13 +445,13 @@ int16 DiskStatus(uint32 pb, uint32 dce)
 {
 	drive_vec::iterator info = get_drive_info(ReadMacInt16(pb + ioVRefNum));
 	uint16 code = ReadMacInt16(pb + csCode);
-	D(bug("DiskStatus %d\n", code));
+	if (code != 43) D(bug("DiskStatus %d\n", code));
 
 	// General codes (we can get these even if the drive was invalid)
 	switch (code) {
 		case 43: {	// Driver gestalt
 			uint32 sel = ReadMacInt32(pb + csParam);
-			D(bug(" driver gestalt %c%c%c%c\n", sel >> 24, sel >> 16,  sel >> 8, sel));
+			D(bug("csDriverGestaltCode 43: '%c%c%c%c'\n", sel >> 24, (sel >> 16) & 0xff, (sel >> 8) & 0xff, sel & 0xff));
 			switch (sel) {
 				case FOURCC('v','e','r','s'):	// Version
 					WriteMacInt32(pb + csParam + 4, 0x01008000);

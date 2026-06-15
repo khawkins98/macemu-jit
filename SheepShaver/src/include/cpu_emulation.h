@@ -27,8 +27,14 @@
  */
 
 // Constants
-const uint32  ROM_SIZE = 0x400000;				// Size of ROM file
-const uint32  ROM_AREA_SIZE = 0x500000;			// Size of ROM area
+const uint32  ROM_SIZE = 0x400000;				// Size of ROM file (4MB — what SS_DUMP_ROM writes)
+const uint32  ROM_AREA_SIZE = 0x500000;			// Size of ROM area (5MB — ROM file + 1MB patch/mirror space)
+// NOTE: ROM_AREA_SIZE > ROM_SIZE.  The extra 1MB (offsets 0x400000–0x4fffff from ROMBase)
+// is NOT from the ROM file; it is populated at runtime by PatchROM (mirror copy of the last
+// 1MB of the ROM file, plus patch tables).  SS_DUMP_ROM writes only ROM_SIZE bytes — any
+// addresses above ROMBase+0x3fffff (e.g. trampoline at 0x429b40, DR mirror at 0x46e964)
+// will NOT appear in the dump.  To inspect those, read from ROMBaseHost+offset in a debugger
+// after PatchROM has run.
 const uintptr DR_EMULATOR_BASE = 0x68070000;	// Address of DR emulator code
 const uint32  DR_EMULATOR_SIZE = 0x10000;		// Size of DR emulator code
 const uintptr DR_CACHE_BASE = 0x69000000;		// Address of DR cache
@@ -69,7 +75,18 @@ static inline void WriteMacInt32(uint32 addr, uint32 v) {vm_write_memory_4(addr,
 static inline uint64 ReadMacInt64(uint32 addr) {return vm_read_memory_8(addr);}
 static inline void WriteMacInt64(uint32 addr, uint64 v) {vm_write_memory_8(addr, v);}
 static inline uint32 Host2MacAddr(uint8 *addr) {return vm_do_get_virtual_address(addr);}
-static inline uint8 *Mac2HostAddr(uint32 addr) {return vm_do_get_real_address(addr);}
+static inline uint8 *Mac2HostAddr(uint32 addr) {
+	// Machine Layer M1 (MACHINE-LAYER-PLAN §2b host-accessor path): raw host
+	// pointers into trapped device space are a contract violation - fail at the
+	// source, not at a later undecodable compiler-generated fault. Out-of-line
+	// abort helper (mmio_bus.cpp) keeps stdio/stdlib out of this header.
+	extern bool mmio_bus_active; extern uint32 mmio_bus_lo, mmio_bus_hi;
+	extern void mmio_mac2host_abort(uint32 addr);
+	if (__builtin_expect(mmio_bus_active, 0)
+	    && addr - mmio_bus_lo < mmio_bus_hi - mmio_bus_lo)
+		mmio_mac2host_abort(addr);
+	return vm_do_get_real_address(addr);
+}
 static inline void *Mac_memset(uint32 addr, int c, size_t n) {return vm_memset(addr, c, n);}
 static inline void *Mac2Host_memcpy(void *dest, uint32 src, size_t n) {return vm_memcpy(dest, src, n);}
 static inline void *Host2Mac_memcpy(uint32 dest, const void *src, size_t n) {return vm_memcpy(dest, src, n);}

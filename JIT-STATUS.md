@@ -1,6 +1,30 @@
 # MacEmu AArch64 JIT — Status
 
-## SheepShaver PPC JIT (2026-05-17)
+## SheepShaver PPC JIT (2026-06-04, macOS arm64 port — branch macos-arm64)
+
+**Build:** ✅ macOS arm64 (Apple clang, no X11). **SDL3 is the default video backend** (`--with-sdl2` to opt out); VDE networking available (`ether vde:`). See `CHANGELOG.md` 2026-06-04.
+**Interpreter:** ✅ Boots Mac OS 8.6 to Finder desktop on Apple Silicon (confirmed visually)
+**JIT boot (macOS arm64):** ✅ Boots Mac OS 8.6 to Finder desktop with full native JIT (SDL3, boot-verified 2026-06-04) — both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably. No skip list, no workarounds, no SS_JIT_SKIP_OPC needed. ROM=0x500000 (full range including DR emulator), block chaining enabled. 12 bugs found and fixed (sessions 7-8, 2026-06-02/03).
+**JIT harness:** ✅ score=100, interpreter and JIT mode (vector count via `make harness-count` — the absolute number drifts as vectors are added/pruned; don't hardcode it)
+**ROM harness:** ⚠️ Needs OldWorld raw ROM dump; New World CHRP ROMs are not compatible with the scanner
+**macOS-specific fixes (all on macos-arm64 branch):**
+- MAP_JIT + pthread_jit_write_protect_np + sys_icache_invalidate for JIT code cache
+- DIRECT_ADDRESSING (NATMEM_OFFSET) throughout JIT codegen
+- GATE3 double-execution bug fixed (commit 7cc741da)
+- arm64 Mach exception fault PC reporting fixed (sigsegv.h)
+
+**Machine Layer (newworld fidelity profile):** 🟡 active (2026-06-12) — MMIO bus, device
+models (SCC/VIA/Cuda-ADB/OpenPIC), virtual clock, real PPC exception core, 68k↔PPC Mixed
+Mode switch, and NK syscall/FE1F/PROGRAM delivery surfaces all shipped; the first DEC
+interrupt deliveries through the NK's own published handlers have landed (riser boots;
+`delivered_dec=3` live). Current default diagnostic boot (9.0.1 NewWorld ROM) runs 44.4 s
+to the PROGRAM#5 srr0=0x50324fec park. The paravirtual profile (the Mac OS 8.6 boot
+above) is frozen and byte-identical throughout. **Live thrust (2026-06-14): the M8→M17 forge arc is
+CLOSED (banked NO-GO); the branch's main aim is now Operation NewSheep — boot 9.2 (NewWorld) by
+running/reproducing the Trampoline producer. See `docs/planning/newsheep/README.md`.** Tracker:
+`docs/planning/MACHINE-LAYER-PLAN.md`.
+
+## SheepShaver PPC JIT (2026-05-17, upstream Linux ARM64)
 
 **Build:** ✅
 **Interpreter:** ✅ Boots Mac OS to desktop (VNC port 5999, ~324 MIPS on Orange Pi 6 Plus)
@@ -12,8 +36,20 @@
 
 ### JIT Boot Status
 
-With JIT active, SheepShaver boots Mac OS to the Welcome splash screen.
-Block cache and chaining are active; lazy CR0 and register-allocation scaffolding remain in-tree but are currently disabled after boot-regression risk:
+With JIT active, SheepShaver boots Mac OS 8.6 to the Finder desktop (macOS arm64, VNC confirmed).
+Both HD boot (macos86_fresh.dsk, 4GB) and ISO boot work reliably — no workarounds needed.
+Full ROM range (0x500000, including DR 68k emulator) is JIT-compiled with block chaining enabled.
+No skip list or workarounds needed — all 12 JIT bugs are fixed (8 from session 7, plus bcctr and 3 earlier fixes):
+1. subfe/adde carry-out (64-bit three-operand CA)
+2. mftb TBU/TBL (interpreter fallback for time-base model)
+3. DR emulator entry-poll suppression (spcflags timing)
+4. icbi NOP -> interpreter (cache invalidation)
+5. isync NOP -> interpreter (deferred invalidation flush)
+6. UXTW addressing mode (32-bit address extension)
+7. fmsub/fnmsub encoding swap (ARM64 sign convention mismatch)
+8. lwarx/stwcx./mftb interpreter fallback (CPU-object state access)
+
+Lazy CR0 and register-allocation scaffolding remain in-tree but are currently disabled:
 1. **Phase 1:** Hash + chaining block cache (8192 buckets)
 2. **Phase 2:** Lazy CR0 flags scaffolded, currently disabled (`lazy_update_cr0()` materializes immediately)
 3. **Phase 3:** Register allocation scaffolded, currently disabled (active path uses direct struct LDR/STR)
@@ -39,6 +75,27 @@ hardware, no SheepShaver runtime dependencies.
 
 Remaining 25 failures: CR field interactions in multi-instruction blocks
 and complex branch BO patterns (CTR+condition combo).
+
+### Recent bug fixes (2026-06, session 7)
+
+- **fmsub/fnmsub encoding swap** (2026-06-03): PPC fmsub (a*c-b) was mapped to ARM64 FMSUB
+  (a-n*m, wrong sign). PPC fnmsub had the reverse error. Fixed by swapping: PPC fmsub uses
+  ARM64 FNMSUB, PPC fnmsub uses ARM64 FMSUB. One of two root causes of the extension-loading hang.
+- **lwarx/stwcx./mftb interpreter fallback** (2026-06-03): lwarx/stwcx. need CPU-object
+  reservation state; mftb needs the CPU's timebase model. All three now fall through to the
+  interpreter. The other root cause of the extension-loading hang.
+- **subfe/adde carry-out computation** (2026-06-03): The JIT read carry from a partial ADDS
+  (~rA + rB) instead of the full three-operand sum (~rA + rB + CA). For `subfe r4,r4,r4`
+  (carry-to-mask idiom), this always wrote CA=0 regardless of input. Fixed by computing in
+  64 bits and extracting bit 32. Root cause of the DR emulator boot hang.
+- **icbi/isync NOP** (2026-06-03): icbi compiled as NOP left stale JIT translations; isync
+  compiled as NOP skipped deferred invalidation. Both now fall through to interpreter.
+- **UXTW addressing** (2026-06-03): register-offset memory access changed from LSL to UXTW
+  for defensive 32-bit address extension.
+- **DR emulator entry-poll** (2026-06-03): block-entry spcflags poll suppressed for DR emulator
+  blocks to prevent premature CR2.LT injection mid-dispatch-cycle.
+- **mftb TBU/TBL** (2026-06-03): CNTVCT_EL0 was stored as-is for both TBL and TBU. Fixed
+  with LSR #32 for TBU (later superseded by the interpreter fallback above).
 
 ### Recent bug fixes (2026-05)
 
@@ -128,7 +185,7 @@ VNC keyboard and mouse work for remote control:
 | FP move/convert | 7 | ✅ fmr/fneg/fabs/fnabs/frsp/fctiw/fctiwz/fsel/frsqrte |
 | FP compare | 2 | ✅ fcmpu/fcmpo |
 | FPSCR | 5 | ✅ mffs/mtfsf/mtfsfi/mtfsb0/mtfsb1/mcrfs — syncs ARM64 FPCR rounding |
-| AltiVec (NEON) | 140 | ✅ Full VMX via AArch64 NEON intrinsics |
+| AltiVec (NEON) | 140 | ✅ Full VMX via AArch64 NEON. **Reachable by real apps via the opt-in `altivec` pref** (registers the `'ppcf'` gestalt; verified: Fractal Carbon runs its vector kernel through the JIT — 2026-06-07). Codegen validated by `make test-jit` (incl. the 2026-06-07 sum-across/shift/round XO-scramble + saturation fixes). |
 | Cache/Sync/NOP | 8 | ✅ dcbf/dcbst/dcbt/dcbtst/dcba/icbi/isync/sync/eieio |
 | System | 4 | ✅ sc/mfmsr/eciwx/ecowx (terminators/NOPs) |
 | **Total** | **285** | **+ all record forms (. suffix)** |
@@ -143,6 +200,7 @@ VNC keyboard and mouse work for remote control:
 | FP compare → CR | ✅ fcmpu/fcmpo with XER[SO] |
 | FPSCR rounding modes | ✅ PPC RN → ARM64 FPCR RMode mapping (nearest/zero/+inf/-inf) |
 | FP load/store | ✅ lfs (single→double)/lfd/stfs (double→single)/stfd + indexed |
+| **FP register allocator (P5b, 2026-06-07)** | ✅ Block-local cache of PPC FPRs → ARM64 **V16–V23** (mirrors the integer RA). Double + single arithmetic, moves (fmr/fneg/fabs/fnabs), and D-form memory (lfs/lfd/stfs/stfd) are **zero-copy**; other FP ops stay coherent via the RA-aware `emit_load_fpr`/`emit_store_fpr` bridge. **Speedometer Math +16%** (~1.89× interpreter, was 1.29×). |
 | FP exceptions | ⚠️ Not tracked (ARM64 defaults match PPC defaults) |
 
 ### XER (Carry/Overflow) Implementation
@@ -159,26 +217,34 @@ All JIT access uses byte-level LDRB/STRB at individual field offsets:
 
 ## BasiliskII 68K JIT
 
-**Build:** ✅
+> ⚠️ **macOS arm64 (2026-06-04): does NOT currently build.** The configure host-routing
+> fix (`c71100d0`) now selects the AArch64 path, but the AArch64 JIT backend
+> (`compemu_support_arm.cpp`) is unported to macOS (Linux `uc_mcontext`, undeclared
+> `uae_vm_jit_write_protect`/`uae_vm_page_size`, `_XOPEN_SOURCE`). See
+> **`docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`**. The ✅ status lines below are
+> **historical (Linux / pre-regression)**, not a current macOS arm64 build.
+
+**Build:** ✅ *(historical — see caveat above)*
 **Interpreter:** ✅ Boots Mac OS 7.x, idle loop reached
 **JIT optlev=0:** ✅ Full boot, zero SEGVs
 **JIT optlev=2:** ✅ Full boot, zero SEGVs (mid-block branch side-exit fix applied)
-**JIT harness:** ✅ 301/301 vectors pass (score=100)
+**JIT harness:** ✅ 301/301 vectors pass (score=100) *(historical)*
 
 See `BasiliskII/src/uae_cpu_2026/compiler/` for the 68K → AArch64 JIT.
 
 ### BasiliskII QA status
 
-BasiliskII now has a repository-visible end-to-end QA scaffold in `BasiliskII/qa/` plus shared emulator-neutral VNC story tooling in `qa/tests/vnc/`. The intended post-JIT validation path is:
+The intended post-JIT validation path is:
 
-1. `jit-test/run.sh` opcode/vector preflight (`301/301`, score 100).
-2. `jit-test/rom-harness.sh` / `BasiliskII/qa/scripts/run-matrix.sh` ROM smoke.
-3. VNC/Xvfb desktop reachability with a known-good System 7 disk.
-4. Deterministic screenshot assertions in CI: PNG metrics, non-blank checks, hashes, optional Tesseract OCR, optional OpenCV templates.
-5. Hardware coverage evidence for safe user-mode networking (`ether slirp` first), dummy/real audio, disk persistence, PRAM/time, display modes, and optional CD/extfs/clipboard assets.
-6. Markdown and PDF reports generated from run artifacts.
+1. `BasiliskII/jit-test/run.sh` opcode/vector preflight (`301/301`, score 100).
+2. `BasiliskII/jit-test/rom-harness.sh` ROM smoke.
+3. Desktop reachability + deterministic screenshot assertions over VNC.
 
-The shared VNC runner currently defaults to the `noop` driver so both BasiliskII and SheepShaver profiles can validate user stories and reporting in CI without requiring a live desktop. A real VNC capture/input backend is the next automation gap.
+> **Note (2026-06-05):** the old repo-level VNC/Gherkin QA scaffold (`qa/` and
+> `BasiliskII/qa/`) was **removed** — it was Xvfb/Linux-oriented and is superseded by the
+> macOS VNC E2E harness at `SheepShaver/e2e/`. When the BasiliskII macOS build is restored,
+> desktop QA should follow the `SheepShaver/e2e/` pattern (isolated prefs + pristine disk),
+> not a revived Linux story tree.
 
 ### Test Harness (68K)
 

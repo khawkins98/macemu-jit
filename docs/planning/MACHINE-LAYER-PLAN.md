@@ -1,0 +1,770 @@
+# The Machine Layer — a designed NewWorld fidelity profile
+
+> **Status:** 🟢 Approved architecture (rev 4) · parent strategy for **Operation NewSheep** (the
+> branch's MAIN AIM — `docs/planning/newsheep/README.md`). Resume: `docs/HANDOFF.md`.
+> **Current state (header budget = 5 lines):** M0–M13 landed; M14–M17 (the forge arc) CLOSED — banked
+> NO-GO (M17 red-team BLOCKED). The §2.7 principle here ("LLE for boot, HLE for runtime") is now
+> pointed at the right component by NewSheep: **run/reproduce the Trampoline (producer of the
+> nanokernel boot-time init), not forge its outputs.** Native interrupt *delivery* works (M13); the
+> wall is that the Trampoline never runs. Do NOT re-chase per-wall CGRP/injection forging (bankrupt).
+> Re-scores: #3 CONFIRMED, #4 trigger recorded (§9). Live frontier: `docs/AGENT-CONTEXT.md`.
+> Full arc: `CHANGELOG.md` + §"Archived status narratives" below.
+> · **Created:** 2026-06-10 · **Updated:** 2026-06-12
+> **Decision (2026-06-10):** Stop extending the ROM-patching/paravirtualization approach toward
+> NewWorld and Mac OS 9.2.x one bug at a time. Instead, build the thing SheepShaver never had:
+> a **real machine-model layer** — MMIO bus, virtual clock, device models, interrupt/exception
+> architecture, supervisor environment — as a first-class, testable subsystem, landed as a second
+> **machine profile** beside the proven paravirtual path.
+>
+> **This is the new primary approach for ROADMAP D3** ("break the 9.0.4 ceiling").
+>
+> **Refinement (M13 CLOSE-OUT, 2026-06-14) — RETRACTS the interrupt sub-thesis; the fidelity-profile
+> plan still holds.** M13 set out to HLE an "unwired NK→DR interrupt handoff" (`cr2lt` at the EXT
+> fallback `0x50325f00`) believed to be the 9.0.1 blocker. That whole premise was **falsified as a
+> measurement artifact**: native 68k interrupt delivery already works — genuine level-1 vector-$64
+> autovectors fire in plain baseline (proven by re-targeting the blind exact-match probe `ed08`→`ed0a`,
+> 8/8; saved SR IPL=0; handler + VBL/deferred pass run; scheduler healthy). So device-model fidelity
+> was never the wall on 9.0.1 (rev-2 was right about that) AND neither was the interrupt handoff. The
+> **actual remaining 9.0.1 blocker is downstream: the `[ALARM]` model-rejection / pre-System gate**
+> (~15s, a Gestalt/model-ID or System-file boot gate). The Machine Layer's fidelity-profile thesis is
+> intact; the interrupt-delivery work (M9→M13, incl. the now-reverted `SS_NW_DR_AUTOVEC` and
+> `SS_M10_CGRP` mechanisms) targeted a non-problem. **Do NOT re-chase interrupt delivery / CGRP
+> registration / 68k injection.** M14 = characterize the model-rejection gate (leverage
+> `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` + the archived Upgrade-Card gate-bypass);
+> one early cross-version boot decides whether a ROM/OS-version route-around is even viable. Evidence:
+> `docs/planning/M13-FINDINGS-interrupt-delivery.md` (top retraction banner + §C-pin.7/8);
+> `docs/HANDOFF.md` (headline). The `2026-06-14-m13-nk-interrupt-delivery.md` plan is now HISTORICAL
+> (it planned the non-problem); `NANOKERNEL-STRATEGY-DECISION.md`'s "complete the NK interaction" framing
+> is superseded for the interrupt path by this retraction.
+
+---
+
+## 0. Lineage — what this supersedes and what it builds on
+
+This document is the synthesis of the Path A / Path B research arc. It **supersedes the
+strategy** in the documents below; their analysis, data, and reverse-engineering remain the
+foundation and are referenced throughout, not discarded.
+
+| Ancestor doc | Relationship |
+|---|---|
+| `HANDOFF-NEWWORLD-SUPERVISOR-MMU.md` (Path A) | **Superseded as a path, harvested as components.** Its §2.7 hybrid insight (LLE for boot, HLE for runtime) is this plan's core principle. Its §3 MMU rung-ladder becomes §2e here. Its §2.8 obstacle map remains the per-wall reference — and is now **explicitly inherited by milestone M6** (rev-2 correction: device models alone were never the blocking walls on the 9.0.1 path). The env-gated scaffolding (`SS_NW_TRAMPOLINE`, synthetic ECB stub, SegMap/PMDT spikes) are prototypes the Machine Layer replaces with designed components. |
+| `UPGRADE-CARD-PATH.md` (Path B) | **Superseded as a strategy, kept as a tactical tool.** The 4-byte System-file gate bypass and the SYSTEM-BOOT-GATES RE are permanently useful. Its key finding — the post-splash **SCC serial stall** — is the Machine Layer's first concrete consumer (M1). The "upgrade card" metaphor survives in corrected form: the cards we slot in are **device models and supervisor components**, not identity shims (identity patches were measured insufficient — UPGRADE-CARD-PATH §2.1). |
+| `NEW-WORLD-ROM-SUPPORT-PLAN.md` | Historical context for the NewWorld ROM work; staged parcels analysis still valid as reference. |
+| `PATCH-68K-SHIM-INVENTORY.md` | Path A artifact; the HLE-shim reference for milestone M6's shim triage and for whichever shims the fidelity profile keeps (§2f). |
+| `docs/planning/sheepshaver-research/SYSTEM-BOOT-GATES.md` | Active reference — gate anatomy + DSAT format, reusable across System versions. |
+| `DINGUSPPC-EVALUATION-PLAN.md` | Resolved the license question (GPLv2-or-later + GPLv3 → combined GPLv3, feasible). DingusPPC is promoted from "ideas-first reference" to **primary device-model donor** (§4). Caveat (rev 2): its device models hang off its `TimerManager`/event-scheduler globals — porting them means building our own virtual clock first (§2c / M2). |
+| `MMU-NANOKERNEL-MP-PLAN.md`, `MMU-DEFERRAL-REDTEAM.md` | Deep-dive references for §2e; the deferral verdict stands (classic Mac OS is morally V=P — no translation engine needed). One carve-out discovered in review: exception-vector delivery may need a single special-cased low-memory mapping (§2d). |
+| `COMPATIBILITY-PAYOFF-DINGUSPPC-REVISIT.md` | Its "make 8.6–9.0.4 run wanted software usably" verdict is unaffected — that work proceeds on the **paravirtual** profile in parallel. |
+
+**Why the pivot from both paths:** Path A devolved into ROM-specific byte-pattern RE with no
+unifying design (violating architecture-first); Path B proved that identity/gate patches cannot
+close a *structural* gap (a 1998 ROM environment vs a 2001 System's expectations) — its own
+frontier (the SCC stall) is literally a missing device model. Both paths independently arrived
+at the same wall: **SheepShaver has no machine model.** This plan builds one.
+
+---
+
+## 1. Goal and governing decisions
+
+**End state (Phase-3 "widen emulation," ROADMAP project arc):** a full-stack classic PowerPC Mac
+emulation platform — Mac OS 8.6 → **9.2.2** — benefiting from the native AArch64 JIT, with
+designed foundations for raw hardware handling, power management, and eventually Metal-mapped
+graphics.
+
+Decisions made 2026-06-10 (with Ken):
+
+1. **Destination is B, gait is C.** The platform vision ("model the complete PowerPC Mac")
+   justifies building permanent components — but we build them **in the order 9.2.x demands**,
+   no speculative generality.
+2. **Classic Mac OS only; door architecturally ajar for OS X.** Classic Mac OS is morally V=P,
+   so the DIRECT_ADDRESSING/NATMEM identity-mapped JIT fast path stays. We do **not** build a
+   softmmu. The memory-access seam (MMIO bus) is designed so a translation layer *could* slot
+   in later; we never pay for it now.
+3. **Strangler-fig dual profile (Approach A).** The new work lands as a second, pref-selected
+   **machine profile**. Today's path is frozen as `paravirtual` and remains the shipping
+   default with all gates green. The `newworld` fidelity profile grows beside it, component by
+   component, A/B-testable against the known-good path.
+4. **Chassis stays SheepShaver.** Evaluated and rejected: porting our JIT into DingusPPC
+   (near-rewrite of the JIT's memory/dispatch model; abandons our host-integration and
+   verification investment) and adopting QEMU as substrate (TCG replaces our JIT — the
+   project's reason to exist). Both are demoted to supporting roles: DingusPPC = device-model
+   donor, QEMU = behavioral oracle.
+
+   *Identity check — this is NOT a QEMU fork with JIT ambitions.* QEMU's posture is full LLE
+   (every device real, guest opaque, softmmu, TCG). SheepShaver's posture — which we keep —
+   is a paravirtualized OS runtime (HLE video/disk/network/FS, identity-mapped memory, our
+   JIT, first-class host integration). The Machine Layer adds a **thin LLE crust at the
+   firmware boundary only**: one SCC, a VIA timer surface, a PIC, NVRAM, a clock, honest
+   exception delivery — perhaps 2–3% of a QEMU-style machine model, fenced to exactly the
+   registers the ROM provably probes (machine-description §4). Everything above the firmware
+   stays paravirtual, permanently (§2f). **Anti-drift rule: the day a milestone proposes
+   modeling hardware the ROM doesn't probe, the answer is no — that's rebuilding QEMU,
+   badly; use QEMU (we do — as the oracle).**
+5. **(rev 2) The fidelity profile models exactly ONE machine: Core99-class (Power Mac G3
+   B&W/G4 era — KeyLargo MacIO + OpenPIC), the machine QEMU `mac99` and DingusPPC both model
+   well and the 9.0.1 ROM targets.** The 1.1 ROM expects Heathrow/Paddington-class hardware —
+   a *different* machine; supporting both would mean two address maps, two PICs, two device
+   trees. The 1.1-ROM/9.2.1 tactical path (Path B's frontier) gets **only standalone device
+   model(s) at the addresses the stall loop actually polls** — not the full profile.
+   *(rev 3 caveat — RESOLVED by spike S3 (rev 4): the stall is the ROM's serial test monitor
+   polling SCC ch A (0xF3012002) with a VIA 6522 T2-timeout escape (0xF3016000) — r18=VIA,
+   r19=SCC; M1's scope is SCC + VIA timer/IFR. And per spike S1, the 1.1-ROM path is a bus
+   testbed only — 9.2 audits CFM boot fragments that only parcels ROMs provide, so 9.2-on-1.1
+   is structurally capped regardless of devices.)*
+
+---
+
+## 2. Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│ Host integration (SDL3, VNC, E2E, prefs)        │  ← unchanged
+├─────────────────────────────────────────────────┤
+│ CPU core: AArch64 JIT + interpreter              │  ← fast path unchanged; exception/
+│   memory access stays identity-mapped            │    SPR slow paths gain a profile seam
+├──────────────────┬──────────────────────────────┤
+│ Profile:         │ Profile: NEWWORLD FIDELITY    │
+│ PARAVIRTUAL      │  (new, Core99-class machine)  │
+│ (today's path,   │  ┌─────────────────────────┐ │
+│  frozen & green) │  │ Machine description      │ │
+│                  │  │ MMIO bus + virtual clock │ │
+│  ROM patches +   │  │ Device models:           │ │
+│  HLE shims +     │  │  SCC · VIA/Cuda · PIC ·  │ │
+│  EMUL_OPs        │  │  NVRAM · MacIO · DBDMA   │ │
+│                  │  │ Interrupt/exception      │ │
+│                  │  │  architecture (MSR/SRR)  │ │
+│                  │  │ Supervisor env:          │ │
+│                  │  │  MMU bookkeeping ·       │ │
+│                  │  │  Trampoline synthesis    │ │
+│                  │  └─────────────────────────┘ │
+│                  │  HLE shims kept for runtime   │
+└──────────────────┴──────────────────────────────┘
+```
+
+New code lives in `SheepShaver/src/machine/` — explicit, testable components replacing the
+diffuse patchwork of ROM patches, fake memory pages, and env-gated hacks.
+
+### 2a. Machine description (the contract everything implements)
+
+An explicit, versioned description of the modeled machine: physical address map (MacIO base,
+device offsets), interrupt tree (which device raises which PIC input), and the **device-tree
+skeleton** the synthesized firmware handoff publishes to the guest. This is a *design artifact
+produced in M0*, because every later component implements against it — device addresses (M1,
+M4), interrupt routing (M3), and critically the **video node**: the HLE video path must appear
+as a plausible display device in the tree (the future `.ndrv`/Metal seam — §2f), and
+HLE-backed devices must NOT advertise capabilities (e.g. DBDMA channels) that we don't model.
+
+### 2b. MMIO bus (the keystone)
+
+A registry of guest physical address ranges → device objects with
+`read(addr, size)` / `write(addr, size, value)` handlers.
+
+**Three dispatch paths, by access origin** *(rev 2 — the original "the existing SIGSEGV
+machinery already decodes faulting accesses" was wrong; on macOS arm64 the handler is
+`pc += 4` with no operand decode — `sigsegv.cpp:2564`. rev 3 — a third access class was
+missed entirely)*:
+
+- **JIT path — fault + decode.** Device pages are left unmapped inside the NATMEM
+  reservation; a SIGSEGV/Mach-exception handler decodes the faulting **JIT-emitted** access
+  and dispatches to the bus. This requires building (M1): an **AArch64 load/store decoder**
+  for the specific access forms the JIT emits (`ppc-jit.cpp` emits clean
+  `LDR/STR Wt, [RMEMBASE, Xidx]` + separate `REV` — a deliberately restricted, decodable set;
+  the JIT memory-emitters become the *contract* the decoder tests against), register
+  writeback via Mach thread state, and an explicit **endianness contract**: the injected
+  value must be raw big-endian, because the JIT's `REV` executes after the resumed load.
+- **Interpreter path — software range check.** Interpreter memory accesses are
+  compiler-generated host code (undecodable), and nested `execute()` contexts (interrupt
+  handlers, EMUL_OPs) run in the interpreter — exactly where device touches from handlers
+  happen. The interpreter's memory accessors get an address-range check that calls the bus
+  directly. Both paths land on the same device handler. *(rev 3)* The range check is
+  **compiled/branch-gated per profile** so the paravirtual interpreter path (incl. all
+  nested-execute contexts and the `SS_USE_JIT=0` baseline) pays nothing — and the bench
+  gates must include an interpreter-mode measurement to prove it, since the §3 gates
+  otherwise only measure JIT.
+- ***(rev 3)* Host-accessor path — explicit bus entry points.** A large access class is
+  host-side C++ via `ReadMacInt*`/`WriteMacInt*`/`Mac2HostAddr`: EMUL_OP handlers,
+  `Execute68k`, HLE shims (serial/disk/video), ROM patching — and our own debug tooling
+  (`SS_PROBE_PC` `[rN:SIZE]` dumps, `SS_JIT_WATCH_ADDR` reads). Any of these touching a
+  trapped page faults at arbitrary compiler-generated code — undecodable, so under the
+  abort-loudly rule a guest driver handing a device address to an HLE shim (or a developer
+  probing 0xF3xxxxxx) would hard-abort the emulator. Contract: host code accesses device
+  space only through explicit `bus_read`/`bus_write`; debug builds assert-on-MMIO-range in
+  `Mac2HostAddr`; the probe/watch tools route through the bus or refuse device ranges loudly.
+
+**Region kinds** *(rev 2)*: the bus API distinguishes **trapped-MMIO** regions (unmapped,
+fault-dispatched — device registers) from **mapped-aperture** regions (real memory, direct
+access, dirty-tracked — the future Metal framebuffer). Trap-per-write framebuffers are
+impossible; baking the distinction into the API now avoids a bus redesign at the Metal
+milestone.
+
+**Polling-loop strategy** *(rev 2 — the original "boot-time polling is not perf-critical" was
+contradicted by our own data: the nanokernel idle loop IS a device poll, observed at ~2.6M
+iter/s. rev 3 — costed honestly: this build uses **Mach exceptions**, not in-thread signals;
+each fault is a Mach message + thread suspend + 2× get/set state = microseconds, so a MHz-rate
+poll through the fault path is ~hours-per-second of wall time, not merely "slow")*:
+**(a) JIT backpatch is in M1 scope, not in reserve** — a known-faulting access site gets
+patched to call the bus directly (Dolphin's approach); the fault path is the *discovery*
+mechanism, the backpatch is the steady state for hot sites; **(b) idle-detection** — when a
+device read polls "no work" N consecutive times, the device may request a host-side
+sleep/yield (also the future power-management hook). The bus logs per-region fault rates so
+any storm is visible, not theorized.
+
+**Constraints:** 16 KB host-page granularity (trapped regions must be 16 KB-aligned; fine for
+the 0xF30xxxxx device block, but means a "device pointer" aimed into mapped RAM can never
+trap — consumers like `[KDP-0x900]` must point at real unmapped device addresses). The
+fidelity profile **disables** `ignoresegv` and the legacy hardcoded PC/register serial-skip
+hacks (`sheepshaver_glue.cpp` sigsegv handler) — a skip firing before bus dispatch would
+silently eat a device access. MMIO regions are excluded from `SS_JIT_VERIFY` replay (device
+reads are side-effecting — clear-on-read/FIFO-pop — and must never be double-executed).
+
+**Cost model:** zero on the RAM/ROM fast path — those stay raw JIT loads/stores. **OS X door
+(decision 2):** the bus is the memory-access seam; if translation is ever needed it slots in
+here.
+
+### 2c. Virtual clock & event scheduler *(rev 2 — new component; was entirely missing)*
+
+**M2 landed (2026-06-10):** `virt_clock` (`SheepShaver/src/machine/virt_clock.cpp`) and `event_sched` (`src/machine/event_sched.cpp`) — the latter is a port of DingusPPC `core/timermanager.{cpp,h}` @ `92bb6d10549529f9f4031a85c2bc136149535bdc` (GPL-3.0) — are the live production implementation of this section.
+
+There is no guest time infrastructure today: DEC reads return 0 (or the `SS_SYNTH_DEC` hack),
+`mtspr DEC` is **dropped**, and timing is the host 60 Hz tick thread. Every device model needs
+a time base: VIA timers, SCC baud/timeouts, DBDMA completion, and the CPU's own
+timebase/decrementer. Component: a guest-visible **TB/DEC** honoring `mtspr`/`mfspr` (mapped
+to host monotonic time at a fixed ratio), plus a **host event scheduler** (ordered timer
+queue) device models hang callbacks on. This is also the porting prerequisite for DingusPPC
+device code, which is written against its `TimerManager` equivalent.
+
+Note the architectural split this enforces: **DEC is a CPU-internal exception (vector 0x900)
+— it never passes through the PIC.** VIA/device timers raise PIC inputs. The two paths are
+distinct in §2d.
+
+### 2d. Interrupt & exception architecture *(rev 2 — promoted to the central component; it was
+mis-scattered across milestones as if a side effect)*
+
+Today's `interrupt()` (`sheepshaver_glue.cpp:595`) is a host-managed context switch: it fakes
+the nanokernel's register-save into the KDP context block, swaps stacks, runs a **nested
+`execute()`** terminated by an EMUL_RETURN trampoline, and restores PC/LR/CTR — with
+`SDL_PumpEvents` running inside `HandleInterrupt`. The fidelity profile replaces this with
+real delivery: device → PIC → CPU exception → guest handler → `rfi` resume.
+
+What that actually requires (the honest list):
+- **MSR model:** EE (external-interrupt enable) gating, PR, IP — stored state the
+  CPU core consults at interrupt-delivery points (spcflags are checked at block boundaries —
+  that is the precise-interrupt point; acceptable for classic Mac OS).
+- **SRR0/SRR1 + `rfi`:** real save/restore semantics so the guest handler returns into JIT
+  execution. (This also structurally fixes the `sc` double-increment bug class — `sc` becomes
+  a real exception instead of `execute_illegal` + ad-hoc PC bumps.)
+- **Vector-base decision:** PPC exceptions vector to physical 0x0100–0x0F00 — which under
+  identity mapping **collides with 68k low-memory globals** (`Ticks` at 0x16a, the RTE stubs,
+  etc.). On real hardware the nanokernel maps 68k-virtual 0 away from physical 0; we defer
+  real translation. Two candidate resolutions, to be settled by a bounded experiment at the
+  start of M3: **(i) direct-entry** — the PIC/exception layer dispatches straight to the
+  nanokernel's known handler entry points (recovered from the working `interrupt()` ABI),
+  skipping the vector page entirely; or **(ii) one special-cased mapping** for the vector
+  page only (the single rung-3 carve-out). Start with (i) — it is the smaller delta from the
+  proven mechanism.
+- **Host-integration relocation:** `SDL_PumpEvents` and friends move out of the interrupt
+  path to a host-side cadence.
+- ***(rev 3)* Deliverability rule — real exceptions vs the nested-execute HLE we keep:**
+  EMUL_OPs/HLE (§2f) still run via nested `execute()` terminated by EMUL_RETURN trampolines.
+  A PIC assertion delivered *inside* a nested context would have the guest handler `rfi`
+  "back" into a continuation that is a host C++ stack frame — undefined, the `sc`
+  double-increment bug class one layer up. Rule: **external interrupts are deliverable only
+  at depth-1 block boundaries**; nested HLE contexts execute as if MSR.EE were masked, with
+  a pending-latch drained on return to depth 1. M3's harness additions include a test vector
+  for exactly this.
+- **CPU-core honesty** *(rev 2 — the original "CPU core unchanged" claim was false)*: `sc`,
+  DEC, MSR, SRR0/1 live in shared CPU files (`ppc-execute.cpp`, `ppc-jit.cpp` SPR cases).
+  The profile seam goes *inside* the CPU core on **slow paths only** (exception dispatch, SPR
+  access) — a profile check at those sites, never per-memory-op. Standing rule: any new
+  `powerpc_registers` fields (MSR, SRR0/1, DEC) are appended **last** (the JIT hardcodes
+  struct offsets) and require a clean PPC recompile (known stale-build footgun).
+
+### 2e. Supervisor environment (the rung-ladder, continued as components)
+
+- **Rung 2 — SR/BAT as stored state** (S, general correctness): store what `mtspr`/`mtsr`
+  writes, return it on read-back, like the SPRG0–3 fix already harvested from Path A.
+- **Synthesized Trampoline handoff:** the **recovered-by-RE** register/KDP/device-tree state
+  Open Firmware leaves for the nanokernel *(rev 2: not "documented" — no public source states
+  the Trampoline's post-conditions; our contract comes from Path A's wedge/RE work and has
+  known soft spots, e.g. the SegMap episode)*. Built by ABI contract as a designed
+  initializer, publishing the §2a device tree. Promoted from the env-gated
+  `SS_NW_TRAMPOLINE` writes.
+- **MMU bookkeeping only:** rungs 3+ (pre-seeded HTAB, shadow arenas, softmmu) stay deferred
+  per MMU-DEFERRAL-REDTEAM — except the possible single vector-page carve-out (§2d).
+
+### 2f. What stays HLE on purpose
+
+Video (→ the future Metal surface, advertised through the §2a device tree as a display node),
+disk, ethernet, sound, file system. These are *runtime* paths where paravirtualization is the
+feature, not the compromise — it's where the speed is and where host integration (and
+eventually Metal) hooks in. The hybrid split is permanent architecture, not a transition
+state: **LLE for what the ROM probes, HLE for what the OS uses.** Constraint from §2a: the
+device tree must not advertise LLE capabilities behind HLE devices (no phantom DBDMA channels
+on nodes we service by HLE).
+
+### 2g. Execution & locking model *(rev 3 — new section; rev 2 had zero words on threading)*
+
+This build handles faults via **Mach exceptions on a dedicated handler thread**
+(`HAVE_MACH_EXCEPTIONS`, `sigsegv.cpp:727` spawns `handleExceptions`, which mutates the
+suspended CPU thread via `thread_get/set_state`). So the machine layer's contexts are:
+
+| Context | Thread | Touches device state? |
+|---|---|---|
+| JIT-path MMIO (fault dispatch) | **Mach exception-handler thread**, CPU thread suspended mid-instruction | yes |
+| Interpreter/host-accessor MMIO | emul (CPU) thread | yes |
+| Event-scheduler callbacks (VIA timers, DBDMA completion) | tick/timer thread | yes |
+| Interrupt assertion (PIC → CPU) | any of the above | spcflags only |
+
+Rules:
+1. **One lock per device** (or finer): all device-state mutation goes through the owning
+   device's lock, regardless of entry path. Device handlers must be small and never call
+   out into emulator subsystems while holding their lock.
+2. **The Mach-handler thread takes no foreign locks** — no malloc, no stdio, no JIT-compile
+   lock; anything possibly held by the suspended thread deadlocks the emulator. Device
+   handlers reachable from the fault path must satisfy this (lock-only-their-device,
+   pre-allocated memory, deferred logging via ring buffer).
+3. **Interrupt assertion is atomic-with-ordering**: PIC → spcflags uses the existing atomic
+   spcflags mechanism (release/acquire), safe from any thread; delivery happens only at the
+   CPU thread's block-boundary poll (§2d).
+4. **SIGUSR2 interplay**: the legacy tick→`pthread_kill(emul_thread, SIGUSR2)` interrupt
+   path can land while the CPU thread is Mach-suspended; on the fidelity profile the SIGUSR2
+   mechanism is retired with the nested-execute path (M3) — until then, fidelity-profile
+   testing documents the suspension window as a known hazard.
+5. **lldb caveat**: a debugger attach contends the EXC_BAD_ACCESS exception port — debugging
+   the bus with lldb perturbs the bus. Bus diagnostics must be log/telemetry-first (consistent
+   with the existing single-attach VBL rule in LEARNINGS).
+
+---
+
+## 3. Milestones *(rev 2 — re-cut after review: M1 grew, the clock got its own milestone, the
+interrupt/exception redesign is now explicitly the big rock, and the inherited Path A walls
+got their own milestone instead of hiding inside "integration")*
+
+Each milestone is independently valuable and gated; the paravirtual profile's gates
+(`make test-jit`, `make e2e`, bench history) stay green throughout — the standing
+non-regression contract.
+
+**Pre-M0 spikes** — ✅ **ALL THREE COMPLETE (2026-06-10, same day — see
+`docs/planning/spikes/`)**. Results, each of which changed the plan (rev 4):
+
+- ✅ **S1 — QEMU gate-check** (`SPIKE-S1-QEMU-GATE-CHECK.md`): **gates PASS natively on the
+  9.0.1 ROM** — the unpatched 9.2.1 installer (all `_SysError` sites A9C9-intact, verified)
+  boots to Finder under QEMU mac99 with the 2001 "Mac OS ROM 9.0.1" swapped in. **And the
+  gate-2 probe (~0x7E24) is not a model check at all: it is a CFM boot-fragment audit** —
+  `Gestalt('mach')` selects a checklist, then verifies DebugLib/InterfaceLib/Math64Lib/
+  MPLibrary/… fragments via `GetResource('fovr'/'sfvr'/'nlib')` + CFM lookups — state the
+  9.0.1 ROM's `prcl` parcels provide and **the 1.1 ROM structurally cannot** (no parcels, no
+  fragment names). Consequences: (a) M7's path is settled — native 9.0.1 ROM, no ROM-swap
+  rung, 4-byte bypass kept only for the residual $76-on-HD-copy case; (b) **Path B was
+  structurally doomed**, retroactively explaining why identity patches never worked; (c) M1
+  consumer (a) (9.2-on-1.1) is re-framed as a **bus/SCC testbed only** — its endgame is
+  capped by the missing parcels, it is not a route to 9.2. Bonus: `macos921.dsk` actually
+  contains Mac OS **8.6**, not 9.2.1.
+- ✅ **S2 — Mach fault-decode spike** (`SPIKE-S2-MACH-FAULT-DECODE.md`, working code in
+  `spikes/s2-mach-fault-decode/`): **keystone validated end-to-end, first try** — PROT_NONE
+  page → Mach EXC_BAD_ACCESS on a handler thread → decode the exact JIT form
+  (`LDR Wt,[Xn,Wm,UXTW]`, mask 0xFFE0FC00/0xB8604800) → inject raw BE via
+  `thread_set_state` → resumed `REV` yields the correct guest value; **identical from a
+  MAP_JIT page** (known-unknown resolved); zero entitlement/hardened-runtime friction.
+  **Measured cost: ~5.8–9.6 µs/fault (typical ~8.5 µs) vs sub-ns mapped — ~10⁴×** — the
+  2.6M iter/s idle poll would cost ~22 wall-s per guest-s through the fault path, hard-
+  confirming backpatch-in-M1-scope. Decoder gotchas captured for M1: PAC-safe PC accessors,
+  rt==31→WZR, zero-extended W writeback, width-keyed inject (LDRB has no REV; stores REV
+  *before* STR so the faulting value is already raw BE).
+- ✅ **S3 — stall-loop device probe** (`SPIKE-S3-STALL-DEVICE-PROBE.md`): **the identities
+  were mislabeled again** (decision-5 caveat vindicated). The 9.2.1 post-splash stall is the
+  ROM's factory **serial test monitor** ("STM 2.2/CTE 2.1") polling **SCC ch A** (RR0 bit 0
+  at 0xF3012002, data +6) — but the monitor's designed escape is a **VIA 6522 T2 timeout**
+  (IFR at 0xF3016000, 0x200 stride) + Cuda handshakes: r18=VIA, r19=SCC (SYSTEM-BOOT-GATES
+  §5 had the labels backwards — corrected). An honest "no Rx char" SCC alone plausibly
+  never terminates the monitor's blocking read — **the VIA timer is likely the real
+  un-stick mechanism**. `check_work` (9.0.1) is **SCC-only, conclusively** (full Zilog WR
+  init sequence decoded; HANDOFF §1.7.1 confirmed, commit e0e8640e refuted) — but its
+  timeout loop needs a **ticking DEC** (M2 dependency reaching into M1 consumer (b)).
+  **M1 device scope: SCC 8530 + VIA 6522 timer/IFR surface (Cuda as loud stub).** Open
+  follow-up: the 9.2.1 entry path into the monitor (cheap SS_PROBE_PC probe).
+
+| # | Milestone | Definition of done | Effort |
+|---|---|---|---|
+| **M0** | ✅ **Profile plumbing + machine description — DONE 2026-06-10** (machine pref + unit-tested profile module; SS_NW_* consolidated, SS_NW_TRAMPOLINE deprecated alias; skips/ignoresegv gated off on newworld; paravirtual byte-identical: test-jit 350/350 + e2e PASS; CORE99-MACHINE-DESCRIPTION.md + ROM-PATCH-AUDIT.md landed) | `machine` pref (`paravirtual` default / `newworld`); `SS_NW_*` env-gate sprawl consolidated under the profile; fidelity profile disables `ignoresegv` + legacy serial-skip hacks; paravirtual byte-identical, all gates green. **Plus the §2a machine-description artifact** (Core99 address map, interrupt tree, device-tree skeleton) reviewed against the 9.0.1 ROM's actual probes, **including a ROM-patch audit table** *(rev 3)*: every `PatchROM`/`patch_nanokernel`/`patch_68k` patch that neutralizes device init (`via_init*`, `scc_init`, `cuda_init`, GC interrupt-mask NOPs…) classified keep-on-fidelity / retire-at-Mx / replace-with-device-model — device models behind patched-out guest init are dead code, so each device milestone's DoD names the patches it retires and asserts the un-patched ROM init sequence completes. | M |
+| **M1** | ✅ **MMIO bus + SCC 8530 + VIA timer/IFR surface — implementation complete + unit/e2e-validated 2026-06-10; live acceptance PARTIAL** *(scope set by spikes S2+S3; conformance audit: `docs/planning/machine/M1-DEVICE-CONFORMANCE.md`. Acceptance run 2026-06-10: bus activation, KDP wiring, scc\_init retirement, no aborts/regressions, paravirtual e2e PASS all verified; **consumer-(b) live acceptance blocked on the NK boot ceiling at pc=0x503123fc (ea=0xffffffff, page-descriptor build loop) — CEILING ROOT-CAUSED + FIXED (commit `d8932203`)**: un-seeded `KDP+0x6b4` clamped the page-descriptor loop to ~16k iterations, driving the stride-8 pointer walk at `KDP+0x80` into `0xFFFFFFFF` poison at `KDP+0x340` → faulting `stw r30,0(r8)` at `0x5031240c`; the pre-M0 paravirtual path had silently eaten these faults via `ignoresegv` for the entire page-init stage (prior "passed nanokernel init" claims under the old path were partially an ignoresegv illusion; the fidelity profile's abort-loudly design surfaced this within hours of landing). Fix: ROM instruction patch in `rom_patches.cpp` (gated `g_rom_904_lenient` + newworld): `lwz r8,0x6b4(r1)` at ROM 0x3123ac → `lis r8,1` (cap=65536 pages for 256 MB). Boot now advances one stage further then hits the **0x50326050–0x50326068 MMU/segment-handler wall**: `lwbrx` of hardcoded physical `0x200a0` (below RAMBase) inside the NK's segment-fault handler (`mtdbatl/mtdbatu`, `mtsrin`, `mtmsr` translation toggling, byte-reversed PTE accesses) — the genuine SR/BAT/supervisor-environment wall, M3/M5 territory, HANDOFF §2.8. Consumer-(b) live acceptance remains blocked, now by a root-caused, documented hard wall. Fault path + backpatch + thunk validated by unit tests (21-check machfault dispatch + THUNK-SELFTEST).)* | Three-path dispatch (§2b): AArch64 fault decoder + Mach writeback + endianness contract for the JIT path (S2-validated; S2's decoder gotchas are the unit-test checklist); software range-check in interpreter accessors (profile-gated, interpreter-mode bench proof); explicit `bus_read/write` host-accessor entry points; region kinds (trapped/aperture) in the API; **JIT backpatch for hot sites (in scope — S2 measured ~8.5 µs/fault, ~10⁴× a mapped access)**; per-region fault-rate logging + idle-detection hook; §2g locking rules implemented. Devices per S3: **SCC 8530** (legacy +2/+6 layout, WR-pointer state machine, RR0/RR1 bits) **+ VIA 6522 timer/IFR surface** (the serial monitor's T2-timeout escape is plausibly the real un-stick; Cuda = loud stub) **+ a minimal DEC tick** (pulled forward from M2: `check_work`'s timeout loop needs it — full clock/scheduler stays M2). Consumers: (a) ⚠️ **DEMOTED 2026-06-10 — likely DROP**: the post-splash stall's root cause is NOT missing SCC hardware but **A-line vector ($28) corruption from a Memory Manager heap free-list bug** (guest/ROM-vintage mismatch; interpreter-reproducible, not a JIT bug — see SYSTEM-BOOT-GATES §5 rewrite + commit 46e497d8). The serial monitor is merely where the corrupted vector lands. Combined with S1 (1.1 ROM structurally lacks the parcels/CFM fragments 9.2 audits), the 1.1-ROM path is closed; an SCC model cannot fix heap corruption. M1's acceptance consumer is (b) alone; keep (a) only if a cheap STM-monitor poke is wanted as a bus smoke test — run as a **named third config** (`paravirtual` + bus + devices − serial-skips), `SS_COMPAT_92X`'s SCC-neutralizing patches retired, DoD asserts **observed device register traffic** (no false pass); (b) nanokernel `check_work` polls a real SCC **at an unmapped F3 address** (not a RAM pointer) without a fault storm (backpatch + idle-detection proven). Device unit tests + QEMU conformance (§5). | **L** |
+| **M2** | ✅ **Virtual clock — implementation complete + gates green 2026-06-10; acceptance: `9.0.1 diagnostic boot 2026-06-10: mtspr_dec=3 / mfspr_dec=0 / tb_writes=0 / dec_expiries=0; boot dies at the unchanged pre-existing 0x50326050–68 MMU/SR wall (ea=0x200a0), identical in baseline (SS_SYNTH_DEC=0) and acceptance runs — DEC is not load-bearing pre-wall on the current path; the S3 §2.4 check_work DEC consumer (0x50326520+) lies beyond the ceiling, so mfspr-DEC live coverage carries forward with it (unit-level: the check_work deadline-math simulation in test_virt_clock)`** *(virt_clock + event_sched modules: `SheepShaver/src/machine/virt_clock.cpp` + `event_sched.cpp`; DingusPPC `core/timermanager.{cpp,h}` port @ commit `92bb6d10549529f9f4031a85c2bc136149535bdc` (github.com/dingusdev/dingusppc), GPL-3.0; combined work GPLv3. Adaptations: rename, no singleton, no loguru, NS_PER_* inlined. `SS_SYNTH_DEC` absorbed as deprecated force-override (=0 escape hatch still works; readings no longer monotone free-run once the guest writes DEC). Cold-state bit-identical to M1 synth counter. DEC-expiry: CONDITION latch only — delivery is M3a. `mdec_dat` gate live for 1.1-ROM newworld; 9.0.1 parcels ROM natively un-patched (pattern absent, byte-verified — the 9.0.1 boot exercises the M2 clock seams, not the gate). VIA timers re-clocked off VirtClockNowNS; N6/N7/N8 conformance notes resolved + T1CL-read ack added for symmetry. Integration: clock init after get_system_info (cpuclock pref honored), scheduler pump thread (10ms cap, kicked-predicate), DEC eager-expiry hook. Paravirtual profile inert (no thread, no output). Known accepted M2 risk (documented): VIA timer_arm allocates on a Mach-fault-reachable path (§2g); M3a hardening = pre-allocated slots (deferred — the M3a hot path did not hit the allocation site in practice). Gates: machine suite 8/8 (192+ checks), test-jit 350/350 batch+legacy, e2e-test 122/122, positive seam check (mfspr r3,DEC returned nonzero through the real interpreter seam).)* | Guest-visible TB/DEC honoring `mtspr`/`mfspr` (the `SS_SYNTH_DEC` hack and M1's minimal DEC tick retired/absorbed); host event scheduler for device timers; DEC-expiry raises the CPU decrementer exception *condition* (delivery landed in M3a). | M |
+| **M3a** | ✅ **Exception core + DEC delivery — DONE 2026-06-10** (exc_core pure module; sc/rfi real semantics; EE-edge re-raise; DEC delivery hook; [NW-INT] deleted; HandleInterrupt fenced; test-jit 353/353 + machine suite 9/9 + e2e PASS throughout. Acceptance: first real PPC exception delivered `[EXC] DEC delivered #1: restart=50429b40 srr1=0000f072 msr=00001040 -> entry=50412b1c`; both delivery directions verified (delivers when EE permits, defers when not); **end-to-end demo** SS_SCC_RX_INJECT CR at T+25s → 10 new compiled blocks; M1 Rx-path carry-forward closed. **Honest carry-forward:** the boot frontier is the NK Thud debug console whose designed wake is a serial character — M3a confirmed both interrupt-delivery directions live; waking past the console is M3b + M6 territory.) | M |
+| **M3b** | **OpenPIC + Cuda/ADB + interrupt completion** ← *M3 second half*. **Wave 1 ✅ complete 2026-06-11** (plan: `docs/superpowers/plans/2026-06-11-machine-layer-m3b.md`; acceptance record: `docs/planning/machine/M6A-WAVE2-SHIM-RECON.md` "M3b Wave 1 acceptance"): dev_cuda protocol model (behavioral extraction from QEMU cuda.c @ `de5d8bfd` + DingusPPC viacuda.cpp @ `92bb6d10`; test_dev_cuda 3924 checks incl. CV-0…CV-10) + adb_stub (kbd@2/mouse@3, Talk R3, Listen-R3 address-move; full host-input-over-ADB deferred per donor study §7.2, tracked in ROADMAP D3) + VIABindCuda seam + RTC/PRAM/I2C commands + cuda_init/adb_init retirements (no-op on 9.0.1 by construction). Key fix: CV-10 deferred SR-int delivery (`d3e60d88` — QEMU's 20 µs SR-int delay reproduced as lazy delivery on the R_IFR read path; the sync park root cause). **Acceptance: the M6a ORB=18338 sync frontier CROSSED; boot runs past the Cuda walls** (packets=9529, pram/i2c traffic, unknown=0, comp climbing, no park) but cycles a Cuda probe sequence without reaching ADB/GET_TIME. **Loop-ender ROOT-CAUSED (2026-06-11, recon `b3a947e4`): the "cycle" is a deterministic ~80 ms REBOOT LOOP** — each pass is a full re-init ending in a SysError-shaped trap to reset, fired at MPLibrary's parcel init — root-cause refined by the follow-up recon (`36f048a0`): MPLibrary's "entry" is a MixedMode RoutineDescriptor; the $AAFE trap reaches the DR's FE01 Mixed-Mode service, whose save-record allocator found the **ECB pool unprovisioned** ([ECB+0xE0..0xEC] all zero — NK-provisioned on real HW) and fell through a zero entry-vector slot into **our own table[0] always-cold-start diagnostic trampoline** → reset. The loop was SELF-INFLICTED scaffolding debt; no SysError, no syscall involved (vector-0xC00 suspicion refuted — no sc is reached). Falsified as gates: Cuda reply content (twice), Ticks starvation, disk presence; IER/SCC storms are delay primitives. **THE §9 STOP-RULE FIRES — the frontier is NOT interrupt-shaped.** `SS_NW_MM_POOL` (`3936db4b`) seeds a 4-record pool and ELIMINATES the reboot loop — *(update 2026-06-11: the pool AND the full Mixed Mode switch are now newworld profile DEFAULTS; the MM-switch frontier named here was completed by **M6a rung 2** — see the M6 row)*. OpenPIC ships model+tests with EXC_EXTERNAL wiring DEFERRED (no live consumer); the DEC chain is real but downstream. *(Wave-2 update 2026-06-11: the **OpenPIC (KeyLargo MPIC) model + 206-check unit suite LANDED** (`b86449c9`, target pre-wire `884586a5`) — pure module + tests per the stop-rule disposition, QEMU-oracle behavioral reimplementation with the oracle corrections baked in (KeyLargo register file is little-endian; CTPR resets to 15); machine suite is now 12 suites; `OpenPICBindOutput` is the future wiring seam. And the **EE-chain recon memo** (`89fd0642`, `docs/planning/machine/EE-CHAIN-RECON.md`) maps the 11-link delivery chain (real through delivery, fictional after), pins the first-EE-rise verdict (EE rises by rfi — the NK forces EE=1 at 0x50313bf8; the pending DEC latch makes the first rise an instant delivery) and **recommends re-ordering Wave 2 verification-first: W2-0 (decision extraction + test_exc_chain) → W2-1 (harness lane) → W2-2 (probe session) BEFORE W2-3 (OpenPIC wiring) → W2-4 (tm_task/via_int retirements)**. **W2-3 SHIPPED GATED-OFF** (`b2e0d718`/`7cafd6ae`/`95d3fc53`/`81e3ea4a`): the OpenPIC wired to the M1 bus at 0xF3040000+0x40000, SCC Rx-int + VIA summary edge as inputs, level-held EXT pending flag + CPU kick as output; `ExcEnter(EXC_EXTERNAL)` consuming `external_entry` (0x50314880, NK-published `[KDP+0x374]`); flip HELD per stop-rule 3 (no EE riser on the boot path; PIC reads=0 writes=0); chain live-proven by one `[DIAG-FORCED]` boot pair (SCC→0x25 leg; VIA→197 edges/boot); EXT delivery harness-proven at H6/H7 (9/9 score=100); gated-off A/B byte-identical. **W2-4 (tm_task/via_int retirements) is evidence-gated next for Stream B** — activates when a live EE riser exists.)* *(M7 close-out update 2026-06-12: **W2-4 is CLOSED — its remainder shipped via the M7 interrupt-injection milestone** (`2026-06-12-interrupt-injection.md`, arc `153c088b`…`81d60cc1`) per the rev-2 supersession table: the reserved riser/published flip landed as the Task-C cluster flip (`SS_NW_EE_RISER`+`SS_NW_DEC_PUBLISHED`+`SS_NW_HOST_IRQ` newworld DEFAULT, `81d60cc1`); tm_task retirement MOOTED by `2ff7765f`; via_int cluster RETAINED-as-load-bearing (it IS the consumption rail — Q-I3); XLM_IRQ_NEST documented-as-dead; polled-trampoline/SDL_PumpEvents named-deferred (ROADMAP row). **Link-7 status: delivery is LIVE end-to-end through the NK post** — first host-sourced EXT delivery, first guest IACK, level test passes env-on — **but consumption is the open tail**: the armed 68k post (0x8001 at 0x68fff070) is never polled/retired by the DR/68k world, so Ticks stays guest-unclaimed; the named next task is the slot-4 consumption round trip, slot5-recon `b3e51b8d`.)* Original Wave-2 backlog (deferred): `SDL_PumpEvents` relocated out of the interrupt path; deliverability harness vector (execute_depth>1 defers); nested-execute path completion; boot-past-the-console question (couples to M6 PPC→68k handoff). | **L** |
+| **M4** | **NVRAM + MacIO container + DBDMA stubs** — *sequencing disposition (2026-06-11): deliberately NOT started; no live consumer yet.* The boot's PRAM reads are served correctly by dev_cuda's in-memory 256-byte store (the documented dual-PRAM window — two divergent sources, deliberate, until M4 unifies them); persistence matters when a booting system needs prefs (startup disk, display, TZ) to survive restarts — a polish milestone for a booting system, not a gate to reaching one. Activates when a frontier demands it or M7 nears. | Full partitioned 8 KB NVRAM behind the bus at the KeyLargo-correct address; MacIO container address map live; **DBDMA channel stubs that abort loudly** (NewWorld serial/audio drivers probe DBDMA — rev-2 addition; real channel engine only when a milestone demands it). | S–M |
+| **M5** | **Supervisor environment + boot framebuffer** — *sequencing disposition (2026-06-11): the MMU/SR WALL was crossed early (Wave 0, 2026-06-10 — the boot demanded it before M3a); the REMAINDER (real translation state, synthesized Trampoline) is deliberately parked: the V=P flat model + the MSR fiction (IR/DR behaviorally inert — re-verified by the syscall-plan red-team: M3a's live DEC deliveries ran the NK handler at msr=0x1040, translation off) suffices for every frontier so far. Building a paged MMU with no live consumer is the tunneling the §9 stop-rule forbids. Activates when a frontier shows the guest depending on real translation, or when M7's framebuffer aperture nears.* | Rung 2 SR/BAT stored state; synthesized Trampoline handoff replaces `SS_NW_TRAMPOLINE` ad-hoc writes, publishing the M0 device tree — **including a boot-framebuffer aperture** *(rev 3)*: the ROM draws happy-Mac/splash to the OF display node's `address` long before any `.ndrv` loads, so M5 publishes a mapped-aperture bus region backed by real memory and blitted to SDL (also the first live test of the aperture region kind before Metal). Without it, M7 debugs a black screen. | M |
+| **M6** | **PPC→68k handoff + shim triage** *(inherited Path A walls — HANDOFF §2.8 Phases 1–2, previously hidden inside "integration")*. **M6a rung 2 ✅ complete 2026-06-11** (plan: `docs/superpowers/plans/2026-06-11-m6a-rung2-mixedmode-switch.md`; results: `docs/planning/machine/M6A-ONGOING-ENTRY-DESIGN.md` Task T…Y sections): the DR cold-start dispatch runs (M6a Waves 1–2 — the old `rfi`-to-garbage crash is long resolved; jDR carries the boot) and the **68k→PPC Mixed Mode switch is COMPLETE in both directions, newworld profile DEFAULT** (`SS_NW_MM_SWITCH=0` opt-out; pool default-on + Hnfo-collision fix `735f775c`; forward switch = two KDP seeds `1c10d968`; table[0] cold/warm discriminator `3dd1550b`; `[KDP+0x65c]` world-flip closes the round trip `43d42b83` + the `[0x2810]` DEC fence; verify-and-leave + re-census `aaaa9a02`; acceptance + default flip `296c3661`). First complete MixedMode round trip: MPLibrary's TVector executes, 68k resumes at the completion-written PC, jNK 116M→4104, all gates green, opt-out byte-identical. **NK syscall surface ✅ complete 2026-06-11** (plan: `docs/superpowers/plans/2026-06-11-nk-syscall-surface.md` rev 2, two red-team rounds; evidence: `M3A-ENTRY-TABLE.md` "Syscall entry resolution" + Task B/C results; arc `dad9a557`/`3e9682c9` plan, `780bbc34`+`3e7b04ca` Task 0, `bcce26c2` Task A, `c41b9ea3` Task B, `7a079079`+`52928958` Task C): **vector 0xC00 resolved — the first guest syscall ever** — `syscall_entry=0x50314ac0`, the staged NK's own handler (PRIMARY copy, NK-published `[KDP+0x390]`; deliberate cross-copy asymmetry vs interrupt_entry's staged copy, recorded), delivered via bare ExcEnter(EXC_SC) + a 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR — the real vector stub's postconditions transcribed host-side; the syscall path saves into the `[KDP-0x14]` ctx, NOT `[KDP+0x65c]`, so the DEC-shim KDP logic deliberately does not transfer). First sc: selector 0x3f → r3=0; 5 selectors per boot (0x3f/0x19/0x14/0x19/0xf, full stub table 0x00..0x84 statically mapped); **MPLibrary's MixedMode excursion RETURNS**. **Newworld profile DEFAULT** (`SS_NW_SC_SURFACE=0` opt-out; env-matrix fixes: no-comma `SS_EXC_ENTRY` trap, inert-legacy warning, 5th `exc=` field). The M3a syscall_entry descope is formally CLOSED. Zero falsifications; all gates green throughout (12-suite era). **FE1F service surface ✅ complete 2026-06-11** (plan: `docs/superpowers/plans/2026-06-11-fe1f-service-surface.md` revs 2/3; evidence: `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C results; arc `46649a23`/`103c7def`/`eba8f0a3` plan+revs, `74fdc067` Task 0, `89a28c15`+`669ccf7a`+`3b27fb9c` Task A, `9443a568` Task B, `2949ec32`+`be0e02cb`+`03222907` Task C): the 16 entry-vector "placeholders" are raw `twi` **trap-to-NK-dispatch trampolines** (unknown ≠ dead — rung-2's dead-slot-stop policy retired); restored + an `EXC_PROGRAM` (0x700) delivery surface (entry `0x50314700` = NK-published `[KDP+0x37c]`, 2-SPR shim — the THIRD resolved exception class) completes **the first DR native callout round trip** (selector $31 'EVNT' service: r3=0/r4=handle → ExpandMem slot filled; the $36 sibling fires next); boot 839k→4.48M ring records; sc deliveries 13/9-distinct (the "5" was the cap-5 print artifact); **newworld profile DEFAULT** (`SS_NW_FE1F_SURFACE=0` opt-out, flip `be0e02cb`); zero falsifications (Task B's two corrections = judged predicate refinements). **68k PC-desync ✅ complete, newworld DEFAULT (2026-06-11, `c8429b23`…`2024a835`)**: DR r0≡0 invariant re-assert at slot-exit re-entry 0x5046e1a0 (`SS_NW_DR_R0_INVARIANT`; 3-word stub, NW-gated); DSAT wall PASSED, boot 0.16s→4.8s, sc 13→169; paravirtual byte-identical; zero falsifications. **Next M6 milestone — 0x505bb060 off-ROM PC slide**: control flow reaches beyond staged-copy end 0x50500000, slides through zeros → SIGSEGV; negative-selector candidate surface (0xfffffffe/0xffffffff dominant) also named; both captured in `DSAT-WALL-RECON.md` Task A/B + `M6A-WAVE2-SHIM-RECON.md` frontier update (desync Task C closeout). | DR Emulator cold-start ECB/dispatch-table completion ✅ (Waves 1–2); MixedMode 68k→PPC switch ✅ (rung 2); NK syscall surface (vector 0xC00) ✅ complete + default-on; FE1F service surface ✅ complete + default-on; 68k PC-desync ✅ complete + default-on; 0x505bb060 off-ROM slide — NEXT; `patch_68k` shim triage for the 9.0.1 ROM (28 in-range / 31 relocated-unverified / 25 absent — incremental, boot-path-first per the obstacle map). | **L (1–2+ wks, incremental)** |
+| **M7** | **Mac OS 9.2.2 boots on the fidelity profile** | End-to-end: **native 9.0.1 ROM — gate compatibility PROVEN by spike S1** (unpatched 9.2.1 boots to Finder under QEMU mac99 with this ROM; the gate-2 CFM-fragment audit is satisfied by the ROM's own parcels). Boot to Finder, E2E lifecycle PASS on the `newworld` profile. 4-byte bypass retained only for the residual $76-on-HD-copy case (QEMU couldn't exercise it). *(Note: the M7/M8/M9 milestones below are intermediate milestones toward this goal — inserted after the table was drafted.)* | L (integration) |
+| **M7-int** | ✅ **Interrupt injection — SHIPPED 2026-06-12, newworld DEFAULT** (`2026-06-12-interrupt-injection.md`, arc `153c088b`…`81d60cc1`): first host→guest interrupt through the guest's own exception path (host edge → latch → EXC_EXTERNAL → NK post); first guest IACK; W2-4 closed; `SS_NW_EE_RISER`+`SS_NW_DEC_PUBLISHED`+`SS_NW_HOST_IRQ` cluster flipped newworld default. Honest remainder: 68k post never consumed (Ticks unclaimed). See archived status narrative §"Header status narrative as of 2026-06-12". | First live EXT delivery through the NK post; cluster default-on; paravirtual byte-identical. | M |
+| **M8** | ✅ **Slot-4 consumption — SHIPPED GATED-OFF-GREEN 2026-06-12** (`2026-06-12-slot4-consumption.md`, `42ce3e0e`…`52b69cd7`): R-II10 livelock shapes resolved (fork-(iii): riser stub mtmsr EE re-raise cured by deferred EE-edge latch + Q-C3 staging + 60 Hz starvation backstop); round trip green through leg 7 env-on (post → staging → drain → slot-4 twi → 68k level-1 handler at 60 Hz). Default flip refused: deterministic SC#1=0x0d divergence + retirement RED. Gate: `SS_NW_IRQ_CONSUME` (17th gate). | Round-trip consumption proven env-on; `SS_NW_IRQ_CONSUME` gated-off-green; paravirtual byte-identical; six pre-M7 default-ON gates retired. | M |
+| **M9** | ⏳ **VIA-IFR — PARTIALLY COMPLETE (2026-06-12 session 4).** Stall root-caused and fixed: the ROM patch at 0x5000ed08 (`OP_IRQ_NW+rte`) corrupted bytes the NK reads as DATA during boot, causing dec_expiries=5. Patch removed; `SS_NW_VIA_IFR=1` is now a no-op. Baseline dec_expiries≈1577, irq_fired≈376. **`SS_PROBE_68K=0x5000ed08` never fires** — structural blocker: NK EXT handler at 0x50314880 checks `r11.bit16` (PR=user-mode bit); DR runs in kernel mode (SS_M6A_USER_MSR=0, quarantined), so PR=0 always → fallback taken, CGRP unreachable. Even if PR=1, CGRP is uninitialized (Mac OS normally populates it during System startup; our boot stalls before that). Probe criterion deferred to **M10**. See `docs/HANDOFF.md` §Session 4 for full root cause chain and CGRP field layout. Gate: `SS_NW_VIA_IFR` (no-op, kept for M10). | ✅ Stall fixed; ✅ harness 353/353; ✅ dec_expiries/irq_fired on baseline; ❌ `SS_PROBE_68K=0x5000ed08` fires → M10. | M |
+| **M10** | ✅ **CGRP init + 68k EXT delivery — SHIPPED GATED-OFF 2026-06-13** (gate `SS_M10_CGRP=1`): CGRP TABLE/STACK/DESC/STUB seeded in guest RAM at 0x68ffc210–68; CGRP+0x20=0x503143a0 + *(KDP-0x338)=0x68ffc1c0 armed at first DR68K dispatch; EXT shim re-syncs CGRP on every delivery; STUB (16 words): A7 guard + 68k exception frame push (SR=0, PC from live r24) + DR_WARM branch. Acceptance: `SS_PROBE_68K=0x5000ed08` fires — confirmed match=1/5, clean 60s run. Harness: 353/353. Open tail (M11): interrupted-PC read from live r24 at STUB entry is non-deterministic in some timing runs (NK may not fully restore r24 before CGRP delivery RFI); probe fires in all runs, crash-after-probe is M11 correctness item. | ✅ Probe fires (match=1/5 confirmed); ✅ harness 353/353; ✅ STUB delivers to 0x5000ed08 without crash; ⚠️ frame-PC non-determinism → M11. | M |
+| **M8+** | **Platform features** (separate designs when reached) | PMU power management (builds on the M1 idle-detection hook); Metal-mapped video via the `.ndrv` seam + mapped-aperture bus regions; fidelity profile becomes default once it dominates paravirtual on the E2E + bench matrix. | — |
+
+**Sequencing notes:**
+- M1 is first after plumbing: smallest component that pays off on both fronts at once (the
+  9.2-on-1.1 stall via the standalone SCC, and the bus+decoder foundation everything else
+  uses) — the first "card slotted in."
+- M2 before M3 (the PIC and VIA are meaningless without time); M4/M5 parallelizable after M3.
+- M3 is the project's hardest milestone and is labeled accordingly. Its vector-base
+  experiment runs *first* and is allowed to fail back to direct-entry.
+- The forcing-function discipline survives: every general PPC-correctness bug surfaced en
+  route (the SPRG/fctiw/SDR1/sc class) is fixed on **both** profiles immediately.
+
+---
+
+## 4. Sources, oracle, and provenance
+
+- **DingusPPC = primary device-model donor.** GPL-3.0; combining is license-feasible (our
+  GPLv2-or-later + their GPLv3 → combined work GPLv3 — resolved in DINGUSPPC-EVALUATION-PLAN).
+  Follow backport hygiene: cite the DingusPPC source file/commit SHA in code comments and
+  CHANGELOG. **Constraint: DingusPPC does not accept AI contributions into their repo — never
+  send AI-generated PRs upstream to them.** Downstream GPL use in this (openly AI-assisted)
+  repo is normal GPL practice with attribution. Porting caveat: their models depend on their
+  event scheduler — M2 is the prerequisite.
+- **QEMU mac99 = behavioral oracle** (and secondary code reference — its ESCC/Cuda/OpenPIC/
+  MacIO/DBDMA models are GPL). Valid as oracle **for the Core99 target only** (decision 5).
+- **Datasheets = ground truth** where emulators disagree: Zilog SCC 8530, VIA 6522, Apple
+  Cuda/PMU protocol, OpenPIC spec.
+- **M1 device-model conformance audit:** `docs/planning/machine/M1-DEVICE-CONFORMANCE.md` —
+  QEMU + DingusPPC behavioral check for SCC 8530 + VIA 6522 against the M1 scope fence;
+  zero model fixes warranted; 9 note-level deltas N1–N9 documented (2026-06-10).
+- **Fork-ecosystem scan (M1, 2026-06-10):** no macemu fork (kanjitalk755, rcarmo, or any
+  indexed derivative) carries device-model code; we are the first. `QEMU
+  hw/misc/macio/macio.c` is the KeyLargo MacIO container reference DingusPPC lacks — relevant
+  for M4 (MacIO address map + DBDMA stubs). Optional M2 input: siddhartha77
+  clock-decoupling cherry-pick `7f367cf8eb62` (decouples the DingusPPC timer manager from its
+  global event loop — a transitional shim for porting DingusPPC device models before M2's own
+  scheduler exists).
+
+## 5. Testing strategy
+
+1. **Device unit tests (no boot):** each device model is a pure object — drive its register
+   interface from a host-side test binary, assert state-machine transitions. Lives beside the
+   existing offline suites (cheap, CI-able anywhere).
+2. **QEMU conformance, not trace equality** *(rev 2 — `-d` doesn't log device registers, and
+   OpenBIOS≠Apple-OF means access sequences will never match)*: (a) replay our device unit-test
+   register scripts against QEMU's device model where isolable, asserting same end state;
+   (b) milestone-level behavioral checkpoints ("after ROM serial init, SCC WR/RR state is X")
+   captured from instrumented QEMU runs. Datasheets break ties.
+3. **Existing gates, profile matrix:** `make test-jit` must stay 100 on both profiles (the
+   identity-mapped data path is unchanged; the §2d slow-path seams are exercised by new
+   exception-path vectors added to the harness as M3 lands); `make e2e` on paravirtual
+   (non-regression contract); a new `make e2e-newworld` lane as soon as the fidelity profile
+   boots anything.
+4. **The boot-stage ladder as a regression suite:** each previously-conquered wall (nanokernel
+   init, idle-loop wake, DR Emulator entry, 68k dispatch, splash, Finder) becomes a named,
+   asserted checkpoint — so a device-model change can't silently regress an earlier stage.
+5. **MMIO fault-rate telemetry as a gate:** per-region fault counters in the bus; an idle
+   fidelity-profile boot must not exceed a budgeted fault rate (catches polling storms as a
+   regression, not a discovery).
+6. ***(rev 3)* Asset reality:** the 9.0.1 ROM and 9.2.x media are Apple-copyrighted and
+   non-redistributable — the `e2e-newworld` lane is local-assets-only forever (no hosted CI,
+   no fresh-clone reproducibility; same posture as the existing e2e assets). Interpreter-mode
+   bench measurement added to the profile matrix (§2b range-check gating proof).
+
+## 6. Error handling & risk
+
+| Risk | Mitigation |
+|---|---|
+| AArch64 fault-decoder gaps (JIT emits an access form the decoder misses) | The JIT's memory-access emitters are the contract: decoder unit tests enumerate every emitted form; unmapped-but-unregistered or undecodable faults abort loudly with PC + address (no silent zero-reads, no blind `pc += 4`). |
+| Cross-thread device-state races / Mach-handler deadlock | §2g locking model: per-device locks, no foreign locks on the exception-handler thread, atomic spcflags assertion, SIGUSR2 suspension-window documented until M3 retires it. |
+| ROM patches and device models double-handling the same hardware | M0 ROM-patch audit table; each device milestone retires its patches and asserts the un-patched guest init completes. |
+| M1 false pass via `SS_COMPAT_92X` (boot progresses but the device model never exercised) | Named third config; SS_COMPAT_92X SCC-neutralizing patches retired in that config; DoD requires observed device register traffic. |
+| Wrong device identity behind the boot stall (SCC vs VIA — already flip-flopped twice) | Spike S3 disassembles the actual polling loop before M1's device scope is frozen. |
+| Interpreter/nested-execute MMIO from handler contexts | First-class second dispatch path (§2b), not an afterthought; covered by device unit tests run through both engines. |
+| MMIO polling storm (idle loop = SCC poll at MHz rates) | Idle-detection hook + fault-rate telemetry budget (§5.5); JIT backpatch held in reserve. |
+| Side-effecting device reads double-executed by oracles | MMIO regions excluded from `SS_JIT_VERIFY` replay; bus logging never re-reads. |
+| Device model fidelity rabbit holes (modeling more than the ROM probes) | YAGNI per device: implement registers the trace shows are touched; abort-loudly stubs for the rest (incl. DBDMA channels). QEMU conformance bounds "done." |
+| Vector-page collision with 68k low memory (V=P) | Decided by a bounded experiment at M3 start; direct-entry fallback is the smaller delta from the proven `interrupt()` ABI. |
+| Paravirtual regression while refactoring shared CPU files | Profile seam on slow paths only; new `powerpc_registers` fields appended last + clean recompile rule; existing gates run per PR. |
+| Trampoline handoff contract is recovered-by-RE, not documented | Treated as a versioned, tested artifact (the M0 machine description); QEMU mac99 supervisor-state capture (UPGRADE-CARD Experiment 2) validates the recovered fields. |
+| 9.0.1 ROM still rejects 9.2.x at some deeper gate | SYSTEM-BOOT-GATES methodology (DSAT parse + binary search) reusable on any System version; 4-byte bypass remains the fallback. |
+| Effort balloons past appetite | Milestones individually shippable; stop-rule per wall (HANDOFF §2.7.1): re-evaluate when a wall needs multi-day RE with no general payoff. M6 is explicitly incremental (boot-path shims first). |
+
+## 7. Roadmap integration
+
+- **ROADMAP D3** points here as the primary approach (Upgrade Card demoted to tactical
+  tool within M1/M7).
+- Track B (perf) and the COMPATIBILITY-PAYOFF "make 8.6–9.0.4 usable" thrust continue on the
+  paravirtual profile, unblocked and unaffected.
+- Silicon Sheep (Track C) eventually surfaces the machine profile as a VM-library choice
+  ("Power Mac 9500 (fast)" vs "Power Mac G4 (faithful)").
+
+## 8. Review log (rev 2, 2026-06-10)
+
+An adversarial code-verified review of rev 1 found 12 issues; all are incorporated above.
+The structural ones, for the record:
+
+1. **No AArch64 faulting-access decoder exists** (`sigsegv.cpp` aarch64 = `pc += 4`) — rev 1's
+   keystone premise was wrong → §2b two-path dispatch; M1 re-scoped to L.
+2. **Interrupt/exception redesign was scattered and mis-sequenced** (old M2 depended on old
+   M4's vectoring; vector page collides with 68k low memory under V=P) → §2d, consolidated
+   as M3, the big rock.
+3. **No virtual clock existed in the plan or the code** (DEC reads 0, `mtspr DEC` dropped);
+   DEC≠PIC paths conflated → §2c, milestone M2.
+4. **Idle loop = MMIO poll storm** contradiction → §2b polling strategy + §5.5 telemetry gate.
+5. **Hidden two-machine fork** (1.1 = Heathrow-class vs 9.0.1 = Core99/KeyLargo) → decision 5.
+6. **DBDMA absent** → M4 stubs + §2a/§2f device-tree constraint.
+7. **M5 (now M7) silently inherited Path A's walls** (DR Emulator handoff, 84-shim port) → M6.
+8. **Trampoline "documented ABI" overstated** (it's recovered-by-RE) + device tree needed to
+   be an M0 artifact → §2a, §2e.
+9. **"CPU core unchanged" was false** (sc/DEC/MSR/SRR in shared files) → §2d CPU-core honesty
+   + struct-offset rule.
+10. **QEMU trace-diff methodology unworkable as written** → §5.2 conformance reframe.
+11. **Side-effecting MMIO vs SS_JIT_VERIFY / legacy serial-skip hacks** → §2b exclusions,
+    M0 disables.
+12. **16 KB page granularity + trapped-vs-aperture region kinds** (Metal constraint now) →
+    §2b.
+
+**Rev 3 (second adversarial review, 2026-06-10)** — 9 further findings, none duplicating rev 2:
+
+13. **No threading/concurrency model** — this build uses Mach exceptions on a dedicated
+    handler thread (`sigsegv.cpp:727`); JIT-path MMIO runs on that thread with the CPU thread
+    suspended; scheduler callbacks run on a third thread; SIGUSR2 interplay; Mach round-trip
+    cost makes fault-path polling ~hours/sec at observed rates → new §2g; backpatch promoted
+    into M1 scope; lldb exception-port caveat.
+14. **0xF3016000 is the VIA per our own AddrMap** (`rom_patches.cpp:1903`), and the
+    `[KDP-0x900]` identity has flip-flopped twice — the stall's device identity is unverified
+    → decision 5 caveat + spike S3.
+15. **M1 consumer (a) is a third, unnamed config on the frozen profile, confounded by the
+    `SS_COMPAT_92X` SCC-neutralizing patches** (false-pass risk) → named config, patch
+    disposition, register-traffic DoD.
+16. **No ROM-patch retirement inventory** — device models behind patched-out guest init
+    (`via_init*`, `scc_init`, `cuda_init`, GC mask NOPs) are dead code → M0 audit table,
+    per-milestone patch retirement.
+17. **Third memory-access path unhandled** — host C++ accessors (`ReadMacInt*`,
+    EMUL_OP/HLE/`Execute68k`) and our own debug tools (`SS_PROBE_PC`, `SS_JIT_WATCH_ADDR`)
+    would abort-loudly on device pages → §2b host-accessor contract.
+18. **M7's premise testable for ~zero code now** (QEMU gate-check; 0x7E24 probe RE; newer
+    family ROM fallback) → pre-M0 spikes S1; M7 fallback ladder.
+19. **Real exception delivery vs kept nested-execute HLE unreconciled** (`rfi` into a host
+    C++ continuation) → §2d deliverability rule + M3 test vector.
+20. **No boot framebuffer** — the ROM draws the splash to the OF display node long before any
+    `.ndrv`; M7 would debug a black screen → M5 aperture + blit.
+21. **Honesty gaps:** interpreter range-check cost on the frozen profile (gating + bench
+    proof) and the non-redistributable-assets posture for `e2e-newworld` → §2b, §5.6.
+
+## 9. Holistic assessment — chances of success (2026-06-10, pre-implementation)
+
+A calibration record, written before any code, to be re-scored as milestones land. Three
+nested bets:
+
+| Bet | Definition | Estimate | Why |
+|---|---|---|---|
+| **Platform** | SheepShaver gains a real machine layer (bus, clock, devices, exception model) as permanent, tested components | **~90%** | Every milestone independently shippable; paravirtual frozen as a floor; even M0–M2 alone leaves the codebase structurally better than the patch-pile. Downside bounded by design. |
+| **Capability** | Mac OS 9.2.2 boots to Finder on the fidelity profile (M7) | **~60–65%** in ~2–4 months focused effort | Dragged down by M3 and M6 (below), not by the device models. |
+| **Vision** | Full-stack platform: power management, Metal video (M8+) | unscoreable | Strictly downstream of the capability bet; prerequisites (aperture regions, idle hooks, device-tree video node) are baked into the architecture rather than blocked by it. |
+
+### Where the risk actually lives (ranked by expected pain)
+
+1. **M3 (interrupt/exception, XL) — the make-or-break.** MSR/SRR/`rfi`, the vector-page
+   collision, replacing nested-execute, in shared CPU files. Could eat a month. The saving
+   grace: the **direct-entry option is a designed, honest version of the mechanism that
+   already works today** — M3's floor is not "fail" but "ship a cleaner version of the
+   current architecture with real device sources." That floor is what holds the capability
+   estimate at 60+ rather than lower.
+2. **M6 (inherited Path A walls).** DR Emulator handoff + shim triage: a known grind with a
+   known map. No architecture saves this — it's RE labor; motivation, not engineering, is the
+   limiting reagent.
+3. **The unknown 9.2 gate (spike S1).** What the 0x7E24 probe checks is genuinely unknown —
+   but this is uncertainty about *which path* (native 9.0.1 / newer family ROM / 4-byte
+   bypass), not *whether a path exists*.
+
+The things that *look* scary — MMIO decoding, Mach exceptions, device models — are
+well-understood engineering with spikes, contracts, and oracles attached.
+
+### The meta-signal
+
+**21 substantive findings before a line of code.** Read both ways: (a) the review process
+works — two rounds of code-verified, plan-changing findings absorbed without the skeleton
+breaking is evidence the skeleton is right; (b) this domain is **hostile** — reviews 3 and 4
+will be delivered by reality, and the project's own history (the VIA/SCC identity
+flip-flopping twice, rev 1's "sigsegv already decodes" assumption, the session-5 STUCK-PC
+retraction) shows a high error rate on untested beliefs. The plan's main defense is that it
+systematically converts beliefs into experiments (S1–S3, the M3 vector-base experiment, QEMU
+conformance) before building on them.
+
+### What success most depends on
+
+1. **Run spikes S1–S3 before anything else** (~a week, de-risks the two biggest bets; S1 can
+   reshape M7's endgame for zero code).
+2. **Honor the stop-rule at M3.** If the vector-base experiment fails and direct-entry also
+   bogs down: ship the M3 floor and reassess — don't tunnel.
+3. **Resist the old failure mode.** The single most likely cause of failure is reverting to
+   bug-chase mode mid-milestone (fixing whatever the boot hits next instead of finishing the
+   component). The milestone DoDs (register-traffic assertions, patch-retirement lists,
+   fault-rate budgets) are shaped specifically to resist that; trust them.
+
+### Bottom line
+
+Architecture sound; reviews made it honest; downside structurally capped (worst case:
+today's working emulator unchanged, plus reusable components and a much better map); upside
+is the project's stated reason to exist. The expected outcome is not binary — most futures
+land on "machine layer partially built, every piece permanently useful, 9.2 reached by one
+of three documented paths."
+
+**Re-scoring triggers:** after spikes S1–S3 (adjust M1 scope + M7 path), after the M3
+vector-base experiment (adjust the capability estimate), and at any stop-rule invocation.
+
+### Re-score #1 — post-spikes (2026-06-10, same day; all three spikes complete)
+
+| Bet | Was | Now | Why |
+|---|---|---|---|
+| Platform | ~90% | **~92%** | S2 removed the keystone unknown (fault-decode works end-to-end incl. MAP_JIT, zero platform friction); the bus's hardest mechanism is now demonstrated code, not a design. |
+| Capability (M7) | ~60–65% | **~70–75%** | S1 removed the gate unknown *in the favorable direction* — unpatched 9.2.1 boots to Finder on the 9.0.1 ROM under QEMU, so M7 needs no System-file patching and no ROM-swap rung. The remaining drag is unchanged: M3 (exception architecture) and M6 (DR Emulator handoff + shims) — neither was touched by the spikes. |
+| Vision | unscoreable | unscoreable | Unchanged; still downstream. |
+
+Qualitative shifts:
+- **The plan's epistemics validated on day one:** all three spikes changed the plan (S1
+  re-framed M1 consumer (a) and settled M7; S2 quantified the fault cost and resolved the
+  MAP_JIT unknown; S3 corrected the device identities a *third* time and pulled a DEC tick
+  into M1). The "beliefs must become experiments" discipline is paying measurably.
+- **Path B's post-mortem is now mechanistic:** the gate-2 probe audits CFM boot fragments
+  that only parcels ROMs provide — identity patches never had a chance. The pivot was
+  correct for reasons deeper than we knew when we made it.
+- **New honest negative:** the 9.2-on-1.1 demo (M1 consumer (a)) is a testbed, not a
+  product milestone — the visible "9.2 splash on the old ROM" win will not become a boot.
+  The real 9.2 path runs entirely through the fidelity profile + 9.0.1 ROM (M3→M6).
+
+### Re-score #2 — post-M3a/M3b-Wave-1/M6a-rung-2 (2026-06-11; the two named risk concentrations have landed)
+
+| Bet | Was | Now | Why |
+|---|---|---|---|
+| Platform | ~92% | **~95%** | The machine layer is no longer a bet — it is seven shipped, gated, reviewed milestones (M0–M2, M3a, M3b W1, M6a W1–2 + rung 2) with 353/353 + 11-suite + paravirtual-byte-identical invariants held through every landing. The strangler-fig structure survived two stop-rule firings and a re-scope without destabilizing. |
+| Capability (M7) | ~70–75% | **~80%** | Re-score #1's two named drags both broke favorably: **M3** (the "could eat a month" make-or-break) landed as M3a in ~a day — exc_core + real DEC delivery + sc/rfi semantics, and the syscall surface recon now shows the NK's own syscall machinery running on staged state (selector 0x3f end-to-end with just an entry override). **M6** (the inherited Path-A walls) yielded to seeds + small shims, not the feared 84-shim grind: the DR dispatch repair was three constants + an MSR write; the MixedMode switch was two KDP seeds + a world-flip word. The pattern is now established across five walls: *the staged NK is far more complete than Path A assumed — our obligation keeps reducing to "provide the Trampoline-init surface" (seeds), not "reimplement services".* Residual drag: the unbounded count of remaining walls (CFM, Process Mgr, drivers — each individually small on the evidence, but the tail is unmeasured), the unwired interrupt-delivery chain (EE has never risen on the boot path; Wave-2/via_int territory) *[superseded 2026-06-12: the EE riser + published DEC route now deliver — see status header]*, and M5's framebuffer aperture before anything is visible. |
+| Vision | unscoreable | unscoreable | Unchanged; still strictly downstream. |
+
+Qualitative shifts:
+- **The "beliefs must become experiments" discipline compounded:** every acceptance this
+  cycle produced a falsification that redirected the plan (the CV-10 SR-int race; the
+  reboot loop being our own scaffolding; the W "advancing" illusion; the 0x5f0 retarget
+  that all prior docs recommended and a red-team killed before it broke the working path).
+  Verify-first framing is now the default task shape, not a review afterthought.
+- **The risk model inverted on M6:** Path A's obstacle map priced the walls as
+  reimplementation; the actual cost profile is recon-heavy/implementation-light (Task 0s
+  routinely consume more effort than the Tasks A they gate — and that is the cheap side).
+- **New honest negatives:** (1) the boot has still never risen past EE=0 — the entire
+  interrupt-delivery chain (PIC wiring, tick restoration, via_int retirement) is unexercised
+  and is the likeliest place for the next M3-class surprise *[superseded 2026-06-12: the
+  SS_NW_EE_RISER boots deliver (12.4M storm-scale + delivered_dec=3 live on the published
+  route); the remaining chain work is the active interrupt-injection milestone]*; (2) the device surface beyond
+  Cuda (I2C clock chips, DBDMA probes, the M5 framebuffer) is stubbed-absent and the boot
+  has not yet reached the stage that demands it; (3) M4/M5 remain deliberately unstarted
+  (dispositions recorded in their rows) — correct sequencing, but they are real remaining
+  work inside the M7 estimate, not free.
+
+### Re-score #3 — post-M7-interrupt-injection (2026-06-12) — **CONFIRMED**
+
+> Drafted by the M7 Task-Z close-out per the §9 convention (re-score was due at this
+> checkpoint, flagged since the desync sweep). **Coordinator confirmed 2026-06-12 as
+> drafted** — platform ~96%, capability ~82%, the slot-4 restore-tail livelock named
+> as the next likeliest M3-class surprise. One coordinator addition: the gate-retirement
+> candidate list (the six pre-M7 default-ON surfaces) is endorsed but explicitly
+> deferred until after the slot-4 task — no retirement churn while the consumption
+> half is in flight.
+
+**The named surprise fired AND was resolved this cycle.** Re-score #2 named the
+EE/interrupt-delivery chain as "the likeliest place for the next M3-class surprise."
+It fired — repeatedly, in bounded sessions, exactly as the verification-first design
+intended: the 12.4M DEC storm (one unstaged frequency global), the statically-found
+level-source livelock (red-team, pre-code), the zero-level post (R-II7 — the real
+chain's correct pre-init behavior, not a bug), and the post-delivery consumption
+livelock (three shapes, slot5-recon). Every one was caught in-budget, none cost a
+milestone. The chain itself is now REAL end-to-end through the NK post: host edge →
+EXC_EXTERNAL → NK-published handler → fallback service body → guest PIC IACK → vector
+→ level table → 68k post — all guest-traversed, default-ON (the cluster flip
+`81d60cc1`), with the fake-poke fence never breached.
+
+| Bet | Was | Now | Why |
+|---|---|---|---|
+| Platform | ~95% | **~96% (draft)** | The interrupt architecture — the component §9 originally priced as "could eat a month, make-or-break" — is shipped, default-ON, and has a live guest consumer (the first OpenPIC IACK). All M7 landings held the invariants (full gates green pre/post-flip; all-OFF opt-out byte-identical). What keeps this under ~100%: platform-bet residue is now mostly gate-debt and M4/M5 absence, not mechanism risk. |
+| Capability (M7 = 9.2.2 to Finder) | ~80% | **~82% (draft)** | Favorable: the delivery half of the interrupt chain — re-score #2's named residual drag — is done and cheap (the seeds-not-services pattern held again: the whole milestone's guest-visible fixes were ~6 staged init words + one latch + one fence narrowing). Unfavorable, and why this is +2 not +10: the *consumption* half is honestly open (the slot-4 livelock — the 68k world never consumes/retires the armed post; Ticks has never been guest-claimed), the wall-count tail is still unmeasured (CFM, Process Mgr, drivers), and M5's framebuffer remains untouched before anything is visible. |
+| Vision | unscoreable | unscoreable | Unchanged; still strictly downstream. |
+
+**Gate census (a strategy-level cost, flagged by the plan's rev-2 B6):** **16 `SS_NW_*`
+gates in-tree** (DEC_PUBLISHED, DR_R0_INVARIANT, EE_RISER, FE1F_SURFACE, HOST_IRQ,
+MM_POOL, MM_SWITCH, MODEL, NO_SCC, PIC, PIC_FORCE, SC_SURFACE, SYNTH_ENTRY,
+TM_TASK_FORCE, TM_TRAPS, TRAMPOLINE). **9 are newworld default-ON** (the six prior
+surfaces + the M7 cluster's three — EE_RISER/DEC_PUBLISHED/HOST_IRQ, `81d60cc1`);
+7 default-OFF (SS_NW_PIC HELD with written flip criteria + carry-forwards
+[DIAGNOSTICS M7 section / ROADMAP follow-on row]; the rest diagnostic/bring-up knobs).
+Doc-sweep-3's docs-only-named gates reconciled by grep: `SS_NW_DESYNC_FIX`/
+`SS_NW_TRAP_RFI` were planning-time aliases for the landed `SS_NW_DR_R0_INVARIANT`;
+`SS_NW_NOP_AREAS` a rejected option in the parked Path-A handoff; `SS_NW_DEBUG` an
+unlanded ROADMAP proposal — none is a live untracked gate. Standing cost: each
+default-ON gate's opt-out path is a config we nominally support; the Task-C battery
+validated all-ON and all-OFF only (partial opt-outs are documented diagnostic-only).
+Gate retirement (hard-wiring shipped defaults) is now cheaper than gate accumulation —
+candidates: the six pre-M7 default-ON surfaces after a quiet release cycle.
+
+**The next likeliest M3-class surprise, NAMED: the slot-4 restore-tail livelock's root
+cause** (shape A's 0x503244e8 world-restore tail cycling at 10⁹ visits without
+completing a world switch — why does the restore not land?). It sits on the critical
+path of the named next task and is the one place where "the staged NK is more complete
+than assumed" could fail us: if the restore tail cycles because of NK state we never
+staged (a scheduler/run-queue word, the R-II8 junk queue-depth `[KDP+0x910]` it is
+load-bearing for), the fix is another seed; if it cycles because the DR/NK world-switch
+protocol needs machinery we don't model, that is M3-class. Runners-up: (2) the R-II8
+junk-queue dependency surfacing as wild behavior once consumption goes live; (3) Mac OS's
+native interrupt init colliding with our staged words (IVPR/IDR/CTPR/`[0x3f3f]`/PIC
+base) when the guest finally runs its own MPIC init — the staging is
+what-the-real-init-writes by construction, but the collision has never been executed.
+
+### Re-score #4 trigger check — post-M8-slot-4-consumption (2026-06-12, Task Z) — **trigger state recorded, NOT drafted**
+
+**The named surprise is ADJUDICATED: it fired and resolved as fork-(iii)** — the
+restore-tail livelock was OUR OWN riser stub's patch-created non-atomicity (the mtmsr
+EE-edge re-raise firing mid-tail, before the ctx reloads + bctr — torn-ctx confirmed
+live, Task-0 [PROBE✓]), NOT unstaged NK state (fork-i) and NOT unmodeled world-switch
+protocol (fork-ii). **Stop-rule 1 never fired**; the one-iteration rule absorbed both
+in-task falsifications (the HANDLE re-arm starvation; the "kick guaranteed" premise);
+seeds-not-services held again (the fix set = one latch + one donor-mirror staging stub
++ one poll kick; zero new service bodies). Per §9's prediction accounting that is the
+best outcome class: caught in-budget, in-scope, milestone intact.
+
+**Why no re-score #4 is drafted at this checkpoint:** M8 shipped GATED-OFF-GREEN — the
+default boot's capability surface is unchanged (the flip was refused on the honest
+criteria: the deterministic SC#1=0x0d divergence + retirement RED at the VIA-IFR leg),
+so neither bet moves by more than draft granularity (platform: the consumption rail is
+proven machinery but not yet default; capability: the 9.2.2 path gains a proven-but-
+parked rail). Re-score #3's scores stand. **Re-score #4 is FLAGGED DUE at the next
+default-flip-class landing** (the VIA-IFR milestone's flip, or the SS_NW_PIC flip,
+whichever lands first), with this adjudication as a standing input. Its named-surprise
+candidate carries forward from re-score #3's runner-up (3): the guest's own MPIC init
+colliding with our staged interrupt words — plus the new SC#1=0x0d mechanism question.
+
+**Gate census correction (post-M8): 17 `SS_NW_*` gates** (re-score #3's 16 +
+`SS_NW_IRQ_CONSUME`, standalone, default OFF, retirement criterion = mandatory
+fold-into-cluster at its flip). **Re-score #3's coordinator deferral of gate
+retirement expires with the M8 close-out** — the six pre-M7 default-ON surfaces are
+again eligible candidates after a quiet release cycle (flagged in ROADMAP; not
+scheduled here).
+
+
+---
+
+## Archived status narratives (relocated from the header — nothing deleted)
+
+> Per the 2026-06-12 doc-structure feedback: the header carries a 5-line current-state
+> budget; superseded header narratives move here verbatim, dated. The authoritative
+> per-change record remains `CHANGELOG.md`.
+
+### Header status narrative as of 2026-06-12 (M0 → M8, verbatim)
+
+> **Status:** 🟢 Approved architecture (rev 4) — **spikes done; M0 + M1 + M2 complete; Wave 0 MMU/SR wall CROSSED (2026-06-10); M3a ✅ complete (2026-06-10)**: real PPC exception model landed — exc_core (OEA masks, sc/rfi real semantics, EE-edge re-raise), DEC delivery hook (KDP shim, execute_depth deliverability rule, in-place poll), [NW-INT] deleted, HandleInterrupt fenced; **first real PPC exception ever delivered**: `[EXC] DEC delivered #1: restart=50429b40 srr1=0000f072 msr=00001040 -> entry=50412b1c`; cold-MSR EE=0 fix; boot-frontier identified as the NK Thud debug console (designed wake = serial character, not timer — EE stays honestly masked there); **end-to-end demo** (a2dd1ff8): SS_SCC_RX_INJECT fed one CR at T+25s → JIT compile counter 781→791 (10 new blocks); M2 scheduler → M1 bus/backpatch → SCC Rx → check_work → console — every machine-layer milestone composing; **M3b Wave 1 ✅ complete (2026-06-11)**: Cuda protocol model (dev_cuda, QEMU+DingusPPC behavioral extraction) + minimal ADB stub live behind the M1 VIA's SR/ORB seam — the M6a 18338-read ORB sync frontier CROSSED, cuda_init/adb_init retired, boot past the Cuda walls and cycling its probe sequence — loop-ender root-caused as MPLibrary's MixedMode FE01 reaching an unprovisioned save-record pool + our always-cold table[0] (self-inflicted scaffolding debt, §9 stop-rule fired); **M6a rung 2 ✅ complete (2026-06-11, `c8178095`…`296c3661`)**: the 68k→PPC **Mixed Mode switch works in BOTH directions and is the newworld profile DEFAULT** (`SS_NW_MM_SWITCH=0` opt-out) — first complete MixedMode round trip, MPLibrary's TVector executes, boot transformed (jNK 116M→4104); results in `M6A-ONGOING-ENTRY-DESIGN.md`; **NK syscall surface ✅ complete (2026-06-11, `dad9a557`…`52928958`)**: vector 0xC00 resolved to the staged NK's OWN syscall handler `0x50314ac0` (primary copy, NK-published `[KDP+0x390]`) via bare ExcEnter(EXC_SC) + a 2-SPR shim (SPRG1:=caller r1, SPRG2:=caller LR) — **the first guest syscall ever resolved** (selector 0x3f → r3=0); 5 selectors delivered per boot (0x3f/0x19/0x14/0x19/0xf), MPLibrary's MixedMode excursion RETURNS; **newworld profile DEFAULT** (`SS_NW_SC_SURFACE=0` opt-out); the M3a syscall_entry descope formally CLOSED; zero falsifications (evidence: `M3A-ENTRY-TABLE.md`); **FE1F service surface ✅ complete, newworld DEFAULT (2026-06-11, `46649a23`…`03222907`; flip `be0e02cb`, opt-out `SS_NW_FE1F_SURFACE=0`)** — Task 0 falsified the slot-population framing: the raw ROM's `twi` placeholders ARE the design (trap→0x700→NK dispatch), so the fix was restore-the-placeholders + an `EXC_PROGRAM` (0x700) delivery surface — the THIRD real exception class, the sc-surface idiom one vector over (rung-2's dead-slot-stop policy retired); **the first DR native callout round trip**: FE1F selector $31 → 0x700 → NK gateway → 'EVNT' service → r3=0/r4=handle 0x00120001 → ExpandMem slot `[0x100037dc]` filled, boot 839k→4.48M ring records; sc deliveries 13/9-distinct (the old "5" was the cap-5 print artifact — per-selector counter `2949ec32`); zero falsifications (evidence: `M6A-ONGOING-ENTRY-DESIGN.md` "FE1F native callout" + Task A/B/C results); **68k PC-desync ✅ complete, newworld DEFAULT (2026-06-11, `c8429b23`…`2024a835`; flip `25be4342`, opt-out `SS_NW_DR_R0_INVARIANT=0`)** — DR r0≡0 invariant re-assert at slot-exit re-entry 0x5046e1a0 (3-word stub, NW-gated, paravirtual untouched); DSAT wall PASSED, boot 0.16s→4.8s, sc 13→169/16-distinct; new frontier = **0x505bb060 off-ROM PC slide** (captured `DSAT-WALL-RECON.md` Task A + `M6A-WAVE2-SHIM-RECON.md` frontier update) + **negative-selector candidate surface** (0xfffffffe×17/0xffffffff×103 — smells like a new service class; evidence `DSAT-WALL-RECON.md` Task B); **re-score #3 due at next re-score checkpoint** (this sweep does not score); M3b Wave 2: OpenPIC model+tests LANDED (`b86449c9`), **W2-3 EXC_EXTERNAL delivery shipped gated-off** (`b2e0d718`/`7cafd6ae`/`95d3fc53`/`81e3ea4a`, flip HELD per stop-rule 3 — no EE riser on the boot path; harness H6/H7 proven; W2-4 is evidence-gated next for Stream B), and the Wave-2 interrupt-chain plan (`2026-06-11-wave2-interrupt-chain.md`) is **rev 2 ready-to-execute** (verification-first W2-0..W2-4); **2026-06-12 arc**: the **0x505bb060 slide wall FIXED** (`2ff7765f` tm_task verify-EXPECTED-first guard — a 9.0.1 ROM-patch misalignment, not a stack drain; sibling lenient-patch sweep in `SLIDE-WALL-RECON.md`); **W2-4 steps 0–2 landed gated-off** (`181efc02` SS_NW_DEC_PUBLISHED: DEC → NK-published 0x50313200 `[KDP+0x384]` + 2-SPR shim, run-exc.sh H8, lane 12/12; `10b1b3e8`/`cd1f0153` SS_NW_EE_RISER: the 0x318000-stub EE riser — **first DEC deliveries ever**, storm-scale 12.4M handled cleanly; chain links 3/5/6/10 READY, 7/8 BROKEN at scoring); **DEC cadence fixed** (`21704614`/`f31d475e`/`c1075472`: `[KDP+0xf2c]` TimebaseSpeed staged at trampoline; mtspr-DEC `[VCLK]` capture default-on — cadence HEALTHY, mtspr_dec=8, 1.042 ms timeslice); **SysError-12 wall CLEARED** (`f808a7fb`/`adea99bc`: HLE Time Manager trap population **SS_NW_TM_TRAPS newworld default-ON**; patch_68k .Sony-abort lifted [g_rom_904_lenient] so the EMUL_OP tail now applies on 9.0.1 [ADBOp/PowerOff/scrap]; TIME_MANAGER_PATCH_SPACE=0x2fd240; evidence `TRAP-TABLE-RECON.md`, P-M4 → P-M5); **P-M5 SIGSEGV CLEARED** (`34d3d441` Execute68k newworld port: `[KDP+0x1074/0x1078]` emulator pair staged; `3cb3b16e` DEFER_NATIVE wake-up re-arm, 65536/episode cap — `deferred_native` is a re-poll count from here, DIAGNOSTICS updated `cefaed7d`; root cause `INTERRUPT-INJECTION-RECON.md` `5accbcf8`); **`delivered_dec=3` live on the riser-on boot — the first live published-route deliveries**; **M7 interrupt injection ✅ SHIPPED 2026-06-12** (`docs/superpowers/plans/2026-06-12-interrupt-injection.md`, arc `153c088b`…`81d60cc1`; W2-4's remainder — including the step 0/1 gate flips — closed per its rev-2 supersession table): the **first host→guest interrupt delivered through the guest's own exception path** (host edge → once-per-assert-edge latch `SS_NW_HOST_IRQ` → EXC_EXTERNAL → 0x50314880 → `[KDP+0x5b0]` fallback service body → 68k post), the **first guest IACK of the OpenPIC model** (B-2 level staging, sign-off shape (i) — host source rides PIC input 0x3F), the NK post's **level test PASSES env-on** (watch 68fff070=0x80010000), exactly-once-per-edge proven, Q-I6 fence narrowed (deferred_native 97→0); **THE CLUSTER FLIPPED** (`81d60cc1`): `SS_NW_EE_RISER`+`SS_NW_DEC_PUBLISHED`+`SS_NW_HOST_IRQ` newworld DEFAULT (explicit-"0" opt-outs; all-OFF byte-identical to the pre-flip baseline; `SS_NW_PIC` stays HELD — env-on test cluster only); default boots deliver DEC #1–4 (2-SPR) + EXT #1 live and still reach the PROGRAM#5 srr0=0x50324fec park; **honest remainder: consumption** — the armed 68k post is never consumed (Ticks unclaimed); **re-score #3 CONFIRMED** (§9); **M8 slot-4 consumption ✅ CLOSED 2026-06-12 — SHIPPED GATED-OFF-GREEN** (`2026-06-12-slot4-consumption.md`, `42ce3e0e`…`52b69cd7`): the R-II10 livelock shapes FIXED — re-score #3's named M3-class surprise resolved as **fork-(iii)** (OUR riser stub's patch-created non-atomicity: the mtmsr EE re-raise fired mid-tail before the ctx reloads + bctr; cured by the deferred EE-edge latch + the Q-C3 deferred-pair staging + the 60 Hz starvation backstop — stop-rule 1 never fired, seeds-not-services held, zero new service bodies); consumption round trip GREEN through leg 7 env-on (post → staging → drain → slot-4 twi → 68k level-1 handler at 60 Hz); **default flip REFUSED on honest criteria** (deterministic SC#1=0x0d divergence; retirement RED) — `SS_NW_IRQ_CONSUME` is a standalone 17th gate, default OFF, fold-into-cluster mandatory at its future flip; **named next task: the VIA-IFR surface** (device-model M-class — the via6522 model presents no 60 Hz IFR source bit, the 68k handler rte's source-less at 0x5000eecc; resolve a4@0x5000ee9a + the d6 bit index first; closing it retires leg 8 + unlocks multi-edge + the Ticks guest-claim); **re-score #4 trigger state recorded** (§9 — not drafted: M8 shipped gated-off, no default-capability change)
+
+### Header "Updated" trail as of 2026-06-12 (verbatim)
+
+> · **Created:** 2026-06-10
+> · **Updated:** 2026-06-12 (M8 slot-4 consumption close-out: shipped gated-off-green,
+> header + §9 re-score #4 trigger check recorded, gate census 17. Earlier same day, M7
+> close-out: milestone shipped + cluster flip folded into the
+> header and the M3b row; §9 re-score #3 drafted, then coordinator-confirmed. Earlier same day, doc-sync sweep #3: 2026-06-12 arc folded — slide wall fixed,
+> W2-4 steps 0–2, DEC cadence, TM traps default-ON, Execute68k staging, new 44.4s frontier,
+> interrupt-injection milestone active. Earlier 2026-06-11: desync ✅ default-on + frontier 0x505bb060; W2-3
+> shipped gated-off. Earlier same day: FE1F service surface complete + default-on. NK syscall
+> surface complete; Wave-2 plan rev 2 ready-to-execute. Earlier: rev 2+3: two adversarial review rounds — §8; rev 4: spike results
+> folded in — §3 spikes, M1/M2/M7 re-scoped, §9 re-score #1: capability ~70–75%; post-M1 spike:
+> NK ceiling at 0x503123fc root-caused + fixed d8932203; new frontier is the 0x50326050
+> MMU/segment-handler wall — M3/M5 territory)

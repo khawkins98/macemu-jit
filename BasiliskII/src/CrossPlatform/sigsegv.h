@@ -119,6 +119,7 @@ extern "C" {
 #define SIGSEGV_THREAD_STATE_COUNT		ARM_THREAD_STATE64_COUNT
 #define SIGSEGV_REGISTER_FILE			((SIGSEGV_REGISTER_TYPE *)&SIP->thr_state.MACH_FIELD_NAME(x[0])) /* x[0] is the first GPR we consider */
 #define SIGSEGV_SKIP_INSTRUCTION		aarch64_skip_instruction
+#define SIGSEGV_FAULT_INSTRUCTION		SIP->thr_state.MACH_FIELD_NAME(pc)
 #endif
 
 #ifdef __x86_64__
@@ -152,7 +153,8 @@ struct sigsegv_info_t {
 enum sigsegv_return_t {
   SIGSEGV_RETURN_SUCCESS,
   SIGSEGV_RETURN_FAILURE,
-  SIGSEGV_RETURN_SKIP_INSTRUCTION
+  SIGSEGV_RETURN_SKIP_INSTRUCTION,
+  SIGSEGV_RETURN_STATE_MODIFIED   // handler mutated the thread state in place (Mach only)
 };
 
 // Type of a SIGSEGV handler. Returns boolean expressing successful operation
@@ -176,6 +178,12 @@ extern sigsegv_address_t sigsegv_get_fault_address(sigsegv_info_t *sip);
 // Return the address of the instruction that caused the fault, or
 // SIGSEGV_INVALID_ADDRESS if we could not retrieve this information
 extern sigsegv_address_t sigsegv_get_fault_instruction_address(sigsegv_info_t *sip);
+
+// Mach path only: returns a pointer to the ARM_THREAD_STATE64 of the faulting
+// thread (mutable in place; written back by handle_badaccess when the handler
+// returns SIGSEGV_RETURN_STATE_MODIFIED). The state is fetched lazily on first
+// call. Returns NULL on non-Mach/non-arm64 builds.
+extern void *sigsegv_get_thread_state(sigsegv_info_t *sip);
 
 // Define an address that is bound to be invalid for a program counter
 const sigsegv_address_t SIGSEGV_INVALID_ADDRESS = sigsegv_address_t(-1);

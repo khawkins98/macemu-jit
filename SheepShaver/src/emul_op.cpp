@@ -19,6 +19,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>	// E2E harness frontmost-app change tracking (strcmp/strncpy)
 
 #include "sysdeps.h"
 #include "main.h"
@@ -46,16 +47,513 @@
 #include "user_strings.h"
 #include "emul_op.h"
 #include "thunks.h"
+#include "ui_introspect.h"
 
 #define DEBUG 0
 #include "debug.h"
 
 extern bool tick_inhibit;
 
+// Stub-pressure trace (SS_STUB_TRACE): flip boot→steady at first guest idle. Defined in
+// ppc-execute.cpp; no-op unless the probe is enabled. See MMU-NANOKERNEL-MP-PLAN.md.
+extern "C" void ss_stub_trace_steady(void);
+
+// CopyBits HLE go/no-go probe (SS_COPYBITS_TRACE): resolve _CopyBits (trap 0xA8EC) once the System is
+// up, and report its address so a SS_JIT_PROFILE run can read CopyBits's execution count straight from
+// the JIT's per-block (PC-keyed) profiler — NO guest patching, zero crash surface. (An earlier
+// come-from heap-stub that counted via an EMUL_OP crashed the guest on the first CopyBits call from the
+// ADB cursor-draw path — the EMUL_OP mis-resumed in nested execute_68k, jmp(a0) → garbage PC; abandoned.
+// COMPATIBILITY-PAYOFF memo #1.) To get the frequency: run with `SS_COPYBITS_TRACE=1 SS_JIT_PROFILE=/p`,
+// note the logged CopyBits PC, then grep the profile's hot-block table for that PC. Phase 2 (rect sizes)
+// will need real interception — do it the safe ROM-patch way, not a heap come-from. Env-gated; default off.
+static bool g_copybits_resolved = false;
+static void copybits_probe_install(void)
+{
+	const char *e = getenv("SS_COPYBITS_TRACE");
+	if (g_copybits_resolved || !(e && *e && *e != '0'))
+		return;
+	g_copybits_resolved = true;
+	M68kRegisters r = {};
+	r.d[0] = 0xA8EC;                 // _CopyBits
+	Execute68kTrap(0xa146, &r);      // GetToolboxTrapAddress -> a0
+	uint32 addr = r.a[0];
+	// On a PPC Mac, CopyBits is PowerPC code reached via Mixed Mode: the trap address is a
+	// RoutineDescriptor (magic 0xAAFE), not the PPC code the JIT runs. Follow RD -> first
+	// RoutineRecord.procDescriptor (@+0x18) -> PPC TVector -> [codeAddr, tocAddr]. Read-only.
+	uint32 ppc_entry = 0;
+	if (addr && guest_ptr_ok(addr) && (ReadMacInt16(addr) == 0xAAFE)) {
+		uint32 pd = ReadMacInt32(addr + 0x18);          // procDescriptor (TVector* for PPC)
+		if (pd && guest_ptr_ok(pd)) ppc_entry = ReadMacInt32(pd);  // TVector[0] = code address
+	}
+	fprintf(stderr, "[COPYBITS] _CopyBits trap 0xA8EC -> descriptor %08x%s. "
+	        "Use SS_JIT_PROFILE_PC=<the PPC entry> for the call count (Finder barely blits — use a graphics app).\n",
+	        (unsigned)addr,
+	        ppc_entry ? "" : " (not a RoutineDescriptor / no PPC TVector found)");
+	if (ppc_entry)
+		fprintf(stderr, "[COPYBITS] PPC code entry (the JIT block PC to profile): %08x\n", (unsigned)ppc_entry);
+}
+
 void PlayStartupSound();
 
 // TVector of MakeExecutable
 static uint32 MakeExecutableTvec;
+
+
+// E2E harness boot-ready signal (ROADMAP A5). Emit ONE line the first time the guest reaches
+// Process-Manager idle (OP_IDLE_TIME = SynchIdleTime patch), enriched with frontmost-app + modal
+// state so an automated harness can tell "idle at the Finder desktop" from "idle blocked on a
+// modal dialog" (disk-repair prompt etc.). The two heuristic alternatives (heartbeat block-rate
+// collapse / compiled-block plateau) cannot make that distinction; this idle hook can, because it
+// can read guest state. See docs/superpowers/specs/2026-06-04-e2e-vnc-harness-design.md §11.
+//
+// Technique: reading classic Mac OS low-memory globals to inspect the running system from the
+// host. Source: Inside Macintosh (Operating System Utilities / Toolbox) — CurApName ($0910, the
+// frontmost app name as a Str31), WindowList ($09D6, head of the window list), the WindowRecord
+// windowKind field (offset +$6C; dialogKind == 2), and Ticks ($016A, 60/s since boot). These
+// fixed low-mem addresses are stable across classic Mac OS; SheepShaver maps guest low memory via
+// Mac2HostAddr/ReadMacIntN. The idle hook itself reuses SheepShaver's own SynchIdleTime ROM patch
+// (rom_patches.cpp), so this adds only the state read, not a new trap.
+// Make a byte safe to drop into a single-quoted log field: non-printable -> '?' (and flags a junk
+// read via *bad); a literal single-quote -> '`' so it can't break the harness's frontApp='...' /
+// title='...' regexes (which capture with '[^']*').
+static inline char e2e_log_safe_char(uint8 c, bool *bad)
+{
+	if (c < 32 || c >= 127) { if (bad) *bad = true; return '?'; }
+	if (c == '\'')
+		return '`';
+	return (char)c;
+}
+
+// Front window title, for instrumentation. WindowRecord.titleHandle is at +0x86 (a StringHandle =
+// Handle to a Str255: deref the handle to a master ptr, then read length byte + chars). Empty for
+// untitled dialogs/alerts. Sanitized to log-safe ASCII. Returns FALSE if a pointer is wild or the
+// read looks like garbage (insane length / non-printable bytes) — under cooperative multitasking the
+// frontmost "window" briefly points at background-extension pseudo-windows whose title deref yields
+// junk; the caller suppresses those frames, and the bounds-checks keep a wild deref from crashing.
+static bool e2e_front_window_title(uint32 win, char *out, int outsz)
+{
+	out[0] = '\0';
+	if (!win)
+		return true;			// bare desktop / no front window = a valid empty title
+	if (!guest_ptr_ok(win))
+		return false;
+	uint32 hdl = ReadMacInt32(win + 0x86);		// titleHandle
+	if (!hdl)
+		return true;			// untitled window = valid empty
+	if (!guest_ptr_ok(hdl))
+		return false;
+	uint32 ptr = ReadMacInt32(hdl);				// *titleHandle -> Str255
+	if (!ptr)
+		return true;
+	if (!guest_ptr_ok(ptr))
+		return false;
+	uint8 *s = Mac2HostAddr(ptr);
+	int len = s[0];
+	if (len > 63)
+		return false;			// insane Str255 length = junk read
+	bool valid = true;
+	for (int i = 0; i < len && i < outsz - 1; i++)
+		out[i] = e2e_log_safe_char(s[1 + i], &valid);
+	out[(len < outsz - 1) ? len : outsz - 1] = '\0';
+	return valid;
+}
+
+// ---- AltiVec detection enabler (opt-in: `altivec` pref / SS_FORCE_ALTIVEC env) --------------
+//
+// WHAT: makes the guest OS report that the (emulated) PowerPC has a vector unit, so real apps
+// take their AltiVec code path. Our AArch64 JIT already COMPILES PPC AltiVec → ARM64 NEON
+// unconditionally (no MSR[VEC] gate); the only thing missing was the guest *detecting* AltiVec.
+//
+// WHY IT'S NEEDED (verified 2026-06-07): in SheepShaver's OldWorld-1.1-ROM environment the
+// gestalt selector 'ppcf' (gestaltPowerPCProcessorFeatures, 0x70706366) is NOT registered at
+// all — Gestalt('ppcf') returns gestaltUndefSelectorErr under BOTH Mac OS 8.6 AND 9.0 ('sysv'
+// control reads fine). The OldWorld nanokernel never advertises a vector unit, so no OS version
+// fixes it. PVR is already a 7400 (G4), but apps key off the gestalt, not PVR.
+//
+// HOW: at the first post-boot idle (System up, safe to call traps), REGISTER 'ppcf' ourselves
+// via _NewGestalt ($A3AD) with a tiny 68k SelectorFunction that returns the vector-feature mask
+// 0x10 = (1 << gestaltPowerPCHasVectorInstructions). NOTE the constant is bit NUMBER 4, so the
+// mask is 0x10 — NOT 0x40 (bit 6 = gestaltPowerPCHas64BitSupport; an earlier 0x40 set the wrong
+// feature and confounded the whole experiment — see LEARNINGS 2026-06-07). Verified end-to-end:
+// AltiVec Fractal Carbon then detects AltiVec, runs its vector kernel, and the JIT compiles it
+// (`SS_JIT_PROFILE` → [JIT-COMPILED-MIX] AltiVec=160, AltiVec hot blocks).
+//
+// OPT-IN + CAVEAT (why this is NOT default-on): under 8.6/9.0 here the OS/nanokernel does not do
+// VR (vector register) context save/restore across task switches — fine for a single compute
+// app, but advertising AltiVec system-wide could corrupt vector state in true preemptive/MP
+// vector use. So it's an explicit opt-in (`altivec` pref, default false; SS_FORCE_ALTIVEC env
+// overrides for dev). Roadmap §B5 tracks promoting this to fully-safe (model VR context).
+static void force_altivec_idle_service(void)
+{
+	static int s_enabled = -1;
+	static bool s_done = false;
+	if (s_enabled < 0) {
+		// `altivec` pref is the user-facing opt-in; SS_FORCE_ALTIVEC env is a dev override that
+		// forces it on even when the pref is absent/false (and "=0" forces it off).
+		const char *e = getenv("SS_FORCE_ALTIVEC");
+		if (e && *e) s_enabled = (*e != '0') ? 1 : 0;
+		else s_enabled = PrefsFindBool("altivec") ? 1 : 0;
+	}
+	if (!s_enabled || s_done)
+		return;
+	// Gate on a KNOWN-registered selector ('sysv' = system version) so we don't act before the
+	// System Gestalt is up. Once 'sysv' resolves, the System is initialized.
+	M68kRegisters sv = {};
+	sv.d[0] = 0x73797376;			// 'sysv'
+	Execute68kTrap(0xa1ad, &sv);		// Gestalt()
+	if ((sv.d[0] & 0xffff) == 0xea51)	// System gestalt not up yet; retry next idle
+		return;
+	s_done = true;
+
+	// Read 'ppcf' (gestaltPowerPCProcessorFeatures). In SheepShaver's OldWorld environment it is
+	// NOT registered (undefSelectorErr) under 8.6 or 9.0 — so there is no bit to flip. FORCE it by
+	// REGISTERING the selector ourselves with the vector bit set, then read it back to confirm.
+	M68kRegisters pf = {};
+	pf.d[0] = 0x70706366;			// 'ppcf'
+	Execute68kTrap(0xa1ad, &pf);		// Gestalt()
+	uint32 pre_err = pf.d[0] & 0xffff;
+
+	uint32 reg_err = 0xffff, proc = 0;
+	if (pre_err != 0) {
+		// Allocate a system-heap block for a tiny 68k Gestalt SelectorFunction and write it.
+		// SelectorFunction ABI (Pascal): pascal OSErr fn(OSType selector, long *response).
+		// On entry: 0(sp)=retaddr, 4(sp)=response(long*), 8(sp)=selector, 12(sp)=result(OSErr,2B).
+		// We ignore the selector, write *response = 0x10 = (1 << gestaltPowerPCHasVectorInstructions).
+		// CRITICAL: the gestalt constant is bit NUMBER 4, so the mask is 0x10 — NOT 0x40 (which is
+		// bit 6 = gestaltPowerPCHas64BitSupport). Verified against Apple CarbonCore Gestalt.h
+		// (2026-06-07). The earlier 0x40 set the wrong feature, confounding the FC experiment.
+		// set result=noErr, and Pascal-return (pop retaddr, drop 8B params, leave result slot).
+		M68kRegisters m = {};
+		m.d[0] = 32;
+		Execute68kTrap(0xa71e, &m);	// NewPtrSysClear()
+		proc = m.a[0];
+		if (proc) {
+			static const uint16 sel_code[] = {
+				0x206F, 0x0004,			// movea.l 4(a7),a0      ; a0 = response
+				0x20BC, 0x0000, 0x0010,		// move.l  #$10,(a0)      ; *response = 1<<4 (vector bit)
+				0x426F, 0x000C,			// clr.w   12(a7)        ; result = noErr
+				0x205F,				// movea.l (a7)+,a0      ; pop return addr
+				0x4FEF, 0x0008,			// lea     8(a7),a7      ; drop 2 params (8B)
+				0x4ED0				// jmp     (a0)
+			};
+			for (unsigned i = 0; i < sizeof(sel_code)/sizeof(sel_code[0]); i++)
+				WriteMacInt16(proc + i*2, sel_code[i]);
+			// NewGestalt(selector=d0, selectorFunction=a0). Raw 68k proc ptr → Mixed Mode calls
+			// it as 68k via the SelectorFunction ProcInfo. Trap _NewGestalt = $A0AD.
+			M68kRegisters n = {};
+			n.d[0] = 0x70706366;		// 'ppcf'
+			n.a[0] = proc;
+			Execute68kTrap(0xa3ad, &n);	// NewGestalt() = $A3AD (Gestalt family: bits 9-10 select op)
+			reg_err = n.d[0] & 0xffff;
+		}
+	}
+
+	// Read back — this CALLS our selector function, exercising the whole chain.
+	M68kRegisters rb = {};
+	rb.d[0] = 0x70706366;			// 'ppcf'
+	Execute68kTrap(0xa1ad, &rb);		// Gestalt()
+	fprintf(stderr, "[FORCE_AV] sysv=0x%08x | ppcf pre:err=%u | NewGestalt(proc=%08x):err=%u | "
+	        "readback:err=%u features=0x%08x vectorBit(0x10)=%s\n",
+	        (unsigned)sv.a[0], (unsigned)pre_err, (unsigned)proc, (unsigned)reg_err,
+	        (unsigned)(rb.d[0] & 0xffff), (unsigned)rb.a[0], (rb.a[0] & 0x10) ? "SET" : "clear");
+}
+
+// Set once the guest reaches Process-Manager idle ([BOOT] emitted). The boot-stall probe
+// (ss_boot_stall_check, driven by the host-side JIT heartbeat) reads this to know when to go
+// quiet — before idle it reports the front modal screen; after idle the idle hook owns dialog
+// reporting via [APP].
+static volatile bool g_boot_idle_emitted = false;
+
+static void e2e_emit_idle_signals(void)
+{
+	// CurApName: low-mem 0x910, Pascal Str31 (length byte + chars). Sanitize to log-safe ASCII so an
+	// app name containing a quote/control char can't break the harness's frontApp='...' parser.
+	char app[32];
+	uint8 *namep = Mac2HostAddr(0x910);
+	int len = namep[0];
+	if (len > 31)
+		len = 31;
+	for (int i = 0; i < len; i++)
+		app[i] = e2e_log_safe_char(namep[1 + i], NULL);
+	app[len] = '\0';
+
+	// Modal check: is the front window a dialog? WindowList head = 0x9D6; windowKind at +0x6C.
+	int modal = 0;
+	uint32 front = ReadMacInt32(0x9d6);
+	if (front) {
+		int16 kind = (int16)ReadMacInt16(front + 0x6c);
+		if (kind == 2)			// dialogKind
+			modal = 1;
+	}
+	char title[64];
+	bool title_valid = e2e_front_window_title(front, title, sizeof(title));
+	uint32 ticks = ReadMacInt32(0x16a);	// Ticks since boot (60/s)
+	uint16 mbar = ReadMacInt16(0x0baa);	// MBarHeight (menu-bar height; non-zero once Finder drew it)
+
+	// [BOOT]: one-shot at the FIRST idle (boot-ready). Kept as a diagnostic; it can fire before the
+	// Finder finishes drawing the desktop, so prefer [READY] (below) for "desktop actually usable".
+	// menubar= is included here too so its first-idle value can be compared with [READY]'s — if it's
+	// already non-zero at first idle, MBarHeight isn't a useful extra readiness discriminator.
+	// Guest OS version: SysVersion low-memory global ($015A), BCD-packed (0x0860 = 8.6.0).
+	// Read on every idle until non-zero (may not be initialized at first idle).
+	static uint16 detected_sysv = 0;
+	if (!detected_sysv) {
+		uint16 sv = ReadMacInt16(0x015a);
+		if (sv >= 0x0700 && sv <= 0x0fff) {
+			detected_sysv = sv;
+			fprintf(stderr, "[SYSV] osVersion=0x%04X (%d.%d.%d)\n",
+			        sv, (sv >> 8) & 0xf, (sv >> 4) & 0xf, sv & 0xf);
+			fflush(stderr);
+		}
+	}
+
+	static bool boot_emitted = false;
+	if (!boot_emitted) {
+		boot_emitted = true;
+		g_boot_idle_emitted = true;	// silence the pre-idle stall probe
+		fprintf(stderr, "[BOOT] idle frontApp='%s' modal=%d win=0x%x title='%s' menubar=%u ticks=%u (%.1fs)\n",
+		        app, modal, front, title, mbar, ticks, ticks / 60.0);
+		fflush(stderr);
+		// Flip the stub-pressure trace (SS_STUB_TRACE) from boot to steady-state at first idle
+		// (no-op unless that probe is enabled). See ppc-execute.cpp / MMU-NANOKERNEL-MP-PLAN.md.
+		ss_stub_trace_steady();
+		// Install the CopyBits-frequency probe (SS_COPYBITS_TRACE) now the System + traps are up.
+		copybits_probe_install();
+	}
+
+	// [READY]: one-shot when the desktop is SETTLED — the Finder has been seen frontmost at least
+	// once (CurApName churns ~6/s under cooperative MT, so a latch beats "currently Finder"), no
+	// modal dialog is up, and that has held for a ~2 s dwell. More robust than first-idle, which can
+	// fire mid-draw. MBarHeight ($0BAA, the menu-bar height — non-zero once the Finder has drawn its
+	// menu bar) is emitted as instrumentation to evaluate folding it into the gate later. NOTE: this
+	// fires only while the desktop stays non-modal, so on the benchmark disk it may not fire before a
+	// Startup Item (Speedometer) grabs the foreground — that path gates on [APP], not [READY].
+	static bool ready_emitted = false;
+	static bool finder_seen = false;
+	static uint32 settled_since = 0;		// guest tick the settled condition began (0 = not settled)
+	if (strcmp(app, "Finder") == 0)
+		finder_seen = true;
+	bool settled = finder_seen && !modal;
+	if (!settled)
+		settled_since = 0;
+	else if (settled_since == 0)
+		settled_since = ticks;
+	if (!ready_emitted && settled && settled_since != 0 && (ticks - settled_since) >= 120) {
+		ready_emitted = true;
+		fprintf(stderr, "[READY] desktop settled frontApp='%s' menubar=%u modal=%d ticks=%u (%.1fs)\n",
+		        app, mbar, modal, ticks, ticks / 60.0);
+		fflush(stderr);
+	}
+
+	// [APP]: emit on frontmost-app change, front-window MODAL change, or front-window TITLE change.
+	//  - App changes let the harness wait for an app to launch (Speedometer from Startup Items).
+	//    CurApName churns among background extensions under cooperative multitasking (~6/s of
+	//    noise), so pure app-name emits are rate-limited (~0.5s).
+	//  - Modal + title changes are emitted immediately (meaningful): the title distinguishes the
+	//    important dialogs (e.g. Speedometer's "All Done!" = the benchmark-finished hook, vs its
+	//    untitled splash/registration/"choose a disk" dialogs, which all reuse ONE window so they're
+	//    NOT individually distinguishable — see docs). win=/title= are instrumentation.
+	//    NOTE: we deliberately do NOT trigger on the front-window POINTER changing — under
+	//    cooperative multitasking the frontmost window oscillates among background extensions every
+	//    frame, which floods the log without adding signal.
+	static char last_app[32] = { 0 };
+	static int last_modal = -1;
+	static char last_title[64] = { 0 };
+	static uint32 last_app_emit = 0;
+	bool app_changed = (strcmp(app, last_app) != 0);
+	bool modal_changed = (modal != last_modal);
+	bool title_changed = (strcmp(title, last_title) != 0);
+	// Skip transient junk frames (garbage front-window title = a background-extension pseudo-window
+	// momentarily frontmost). This suppresses the cooperative-multitasking churn that otherwise
+	// floods the log, leaving the real foreground states (Finder 'Desktop', Speedometer dialogs).
+	if (title_valid && (app_changed || modal_changed || title_changed)) {
+		if (modal_changed || title_changed || (ticks - last_app_emit) >= 30) {	// 0.5s debounce on app churn
+			fprintf(stderr, "[APP] frontApp='%s' modal=%d win=0x%x title='%s' ticks=%u\n",
+			        app, modal, front, title, ticks);
+			fflush(stderr);
+			last_app_emit = ticks;
+		}
+		strncpy(last_app, app, sizeof(last_app) - 1);
+		last_app[sizeof(last_app) - 1] = '\0';
+		strncpy(last_title, title, sizeof(last_title) - 1);
+		last_title[sizeof(last_title) - 1] = '\0';
+		last_modal = modal;
+	}
+}
+
+
+// Boot-stall watchdog (diagnostic). Problem it solves: when the guest wedges at an early-boot
+// dead-end — most often the ROM "This startup disk will not work on this Macintosh model" alert,
+// but also a hang or a sad-Mac — the log shows a burst of JIT compilation (~0.2s) and then goes
+// SILENT, because every higher-level signal we have ([BOOT]/[APP] modal, [SYSV], [READY]) rides
+// the idle hook (SynchIdleTime), which only fires once the guest reaches Process-Manager idle —
+// which a wedged guest never does. The operator is left staring at a GUI screen the log can't see
+// (see memory gui-outcomes-not-in-log). Empirically (9.2.1 model-rejection, 2026-06-07): that
+// screen is a ROM-level DSAlert drawn BEFORE the System boots, so WindowList(0x9D6) reads
+// 0xffffffff and the Toolbox can't name it — naming via low-mem is impossible. But the SHAPE of
+// the failure is unmistakable and signal-independent: blocks keep executing fast (~150M/s, a tight
+// wait loop) while NO new blocks compile and idle is NEVER reached.
+//
+// So this is a WATCHDOG, not a namer: driven by the host-side JIT heartbeat (ppc-cpu.cpp), which
+// keeps ticking all through the wedge (16k+ [HB] lines were emitted during that 9.2.1 screen). It
+// raises a loud [ALARM] the moment that shape is confirmed, then re-states it every ~30s so a
+// `tail` of the log always shows the live stalled state instead of silence.
+//
+// FALSE-POSITIVE SAFETY (cf. CLAUDE.md "comp frozen ≠ hang"): that caution is about POST-boot
+// steady-state HOT-PC sampling. This watchdog is scoped strictly PRE-IDLE and self-disarms the
+// instant [BOOT] idle fires (g_boot_idle_emitted) — a healthy boot reaches idle in ~10s, well
+// before the alarm threshold, so it never trips. It also re-arms whenever compilation resumes
+// (comp increases), so a legitimate brief cached-loop phase that then proceeds won't alarm. The
+// alarm requires: pre-idle AND comp flat for >= stall window AND still spinning fast, after a
+// grace period for normal early-boot compilation. Threshold tunable via SS_BOOT_STALL_SECS
+// (default 15s total; "0" disables the watchdog).
+extern "C" void ss_boot_stall_check(double now_s, unsigned compiled, double rate_mhz)
+{
+	static bool     s_alarmed = false;
+	static bool     s_recovery_logged = false;
+
+	if (g_boot_idle_emitted) {
+		// Idle reached — healthy; [APP] owns dialog reporting now. If we had alarmed (a slow
+		// medium that crossed the threshold but then DID boot), retract once so a false [ALARM]
+		// is self-correcting in the log rather than sitting there permanently.
+		if (s_alarmed && !s_recovery_logged) {
+			s_recovery_logged = true;
+			fprintf(stderr, "[RECOVERED] boot reached idle at %.1fs — the earlier [ALARM] was a "
+			        "slow boot, not a dead-end (consider raising SS_BOOT_STALL_SECS)\n", now_s);
+			fflush(stderr);
+		}
+		return;
+	}
+
+	static int    s_threshold = -1;		// total seconds of stall before alarming (env-tunable)
+	static double s_grace = 8.0;		// don't judge before this — early boot legitimately compiles
+	if (s_threshold < 0) {
+		const char *e = getenv("SS_BOOT_STALL_SECS");
+		s_threshold = (e && *e) ? atoi(e) : 15;
+	}
+	if (s_threshold == 0)
+		return;					// watchdog disabled
+
+	static unsigned s_last_comp = 0;
+	static double   s_comp_progress_t = -1.0;	// last time a NEW block compiled
+	static double   s_last_restate = 0.0;
+	if (s_comp_progress_t < 0.0) { s_last_comp = compiled; s_comp_progress_t = now_s; }
+
+	if (compiled != s_last_comp) {		// compilation progressed -> re-arm
+		s_last_comp = compiled;
+		s_comp_progress_t = now_s;
+		s_alarmed = false;
+	}
+
+	double quiet = now_s - s_comp_progress_t;	// seconds since the last new block compiled
+	// "Executing but not progressing": any non-trivial block rate. The threshold is deliberately low
+	// (0.01M/s) — the real false-positive guard is the pre-idle scoping + self-disarm at [BOOT] idle,
+	// NOT the rate. A higher gate (1M/s) caught the fast tight-loop wedge (model-rejection DSAlert,
+	// ~150M/s) but MISSED a slow interrupt-idle wedge (e.g. a parcels nanokernel idling at ~0.1M/s
+	// with no 68k OS to run — observed 2026-06-08). >0.01 still excludes a truly-dead/starved process.
+	bool spinning = rate_mhz > 0.01;
+	bool stalled = (now_s >= s_grace) && (quiet >= (double)s_threshold - s_grace) && spinning;
+
+	// Best-effort name the front screen — works only if the WindowManager is up (later dialogs:
+	// disk-repair prompt, "rebuild desktop?"); for the pre-System DSAlert case win reads 0xffffffff.
+	uint32 front = ReadMacInt32(0x9d6);		// WindowList head
+	bool wm_up = front != 0 && front != 0xffffffff && guest_ptr_ok(front);
+	char title[64] = { 0 };
+	if (wm_up)
+		e2e_front_window_title(front, title, sizeof(title));
+
+	if (stalled && !s_alarmed) {
+		s_alarmed = true;
+		s_last_restate = now_s;
+		fprintf(stderr, "[ALARM] boot stalled at %.1fs: no new blocks for %.0fs, guest NOT idle, "
+		        "still spinning %.0fM/s -> dead-end (model-rejection alert / hang). %s\n",
+		        now_s, quiet, rate_mhz,
+		        wm_up ? "Front window/dialog title='" : "WindowManager not up (pre-System screen, "
+		                "e.g. \"won't work on this model\") — capture a screenshot to identify.");
+		if (wm_up)
+			fprintf(stderr, "         title='%s'\n", title);
+		fflush(stderr);
+	} else if (s_alarmed && (now_s - s_last_restate) >= 30.0) {
+		s_last_restate = now_s;			// keep the log alive instead of going silent
+		fprintf(stderr, "[STALL] still wedged at %.1fs (no new blocks for %.0fs, %.0fM/s, pre-idle)\n",
+		        now_s, quiet, rate_mhz);
+		fflush(stderr);
+	}
+}
+
+
+// E2E harness clean-shutdown trigger (ROADMAP A5). When the host requests shutdown (SIGUSR1 ->
+// host_shutdown_requested), inject the ADB Power key — the same call the SDL window-close handler
+// uses (video_sdl3.cpp). The guest routes the power key to the Shutdown Manager, which runs the
+// REAL shutdown (procs + flush/unmount volumes) then powers off -> patched PowerOff() ->
+// OP_POWEROFF -> "Shutdown complete." -> clean exit. Posting an event (vs re-entering via
+// Execute68kTrap) is non-reentrant: the guest shuts down from its own top-level event loop.
+//
+// Sequence (driven across idle-hook cycles, each >= ~1 VBL apart):
+//   1. ADB Power key down, hold a few cycles, up -> Mac OS raises the "Shut Down / Restart / Sleep"
+//      confirmation dialog (verified on Mac OS 8.6 and 9.0.4).
+//   2. WAIT for that dialog to actually be modal (windowKind==2), then press Return -> activates the
+//      default "Shut Down" button -> the OS runs its real shutdown (procs + flush/unmount) ->
+//      patched PowerOff() -> OP_POWEROFF -> "Shutdown complete." -> clean exit.
+//   3. if the dialog is still up shortly after, the keystroke didn't take -> RESEND the Return.
+// This is self-correcting (gate on the dialog + resend), mirroring the Python harness's _drive_until,
+// rather than pressing Return blindly after a fixed delay. Return's Mac key code is 0x24, Power 0x7f.
+// Posting events (vs Execute68kTrap) is non-reentrant: the guest acts from its own modal event loop.
+static void e2e_check_host_shutdown(void)
+{
+	enum { PH_IDLE, PH_HOLD_POWER, PH_WAIT_DIALOG, PH_VERIFY, PH_DONE };
+	static int phase = PH_IDLE;
+	static int counter = 0;
+	static int returns_sent = 0;
+
+	if (phase == PH_IDLE) {
+		if (!host_shutdown_requested)
+			return;
+		host_shutdown_requested = 0;
+		fprintf(stderr, "[BOOT] host shutdown requested — ADB Power key down\n");
+		fflush(stderr);
+		ADBKeyDown(0x7f);
+		phase = PH_HOLD_POWER; counter = 0;
+		return;
+	}
+
+	// Is a modal dialog up front? (the Shut Down confirmation — WindowList head, windowKind==2.)
+	uint32 fw = ReadMacInt32(0x9d6);
+	bool dialog_up = fw && ((int16)ReadMacInt16(fw + 0x6c) == 2);
+
+	switch (phase) {
+	case PH_HOLD_POWER:			// hold the power key a few cycles, then release
+		if (++counter < 4)
+			break;
+		ADBKeyUp(0x7f);
+		fprintf(stderr, "[BOOT] Power key up; waiting for Shut Down dialog\n");
+		fflush(stderr);
+		phase = PH_WAIT_DIALOG; counter = 0; returns_sent = 0;
+		break;
+	case PH_WAIT_DIALOG:		// gate on the dialog being modal, then confirm with Return
+		// Wait for the dialog to actually be up (not a blind cycle count); fall back after ~150 idle
+		// cycles so a missed modal probe can never wedge the shutdown.
+		if (!dialog_up && ++counter < 150)
+			break;
+		fprintf(stderr, "[BOOT] confirming Shut Down dialog (Return, attempt %d)\n", returns_sent + 1);
+		fflush(stderr);
+		ADBKeyDown(0x24); ADBKeyUp(0x24);	// Return = the default "Shut Down" button
+		returns_sent++;
+		phase = PH_VERIFY; counter = 0;
+		break;
+	case PH_VERIFY:				// if the dialog didn't clear, the keystroke didn't take -> resend
+		if (++counter < 30)		// give the OS ~0.5 s to act on the keystroke
+			break;
+		if (dialog_up && returns_sent < 4) {
+			fprintf(stderr, "[BOOT] dialog still modal; re-pressing Return\n");
+			fflush(stderr);
+			phase = PH_WAIT_DIALOG; counter = 0;
+		} else {
+			phase = PH_DONE;	// dialog cleared (shutting down) or out of retries
+		}
+		break;
+	}
+}
 
 
 /*
@@ -70,6 +568,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			printf("*** Breakpoint\n");
 			Dump68kRegs(r);
 			break;
+
 
 		case OP_XPRAM1: {			// Read/write from/to XPRam
 			uint32 len = r->d[3];
@@ -354,6 +853,78 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				r->d[0] = 1;
 			break;
 
+		case OP_IRQ_NW: {		// Level 1 interrupt — frame-aware (NewWorld via_nw901_int patch)
+			// 0x5000ed08 is reached both via 68k interrupt (exception frame on A7) and
+			// via JSR during early 68k init (return address on A7).  Detect which case
+			// from the high byte of [A7]:
+			//   interrupt — 68020 short frame format/offset word: high byte = 0x00
+			//   interrupt — 68000 SR first: high byte = 0x20-0x27 (supervisor + IPL mask)
+			//   JSR from ROM (0x5000xxxx): high byte = 0x50
+			// Threshold 0x40 splits them cleanly for our ROM layout.
+			uint8 frame_hi = ReadMacInt8(r->a[7]);
+			if (frame_hi >= 0x40) {
+				// JSR caller: pop 4-byte return address, redirect PC to skip the rte
+				uint32 ret = ReadMacInt32(r->a[7]);
+				r->a[7] += 4;
+				r->pc = ret;
+				static int jsr_count = 0;
+				if (++jsr_count <= 5) {
+					fprintf(stderr, "[OP_IRQ_NW] JSR caller #%d: ret=%08x sp=%08x\n",
+					        jsr_count, ret, r->a[7]);
+					fflush(stderr);
+				}
+			} else {
+				// Interrupt path: run normal OP_IRQ work; rte fires on return.
+				// NOTE: do NOT write to ReadMacInt32(KernelDataAddr+0x67c) here.
+				// In NewWorld, [KDP+0x67c] = ECB+0x70 = the NK's interrupt-pending
+				// halfword cell.  Writing 0 to it corrupts the NK's DEC scheduler:
+				// the NK uses ECB+0x70 to track pending-interrupt state; clearing it
+				// from the 68k side causes the NK to load DEC=0x7fffffff (idle mode)
+				// instead of the normal short timeslice.  The NK manages this cell;
+				// the 68k handler must leave it alone.
+				r->d[0] = 0;
+				if (HasMacStarted()) {
+					if (InterruptFlags & INTFLAG_VIA) {
+						ClearInterruptFlag(INTFLAG_VIA);
+#if !PRECISE_TIMING
+						TimerInterrupt();
+#endif
+						ExecuteNative(NATIVE_VIDEO_VBL);
+						static int tick_counter_nw = 0;
+						if (++tick_counter_nw >= 60) {
+							tick_counter_nw = 0;
+							SonyInterrupt();
+							DiskInterrupt();
+							CDROMInterrupt();
+						}
+						r->d[0] = 1;
+					}
+					if (InterruptFlags & INTFLAG_SERIAL) {
+						ClearInterruptFlag(INTFLAG_SERIAL);
+						SerialInterrupt();
+					}
+					if (InterruptFlags & INTFLAG_ETHER) {
+						ClearInterruptFlag(INTFLAG_ETHER);
+						ExecuteNative(NATIVE_ETHER_IRQ);
+					}
+					if (InterruptFlags & INTFLAG_TIMER) {
+						ClearInterruptFlag(INTFLAG_TIMER);
+						TimerInterrupt();
+					}
+					if (InterruptFlags & INTFLAG_AUDIO) {
+						ClearInterruptFlag(INTFLAG_AUDIO);
+						AudioInterrupt();
+					}
+					if (InterruptFlags & INTFLAG_ADB) {
+						ClearInterruptFlag(INTFLAG_ADB);
+						ADBInterrupt();
+					}
+				} else
+					r->d[0] = 1;
+			}
+			break;
+		}
+
 		case OP_SCSI_DISPATCH: {	// SCSIDispatch() replacement
 			uint32 ret = ReadMacInt32(r->a[7]);
 			uint16 sel = ReadMacInt16(r->a[7] + 4);
@@ -485,6 +1056,10 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME:
+			force_altivec_idle_service();
+			e2e_emit_idle_signals();
+			e2e_check_host_shutdown();	// inject Power key (with dwell) if host asked (A5)
+			ui_introspect_service();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();
@@ -492,10 +1067,27 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_IDLE_TIME_2:
+			force_altivec_idle_service();
+			e2e_emit_idle_signals();	// some ROMs patch the 0x70fe SynchIdleTime variant (A5)
+			e2e_check_host_shutdown();
+			ui_introspect_service();
 			// Sleep if no events pending
 			if (ReadMacInt32(0x14c) == 0)
 				idle_wait();
 			r->d[0] = (uint32)-2;
+			break;
+
+		case OP_POWEROFF:			// Guest Mac OS shut down (Special > Shut Down)
+			printf("\n"
+			       "    ┌───────────┐\n"
+			       "    │  ┌─────┐  │\n"
+			       "    │  │ ◠ ◠ │  │\n"
+			       "    │  │ ╰─╯ │  │\n"
+			       "    │  └─────┘  │\n"
+			       "    └────┬──────┘\n"
+			       "         │\n"
+			       "  Shutdown complete.\n\n");
+			power_off_requested = true;
 			break;
 
 		default:

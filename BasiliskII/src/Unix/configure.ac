@@ -213,7 +213,16 @@ case "$target_cpu" in
   sparc* ) HAVE_SPARC=yes;;
   powerpc* ) HAVE_POWERPC=yes;;
   x86_64* | amd64* ) HAVE_X86_64=yes;;
-  arm* ) HAVE_ARM=yes;;
+  arm* )
+    dnl On Apple Silicon, config.guess reports the CPU as `arm` (arm-apple-darwin),
+    dnl but it is always 64-bit arm64 — there is no 32-bit ARM macOS. Route Darwin
+    dnl `arm` to AArch64 so it does not fall into the ARM32/ARMv6 assembly path
+    dnl (which emits 32-bit inline asm that does not compile on arm64).
+    case "$target_os" in
+      darwin* ) HAVE_AARCH64=yes;;
+      * )       HAVE_ARM=yes;;
+    esac
+    ;;
   aarch64* ) HAVE_AARCH64=yes;;
 esac
 
@@ -1676,6 +1685,25 @@ if [[ "x$HAVE_GCC30" = "xyes" ]]; then
     AC_SUBST(SLIRP_CFLAGS, "-fno-strict-aliasing")
   fi
   CFLAGS="$SAVED_CFLAGS"
+fi
+
+dnl Check whether the compiler rejects K&R-style function definitions (C23 removed them).
+dnl If the test fails (e.g. clang with autoconf-baked -std=gnu23), add -std=gnu89 to
+dnl SLIRP_CFLAGS so the vendored slirp sources compile correctly.  A later -std= flag
+dnl overrides an earlier one, so this cancels out any -std=gnu23 injected into $(CC).
+AC_CACHE_CHECK([whether slirp needs -std=gnu89 for K&R definitions],
+  ac_cv_slirp_needs_gnu89, [
+  AC_LANG_PUSH(C)
+  AC_COMPILE_IFELSE(
+    [AC_LANG_SOURCE([int f(x) int x; { return x; }
+int main() { return f(0); }])],
+    [ac_cv_slirp_needs_gnu89=no],
+    [ac_cv_slirp_needs_gnu89=yes])
+  AC_LANG_POP(C)
+])
+if [[ "x$ac_cv_slirp_needs_gnu89" = "xyes" ]]; then
+  SLIRP_CFLAGS="$SLIRP_CFLAGS -std=gnu89"
+  AC_SUBST(SLIRP_CFLAGS)
 fi
 
 dnl Add -mdynamic-no-pic for MacOS X (XXX icc10 will support MacOS X)

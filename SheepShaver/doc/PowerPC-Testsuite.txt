@@ -26,3 +26,20 @@ See [[#links|links]] for other testsuites. As of **2006/07/04**, the current She
 
   * [[http://www.valgrind.org/|Valgrind]] contains an interesting testsuite for the VEX.
   * [[http://perso.magic.fr/l_indien/qemu-ppc/|Qemu-PPC]] contains part of the original ALU tests used in VEX.
+====== 2026 Fork Note (macemu-jit, macos-arm64 branch) ======
+
+The original download links above are long dead (gwenole.beauchesne.info went offline). This fork recovered and preserved both pieces:
+
+  * **The tester source** was already in the tree: ''src/kpx_cpu/src/test/test-powerpc.cpp''
+
+  * **The G4-recorded results file** was recovered on 2026-06-02 from the Internet Archive's sole surviving snapshot (crawled 2006-12-12): [[https://web.archive.org/web/20061212220526id_/http://gwenole.beauchesne.info:80/projects/ppctester/files/ppc-testresults.dat.bz2]]
+
+It is now preserved **in this repository**, kept bzip2-compressed (4.8 MB vs 36 MB raw; the file is immutable so there is no benefit to storing it uncompressed):
+
+  * ''src/kpx_cpu/src/test/ppc-testresults.dat.bz2''
+
+Verification: the decompressed file's md5sum is ''3e29432abb6e21e625a2eef8cf2f0840'' — exactly matching the md5 documented above and in ''test-powerpc.cpp''. This is bit-for-bit the file Gwenolé Beauchesne recorded on his PowerBook G4 (PPC 7410).
+
+To use: ''bunzip2 -k src/kpx_cpu/src/test/ppc-testresults.dat.bz2''
+
+See ''src/kpx_cpu/src/test/RESULTS-FILE-PROVENANCE.md'' for the full chain of custody, and ''docs/planning/sheepshaver-research/COMPATIBILITY-TESTING-PLAN.md'' (Tier 1.4) for the plan to revive the tester against this file.

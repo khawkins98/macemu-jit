@@ -93,12 +93,15 @@
 #include <sys/param.h>
 #include <signal.h>
 #include <string>
+#include <vector>
 
 #include "sysdeps.h"
 #include "main.h"
 #include "version.h"
 #include "prefs.h"
 #include "prefs_editor.h"
+#include "machine_profile.h"
+#include "exc_core.h"
 #include "cpu_emulation.h"
 #include "emul_op.h"
 #include "xlowmem.h"
@@ -114,6 +117,14 @@
 #include "sigsegv.h"
 #include "sigregs.h"
 #include "rpc.h"
+#include "mmio_bus.h"
+#include "dev_scc8530.h"
+#include "dev_via6522.h"
+#include "dev_cuda.h"
+#include "dev_openpic.h"   // Wave-2 W2-3: OpenPIC bus wiring (SS_NW_PIC)
+#include "adb_stub.h"
+#include "virt_clock.h"
+#include "event_sched.h"
 #if defined(__linux__) && defined(__aarch64__)
 #include <sys/personality.h>
 #endif
@@ -210,6 +221,8 @@ int64 TimebaseSpeed;	// Timebase clock speed (Hz)
 uint8 *RAMBaseHost;		// Base address of Mac RAM (host address space)
 uint8 *ROMBaseHost;		// Base address of Mac ROM (host address space)
 uint32 ROMEnd;
+// vde switch variable
+char* vde_sock;
 
 #if defined(__APPLE__) && defined(__x86_64__) || defined(MEM_BULK)
 uint8 gZeroPage[0x3000], gKernelData[0x2000];
@@ -230,6 +243,9 @@ static bool rom_area_mapped = false;		// Flag: Mac ROM mmap()ped
 static bool ram_area_mapped = false;		// Flag: Mac RAM mmap()ped
 static bool dr_cache_area_mapped = false;	// Flag: Mac DR Cache mmap()ped
 static bool dr_emulator_area_mapped = false;// Flag: Mac DR Emulator mmap()ped
+bool fb_aperture_mapped = false;			// Flag: M11 framebuffer aperture mmap()ped (quiet mode)
+bool ss_m11_fb = false;						// Gate: SS_M11_FB=1 framebuffer aperture active
+uint32_t fb_aperture_base = 0;				// Guest base of framebuffer aperture (0x81000000)
 static KernelData *kernel_data;				// Pointer to Kernel Data
 static EmulatorData *emulator_data;
 
@@ -261,6 +277,32 @@ static const char *crash_reason = NULL;		// Reason of the crash (SIGSEGV, SIGBUS
 
 static rpc_connection_t *gui_connection = NULL;	// RPC connection to the GUI
 static const char *gui_connection_path = NULL;	// GUI connection identifier
+
+// C2.0: bidirectional RPC server — accepts commands from SiliconSheep launcher
+rpc_connection_t *ss_rpc_server = NULL;
+bool ss_rpc_client_connected = false;
+static char ss_rpc_socket_path[256] = "";
+
+void ss_rpc_try_accept(void) {
+	if (!ss_rpc_server || ss_rpc_client_connected) return;
+	if (rpc_listen_socket_nb(ss_rpc_server) == RPC_ERROR_NO_ERROR) {
+		ss_rpc_client_connected = true;
+		fprintf(stderr, "[RPC] C2.0 client connected\n");
+	}
+}
+
+// Shutdown/restart flags (set by emul_op handlers, read by main loop)
+bool power_off_requested = false;
+bool restart_requested = false;
+
+// E2E harness (ROADMAP A5): host-requested clean guest shutdown. SIGUSR1 sets this
+// (async-signal-safe — just a flag); the guest idle hook (OP_IDLE_TIME) injects the ADB Power
+// key with dwell. SIGUSR1 is free here (SIGUSR2 is the nanokernel's interrupt mechanism).
+volatile int host_shutdown_requested = 0;
+static void sigusr1_handler(int)
+{
+	host_shutdown_requested = 1;
+}
 
 uint32  SheepMem::page_size;				// Size of a native page
 uintptr SheepMem::zero_page = 0;			// Address of ro page filled in with zeros
@@ -741,10 +783,14 @@ static bool init_sdl()
 	assert(sdl_flags != 0);
 
 #ifdef USE_SDL_VIDEO
-#if REAL_ADDRESSING && defined(GDK_WINDOWING_WAYLAND)
-	// Needed to fix a crash when using Wayland
-	// Forces use of XWayland instead
-	setenv("SDL_VIDEODRIVER", "x11", true);
+	// Backported from kanjitalk755/macemu 91d58b12 "Fix Wayland detection when there's no GTK".
+	// PROSPECTIVE / UNVALIDATED: gated on REAL_ADDRESSING (32-bit ARM / native-PPC only), so this
+	// compiles out on every 64-bit build — macOS and 64-bit Linux alike. Brought in for a future
+	// 32-bit ARM / Wayland target; runtime behavior is not validated on this fork.
+#if REAL_ADDRESSING && defined(__linux__)
+	// Wayland's mmap usage conflicts with fixed low-address mappings; force XWayland.
+	if (getenv("WAYLAND_DISPLAY") && !getenv("SDL_VIDEODRIVER"))
+		setenv("SDL_VIDEODRIVER", "x11", 0);
 #endif
 
 	// Don't let SDL block the screensaver
@@ -785,6 +831,23 @@ static bool init_sdl()
 	// Don't let SDL catch SIGINT and SIGTERM signals
 	signal(SIGINT, SIG_DFL);
 	signal(SIGTERM, SIG_DFL);
+
+	// M3b diagnostics: SS_TERM_DUMP=1 turns SIGTERM into exit(1) so the atexit
+	// telemetry dumps (MMIO/VIA/VCLK) run on timeout(1)-killed diagnostic boots.
+	// exit() from a handler is async-unsafe in general; acceptable for a one-shot
+	// teardown on an env-gated diagnostics path (default behavior unchanged).
+	if (getenv("SS_TERM_DUMP"))
+		signal(SIGTERM, [](int) { exit(1); });
+
+	// E2E harness (ROADMAP A5): SIGUSR1 requests a clean guest shutdown. SA_RESTART so it
+	// doesn't EINTR blocking syscalls. The handler only sets host_shutdown_requested.
+	{
+		struct sigaction sa;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_handler = sigusr1_handler;
+		sa.sa_flags = SA_RESTART;
+		sigaction(SIGUSR1, &sa, NULL);
+	}
 	return true;
 }
 #endif
@@ -817,6 +880,693 @@ static void gui_activate (GtkApplication *app)
 #endif
 #endif
 
+// C2.0 bidirectional RPC handlers — SiliconSheep → emulator
+// These run from the video refresh thread via rpc_dispatch(), so they must be
+// quick and not block. Heavy work (memory reads) is bounded by the request size.
+
+// These are defined in video_sdl3.cpp (non-static for C2.0 RPC access)
+extern bool input_lockout;
+extern uint32 frame_skip;
+
+static int ss_rpc_handle_input_lockout(rpc_connection_t *conn) {
+	int32_t val;
+	if (rpc_method_get_args(conn, RPC_TYPE_INT32, &val, RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+	input_lockout = (val != 0);
+	fprintf(stderr, "[RPC] input_lockout → %s\n", input_lockout ? "ON" : "OFF");
+	return rpc_method_send_reply(conn, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_frameskip(rpc_connection_t *conn) {
+	int32_t val;
+	if (rpc_method_get_args(conn, RPC_TYPE_INT32, &val, RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+	frame_skip = (uint32)val;
+	fprintf(stderr, "[RPC] frameskip → %u\n", frame_skip);
+	return rpc_method_send_reply(conn, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_get_stats(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+#if defined(__aarch64__) && defined(USE_AARCH64_JIT)
+	int blocks = 0, pool_size = 0;
+	size_t cache_used = 0, cache_total = 0;
+	extern void ppc_jit_aarch64_get_stats(int*, int*, size_t*, size_t*);
+	ppc_jit_aarch64_get_stats(&blocks, &pool_size, &cache_used, &cache_total);
+	char buf[256];
+	snprintf(buf, sizeof buf, "blocks=%d pool=%d cache=%zu/%zuK",
+	         blocks, pool_size, cache_used/1024, cache_total/1024);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+#else
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, "no-jit", RPC_TYPE_INVALID);
+#endif
+}
+
+static int ss_rpc_handle_read_memory(rpc_connection_t *conn) {
+	uint32_t addr, len;
+	if (rpc_method_get_args(conn, RPC_TYPE_UINT32, &addr, RPC_TYPE_UINT32, &len, RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+	if (len > 65536) len = 65536;  // cap at 64K per read
+	uint8 *host = Mac2HostAddr(addr);
+	return rpc_method_send_reply(conn, RPC_TYPE_ARRAY, RPC_TYPE_CHAR, (int)len, host, RPC_TYPE_INVALID);
+}
+
+// Defined in sheepshaver_glue.cpp — dumps PPC registers to a JSON string
+extern "C" void ss_dump_registers_json(char *buf, int bufsz);
+
+static int ss_rpc_handle_dump_registers(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	char buf[2048];
+	ss_dump_registers_json(buf, sizeof(buf));
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+// C2.0: defined in ui_introspect.cpp
+extern "C" void ss_ui_snapshot_json(char *buf, int bufsz);
+
+static int ss_rpc_handle_ui_snapshot(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[16384];
+	ss_ui_snapshot_json(buf, sizeof(buf));
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+extern "C" void jit_profile_get_json(char *buf, int bufsz, int top_n);
+extern "C" void jit_fallback_get_json(char *buf, int bufsz, int top_n);
+extern "C" void jit_profile_time_get_json(char *buf, int bufsz, int top_n);
+extern "C" void jit_profile_opcode_mix_json(char *buf, int bufsz);
+extern "C" void jit_profile_heatmap_json(char *buf, int bufsz);
+
+static int ss_rpc_handle_get_profile(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[32768];
+	jit_profile_get_json(buf, sizeof(buf), 50);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_get_fallbacks(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[32768];
+	jit_fallback_get_json(buf, sizeof(buf), 50);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_get_timing(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[32768];
+	jit_profile_time_get_json(buf, sizeof(buf), 50);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_opcode_mix(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[8192];
+	jit_profile_opcode_mix_json(buf, sizeof(buf));
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+static int ss_rpc_handle_heatmap(rpc_connection_t *conn) {
+	rpc_method_get_args(conn, RPC_TYPE_INVALID);
+	static char buf[8192];
+	jit_profile_heatmap_json(buf, sizeof(buf));
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+// Returns true if [addr, addr+len) is within a known mapped guest region.
+// Checks RAM, ROM, and both kernel-data pages. Used by mem_search and mem_read_json
+// to avoid segfaults on unmapped addresses (Mac2HostAddr is an offset — no guard).
+static bool ss_rpc_is_mapped(uint32_t addr, uint32_t len) {
+	if (len == 0) return false;
+	uint32_t end = addr + len;
+	if (end < addr) return false;  // overflow
+	// RAM
+	if (addr >= RAMBase && end <= RAMBase + RAMSize) return true;
+	// ROM
+	if (addr >= ROMBase && end <= ROMEnd) return true;
+	// Kernel Data (primary)
+	if (addr >= KERNEL_DATA_BASE && end <= KERNEL_DATA_BASE + KERNEL_AREA_SIZE) return true;
+	// Kernel Data (alternate)
+	if (addr >= KERNEL_DATA2_BASE && end <= KERNEL_DATA2_BASE + KERNEL_AREA_SIZE) return true;
+	// New World Trampoline regions
+	if (MachineProfileIsNewWorld()) {
+		// Wave 0: extended Low Memory (0x0-0x2000000) — NK low-physical descriptors
+		// + 68k VM Manager VMVectors struct (placed at ~0x01002080 by Mac OS init,
+		// above the original 1MB window; 32MB covers the full 68k System Heap range).
+		if (addr < 0x2000000 && end <= 0x2000000) return true;
+		// Wave 1: 24-bit alias region (0xFF000000-0xFFFFFFFF) — the DR emulator
+		// sign-extends 16-bit negative 68k addresses (e.g. 0xEFD0 → 0xFFFFEFD0)
+		// instead of masking to 24 bits (0x00FFEFD0). The data there is zero in
+		// both cases (probe confirmed). Mapping as anonymous zero lets DR continue.
+		if (addr >= 0xFF000000 && end <= 0x100000000ULL) return true;
+		const uint32_t kdp = KernelDataAddr;
+		const uint32_t sub_kdp_size = 0x8000;
+		const uint32_t shmem_base = kdp & ~0x3FFF;  // SHMLBA=0x4000 on arm64
+		const uint32_t sub_kdp_base = shmem_base - sub_kdp_size;
+		const uint32_t htab_size = 0x10000;
+		const uint32_t htab_base = kdp + 0x2000;
+		const uint32_t ram_size_bytes = RAMSize;
+		const uint32_t page_count = ram_size_bytes / 4096;
+		const uint32_t pgdesc_size = (page_count * 4 + 0xFFF) & ~0xFFF;
+		const uint32_t kmem_base = (sub_kdp_base - pgdesc_size) & ~0xFFFF;
+		const uint32_t kmem_end  = htab_base + htab_size;
+		if (addr >= kmem_base && end <= kmem_end) return true;
+	}
+	return false;
+}
+
+// mem_search: search guest memory for a 4-byte big-endian value.
+// Request args: (uint32 value, uint32 start, uint32 end)
+//   start=0 and end=0 → default to [RAMBase, RAMBase+RAMSize)
+// Reply: JSON string {"matches":["0x..."],"count":N,"truncated":bool}
+static int ss_rpc_handle_mem_search(rpc_connection_t *conn) {
+	uint32_t value, start, end_addr;
+	if (rpc_method_get_args(conn, RPC_TYPE_UINT32, &value,
+	                        RPC_TYPE_UINT32, &start,
+	                        RPC_TYPE_UINT32, &end_addr,
+	                        RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+
+	// defaults
+	if (start == 0 && end_addr == 0) {
+		start    = RAMBase;
+		end_addr = RAMBase + RAMSize;
+	}
+
+	// align start up to 4-byte boundary
+	start = (start + 3) & ~(uint32_t)3;
+
+	const int MAX_MATCHES = 1000;
+	static char buf[24576];  // ~24KB: 1000 matches × ~14 chars + overhead
+	int count = 0;
+	bool truncated = false;
+
+	char *p = buf;
+	char *buf_end = buf + sizeof(buf) - 2;  // leave room for final "}
+	int wrote = snprintf(p, buf_end - p, "{\"matches\":[");
+	if (wrote < 0 || p + wrote >= buf_end) goto finish;
+	p += wrote;
+
+	if (end_addr > 0xFFFFFFFC) end_addr = 0xFFFFFFFC;
+	for (uint64_t addr = start; addr + 4 <= end_addr; addr += 4) {
+		if (!ss_rpc_is_mapped((uint32_t)addr, 4)) continue;
+		uint32_t word = ReadMacInt32((uint32_t)addr);
+		if (word == value) {
+			if (count >= MAX_MATCHES) {
+				truncated = true;
+				break;
+			}
+			wrote = snprintf(p, buf_end - p, "%s\"0x%08x\"",
+			                 count > 0 ? "," : "", (unsigned)addr);
+			if (wrote < 0 || p + wrote >= buf_end) { truncated = true; break; }
+			p += wrote;
+			count++;
+		}
+	}
+
+finish:
+	snprintf(p, buf + sizeof(buf) - p, "],\"count\":%d,\"truncated\":%s}",
+	         count, truncated ? "true" : "false");
+
+	fprintf(stderr, "[RPC] mem_search: found %d matches for 0x%08x in [0x%08x..0x%08x)\n",
+	        count, (unsigned)value, (unsigned)start, (unsigned)end_addr);
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+// mem_read_json: read count bytes from guest address, return as hex words.
+// Request args: (uint32 addr, uint32 count)
+//   count=0 → default 64; capped at 4096
+// Reply: JSON string {"addr":"0x...","hex":"word0 word1 ..."}
+static int ss_rpc_handle_mem_read_json(rpc_connection_t *conn) {
+	uint32_t addr, count;
+	if (rpc_method_get_args(conn, RPC_TYPE_UINT32, &addr,
+	                        RPC_TYPE_UINT32, &count,
+	                        RPC_TYPE_INVALID) < 0)
+		return RPC_ERROR_MESSAGE_ARGUMENT_MISMATCH;
+
+	if (count == 0) count = 64;
+	if (count > 4096) count = 4096;
+
+	// round down to 4-byte boundary, round up count to multiple of 4
+	addr  = addr & ~(uint32_t)3;
+	count = (count + 3) & ~(uint32_t)3;
+
+	// buf: "{"addr":"0x12345678","hex":"" + up to 1024 words × 9 chars + "\"}"
+	static char buf[12288];  // ~12KB: 1024 words × 9 + small overhead
+	char *p = buf;
+	char *buf_end = buf + sizeof(buf) - 4;
+
+	int wrote = snprintf(p, buf_end - p, "{\"addr\":\"0x%08x\",\"hex\":\"", (unsigned)addr);
+	if (wrote >= 0) p += wrote;
+
+	bool first = true;
+	for (uint32_t off = 0; off < count; off += 4) {
+		uint32_t a = addr + off;
+		uint32_t word = ss_rpc_is_mapped(a, 4) ? ReadMacInt32(a) : 0xDEADC0DEu;
+		wrote = snprintf(p, buf_end - p, "%s%08x", first ? "" : " ", (unsigned)word);
+		if (wrote < 0 || p + wrote >= buf_end) break;
+		p += wrote;
+		first = false;
+	}
+
+	snprintf(p, buf + sizeof(buf) - p, "\"}");
+	return rpc_method_send_reply(conn, RPC_TYPE_STRING, buf, RPC_TYPE_INVALID);
+}
+
+static rpc_method_descriptor_t ss_rpc_methods[] = {
+	{ RPC_METHOD_INPUT_LOCKOUT,  ss_rpc_handle_input_lockout },
+	{ RPC_METHOD_FRAMESKIP,      ss_rpc_handle_frameskip },
+	{ RPC_METHOD_GET_STATS,      ss_rpc_handle_get_stats },
+	{ RPC_METHOD_READ_MEMORY,    ss_rpc_handle_read_memory },
+	{ RPC_METHOD_DUMP_REGISTERS, ss_rpc_handle_dump_registers },
+	{ RPC_METHOD_UI_SNAPSHOT,    ss_rpc_handle_ui_snapshot },
+	{ RPC_METHOD_GET_PROFILE,    ss_rpc_handle_get_profile },
+	{ RPC_METHOD_GET_FALLBACKS,  ss_rpc_handle_get_fallbacks },
+	{ RPC_METHOD_GET_TIMING,     ss_rpc_handle_get_timing },
+	{ RPC_METHOD_GET_OPCODE_MIX, ss_rpc_handle_opcode_mix },
+	{ RPC_METHOD_GET_HEATMAP,    ss_rpc_handle_heatmap },
+	{ RPC_METHOD_MEM_SEARCH,     ss_rpc_handle_mem_search },
+	{ RPC_METHOD_MEM_READ_JSON,  ss_rpc_handle_mem_read_json },
+};
+
+static void ss_rpc_init_server(void) {
+	snprintf(ss_rpc_socket_path, sizeof ss_rpc_socket_path,
+	         "/tmp/sheepshaver-%d", (int)getpid());
+	ss_rpc_server = rpc_init_server(ss_rpc_socket_path);
+	if (!ss_rpc_server) {
+		fprintf(stderr, "[RPC] Failed to init server at %s\n", ss_rpc_socket_path);
+		return;
+	}
+	rpc_method_add_callbacks(ss_rpc_server, ss_rpc_methods,
+	                         sizeof(ss_rpc_methods) / sizeof(ss_rpc_methods[0]));
+	fprintf(stderr, "[RPC] C2.0 server listening at %s\n", ss_rpc_socket_path);
+
+	// Write socket path to .sheepvm/rpc_socket for launcher discovery
+	FILE *f = fopen("rpc_socket", "w");
+	if (f) {
+		fprintf(f, "%s\n", ss_rpc_socket_path);
+		fclose(f);
+	}
+}
+
+// --- Machine Layer M1: MMIO bus helpers (MACHINE-LAYER-PLAN.md §2b; CORE99 §4 fence) ---
+
+// MacIO addresses with no device model yet (CORE99-MACHINE-DESCRIPTION §4 fence).
+//
+// M6a Wave 2 fence-policy change (2026-06-11): M1 shipped these as abort-loudly
+// stubs to prevent silent drift. The fence has now served its purpose — the
+// newworld 68k boot's device-init walk PROVABLY probes unmodeled sub-blocks
+// (first observed: read8 of 0xF3018040, IDE at +0x18000 per the Core99 map) —
+// so per the fence's own evidence-driven rule the minimal honest model is
+// ABSENT-HARDWARE (open-bus) semantics:
+//   reads  -> all-ones for the access width (0xFF/0xFFFF/0xFFFFFFFF — what an
+//             empty IDE/SCSI bus reads back on real hardware);
+//   writes -> ignored;
+//   telemetry -> region stats count every access (unchanged); the FIRST touch
+//             of each 0x1000-aligned sub-block logs one stderr line.
+// SS_MMIO_STRICT=1 (resolved once at bus bring-up) restores the M1 abort-loudly
+// contract as a knob. Decision made by the orchestrator under night
+// authorization; recorded in CORE99-MACHINE-DESCRIPTION §4, pending user
+// ratification. Modeled regions (SCC, VIA) are unaffected.
+//
+// §2g tension (documented, not resolved): these handlers can run on the Mach
+// exception-handler thread, where §2g forbids stdio. The M1 stub already
+// fprintf'd from that context (tolerable because it abort()ed immediately);
+// the first-touch line keeps that existing pattern because it is strictly
+// bounded (<=128 lines per process lifetime, in practice 1-2) — unlike the VIA
+// Cuda warning there is no latch/drain seam here. If this ever deadlocks in
+// practice, convert to the VIA latch pattern (drained in mmio_dump_stats_atexit).
+static bool mmio_strict = false;   // set once in the bring-up block below
+
+static void mmio_stub_first_touch(uint32_t addr, const char *what, unsigned size)
+{
+	// 128 sub-blocks of 0x1000 cover the 0x80000 MacIO container. Guarded by
+	// the macio-stub region lock (device callbacks run under it), so plain
+	// non-atomic words are race-free.
+	static uint32_t touched[4];   // 128-bit once-per-sub-block bitmap
+	uint32_t idx = (addr - 0xF3000000u) >> 12;
+	if (idx >= 128) idx = 127;    // defensive clamp; the bus only routes the container
+	if (touched[idx >> 5] & (1u << (idx & 31))) return;
+	touched[idx >> 5] |= 1u << (idx & 31);
+	fprintf(stderr, "[MMIO] macio-stub: first touch of unmodeled sub-block 0x%08x "
+	        "(%s%u) - absent-device semantics (SS_MMIO_STRICT=1 restores abort)\n",
+	        0xF3000000u + (idx << 12), what, size * 8);
+}
+
+static uint64_t mmio_stub_read(void *, uint32_t addr, unsigned size)
+{
+	if (mmio_strict) {
+		fprintf(stderr, "[MMIO] FATAL: read%u from unmodeled MacIO address 0x%08x "
+		        "(CORE99-MACHINE-DESCRIPTION §4 fence; SS_MMIO_STRICT=1)\n", size * 8, addr);
+		abort();
+	}
+	mmio_stub_first_touch(addr, "read", size);
+	// Open-bus/absent-device: all-ones for the access width.
+	return (size >= 8) ? ~0ull : ((1ull << (size * 8)) - 1);
+}
+static void mmio_stub_write(void *, uint32_t addr, unsigned size, uint64_t v)
+{
+	if (mmio_strict) {
+		fprintf(stderr, "[MMIO] FATAL: write%u of 0x%llx to unmodeled MacIO address 0x%08x "
+		        "(CORE99-MACHINE-DESCRIPTION §4 fence; SS_MMIO_STRICT=1)\n",
+		        size * 8, (unsigned long long)v, addr);
+		abort();
+	}
+	mmio_stub_first_touch(addr, "write", size);
+	// Absent device: write ignored (region stats still count it).
+}
+// M2: the single host time authority. GetTicks_usec() is the emulator's existing
+// monotonic source; everything (TB, DEC, VIA ticks, scheduler deadlines) derives
+// from it through the virtual clock so all guest-visible time is mutually consistent.
+static uint64_t vclk_host_now_ns(void *)
+{
+	return GetTicks_usec() * 1000ull;
+}
+// Idempotent: callable from both the harness early path and normal init.
+static void VirtClockInitHost(void)
+{
+	if (!VirtClockReady(&g_virt_clock))
+		VirtClockInit(&g_virt_clock, (uint32_t)TimebaseSpeed, vclk_host_now_ns, NULL);
+}
+
+// VIA clock: virtual-clock ns -> VIA ticks (783360 Hz). 128-bit: host-uptime-scale
+// ns * 783360 overflows uint64.
+static uint64_t mmio_via_now_ticks(void *)
+{
+	return (uint64_t)((unsigned __int128)VirtClockNowNS(&g_virt_clock) * VIA_CLOCK_HZ
+	                  / 1000000000u);
+}
+
+// M2: event scheduler (MACHINE-LAYER-PLAN §2c) + its pump thread (§2g row 3:
+// "Event-scheduler callbacks - tick/timer thread"). Started only when the machine
+// layer is live (MachineUsesMMIOBus() for devices, or newworld for DEC expiry).
+static EventScheduler *g_event_sched = NULL;
+static pthread_t sched_pump_thread;
+static pthread_mutex_t sched_pump_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  sched_pump_cv  = PTHREAD_COND_INITIALIZER;
+static bool sched_pump_quit = false;     // guarded by sched_pump_mtx (rev 2 I3: not volatile-as-sync)
+static bool sched_pump_kicked = false;   // condvar predicate (rev 2 I3: lost-wakeup guard)
+static bool sched_pump_started = false;
+
+static void sched_pump_kick(void)
+{
+	pthread_mutex_lock(&sched_pump_mtx);
+	sched_pump_kicked = true;            // (rev 2 I3) a kick before the wait is never lost
+	pthread_cond_signal(&sched_pump_cv);
+	pthread_mutex_unlock(&sched_pump_mtx);
+}
+
+static void *sched_pump_main(void *)
+{
+	// (rev 2 I3) Residual latency note: a timer added between process_timers()
+	// returning and the predicate check below is caught by sched_pump_kicked.
+	// (rev 3) The 10ms cap bounds the intended SLICE, not wall-clock-step
+	// distortion: timedwait targets an absolute CLOCK_REALTIME deadline, so a
+	// backward NTP step can stretch ONE wait by the step size; a kick or the
+	// shifted timeout recovers. Also: process_timers() samples time_now before
+	// running callbacks, so the returned slice can overshoot the true next
+	// deadline by the callbacks' duration - both bounded in practice by the cap
+	// and by the lazy backstops (VIA timer_poll, VirtClockReadDEC).
+	const uint64_t CAP_NS = 10000000ull;   // 10 ms re-check cap (idle floor)
+	for (;;) {
+		uint64_t slice = g_event_sched->process_timers();
+		if (slice == 0 || slice > CAP_NS) slice = CAP_NS;
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_nsec += (long)(slice % 1000000000ull);
+		ts.tv_sec  += (time_t)(slice / 1000000000ull) + ts.tv_nsec / 1000000000L;
+		ts.tv_nsec %= 1000000000L;
+		pthread_mutex_lock(&sched_pump_mtx);
+		if (!sched_pump_quit && !sched_pump_kicked)
+			pthread_cond_timedwait(&sched_pump_cv, &sched_pump_mtx, &ts);
+		sched_pump_kicked = false;
+		bool quit = sched_pump_quit;
+		pthread_mutex_unlock(&sched_pump_mtx);
+		if (quit) break;
+	}
+	return NULL;
+}
+
+static void sched_pump_stop(void)   // atexit: stop callbacks before the [VCLK] dump
+{
+	// (rev 3) Hazard note: this can run from the sigsegv-handler crash path
+	// (sheepshaver_glue enter_mon -> QuitEmulator -> exit). The join completes
+	// because machine-layer locks are held only for bounded handler bodies; if a
+	// third wedged thread ever held a region lock or the timer-queue mutex at
+	// crash time, this join would hang the crash diagnostics - bounded-join
+	// hardening is an M3 item.
+	if (!sched_pump_started) return;
+	pthread_mutex_lock(&sched_pump_mtx);
+	sched_pump_quit = true;
+	pthread_cond_signal(&sched_pump_cv);
+	pthread_mutex_unlock(&sched_pump_mtx);
+	pthread_join(sched_pump_thread, NULL);
+}
+// (rev 2 I6) Ordering caveat: M1's [MMIO] stats atexit registers at bus bring-up,
+// i.e. AFTER this task's block -> by LIFO it dumps BEFORE the pump stops. Cosmetic
+// only (stats counters are monotonic; M2 callbacks only latch IFR bits); the
+// [VCLK] dump below IS ordered after the stop.
+
+// DEC eager-expiry hook (VirtClock on_dec_write): one-shot that latches the
+// condition. Generation-guarded inside VirtClockDECExpire - stale events no-op.
+static void vclk_dec_arm(void *, uint64_t ns_until_expiry, uint32_t gen)
+{
+	if (g_event_sched) {
+		// (rev 3) Cancel the previous generation's one-shot first: the guest's
+		// normal pattern is "rewrite DEC every interrupt", and without the cancel
+		// every mtspr DEC leaks a dead queue entry until its deadline (heap churn
+		// + a pointless pump wake each). The gen guard in VirtClockDECExpire makes
+		// the scheduler's cancel/callback race (event_sched.h S10) harmless.
+		// CPU-thread-only context (called from VirtClockWriteDEC), so the static
+		// has a single writer.
+		static uint32_t last_dec_timer = 0;
+		if (last_dec_timer)
+			g_event_sched->cancel_timer(last_dec_timer);
+		last_dec_timer = g_event_sched->add_oneshot_timer(ns_until_expiry,
+		                                 [gen]() {
+			VirtClockDECExpire(&g_virt_clock, gen);
+			// M3a Task 4.1: kick the CPU thread so the block-boundary poll runs the
+			// DEC delivery hook (sheepshaver_glue.cpp deliver_pending_dec_exception).
+			// Gated on the latch actually being set: a stale-generation expire no-ops
+			// inside VirtClockDECExpire and must not wake HandleInterrupt spuriously.
+			// The newworld gate is belt-and-braces (this scheduler also runs on the
+			// SS_MMIO_BUS=1 named third config, where the deprecated SS_SYNTH_DEC
+			// override could force the virtual clock on - paravirtual stays inert).
+			//
+			// Lazy-latch note: VirtClockReadDEC can also latch dec_fire on the CPU
+			// thread (virt_clock.cpp - pure module, deliberately not modified). That
+			// path needs no kick seam of its own: the CPU thread is by definition
+			// running, and the latch is picked up by the EE-edge re-raises
+			// (mtmsr/rfi, Task 3) and by the next kick from this scheduler path.
+			if (MachineProfileIsNewWorld() && VirtClockDECPending(&g_virt_clock))
+				TriggerInterrupt();
+		});
+	}
+}
+
+static void vclk_dump_stats_atexit(void) { VirtClockDumpStats(&g_virt_clock, stderr); }
+// Device model instances. File scope (not block-scope statics in the bring-up
+// block below) so mmio_dump_stats_atexit can drain the VIA's latched Cuda-protocol
+// warning at exit. Behavior is otherwise identical to the prior static locals.
+static SCC8530 scc;
+static VIA6522 via;
+// M3b Task 3: Cuda protocol model + minimal ADB stub, bound behind the VIA's
+// SR/ORB surface at bus bring-up (newworld/bus gate only — paravirtual never
+// touches them; the VIA stays in M1 loud-stub mode there).
+static CudaDevice cuda;
+static ADBStub adb;
+
+// --- Wave-2 W2-3: OpenPIC bus wiring (env-gated SS_NW_PIC, default OFF) -------
+// Plan: docs/superpowers/plans/2026-06-11-wave2-interrupt-chain.md Task W2-3.
+static OpenPICDevice openpic;
+static bool nw_pic_on = false;        // resolved once at bus bring-up
+static bool nw_pic_force = false;     // [DIAG-FORCED] knob (SS_NW_PIC_FORCE=1)
+
+// The EXT pending flag + configure seam live in sheepshaver_glue.cpp (declared
+// in ppc-cpu.hpp, which this file does not include — file-scope externs by the
+// established TriggerInterrupt/main.h pattern, not function-scope ones).
+extern "C" uint32_t SheepExcMaxProgramSlot(void);  // [PROGRESS] max NK slot# delivered
+extern "C" int      SheepDR68KStarted(void);        // [PROGRESS] 68k DR emulator fired
+extern "C" void SheepExcExtSetPending(int asserted);
+extern "C" void SheepExcExtConfigure(void);
+// M7 Task A: the host once-per-assert-edge latch (SS_NW_HOST_IRQ; glue owns it).
+extern "C" int SheepExcHostIrqAssert(void);
+extern "C" void SheepExcHostIrqDeassert(void);
+extern "C" void SheepExcHostIrqConfigure(void);
+extern "C" int SheepExcHostIrqFormatStats(char *buf, int len);
+// Resolved once at the newworld bring-up (default OFF; flip is Task C's LAST
+// step). volatile-free plain bool: written once single-threaded before the
+// timer/tick threads start, read-only afterwards.
+static bool nw_host_irq_on = false;
+// M7 Task B-2 (sign-off shape (i)): the host source joins the PIC rail —
+// resolved true only when BOTH SS_NW_HOST_IRQ and SS_NW_PIC are on (the
+// staging is structurally tied to the PIC being registered: the fallback's
+// IACK has no model to read otherwise — binding constraint 3, stated).
+// Same write-once-single-threaded discipline as nw_host_irq_on.
+static bool nw_host_irq_pic_on = false;
+
+// Byte-lane trampolines — the F16 DECISION ([STATIC-oracle]: LE VALUE-SWAP).
+// QEMU maps KeyLargo's MPIC with the little-endian ops table; the model speaks
+// NATURAL register values; the bus speaks ARCHITECTURAL values (what the BE
+// guest's lwz yields). A BE lwz of an LE-mapped natural-value register yields
+// bswap32(value) — so 32-bit accesses are value-swapped in BOTH directions.
+// FALSIFIER (documented per rev 2 F16 — the guest has never read the PIC, so
+// the oracle decides until live evidence exists): the FIRST live guest FRR
+// read must observe 0x02003F00 (= bswap32(0x003F0002)); observing 0x003F0002
+// falsifies the swap — guest evidence wins, flip to natural pass-through and
+// record in EE-CHAIN-RECON.md. The first FRR read and first CTPR write are
+// logged loud below (bounded-once lines; the macio-stub first-touch fprintf
+// precedent for fault-reachable paths, §2g tension documented there).
+static uint64_t openpic_bus_read(void *opaque, uint32_t addr, unsigned size)
+{
+	uint64_t v = OpenPICRead(opaque, addr, size);
+	if (size == 4) {
+		v = (uint64_t)__builtin_bswap32((uint32_t)v);
+		// F16 falsifier observable: the first guest FRR read (glb+0x1000).
+		static bool frr_logged = false;
+		if (!frr_logged && (addr - openpic.base) == 0x1000u) {
+			frr_logged = true;
+			fprintf(stderr, "[PIC] FIRST guest FRR read -> 0x%08x "
+			        "(F16 falsifier: LE value-swap predicts 0x02003F00; "
+			        "0x003F0002 falsifies the swap)\n", (uint32_t)v);
+		}
+	}
+	return v;
+}
+static void openpic_bus_write(void *opaque, uint32_t addr, unsigned size, uint64_t value)
+{
+	if (size == 4)
+		value = __builtin_bswap32((uint32_t)value);
+	// CTPR reset-15 gate observable: distinguishes "guest hasn't initialized
+	// the PIC" from "wiring broken" (W2-3 observability requirement).
+	uint32_t off = addr - openpic.base;
+	if (off == 0x80u || off == 0x20080u) {
+		static bool ctpr_logged = false;
+		if (!ctpr_logged) {
+			ctpr_logged = true;
+			fprintf(stderr, "[PIC] FIRST guest CTPR write: 0x%08x "
+			        "(reset gate 15 %s)\n", (uint32_t)value,
+			        ((uint32_t)value & 0xFu) < 15u ? "OPENS" : "still closed");
+		}
+	}
+	OpenPICWrite(opaque, addr, size, value);
+}
+
+// PIC output -> the CPU-side EXT pending flag + kick (rev 2 F5). Runs under
+// the PIC region lock on whatever thread mutated the PIC (CPU thread via
+// guest MMIO fault, or the scheduler-pump thread via SS_SCC_RX_INJECT ->
+// SCC lock -> PIC lock). Must touch NO device locks (the pic->device
+// direction is forbidden by the documented lock order); it only writes the
+// single-copy-atomic flag and kicks the CPU thread on the ASSERT edge
+// (TriggerInterrupt — the DEC-expiry idiom; pthread_kill is async-safe).
+static void nw_pic_output_edge(void *, bool asserted)
+{
+	SheepExcExtSetPending(asserted ? 1 : 0);
+	if (asserted)
+		TriggerInterrupt();
+}
+
+// Device -> PIC input edges. Both callbacks fire under the OWNING DEVICE's
+// region lock (SCC or VIA) and take the PIC region lock via MMIOBusWithRegion
+// — the documented cross-region order: device -> pic, never pic -> device.
+struct PICInputCtx { unsigned input; bool asserted; };
+static void pic_input_locked(void *opaque)
+{
+	PICInputCtx *c = (PICInputCtx *)opaque;
+	if (c->asserted)
+		OpenPICRaiseInput(&openpic, c->input);
+	else
+		OpenPICLowerInput(&openpic, c->input);
+}
+static void nw_scc_irq_edge(void *, int ch, bool asserted)
+{
+	// Q8 input map: ESCC ch A = 0x25, ch B = 0x24 (dev_openpic.h).
+	PICInputCtx c = { (ch == SCC_CH_A) ? (unsigned)OPENPIC_IRQ_ESCC_A
+	                                   : (unsigned)OPENPIC_IRQ_ESCC_B, asserted };
+	MMIOBusWithRegion(OPENPIC_CORE99_BASE, pic_input_locked, &c);
+}
+static void nw_via_irq_edge(void *, bool asserted)
+{
+	PICInputCtx c = { OPENPIC_IRQ_VIA_CUDA, asserted };   // 0x19
+	MMIOBusWithRegion(OPENPIC_CORE99_BASE, pic_input_locked, &c);
+}
+// Injected Cuda services. now_mac uses the paravirtual local-time convention
+// (plan rev 2 m8: macos_util.cpp TimeToMacTime, Mac-epoch LOCAL seconds — do
+// not re-derive UTC). §2g hardening (Task-3 review): GET_TIME commit runs under
+// the bus region lock, potentially on the Mach handler thread — so the libc/
+// prefs-touching TimeToMacTime runs ONCE at bring-up (cuda_mac_base, safe
+// thread) and the fault-path callback is pure arithmetic on the monotonic
+// clock. Tradeoff: a DST boundary mid-session drifts the offset — irrelevant
+// for boot-time GET_TIME.
+static uint32_t cuda_mac_base;      // TimeToMacTime(time()) sampled at bring-up
+static uint64_t cuda_mac_base_ns;   // vclk_host_now_ns at the same instant
+static uint32_t cuda_now_mac(void *)
+{
+	return cuda_mac_base +
+	       (uint32_t)((vclk_host_now_ns(NULL) - cuda_mac_base_ns) / 1000000000ull);
+}
+// Thin adapter onto the Task 2 ADB stub (signatures match by design).
+static int cuda_adb_adapter(void *opaque, uint8_t cmd, const uint8_t *listen_data,
+                            int listen_len, uint8_t *reply, int reply_max)
+{
+	return ADBStubCommand((ADBStub *)opaque, cmd, listen_data, listen_len,
+	                      reply, reply_max);
+}
+static void mmio_dump_stats_atexit(void)
+{
+	MMIOBusDumpStats(stderr);
+	// Emit the VIA's one-shot Cuda warning here (the device latches it on the
+	// fault-reachable path where stdio is forbidden; §2g).
+	const char *cuda_warn = VIATakePendingWarning(&via);
+	if (cuda_warn)
+		fprintf(stderr, "[MMIO] via6522: Cuda-protocol register touched (%s) - "
+		        "loud stub only until M3 (MACHINE-LAYER-PLAN M3)\n", cuda_warn);
+	// M6a Wave 2 #4: per-register VIA read histogram — identifies WHICH register
+	// a guest poll loop hammers (the heartbeat's mmio=V: count is per-region only).
+	char via_hist[256];
+	if (VIAFormatReadHistogram(&via, via_hist, sizeof(via_hist)))
+		fprintf(stderr, "[VIA] reads: %s\n", via_hist);
+	// M3b C3 polarity forensics: ORB write-value transitions (the 68k handshake
+	// engines are PPC-probe-invisible; the written bit pattern is the evidence).
+	if (VIAFormatOrbTrace(&via, via_hist, sizeof(via_hist)))
+		fprintf(stderr, "[VIA] orb: %s\n", via_hist);
+	// M3b Task 3: drain the Cuda's latched warning (same pattern as the VIA's —
+	// latched on fault-reachable paths where stdio is forbidden, §2g) and dump
+	// the protocol counters. This atexit only registers inside the bus gate,
+	// so paravirtual output is untouched.
+	const char *cuda_pending = CudaTakePendingWarning(&cuda);
+	if (cuda_pending)
+		fprintf(stderr, "[CUDA] warning: %s\n", cuda_pending);
+	if (cuda.orb_writes || cuda.sr_reads || cuda.sr_writes) {
+		char cuda_stats[512];
+		if (CudaFormatStats(&cuda, cuda_stats, sizeof(cuda_stats)))
+			fprintf(stderr, "[CUDA] %s\n", cuda_stats);
+	}
+	CudaDumpPacketTrace(stderr);   // no-op unless SS_CUDA_TRACE=1
+	// Wave-2 W2-3: OpenPIC counters + warning latch + the Q8 first-IACK record
+	// (term-dump path: SS_TERM_DUMP=1 turns SIGTERM into exit(1), so this
+	// atexit IS the slot-boot capture). Silent unless SS_NW_PIC registered it.
+	if (nw_pic_on) {
+		const char *pic_warn = OpenPICTakePendingWarning(&openpic);
+		if (pic_warn)
+			fprintf(stderr, "[PIC] warning: %s\n", pic_warn);
+		char pic_stats[512];
+		if (OpenPICFormatStats(&openpic, pic_stats, sizeof(pic_stats)))
+			fprintf(stderr, "[PIC] %s\n", pic_stats);
+		if (OpenPICFormatFirstIACKs(&openpic, pic_stats, sizeof(pic_stats)))
+			fprintf(stderr, "[PIC] first-iacks: %s\n", pic_stats);
+	}
+	// M7 Task A: host-irq latch telemetry (edges vs consumed = the
+	// exactly-once-per-assert-edge acceptance evidence). Formatter returns 0
+	// unless SS_NW_HOST_IRQ armed the source — gated-off boots byte-identical.
+	{
+		char hirq_stats[160];
+		if (SheepExcHostIrqFormatStats(hirq_stats, sizeof(hirq_stats)))
+			fprintf(stderr, "[EXC] host-irq: %s\n", hirq_stats);
+	}
+}
+
+// ---
+
 int main(int argc, char **argv)
 {
 #if defined(__linux__) && defined(__aarch64__)
@@ -833,9 +1583,12 @@ int main(int argc, char **argv)
 		}
 	}
 #endif
-	/* Early opcode test mode: bypass all SheepShaver init if SS_TEST_HEX is set */
-	if (getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) {
+	/* Early opcode test mode: bypass all SheepShaver init for the opcode harness.
+	 * SS_TEST_HEX = single vector; SS_TEST_HEX_FILE = batch (all vectors, one process). */
+	if ((getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) ||
+	    (getenv("SS_TEST_HEX_FILE") && *getenv("SS_TEST_HEX_FILE"))) {
 		extern bool ss_run_opcode_test(void);
+		VirtClockInitHost();   // M2: harness path — TimebaseSpeed=0 here, fallback freq OK
 		ss_run_opcode_test();
 		return 0;
 	}
@@ -844,6 +1597,53 @@ int main(int argc, char **argv)
 	GtkApplication *app = NULL;
 	int ret;
 #endif
+	// [PROGRESS] — registered first so it runs last (LIFO), after all detail dumps.
+	// Emits one summary line on every exit including SIGTERM (SS_TERM_DUMP converts
+	// SIGTERM to exit(1)).  Greppable milestone readout for Machine Layer work.
+	// M11: [FB-DIRTY] is emitted here when we exit via SIGTERM (fb_aperture_mapped
+	// still true — memory not yet released).  The quit: path (normal/crash exit) emits
+	// it inline BEFORE vm_mac_release and clears fb_aperture_mapped so this block
+	// is a no-op there (prevents double-scan on freed memory).
+	atexit([]() {
+		if (fb_aperture_mapped && fb_aperture_base) {
+			const uint32_t fb_size = 16 * 1024 * 1024;
+			const uint32_t *p = (const uint32_t *)Mac2HostAddr(fb_aperture_base);
+			uint64_t non_zero = 0;
+			for (uint32_t i = 0; i < fb_size / 4; i++)
+				if (p[i]) non_zero++;
+			fprintf(stderr, "[FB-DIRTY] non_zero_pixels=%llu\n",
+			        (unsigned long long)non_zero);
+		}
+		// [NW-PROG …] — discrete, self-documenting boot-progress readout (replaces
+		// the former single [PROGRESS] line). Each signal on its own greppable line
+		// with a coarse score word + inline threshold context, so a snapshot is
+		// readable without consulting DIAGNOSTICS.md. The raw key=val tokens
+		// (program_max= / dr68k= / dec_expiries= / irq_fired=) are preserved so
+		// existing key-greps and the plans' "dec_expiries≥200" phrasing still match.
+		// Format reference: SheepShaver/docs/DIAGNOSTICS.md "[NW-PROG] readout".
+		auto env_on = [](const char *k) {
+			const char *v = getenv(k);
+			return (v && v[0] && v[0] != '0') ? 1 : 0;
+		};
+		uint32_t nw_prog = SheepExcMaxProgramSlot();
+		int      nw_dr   = SheepDR68KStarted();
+		uint64_t nw_dexp = g_virt_clock.dec_expiries;
+		uint32_t nw_irq  = g_exc_consume_stats.fired;
+		fprintf(stderr,
+		    "[NW-PROG config]   profile=%s  opt-in: PIC=%d CONSUME=%d  "
+		        "(newworld cluster defaults implied)\n"
+		    "[NW-PROG nk-stage] program_max=%u  %-4s  highest NK PROGRAM# delivered (j2i Start68k path)\n"
+		    "[NW-PROG dr68k]    dr68k=%d  %-4s  68k DR emulator entered; 0=never started\n"
+		    "[NW-PROG sched]    dec_expiries=%llu  %-4s  scheduler liveness: 5-6=long-park, >=40=baseline-healthy, >=200=milestone-done\n"
+		    "[NW-PROG irq]      irq_fired=%u  %-4s  interrupts delivered to 68k world; 0=none yet, >=1=delivery live\n",
+		    MachineProfileIsNewWorld() ? "newworld" : "paravirtual",
+		    env_on("SS_NW_PIC"), env_on("SS_NW_IRQ_CONSUME"),
+		    nw_prog,                (nw_prog >= 8)  ? "OK"   : "LOW",
+		    nw_dr,                  nw_dr           ? "OK"   : "NONE",
+		    (unsigned long long)nw_dexp, (nw_dexp >= 200) ? "DONE" : (nw_dexp >= 40) ? "OK" : "PARK",
+		    nw_irq,                 (nw_irq >= 1)   ? "OK"   : "NONE");
+	});
+
 	char str[256];
 	bool memory_mapped_from_zero, ram_rom_areas_contiguous;
 	const char *vmdir = NULL;
@@ -968,9 +1768,17 @@ int main(int argc, char **argv)
 
 	// Read preferences
 	PrefsInit(vmdir, argc, argv);
+
+	// Resolve the machine profile (MACHINE-LAYER-PLAN.md M0): pref + env,
+	// before anything consults it (ROM patching, sigsegv policy, NW gates).
+	MachineProfileInit();
+
 	// Only use nogui preference if not passed as command line argument
 	if (use_gui == -1)
 		use_gui = !PrefsFindBool("nogui");
+
+	// C2.0: start bidirectional RPC server for SiliconSheep launcher commands
+	ss_rpc_init_server();
 
 #if SDL_PLATFORM_MACOS && SDL_VERSION_ATLEAST(2,0,0)
 	// On Mac OS X hosts, SDL2 will create its own menu bar.  This is mostly OK,
@@ -1020,6 +1828,11 @@ int main(int argc, char **argv)
 
 	// Get system info
 	get_system_info();
+
+	// M2: virtual clock init. Must follow get_system_info() so TimebaseSpeed is final
+	// (the cpuclock pref may override the 25 MHz default; initializing earlier would
+	// pin the clock at the fallback rate while the TB/DEC machinery uses the real rate).
+	VirtClockInitHost();
 
 	// Init system routines
 	SysInit();
@@ -1112,13 +1925,52 @@ int main(int argc, char **argv)
 #endif
 	if (!memory_mapped_from_zero) {
 #if !defined(PAGEZERO_HACK) && !defined(MEM_BULK)
-		// Create Low Memory area (0x0000..0x3000)
-		if (vm_mac_acquire_fixed(0, 0x3000) < 0) {
+		// Create Low Memory area. Wave 0 (M5-MMU-SR-WALL-ANALYSIS §6): on the
+		// newworld profile, extend it to cover the NK's low-physical descriptor
+		// region (~0x200a0 lwbrx/stwx probes, second access at +0x200b0, and the
+		// absolute lbz at 0x3f00) - real hardware backs this with the first 128KB
+		// of DRAM. Paravirtual keeps the historical 0x3000 (ignoresegv ate these
+		// accesses there; mapping them would change behavior). Single acquire:
+		// page-aligned start, page-size-agnostic, no Mach overlap hazard.
+		// M12: extend NW lowmem from 1MB to 32MB to cover the 68k VM Manager VMVectors
+		// struct (placed at ~0x01002080 by Mac OS init; deref of [0xcf0]+0x48 crashes
+		// with ea=0x010020c8 when the range is unmapped).  32MB stays well below
+		// RAMBase (which vm_mac_acquire places at 0x2000000+ on this path).
+		//
+		// SS_M18 (post-quiesce relocation wall, 2026-06-15): the real NanoKernel
+		// Trampoline models physical DRAM at base 0 (real-Mac invariant) and
+		// operates entirely in low RAM — the OF claim arena is at 0x01000000 and
+		// every claim/translate lands in [0,0x02000000).  After OF quiesce/exit it
+		// relocates a stage to a phys target (observed 0x0ab00000) that lies in the
+		// unbacked gap [0x02000000, RAM_BASE=0x10000000) between the 32MB NW lowmem
+		// and the main Mac RAM area (which DIRECT_ADDRESSING places at RAM_BASE).
+		// Back the full phys-0 RAM window [0,RAM_BASE) so the guest's phys-0
+		// relocation lands in backed RAM.  Contiguous with the main RAM area at
+		// [0x10000000,0x20000000); no overlap with ROM (0x50000000) or KernelData
+		// (0x68ffe000).  Gated to the trampoline boot — translation stays V=P
+		// (NOT S1 live MMU); paravirtual and plain-NW boots keep 0x2000000/0x3000.
+		bool m18_tramp = MachineProfileIsNewWorld() &&
+		                 ({ const char *e = getenv("SS_M18_TRAMPOLINE");
+		                    e && *e && strcmp(e, "0") != 0; });
+		const uint32 lowmem_size = m18_tramp ? RAM_BASE
+		                         : (MachineProfileIsNewWorld() ? 0x2000000 : 0x3000);
+		if (vm_mac_acquire_fixed(0, lowmem_size) < 0) {
 			sprintf(str, GetString(STR_LOW_MEM_MMAP_ERR), strerror(errno));
 			ErrorAlert(str);
 			goto quit;
 		}
 		lm_area_mapped = true;
+		if (MachineProfileIsNewWorld()) {
+			fprintf(stderr, "[WAVE0] low memory extended to 0x0-0x2000000 (NK descriptors + 68k heap)\n");
+			// M12: map 0xFF000000-0xFFFFFFFF so the DR emulator's sign-extended 16-bit
+			// negative EAs (e.g. 0xFFFFEFD0 from 68k offset 0xEFD0) resolve to zero
+			// instead of faulting. The 24-bit equivalent (0x00FFEFD0) is also zero at
+			// boot time; this mapping gives the DR the same result without 24-bit aliasing.
+			if (vm_mac_acquire_fixed(0xFF000000, 0x1000000) < 0)
+				fprintf(stderr, "[WAVE1] WARNING: 24-bit alias map failed: %s\n", strerror(errno));
+			else
+				fprintf(stderr, "[WAVE1] 24-bit DR alias mapped 0xFF000000-0xFFFFFFFF (zero)\n");
+		};
 #endif
 #if REAL_ADDRESSING
 		// Allocate RAM at any address. Since ROM must be higher than RAM, allocate the RAM
@@ -1180,6 +2032,372 @@ int main(int argc, char **argv)
 #endif
 	rom_area_mapped = true;
 	D(bug("ROM area at %p (%08x)\n", ROMBaseHost, ROMBase));
+
+	// M11: framebuffer aperture — 16 MB fixed guest RAM at 0x81000000 (Core99 PCI
+	// video base, confirmed by QEMU mac99 display node T-F1 probe 2026-06-13).
+	// NewWorld profile only; gate SS_M11_FB=1 (default OFF).
+	//
+	// Loud mode (SS_M11_FB_LOUD=1): skip vm_mac_acquire_fixed so the aperture
+	// stays unmapped.  Guest accesses then fault into the MMIO_TRAPPED loud-stub
+	// (registered in the MachineUsesMMIOBus block below) which logs [FB-TOUCH].
+	// Quiet mode (SS_M11_FB alone): real RAM mapped here; SDL reads fb_host_ptr.
+	{
+		const char *env = getenv("SS_M11_FB");
+		if (env && env[0] && env[0] != '0' && MachineProfileIsNewWorld()) {
+			ss_m11_fb = true;
+			fb_aperture_base = 0x81000000;
+			const char *loud_env = getenv("SS_M11_FB_LOUD");
+			bool loud = loud_env && loud_env[0] && loud_env[0] != '0';
+			if (!loud) {
+				const uint32 fb_aperture_size = 16 * 1024 * 1024;
+				if (vm_mac_acquire_fixed(fb_aperture_base, fb_aperture_size) < 0) {
+					fprintf(stderr, "[M11-FB] FATAL: cannot map framebuffer aperture at 0x%08x (%s)\n",
+					        fb_aperture_base, strerror(errno));
+					goto quit;
+				}
+				fb_aperture_mapped = true;
+				fprintf(stderr, "[M11-FB] aperture mapped: guest 0x%08x + 0x%x (16 MB, quiet)\n",
+				        fb_aperture_base, fb_aperture_size);
+			} else {
+				fprintf(stderr, "[M11-FB] aperture NOT mapped (loud mode: faults -> [FB-TOUCH])\n");
+			}
+		}
+	}
+
+	// M2: event scheduler + pump. Needed by the VIA timers (any bus config) and by
+	// the DEC eager-expiry (newworld). Paravirtual default: none of this starts.
+	if (MachineUsesMMIOBus() || MachineProfileIsNewWorld()) {
+		g_event_sched = new EventScheduler();
+		g_event_sched->set_time_now_cb([]() { return vclk_host_now_ns(NULL); });
+		g_event_sched->set_notify_changes_cb(sched_pump_kick);
+		g_virt_clock.on_dec_write = vclk_dec_arm;
+		g_virt_clock.cb_opaque = NULL;
+		if (pthread_create(&sched_pump_thread, NULL, sched_pump_main, NULL) != 0) {
+			fprintf(stderr, "[ESCHED] FATAL: cannot start scheduler pump thread\n");
+			QuitEmulator();
+		}
+		sched_pump_started = true;
+		atexit(vclk_dump_stats_atexit);   // registered BEFORE stop => runs AFTER it (LIFO)
+		atexit(sched_pump_stop);
+		fprintf(stderr, "[ESCHED] event scheduler pump running (cap 10ms)\n");
+	}
+
+	// Machine Layer M1: MMIO bus + device models (MACHINE-LAYER-PLAN.md §2b; CORE99 §1).
+	// Active on the newworld profile or the named third config SS_MMIO_BUS=1.
+	if (MachineUsesMMIOBus()) {
+		// Resolve the strict-fence knob ONCE here (getenv is not safe on the Mach
+		// handler thread where the stub handlers can run; §2g).
+		{
+			const char *strict_env = getenv("SS_MMIO_STRICT");
+			mmio_strict = (strict_env && strcmp(strict_env, "1") == 0);
+		}
+		// Claim the MacIO container so no later mapping can land there. The region
+		// stays PROT_NONE forever: every access must Mach-fault into the bus.
+		void *want = (void *)(uintptr_t)(NATMEM_OFFSET + 0xF3000000ull);
+		void *got = mmap(want, 0x80000, PROT_NONE,
+		                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+		if (got != want) {
+			fprintf(stderr, "[MMIO] FATAL: cannot reserve MacIO container at %p (got %p)\n",
+			        want, got);
+			QuitEmulator();
+		}
+
+		// scc/via are file-scope statics (see mmio_dump_stats_atexit above).
+		SCCReset(&scc, 0xF3012000);
+		VIAReset(&via, 0xF3016000, mmio_via_now_ticks, NULL);
+
+		// Wave-2 W2-3: SS_NW_PIC gate (default OFF; flip-LAST per the plan —
+		// the flip is held pending acceptance, stop-rule 3).
+		{
+			const char *pic_env = getenv("SS_NW_PIC");
+			nw_pic_on = pic_env && pic_env[0] && pic_env[0] != '0';
+		}
+
+		static const MMIODevice macio_stub_dev =
+			{ "macio-stub", NULL, mmio_stub_read, mmio_stub_write, NULL };
+		static const MMIODevice scc_dev =
+			{ "scc8530", &scc, SCCRead, SCCWrite, SCCReadIsIdle };
+		static const MMIODevice via_dev =
+			{ "via6522", &via, VIARead, VIAWrite, NULL };
+		// OpenPIC: contained overlap inside the macio stub (0xF3040000+0x40000
+		// ⊂ 0xF3000000+0x80000) — most-specific wins, the scc/via idiom
+		// (mmio_bus.h:38; no carve needed). Trampolines are the F16 byte-lane
+		// value-swap wrappers above.
+		static const MMIODevice openpic_dev =
+			{ "openpic", &openpic, openpic_bus_read, openpic_bus_write, NULL };
+
+		bool ok = MMIOBusRegister(0xF3000000, 0x80000, MMIO_TRAPPED, &macio_stub_dev)
+		       && MMIOBusRegister(0xF3012000, 0x1000, MMIO_TRAPPED, &scc_dev)
+		       && MMIOBusRegister(0xF3016000, 0x2000, MMIO_TRAPPED, &via_dev);
+		if (ok && nw_pic_on) {
+			// Reset-then-BindOutput order (header contract: reset clears the
+			// binding). Reset BEFORE registration so no fault can ever observe
+			// pre-reset state; the output bind happens below, after the device
+			// edges exist.
+			OpenPICReset(&openpic, OPENPIC_CORE99_BASE);
+			ok = MMIOBusRegister(OPENPIC_CORE99_BASE, OPENPIC_REGION_SPAN,
+			                     MMIO_TRAPPED, &openpic_dev);
+		}
+		if (!ok) { fprintf(stderr, "[MMIO] FATAL: region registration failed\n"); QuitEmulator(); }
+		MMIOBusActivate();
+		if (nw_pic_on) {
+			// Output seam: PIC -> single-copy-atomic EXT flag + CPU kick (F5).
+			OpenPICBindOutput(&openpic, nw_pic_output_edge, NULL);
+			// Source edges (device -> pic lock order, documented at the
+			// callbacks): SCC ch A/B Rx conditions -> inputs 0x25/0x24,
+			// VIA IFR&IER summary -> input 0x19 (Q8 map).
+			SCCBindIRQOutput(&scc, nw_scc_irq_edge, NULL);
+			VIABindIRQOutput(&via, nw_via_irq_edge, NULL);
+			OpenPICRegisterDiagInstance(&openpic);   // heartbeat + crash-path stats
+			SheepExcExtConfigure();                  // exc= tuple gains the 7th field
+			fprintf(stderr, "[PIC] openpic wired: region 0xF3040000+0x40000, "
+			        "inputs scc-a=0x25 scc-b=0x24 via=0x19, byte-lane=LE-value-swap "
+			        "[STATIC-oracle], CTPR reset 15 (silent until guest init)\n");
+			// [DIAG-FORCED] (rev 2 tension 1, sanctioned): SS_NW_PIC_FORCE=1
+			// host-forces the unmask path the guest has not yet programmed —
+			// CTPR=0 + IVPR unmask/level/prio for the three wired sources.
+			// DIAGNOSTIC ONLY, NEVER ACCEPTANCE: it distinguishes wiring-broken
+			// from guest-hasn't-initialized, which CTPR logging alone cannot.
+			// Runs single-threaded at bring-up (before emulation), so direct
+			// model calls (natural values, no byte-lane wrapper) are safe.
+			const char *force_env = getenv("SS_NW_PIC_FORCE");
+			nw_pic_force = force_env && force_env[0] && force_env[0] != '0';
+			if (nw_pic_force) {
+				static const unsigned forced[3] = { OPENPIC_IRQ_ESCC_A,
+					OPENPIC_IRQ_ESCC_B, OPENPIC_IRQ_VIA_CUDA };
+				for (int i = 0; i < 3; i++) {
+					// unmasked, LEVEL sense (the devices hold level
+					// conditions), priority 8, vector = input number
+					// Direct MODEL calls (natural values — deliberately NOT the
+					// byte-lane wrapper; this is the host, not the BE guest).
+					uint32_t ivpr = OPENPIC_IVPR_SENSE |
+					                (8u << OPENPIC_IVPR_PRIO_SHIFT) | forced[i];
+					OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+					             (forced[i] << 5), 4, ivpr);
+					OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+					             (forced[i] << 5) + 0x10, 4, 1u);
+				}
+				OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x20080, 4, 0);  // CTPR=0
+				// SCC enables (WR1 Rx-int / WR9 MIE) are NOT forced here: the
+				// guest's own SCC init (WR9=0xC0 force-hw-reset, the STM table)
+				// would clear them mid-boot. They are re-applied at INJECTION
+				// time instead (the SS_SCC_RX_INJECT one-shot below, under the
+				// SCC region lock) so the injected byte traverses the full
+				// chain mechanically.
+				fprintf(stderr, "[PIC] [DIAG-FORCED] host-forced unmask: CTPR=0, "
+				        "IVPR(0x25/0x24/0x19) unmasked level prio=8; SCC int-enables "
+				        "re-applied at inject time - DIAGNOSTIC, NOT ACCEPTANCE "
+				        "(rev 2 tension 1)\n");
+			}
+		}
+		// M2: VIA timers hang on the event scheduler (eager IFR latch; reads stay
+		// the lazy backstop). Must be after region registration: expiry callbacks
+		// run under the region lock via MMIOBusWithRegion.
+		VIABindScheduler(&via, g_event_sched, MMIOBusWithRegion);
+		// M6a Wave 2 #4: alarm-killed boots skip atexit, so the heartbeat carries
+		// the top-2 read registers too (hb_append_mmio_suffix -> VIAFormatTopReads).
+		VIARegisterDiagInstance(&via);
+		// M3b Task 3: Cuda + ADB stub behind the VIA SR/ORB seam. Lazy-only
+		// timing (plan rev 2 M4, decision recorded at the seam in dev_via6522):
+		// dev_cuda arms NO scheduler one-shots — the settle-on-read backstop is
+		// the primary mechanism, so nothing on this path can allocate on the
+		// Mach fault path. Reset order: ADB stub first (the Cuda binds it).
+		ADBStubReset(&adb);
+		// RTC base sampled here on a safe thread; cuda_now_mac is then pure
+		// monotonic arithmetic (§2g — see the comment at the wrapper).
+		cuda_mac_base = TimeToMacTime(time(NULL));
+		cuda_mac_base_ns = vclk_host_now_ns(NULL);
+		CudaReset(&cuda, cuda_now_mac, NULL);
+		CudaBindADB(&cuda, cuda_adb_adapter, &adb);
+		VIABindCuda(&via, &cuda);
+		CudaRegisterDiagInstance(&cuda);   // crash-path stats (sheepshaver_glue)
+		fprintf(stderr, "[CUDA] model bound to via6522 SR/ORB seam (lazy-only; ADB stub kbd@2 mouse@3)\n");
+		atexit(mmio_dump_stats_atexit);
+		fprintf(stderr, "[MMIO] bus active: macio 0xF3000000+0x80000 (%s), scc 0xF3012000, via 0xF3016000%s\n",
+		        mmio_strict ? "strict fence: abort on unmodeled" : "absent-device stub",
+		        nw_pic_on ? ", pic 0xF3040000" : "");
+
+		// SS_SCC_RX_INJECT=DELAY_S:HEXBYTES — debug/demo Rx injection into SCC ch A.
+		// Format: unsigned decimal seconds, colon, then hex byte pairs (no separator).
+		// Example: SS_SCC_RX_INJECT=10:0D  (inject CR after 10 s)
+		// Example: SS_SCC_RX_INJECT=5:77 20  (inject 'w' ' ' after 5 s — spaces ignored)
+		// Bytes are injected under the SCC region lock (same contract as SCCRead/SCCWrite).
+		// Runs only inside MachineUsesMMIOBus() — paravirtual builds never reach this block.
+		{
+			const char *inject_env = getenv("SS_SCC_RX_INJECT");
+			if (inject_env && inject_env[0]) {
+				// Parse DELAY_S:HEXBYTES
+				char *colon = const_cast<char *>(strchr(inject_env, ':'));
+				if (colon && colon != inject_env) {
+					unsigned delay_s = (unsigned)strtoul(inject_env, NULL, 10);
+					// Parse hex bytes (skip whitespace/colons after the first colon)
+					std::vector<uint8_t> inject_bytes;
+					const char *p = colon + 1;
+					while (*p) {
+						while (*p == ' ' || *p == '\t') p++; // skip whitespace
+						if (!*p) break;
+						// expect two hex digits
+						char hi = *p++, lo = 0;
+						while (*p == ' ' || *p == '\t') p++;
+						if (*p) lo = *p++;
+						else lo = '0';
+						auto hexval = [](char c) -> int {
+							if (c >= '0' && c <= '9') return c - '0';
+							if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+							if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+							return 0;
+						};
+						inject_bytes.push_back((uint8_t)((hexval(hi) << 4) | hexval(lo)));
+					}
+					if (!inject_bytes.empty()) {
+						// Capture bytes by value into the lambda; g_event_sched is stable.
+						struct InjCtx { SCC8530 *scc; uint8_t byte; };
+						static auto inject_one = [](void *opaque) {
+							InjCtx *ctx = (InjCtx *)opaque;
+							SCCInjectRx(ctx->scc, SCC_CH_A, ctx->byte);
+						};
+						// [DIAG-FORCED] (W2-3, rev 2 tension 1): re-apply the SCC
+						// interrupt enables right before injecting — the guest's own
+						// SCC init (WR9 force-hw-reset) cleared any bring-up forcing.
+						// Runs under the SCC region lock like the injection itself.
+						static auto force_enables = [](void *opaque) {
+							SCC8530 *s = (SCC8530 *)opaque;
+							SCCWrite(s, 0xF3012002, 1, 1);     // ch A WR0: point WR1
+							SCCWrite(s, 0xF3012002, 1, 0x10);  // WR1: Rx-int-on-all
+							SCCWrite(s, 0xF3012002, 1, 9);     // WR0: point WR9
+							SCCWrite(s, 0xF3012002, 1, 0x08);  // WR9: MIE
+						};
+						size_t n = inject_bytes.size();
+						uint64_t delay_ns = (uint64_t)delay_s * 1000000000ull;
+						// Shared mutable state captured by the lambda must outlive the timer.
+						// Allocate on heap; the lambda owns it (one-shot, no cancel needed).
+						std::vector<uint8_t> *bytes_heap = new std::vector<uint8_t>(inject_bytes);
+						SCC8530 *scc_ptr = &scc;
+						g_event_sched->add_oneshot_timer(delay_ns, [scc_ptr, bytes_heap]() {
+							InjCtx ctx;
+							ctx.scc = scc_ptr;
+							if (nw_pic_force) {
+								MMIOBusWithRegion(0xF3012002, force_enables, scc_ptr);
+								fprintf(stderr, "[PIC] [DIAG-FORCED] SCC WR1=0x10 WR9=MIE "
+								        "re-applied at inject time\n");
+							}
+							for (uint8_t b : *bytes_heap) {
+								ctx.byte = b;
+								MMIOBusWithRegion(0xF3012002, inject_one, &ctx);
+							}
+							fprintf(stderr, "[SCC-INJECT] %zu byte(s) injected into ch A Rx\n",
+							        bytes_heap->size());
+							delete bytes_heap;
+						});
+						fprintf(stderr, "[SCC-INJECT] armed: %zu byte(s) at T+%us\n", n, delay_s);
+					} else {
+						fprintf(stderr, "[SCC-INJECT] warning: no bytes parsed from SS_SCC_RX_INJECT='%s'\n",
+						        inject_env);
+					}
+				} else {
+					fprintf(stderr, "[SCC-INJECT] warning: SS_SCC_RX_INJECT format must be DELAY_S:HEXBYTES (got '%s')\n",
+					        inject_env);
+				}
+			}
+		}
+
+		// M11: register framebuffer aperture in the non-hull aperture registry.
+		// The MMIO_TRAPPED loud-stub approach is NOT used for 0x81000000 — registering
+		// a MMIO_TRAPPED region there expands the hull to [0x81000000, 0xF3080000),
+		// covering 1.8 GB of address space with no handlers, causing fatal dispatches
+		// to unregistered addresses.  Instead, [FB-DIRTY] is emitted at atexit by
+		// scanning the aperture host memory for non-zero pixels (see the atexit hook
+		// registered below).
+		if (ss_m11_fb) {
+			const uint32 fb_aperture_size = 16 * 1024 * 1024;
+			static const MMIODevice fb_aperture_dev = { "fb-aperture", 0,
+				[](void *, uint32_t, unsigned) -> uint64_t { return 0; },
+				[](void *, uint32_t, unsigned, uint64_t) {},
+				nullptr };
+			if (!MMIOBusRegister(fb_aperture_base, fb_aperture_size,
+			                     MMIO_APERTURE, &fb_aperture_dev))
+				fprintf(stderr, "[M11-FB] warning: aperture registry full\n");
+			else
+				fprintf(stderr, "[M11-FB] aperture registered: 0x%08x+0x%x (non-hull)\n",
+				        fb_aperture_base, fb_aperture_size);
+		}
+
+		// SS_JIT_VERIFY replays blocks; device reads are side-effecting (clear-on-read,
+		// FIFO-pop) and must never be double-executed (MACHINE-LAYER-PLAN §2b). Hard incompat.
+		const char *verify = getenv("SS_JIT_VERIFY");
+		if (verify && verify[0] && verify[0] != '0') {
+			fprintf(stderr, "[MMIO] FATAL: SS_JIT_VERIFY is incompatible with the MMIO bus "
+			        "(side-effecting device reads must not be replayed)\n");
+			QuitEmulator();
+		}
+	}
+
+	// M7 Task A (interrupt-injection plan, Task 0 Q-I4): SS_NW_HOST_IRQ gate
+	// — NEWWORLD DEFAULT since the M7 Task C cluster flip (with SS_NW_EE_RISER
+	// + SS_NW_DEC_PUBLISHED; battery green pre/post-flip); opt-out with
+	// SS_NW_HOST_IRQ=0 (explicit-"0"-only, the SS_NW_SC_SURFACE polarity).
+	// When on: host interrupt posts (SetInterruptFlag — the
+	// InterruptFlags!=0 level, Q-I4(a)) are forwarded through the dedicated
+	// deliver-once-per-assert-edge latch in sheepshaver_glue (NOT the PIC's
+	// level-held seam — A5: the sources OR-compose at the poll site) +
+	// TriggerInterrupt kick on each 0->1 edge (F5: store-release then kick).
+	// Newworld-profile-gated explicitly: MachineUsesMMIOBus() also admits the
+	// named third config (SS_MMIO_BUS=1 on paravirtual), which must NOT arm it.
+	if (MachineProfileIsNewWorld()) {
+		const char *hirq_env = getenv("SS_NW_HOST_IRQ");
+		nw_host_irq_on = !(hirq_env && strcmp(hirq_env, "0") == 0);
+		if (nw_host_irq_on) {
+			SheepExcHostIrqConfigure();   // + the EXT seam: exc= tuple's 7th field
+			fprintf(stderr, "[EXC] host-irq source armed (SS_NW_HOST_IRQ): "
+			        "InterruptFlags!=0 -> once-per-assert-edge EXT latch "
+			        "(deliver-once-per-edge; PIC level-held semantics untouched)\n");
+		}
+		/* M7 Task B-2 (interrupt-injection plan, "Coordinator sign-off: the
+		 * level-source staging", shape (i)): the host source joins the PIC
+		 * rail.  Init-time PIC source configuration for the reserved host
+		 * input — the exact registers Mac OS's native MPIC init writes for
+		 * each source it uses (config, not event state; the per-interrupt
+		 * EVENT path stays fully guest-traversed: assert -> EXT delivery ->
+		 * NK fallback IACK lwbrx [STATIC rom901.bin 0x50326068] -> vector ->
+		 * lbz [0x3f00+vector] level [0x503260a4] -> post 0x3254e0).
+		 *
+		 * Staged words, each justified as "what the real init writes":
+		 *   IVPR[0x3F] = prio8 | vector 0x3F, UNMASKED, EDGE sense — the real
+		 *     init unmasks + assigns vector/priority per source (QEMU
+		 *     write_IRQreg_ivpr semantics, openpic.c:503 @ de5d8bfd…).  EDGE
+		 *     (SENSE=0) deliberately, vs the [DIAG-FORCED] level choice for
+		 *     devices that hold level conditions: the host latch is
+		 *     deliver-once-per-assert-edge (Task A) and the oracle consumes
+		 *     edge sources at IACK (openpic_iack :1056 -> dev_openpic.cpp
+		 *     do_iack) — retirement is guest-side IACK, zero host writes per
+		 *     event.  Vector 0x3F = identity with the input (the bring-up
+		 *     convention; < 0x40 keeps the fallback's in-range IACK leg).
+		 *   IDR[0x3F] = 1 — route to CPU0 (the only CPU; write_IRQreg_idr
+		 *     :445, masked to bit 0).
+		 *   CTPR = 0 — lowered from reset-15 (openpic_reset :1254 resets to
+		 *     15 = nothing deliverable; the real init lowers it when it
+		 *     enables interrupts; same value the [DIAG-FORCED] knob uses).
+		 * Direct MODEL calls, natural values (the [DIAG-FORCED] precedent:
+		 * single-threaded bring-up, the byte-lane swap is for the BE guest).
+		 * The guest-memory half of the staging ([IRP+0xf18] PIC base +
+		 * [0x3f00+vector] level byte) lives in the NW trampoline block
+		 * (sheepshaver_glue.cpp), gated on the same env pair. */
+		if (nw_host_irq_on && nw_pic_on) {
+			uint32_t ivpr = (8u << OPENPIC_IVPR_PRIO_SHIFT) | OPENPIC_IRQ_HOST;
+			OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+			             (OPENPIC_IRQ_HOST << 5), 4, ivpr);
+			OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x10000 +
+			             (OPENPIC_IRQ_HOST << 5) + 0x10, 4, 1u);
+			OpenPICWrite(&openpic, OPENPIC_CORE99_BASE + 0x20080, 4, 0);  // CTPR=0
+			nw_host_irq_pic_on = true;
+			fprintf(stderr, "[PIC-HOST] host source joined the PIC rail "
+			        "(SS_NW_HOST_IRQ+SS_NW_PIC, sign-off shape (i)): input 0x%02x "
+			        "IVPR=edge prio=8 vec=0x%02x IDR=cpu0 CTPR=0; level from "
+			        "lowmem [0x%04x]; every event guest-traversed via IACK\n",
+			        (unsigned)OPENPIC_IRQ_HOST, (unsigned)OPENPIC_IRQ_HOST,
+			        0x3f00 + (unsigned)OPENPIC_IRQ_HOST);
+		}
+	}
 
 	if (RAMBase > ROMBase) {
 		ErrorAlert(GetString(STR_RAM_HIGHER_THAN_ROM_ERR));
@@ -1267,6 +2485,19 @@ quit:
 
 static void Quit(void)
 {
+	// C2.0: clean up RPC server
+	if (ss_rpc_server) {
+		rpc_exit(ss_rpc_server);
+		ss_rpc_server = NULL;
+		if (ss_rpc_socket_path[0])
+			unlink(ss_rpc_socket_path);
+		unlink("rpc_socket");  // remove discovery file
+	}
+
+	// Stop video first — the redraw thread accesses guest memory and will
+	// segfault if we tear down the CPU or unmap RAM before it exits.
+	VideoExit();
+
 #if EMULATED_PPC
 	// Exit PowerPC emulation
 	exit_emul_ppc();
@@ -1326,6 +2557,18 @@ static void Quit(void)
 		vm_mac_release(DR_EMULATOR_BASE, DR_EMULATOR_SIZE);
 	if (dr_cache_area_mapped)
 		vm_mac_release(DR_CACHE_BASE, DR_CACHE_SIZE);
+	if (fb_aperture_mapped) {
+		// Scan before release — atexit guard is fb_aperture_mapped; clearing it here
+		// prevents the atexit lambda from accessing freed memory (use-after-free fix).
+		const uint32_t fb_size = 16 * 1024 * 1024;
+		const uint32_t *p = (const uint32_t *)Mac2HostAddr(fb_aperture_base);
+		uint64_t non_zero = 0;
+		for (uint32_t i = 0; i < fb_size / 4; i++)
+			if (p[i]) non_zero++;
+		fprintf(stderr, "[FB-DIRTY] non_zero_pixels=%llu\n", (unsigned long long)non_zero);
+		fb_aperture_mapped = false;   // prevent atexit re-scan of freed memory
+		vm_mac_release(fb_aperture_base, fb_size);
+	}
 
 	// Delete Low Memory area
 	if (lm_area_mapped)
@@ -1429,14 +2672,23 @@ static void *emul_func(void *arg)
 	// Decrease priority, so more time-critical things like audio will work better
 	nice(1);
 
-	// Jump to ROM boot routine
-	D(bug("Jumping to ROM\n"));
+	for (;;) {
+		// Jump to ROM boot routine
+		D(bug("Jumping to ROM\n"));
 #if EMULATED_PPC
-	jump_to_rom(ROMBase + 0x310000);
+		jump_to_rom(ROMBase + 0x310000);
 #else
-	jump_to_rom(ROMBase + 0x310000, (uint32)emulator_data);
+		jump_to_rom(ROMBase + 0x310000, (uint32)emulator_data);
 #endif
-	D(bug("Returned from ROM\n"));
+		D(bug("Returned from ROM\n"));
+
+		if (restart_requested) {
+			D(bug("Restart requested — re-entering ROM\n"));
+			restart_requested = false;
+			continue;
+		}
+		break;
+	}
 
 	// We're no longer ready to receive signals
 	ready_for_signals = false;
@@ -1625,7 +2877,37 @@ static void *tick_func(void *arg)
 			WriteMacInt32(0x20c, TimerDateTime());
 		}
 
+		// M8 Task B re-pin (one-iteration rule, plan addendum): the deferred-
+		// EE-edge STARVATION BACKSTOP. Task A's passive latch relies on "the
+		// next natural kick" (DEC cadence / host EXT edge) to poll delivery at
+		// an out-of-window boundary — boot s4tb-b4 falsified that guarantee in
+		// the slot-4 consumption cycle: the DEC's own expiry IS the latched
+		// edge (VCLK pending=1, DEC nap-parked, no future mtspr kick) and the
+		// host EXT edge is one-shot pre-WLSC (InterruptFlags never clears), so
+		// the latch starved (deferred=1.43e6 fired=0, DR<->NK twi loop). The
+		// backstop: while the latch is set, this 60 Hz thread re-kicks the CPU
+		// thread (TriggerInterrupt — the existing DEC-expiry idiom; a poll
+		// kick, NOT guest state: the fake-poke fence is untouched). Each kick
+		// polls once; if the entry PC is still in-window the poll suppresses
+		// again and the next tick retries — bounded 60 Hz retry, no dispatcher
+		// spin (the b1r starvation shape needed a PERMANENTLY re-armed flag;
+		// this is one poll per 16.7 ms). Gate: the latch can only be set
+		// inside ExcIrqConsumeEnabled()+riser-armed code (newworld), so the
+		// read of a zero global is the only paravirtual/default-boot effect.
+		if (ExcIrqConsumeEnabled() && g_exc_deferred_ee_edge)
+			TriggerInterrupt();
+
 		// Trigger 60Hz interrupt
+		// M3a Task 5 (tick interplay; M3A-ENTRY-TABLE.md finding 3): on the
+		// newworld diagnostic boot this gate reads NK-owned memory - the staged
+		// nanokernel parks XLM_IRQ_NEST at 0xFFFFFFFF, so the test below is
+		// permanently false and this trigger NEVER fires there. The 60 Hz
+		// re-trigger safety net therefore does NOT exist on that boot; the live
+		// DEC delivery sources are the EE-edge re-raises (mtmsr/rfi, Task 3) and
+		// the scheduler expiry kick (vclk_dec_arm, Task 4.1). Where it DOES fire
+		// (paravirtual), HandleInterrupt runs the legacy path unchanged; its
+		// newworld keep-set is Ticks-only (Task 2 fences). No code change -
+		// the gate is correct as-is for paravirtual.
 		if (ReadMacInt32(XLM_IRQ_NEST) == 0) {
 			SetInterruptFlag(INTFLAG_VIA);
 			TriggerInterrupt();
@@ -1774,11 +3056,84 @@ volatile uint32 InterruptFlags = 0;
 void SetInterruptFlag(uint32 flag)
 {
 	atomic_or((int *)&InterruptFlags, flag);
+	// M7 Task A (SS_NW_HOST_IRQ): forward the level's assert edge through the
+	// once-per-edge latch; kick the CPU thread on exactly the 0->1 edges (F5:
+	// store-release inside Assert, then kick — spurious-safe, missed-unsafe).
+	// Paravirtual is structurally inert here: nw_host_irq_on is set only
+	// inside the MachineProfileIsNewWorld() bring-up block.
+	if (nw_host_irq_on && SheepExcHostIrqAssert()) {
+		// M7 Task B-2 (sign-off shape (i)): on exactly the assert edges, the
+		// host source also wiggles its reserved PIC input — the device-rail
+		// analog of a line edge (event ENTRY, not pending/CR/per-delivery
+		// state; constraint 2 holds — retirement is the guest's own IACK,
+		// which consumes an edge source in the model, dev_openpic.cpp
+		// do_iack). Under the PIC region lock from this (timer/tick/ADB)
+		// thread — the documented device->pic direction, the nw_via_irq_edge
+		// idiom; none of SetInterruptFlag's callers run on a signal handler
+		// or hold a device lock here.  Raise precedes the kick so the IACK
+		// cannot beat the raised bit.
+		if (nw_host_irq_pic_on) {
+			// One-shot lowmem re-assert (config, not event state): glue-time
+			// low-memory writes are documented WIPED before the 68k world
+			// starts (the W2 68k-vector evidence) — re-assert the staged
+			// vector->level byte [0x3f00+vec] once, at the first edge (well
+			// past lowmem init, before the first delivery this staging must
+			// serve), and log what survived as evidence either way.
+			static bool lowmem_checked = false;
+			if (!lowmem_checked) {
+				lowmem_checked = true;
+				uint32 lvl = ReadMacInt8(0x3f00 + OPENPIC_IRQ_HOST);
+				if (lvl != 1) {
+					WriteMacInt8(0x3f00 + OPENPIC_IRQ_HOST, 1);
+					fprintf(stderr, "[PIC-HOST] lowmem level byte [0x%04x] was %u "
+					        "at edge #1 - re-staged to 1 (trampoline write wiped)\n",
+					        0x3f00 + (unsigned)OPENPIC_IRQ_HOST, (unsigned)lvl);
+				} else {
+					fprintf(stderr, "[PIC-HOST] lowmem level byte [0x%04x]=1 "
+					        "survived to edge #1 (trampoline staging intact)\n",
+					        0x3f00 + (unsigned)OPENPIC_IRQ_HOST);
+				}
+			}
+			PICInputCtx c = { OPENPIC_IRQ_HOST, true };
+			MMIOBusWithRegion(OPENPIC_CORE99_BASE, pic_input_locked, &c);
+		}
+		TriggerInterrupt();
+	}
 }
 
 void ClearInterruptFlag(uint32 flag)
 {
 	atomic_and((int *)&InterruptFlags, ~flag);
+	// M7 Task A: deassert edge — the Q-I4(a) level predicate (InterruptFlags
+	// != 0) went false; retire an un-delivered latch with it. Racy-benign vs a
+	// concurrent SetInterruptFlag: its atomic_or precedes its Assert, so a
+	// stale-zero read here is always followed by the asserting thread
+	// re-arming the latch. (Pre-warm-start this path never runs — OP_IRQ's
+	// flag-consuming block is HasMacStarted()-gated, Task 0 Q-I4(a).)
+	// Task B-2 note: NO PIC Lower here — the host input is EDGE-sensitive
+	// (Lower is an oracle no-op, openpic_set_irq :388); a latched-but-retired
+	// edge stays pending in the PIC until the next delivery's IACK, which only
+	// happens after a NEW assert edge re-raised it anyway (benign by pairing).
+	if (nw_host_irq_on && InterruptFlags == 0) {
+		SheepExcHostIrqDeassert();
+		// M7 Task C pre-flip item 3 (Task-A review P2): the lost-edge race
+		// fix. Between this thread's zero-read above and the Deassert, a
+		// concurrent SetInterruptFlag can or-in a fresh flag, take the assert
+		// edge, and kick — the Deassert then retires that FRESH edge, and the
+		// kick's delivery poll finds Pending()==0: one post silently lost
+		// until the next post (pre-warm-start this path never runs, see
+		// above; the fix closes the window for the warm-start regime the
+		// default flip makes reachable). Re-check the level after the
+		// Deassert; if it re-asserted, re-run the full assert-edge path —
+		// SetInterruptFlag(0) is a flags no-op that takes exactly that path
+		// (latch + PIC input edge + TriggerInterrupt kick). No recursion:
+		// SetInterruptFlag never calls back into ClearInterruptFlag. If the
+		// concurrent Set's own Assert won instead (it ran after our
+		// Deassert), our re-Assert sees the latch already armed and is a
+		// no-edge no-op — no double kick.
+		if (InterruptFlags != 0)
+			SetInterruptFlag(0);
+	}
 }
 
 
@@ -1952,39 +3307,47 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 	bool mac_fault = (r->pc() >= ROMBase) && (r->pc() < (ROMBase + ROM_AREA_SIZE)) || (r->pc() >= RAMBase) && (r->pc() < (RAMBase + RAMSize)) || (r->pc() >= DR_CACHE_BASE && r->pc() < (DR_CACHE_BASE + DR_CACHE_SIZE));
 	if (mac_fault) {
 
-		// "VM settings" during MacOS 8 installation
-		if (r->pc() == ROMBase + 0x488160 && r->gpr(20) == 0xf8000000) {
-			r->pc() += 4;
-			r->gpr(8) = 0;
-			return;
-	
-		// MacOS 8.5 installation
-		} else if (r->pc() == ROMBase + 0x488140 && r->gpr(16) == 0xf8000000) {
-			r->pc() += 4;
-			r->gpr(8) = 0;
-			return;
-	
-		// MacOS 8 serial drivers on startup
-		} else if (r->pc() == ROMBase + 0x48e080 && (r->gpr(8) == 0xf3012002 || r->gpr(8) == 0xf3012000)) {
-			r->pc() += 4;
-			r->gpr(8) = 0;
-			return;
-	
-		// MacOS 8.1 serial drivers on startup
-		} else if (r->pc() == ROMBase + 0x48c5e0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
-		} else if (r->pc() == ROMBase + 0x4a10a0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
-	
-		// MacOS 8.6 serial drivers on startup (with DR Cache and OldWorld ROM)
-		} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(16) == 0xf3012002 || r->gpr(16) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
-		} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
-			r->pc() += 4;
-			return;
+		// Legacy PC-keyed skip hacks - PARAVIRTUAL ONLY (see sheepshaver_glue.cpp
+		// sigsegv handler; MACHINE-LAYER-PLAN.md section 2b). Also disabled on
+		// the SS_MMIO_BUS=1 named third config (MachineUsesMMIOBus()) to prevent
+		// these hacks from eating MMIO faults before bus dispatch.
+		// NOTE: this handler is #if !EMULATED_PPC and is dead code on macOS arm64
+		// (EMULATED_PPC=1); this change keeps Linux non-EMULATED_PPC builds correct.
+		if (!MachineUsesMMIOBus()) {
+			// "VM settings" during MacOS 8 installation
+			if (r->pc() == ROMBase + 0x488160 && r->gpr(20) == 0xf8000000) {
+				r->pc() += 4;
+				r->gpr(8) = 0;
+				return;
+
+			// MacOS 8.5 installation
+			} else if (r->pc() == ROMBase + 0x488140 && r->gpr(16) == 0xf8000000) {
+				r->pc() += 4;
+				r->gpr(8) = 0;
+				return;
+
+			// MacOS 8 serial drivers on startup
+			} else if (r->pc() == ROMBase + 0x48e080 && (r->gpr(8) == 0xf3012002 || r->gpr(8) == 0xf3012000)) {
+				r->pc() += 4;
+				r->gpr(8) = 0;
+				return;
+
+			// MacOS 8.1 serial drivers on startup
+			} else if (r->pc() == ROMBase + 0x48c5e0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+			} else if (r->pc() == ROMBase + 0x4a10a0 && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+
+			// MacOS 8.6 serial drivers on startup (with DR Cache and OldWorld ROM)
+			} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(16) == 0xf3012002 || r->gpr(16) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+			} else if ((r->pc() - DR_CACHE_BASE) < DR_CACHE_SIZE && (r->gpr(20) == 0xf3012002 || r->gpr(20) == 0xf3012000)) {
+				r->pc() += 4;
+				return;
+			}
 		}
 
 		// Get opcode and divide into fields
@@ -2116,8 +3479,11 @@ static void sigsegv_handler(int sig, siginfo_t *sip, void *scp)
 			goto rti;
 		}
 
-		// Ignore illegal memory accesses?
-		if (PrefsFindBool("ignoresegv")) {
+		// Ignore illegal memory accesses? (paravirtual only - the newworld
+		// profile and the SS_MMIO_BUS=1 third config must abort loudly on
+		// unexpected faults so no device access is silently swallowed).
+		// NOTE: dead code on macOS arm64 (EMULATED_PPC=1, #if !EMULATED_PPC).
+		if (!MachineUsesMMIOBus() && PrefsFindBool("ignoresegv")) {
 			if (addr_mode == MODE_U || addr_mode == MODE_UX)
 				r->gpr(ra) = addr;
 			if (transfer_type == TYPE_LOAD)

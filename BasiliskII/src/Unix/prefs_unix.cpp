@@ -245,19 +245,18 @@ static bool create_directories(const string& path, mode_t mode)
 
 void SavePrefs(void)
 {
-	FILE *f;
 	string prefs_dir = get_dir(&prefs_name);
 	if (!prefs_dir.empty() && !is_dir(prefs_dir))
 	{
 		create_directories(prefs_dir, 0700);
 	}
-	if ((f = fopen(prefs_name.c_str(), "w")) != NULL)
-	{
-		SavePrefsToStream(f);
+	string tmp_path = prefs_name + ".tmp";
+	FILE *f = fopen(tmp_path.c_str(), "w");
+	if (f) {
+		SavePrefsToStreamMerging(prefs_name.c_str(), f);
 		fclose(f);
-	}
-	else
-	{
+		rename(tmp_path.c_str(), prefs_name.c_str());
+	} else {
 		fprintf(stderr, "WARNING: Unable to save %s (%s)\n",
 		        prefs_name.c_str(), strerror(errno));
 	}
@@ -328,10 +327,12 @@ void LoadPrefs(const char *vmdir)
 
 void SavePrefs(void)
 {
-	FILE *f;
-	if ((f = fopen(prefs_path.c_str(), "w")) != NULL) {
-		SavePrefsToStream(f);
+	string tmp_path = prefs_path + ".tmp";
+	FILE *f = fopen(tmp_path.c_str(), "w");
+	if (f) {
+		SavePrefsToStreamMerging(prefs_path.c_str(), f);
 		fclose(f);
+		rename(tmp_path.c_str(), prefs_path.c_str());
 	}
 }
 

@@ -19,7 +19,7 @@ GCR = @GCR@
 CFLAGS = @CFLAGS@
 CXXFLAGS = @CXXFLAGS@
 CPPFLAGS = @CPPFLAGS@ -I../include -I. -I../CrossPlatform -I../slirp
-DEFS = @DEFS@ -D_REENTRANT -DDATADIR=\"$(datadir)/$(APP)\"
+DEFS = @DEFS@ -D_REENTRANT -DDATADIR=\"$(datadir)/$(APP)\" -DSS_MMIO_BACKPATCH
 LDFLAGS = @LDFLAGS@
 LIBS = @LIBS@
 SYSSRCS = @SYSSRCS@
@@ -65,7 +65,18 @@ endif
 
 ## Files
 SRCS = ../main.cpp main_unix.cpp ../prefs.cpp ../prefs_items.cpp prefs_unix.cpp sys_unix.cpp \
-    ../rom_patches.cpp ../rsrc_patches.cpp ../emul_op.cpp ../name_registry.cpp \
+    ../rom_patches.cpp ../rsrc_patches.cpp ../emul_op.cpp ../ui_introspect.cpp ../name_registry.cpp \
+    ../machine/machine_profile.cpp \
+    ../machine/virt_clock.cpp ../machine/event_sched.cpp \
+    ../machine/exc_core.cpp ../machine/exc_inject.cpp \
+    ../machine/mmio_bus.cpp ../machine/dev_scc8530.cpp ../machine/dev_via6522.cpp \
+    ../machine/dev_cuda.cpp ../machine/adb_stub.cpp ../machine/dev_openpic.cpp \
+    ../machine/a64_mmio_decode.cpp ../machine/mmio_machfault.cpp \
+    ../machine/trampoline_loader.cpp \
+    ../machine/trampoline_ofci_shim.cpp \
+    ../machine/openfirmware_ci.cpp \
+    ../machine/trampoline_ofci_backends.cpp \
+    ../machine/nk_mmu_trace.cpp \
     ../macos_util.cpp ../timer.cpp timer_unix.cpp ../xpram.cpp xpram_unix.cpp \
     ../adb.cpp ../sony.cpp ../disk.cpp ../cdrom.cpp ../scsi.cpp \
     ../gfxaccel.cpp ../video.cpp ../audio.cpp ../ether.cpp ../thunks.cpp \
@@ -268,7 +279,7 @@ endif
 
 $(OBJ_DIR)/ppc-execute.o: ppc-execute-impl.cpp
 ppc-execute-impl.cpp: $(kpxsrcdir)/cpu/ppc/ppc-decode.cpp $(GENEXECPL) $(DYNGENDEPS)
-	$(CPP) $(CPPFLAGS) -DGENEXEC $< | $(PERL) $(GENEXECPL) > $@
+	$(CXX) -E $(CPPFLAGS) -DGENEXEC $< | $(PERL) $(GENEXECPL) > $@
 
 # PowerPC CPU tester
 TESTSRCS_ = mathlib/ieeefp.cpp mathlib/mathlib.cpp cpu/ppc/ppc-cpu.cpp cpu/ppc/ppc-decode.cpp cpu/ppc/ppc-execute.cpp cpu/ppc/ppc-translate.cpp test/test-powerpc.cpp $(MONSRCS) vm_alloc.cpp utils/utils-cpuinfo.cpp
@@ -294,3 +305,13 @@ g_resource.cpp: $(GRESOURCE_SRCS) $(GRESOURCE_XML)
 
 #-------------------------------------------------------------------------
 # DO NOT DELETE THIS LINE -- make depend depends on it.
+
+# Machine-layer header dependencies (M3b: nothing runs makedepend by default,
+# and these headers carry struct layouts whose offsets are baked into every
+# includer - a stale .o after a header change reads shifted garbage; see the
+# 4e544aff review / the powerdowns=6114308096 incident).
+$(OBJ_DIR)/main_unix.o $(OBJ_DIR)/sheepshaver_glue.o $(OBJ_DIR)/dev_via6522.o \
+$(OBJ_DIR)/dev_cuda.o $(OBJ_DIR)/adb_stub.o $(OBJ_DIR)/dev_openpic.o: \
+	../include/dev_cuda.h ../include/dev_via6522.h ../include/adb_stub.h \
+	../include/dev_scc8530.h ../include/mmio_bus.h ../include/event_sched.h \
+	../include/virt_clock.h ../include/exc_core.h ../include/dev_openpic.h

@@ -40,6 +40,10 @@
 #ifdef SHEEPSHAVER
 #include "main.h"
 #include "prefs.h"
+#include "machine_profile.h"
+#include "virt_clock.h"
+#include "exc_core.h"
+#include "nk_mmu_trace.h"
 #endif
 
 #if ENABLE_MON
@@ -51,18 +55,237 @@
 #include "debug.h"
 
 /**
+ *	Stub-pressure trace (SS_STUB_TRACE) — the MMU/nanokernel "second wall" probe.
+ *
+ *	SheepShaver runs the guest as a flat-addressed CPU by FAKING/DROPPING the privileged
+ *	supervisor ops (mfspr-other→0, mtspr DEC→dropped; SDR1+SPRG+BAT are now real registers,
+ *	mtmsr/mtsr/tlbie/rfi→illegal-ignored). On the aarch64 JIT these all route through the
+ *	INTERPRETER (the JIT only inlines LR/CTR/XER and `return false`s the rest), so counting
+ *	here is runtime-accurate. We bucket boot vs steady-state (flipped at the first guest idle
+ *	via ss_stub_trace_steady(), called from emul_op.cpp) to answer the decisive question:
+ *	are the supervisor stubs hit only at BOOT (→ real MMU/nanokernel emulation is a small
+ *	delta, the "second wall" is shallow) or CONSTANTLY (→ deep change)? Decides whether to
+ *	invest in NewWorld-ROM/9.x before that work. Zero cost when SS_STUB_TRACE unset.
+ *	See docs/planning/MMU-NANOKERNEL-MP-PLAN.md "stub-pressure trace".
+ **/
+#ifdef SHEEPSHAVER
+static int    ss_stub_enabled = -1;
+static int    ss_stub_phase = 0;            /* 0 = boot, 1 = steady (set at first idle) */
+static bool   ss_stub_registered = false;
+static uint64 ss_stub_mfspr[2][1024];       /* [phase][spr] faked SPR reads (SDR1 + default-0) */
+static uint64 ss_stub_mtspr[2][1024];       /* [phase][spr] dropped SPR writes */
+static uint64 ss_stub_ill31[2][1024];       /* [phase][xo]  primop-31 undecoded (mtmsr/mtsr/tlbie/rfi) */
+static uint64 ss_stub_ill_other[2];         /* [phase] non-primop-31 illegal */
+
+static void ss_stub_dump(void)
+{
+	static bool dumped = false;   /* idempotent: atexit fallback + explicit teardown can both call */
+	if (dumped) return;
+	dumped = true;
+	FILE *o = stderr;
+	fprintf(o, "\n[STUB-TRACE] supervisor-stub pressure (boot | steady) — MMU 2nd-wall probe\n");
+	fprintf(o, "  (boot = before first guest idle; steady = after. Constant steady hits => deep change.)\n");
+	uint64 tot_boot = 0, tot_steady = 0;
+	fprintf(o, "  -- mfspr (faked reads) --\n");
+	for (int s = 0; s < 1024; s++)
+		if (ss_stub_mfspr[0][s] || ss_stub_mfspr[1][s]) {
+			fprintf(o, "    spr %-4d : %12llu | %12llu\n", s,
+			        (unsigned long long)ss_stub_mfspr[0][s], (unsigned long long)ss_stub_mfspr[1][s]);
+			tot_boot += ss_stub_mfspr[0][s]; tot_steady += ss_stub_mfspr[1][s];
+		}
+	fprintf(o, "  -- mtspr (dropped writes; BAT/SDR1/SPRG = MMU-relevant) --\n");
+	for (int s = 0; s < 1024; s++)
+		if (ss_stub_mtspr[0][s] || ss_stub_mtspr[1][s]) {
+			fprintf(o, "    spr %-4d : %12llu | %12llu\n", s,
+			        (unsigned long long)ss_stub_mtspr[0][s], (unsigned long long)ss_stub_mtspr[1][s]);
+			tot_boot += ss_stub_mtspr[0][s]; tot_steady += ss_stub_mtspr[1][s];
+		}
+	fprintf(o, "  -- illegal/undecoded primop-31 (xo; 146=mtmsr 210=mtsr 306=tlbie ...) --\n");
+	for (int x = 0; x < 1024; x++)
+		if (ss_stub_ill31[0][x] || ss_stub_ill31[1][x]) {
+			fprintf(o, "    xo %-5d : %12llu | %12llu\n", x,
+			        (unsigned long long)ss_stub_ill31[0][x], (unsigned long long)ss_stub_ill31[1][x]);
+			tot_boot += ss_stub_ill31[0][x]; tot_steady += ss_stub_ill31[1][x];
+		}
+	if (ss_stub_ill_other[0] || ss_stub_ill_other[1]) {
+		fprintf(o, "    illegal-other: %12llu | %12llu\n",
+		        (unsigned long long)ss_stub_ill_other[0], (unsigned long long)ss_stub_ill_other[1]);
+		tot_boot += ss_stub_ill_other[0]; tot_steady += ss_stub_ill_other[1];
+	}
+	fprintf(o, "  TOTAL: boot=%llu  steady=%llu  => %s\n",
+	        (unsigned long long)tot_boot, (unsigned long long)tot_steady,
+	        tot_steady == 0 ? "boot-time only (2nd wall SHALLOW)"
+	                        : "ongoing steady-state pressure (investigate which SPR/op)");
+}
+
+static inline bool ss_stub_on(void)
+{
+	if (ss_stub_enabled < 0) {
+		const char *e = getenv("SS_STUB_TRACE");
+		ss_stub_enabled = (e && *e && *e != '0') ? 1 : 0;
+	}
+	if (ss_stub_enabled && !ss_stub_registered) { ss_stub_registered = true; atexit(ss_stub_dump); }
+	return ss_stub_enabled != 0;
+}
+
+/* Called from emul_op.cpp at the first guest idle ([BOOT] marker) to split boot vs steady.
+ * Also force-initializes the probe (ss_stub_on registers the atexit dump) so the result prints
+ * even if ZERO supervisor stubs were ever hit — a guaranteed-reached hook on any successful boot. */
+extern "C" void ss_stub_trace_steady(void) { ss_stub_on(); ss_stub_phase = 1; }
+/* Called from ppc_jit_aarch64_exit() on clean shutdown (the reliable teardown path — QuitEmulator
+ * doesn't run atexit). Idempotent. The atexit() registration in ss_stub_on() is the fallback. */
+extern "C" void ss_stub_trace_dump(void)
+{
+	/* ss_stub_on() force-initializes the env check, so we dump even when ZERO supervisor
+	 * stubs were hit — "TOTAL boot=0 steady=0" is itself the decisive result (2nd wall absent),
+	 * distinct from "the probe never ran". (ss_stub_dump is idempotent.) */
+	if (ss_stub_on()) ss_stub_dump();
+}
+#endif // SHEEPSHAVER
+
+/**
  *	Illegal & NOP instructions
  **/
 
 void powerpc_cpu::execute_illegal(uint32 opcode)
 {
-	/* In opcode test mode, illegal instruction = clean exit */
-	if (getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) {
+#ifdef SHEEPSHAVER
+if (ss_stub_on()) {
+		uint32 primary = opcode >> 26;
+		if (primary == 31) ss_stub_ill31[ss_stub_phase][(opcode >> 1) & 0x3ff]++;
+		else ss_stub_ill_other[ss_stub_phase]++;
+	}
+#endif
+	/* SS_LOG_ILLEGAL=1: log every undecoded opcode reaching this handler, with
+	 * special attention to mtmsr (op31/XO146) and the MSR[VEC] bit (0x02000000).
+	 * Probe for AltiVec-detection task #21: does the OS try to enable the vector
+	 * unit via an mtmsr WRITE that we currently silently drop? Placed at the very
+	 * top so it fires in SS_TEST_HEX mode (probe self-validation) and before the
+	 * ignoreillegal early-return that would otherwise swallow the op silently. */
+	if (getenv("SS_LOG_ILLEGAL") && *getenv("SS_LOG_ILLEGAL") &&
+	    *getenv("SS_LOG_ILLEGAL") != '0') {
+		uint32 primary = opcode >> 26;
+		uint32 xo = (opcode >> 1) & 0x3FF;
+		if (primary == 31 && xo == 146) { /* mtmsr — UNREACHABLE since Wave 0 decoded
+			mtmsr (execute_mtmsr carries this same MSR[VEC] log); fires only if the
+			decode entry ever regresses — kept as that tripwire. */
+			uint32 rs = (opcode >> 21) & 0x1F;
+			uint32 val = gpr(rs);
+			fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsr pc=%08x op=%08x rS=r%u val=%08x MSR[VEC]=%s\n",
+			        pc(), opcode, rs, val, (val & 0x02000000) ? "SET" : "clear");
+		} else if (primary == 31 && xo == 178) { /* mtmsrd (64-bit, unlikely) */
+			fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsrd pc=%08x op=%08x\n", pc(), opcode);
+		} else {
+			fprintf(stderr, "[SS_LOG_ILLEGAL] illegal pc=%08x op=%08x primary=%u xo=%u\n",
+			        pc(), opcode, primary, xo);
+		}
+	}
+
+	/* In opcode test mode, illegal instruction = clean exit (single or batch) */
+	if ((getenv("SS_TEST_HEX") && *getenv("SS_TEST_HEX")) ||
+	    (getenv("SS_TEST_HEX_FILE") && *getenv("SS_TEST_HEX_FILE"))) {
 		spcflags().set(SPCFLAG_CPU_EXEC_RETURN);
 		return;
 	}
 
 #ifdef SHEEPSHAVER
+	/* FE1F-service-surface Task A (plan rev 3): twi/tw trap-taken on the
+	 * newworld profile = a REAL program exception (vector 0x700, PEM trap type)
+	 * delivered to the NK-published handler — the execute_syscall precedent one
+	 * vector over (§2d slow-path seam, no JIT changes).
+	 *
+	 * Where twi/tw land today (Task-A recon, pinned): NEITHER is in the decode
+	 * table (ppc-decode.cpp has no primary-3 / 31-xo-4 entries) — both fall to
+	 * the INVALID entry (this handler) with CFLOW_TRAP, so decoded blocks
+	 * already END at the trap site; the aarch64 JIT explicitly falls back
+	 * (ppc-jit.cpp case 3 "twi — fall back so trap conditions are evaluated",
+	 * case 31/xo-4 "tw", case 2 "tdi"), so this arm runs in JIT boots too.
+	 *
+	 * Scope honesty: only the trap-TAKEN arm is rerouted. An UNTAKEN twi/tw
+	 * (architecturally a no-op) still falls through to the legacy illegal path
+	 * below — unchanged behavior, recorded limitation (no untaken-trap sites
+	 * exist on the boot path; the entry-vector placeholders are all TO=31
+	 * unconditional). tdi (primary 2) is 64-bit-only and stays illegal.
+	 * Paravirtual: this arm never runs (profile-gated) — byte-identical. */
+	if (MachineProfileIsNewWorld()) {
+		const uint32 primary = opcode >> 26;
+		const bool is_twi = (primary == 3);
+		const bool is_tw  = (primary == 31 && ((opcode >> 1) & 0x3FF) == 4);
+		if (is_twi || is_tw) {
+			const uint32 to = (opcode >> 21) & 0x1F;
+			const int32  a  = (int32)gpr((opcode >> 16) & 0x1F);
+			const int32  b  = is_twi ? (int32)(int16)(opcode & 0xFFFF)
+			                         : (int32)gpr((opcode >> 11) & 0x1F);
+			const bool taken = ((to & 0x10) && (a <  b)) ||
+			                   ((to & 0x08) && (a >  b)) ||
+			                   ((to & 0x04) && (a == b)) ||
+			                   ((to & 0x02) && ((uint32)a <  (uint32)b)) ||
+			                   ((to & 0x01) && ((uint32)a >  (uint32)b));
+			if (taken) {
+				/* SS_M18 S3-impl T4: under the master gate the real NK PROGRAM
+				 * vector (0x50314700, NK-published [KDP+0x37c]) owns the 0x700
+				 * trap. Resolve it LIVE (the forged g_exc_entry_table.program_entry
+				 * is NULLED by the T3/T4 retirement) and ExcEnter re-pointed at the
+				 * NK vector — symmetric with the sc retirement above. Stop-rule #6:
+				 * an unresolved slot (install not run — pre-S2b) STOPs. Inert at
+				 * default-OFF (the legacy forged-table path below is byte-identical). */
+				if (NkSupervisorEnabled()) {
+					ExcTransition tnk = SheepExcProgramVectorNk(pc(), regs().msr);
+					if (tnk.pc == EXC_PC_UNRESOLVED) {
+						fprintf(stderr, "[EXC-NK] FATAL: trap (%s) taken at pc=%08x but "
+						        "KDP+0x37c (NK PROGRAM vector) unresolved — install not "
+						        "run (pre-S2b expected). STOP (Stop-rule #6).\n",
+						        is_twi ? "twi" : "tw", pc());
+						abort();
+					}
+					SheepExcProgramShim(gpr(1), lr(), opcode, tnk.srr0);
+					regs().srr0 = tnk.srr0;
+					regs().srr1 = tnk.srr1;
+					regs().msr  = tnk.msr;
+					pc()        = tnk.pc;
+					return;
+				}
+				ExcTransition t = ExcEnter(pc(), regs().msr, EXC_PROGRAM,
+				                           &g_exc_entry_table);
+				if (t.pc == EXC_PC_UNRESOLVED) {
+					/* Trap taken with no resolved 0x700 entry (the
+					 * SS_NW_FE1F_SURFACE=0 opt-out — the surface is newworld
+					 * default since Task C — or a stray trap): loud
+					 * capture-abort — the execute_syscall FATAL idiom, with
+					 * the trap word + slot-id decode (the entry-vector
+					 * placeholders encode their slot id:
+					 * twi 31,r31,N = 0x0fff000N). */
+					const bool is_slot = (opcode & 0xFFFF0000u) == 0x0FFF0000u;
+					fprintf(stderr, "[EXC] FATAL: trap (%s) taken at pc=%08x with "
+					        "unresolved program entry (word=%08x slot=%d "
+					        "SRR0=%08x SRR1=%08x msr=%08x lr=%08x r1=%08x) - "
+					        "SS_NW_FE1F_SURFACE=0 opt-out is set (newworld default arms it)\n",
+					        is_twi ? "twi" : "tw", pc(), opcode,
+					        is_slot ? (int)(opcode & 0xFFFFu) : -1,
+					        t.srr0, t.srr1, regs().msr, lr(), gpr(1));
+					fprintf(stderr, "[EXC] FATAL: trap capture: r0=%08x r3=%08x "
+					        "r4=%08x r5=%08x r6=%08x r7=%08x r8=%08x r9=%08x r10=%08x\n",
+					        gpr(0), gpr(3), gpr(4), gpr(5), gpr(6), gpr(7),
+					        gpr(8), gpr(9), gpr(10));
+					abort();
+				}
+				/* Resolved: the 0x700 vector-stub shim (SPRG1:=caller r1,
+				 * SPRG2:=caller LR — the same two SPR writes as the sc stub;
+				 * the 0x700 handler's save helper 0x50313d40 consumes both)
+				 * + the delivered-program counter/telemetry. Then apply the
+				 * transition atomically. NO increment_pc — PC set absolutely
+				 * (SRR0 = the trap instruction itself, per PEM). */
+				SheepExcProgramShim(gpr(1), lr(), opcode, t.srr0);
+				regs().srr0 = t.srr0;
+				regs().srr1 = t.srr1;
+				regs().msr  = t.msr;
+				pc()        = t.pc;
+				return;
+			}
+			/* untaken trap: fall through to the legacy illegal path (see above) */
+		}
+	}
+
 	if (PrefsFindBool("ignoreillegal")) { increment_pc(4); return; }
 #endif
 	fprintf(stderr, "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);
@@ -994,6 +1217,76 @@ void powerpc_cpu::execute_fp_round(uint32 opcode)
 void powerpc_cpu::execute_syscall(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
+	if (nk_mmu_trace_enabled())
+		nk_mmu_trace_record(NK_MMU_SC, pc(), opcode, 0, gpr(0));
+	if (MachineProfileIsNewWorld()) {
+		/* M3a Task 3: sc as a real PPC exception on the newworld profile.
+		 * CFLOW_TRAP ensures this handler owns the PC absolutely — no increment_pc
+		 * after return (the decoded block ends at sc; the JIT already falls back).
+		 * SS_EXC_SC=legacy restores the legacy no-op for diagnostics (no rebuild needed). */
+		static const bool sc_legacy_mode = []() -> bool {
+			const char *e = getenv("SS_EXC_SC");
+			return e && e[0] == 'l';  /* "legacy" prefix */
+		}();
+		/* SS_M18 S3-impl T4 (Operation NewSheep): under the master gate the real NK
+		 * SC vector (0x50314ac0, NK-published [KDP+0x390]) OWNS sc. Resolve it LIVE
+		 * (never the forged g_exc_entry_table.syscall_entry — that field is NULLED by
+		 * the T3/T4 retirement) and ExcEnter re-pointed at the NK vector. This RETIRES
+		 * the SS sc-as-illegal handling: under the gate sc NEVER falls to
+		 * execute_illegal / the legacy abort. Stop-rule #5 closure (NK SC live AND
+		 * sc-as-illegal retired). Stop-rule #6: an unresolved KDP slot (install not run
+		 * — EXPECTED pre-S2b) STOPs rather than vector into junk. Inert at default-OFF
+		 * (gate false => the legacy forged-table path below runs byte-identically). */
+		if (NkSupervisorEnabled()) {
+			ExcTransition tnk = SheepExcSyscallVectorNk(pc(), regs().msr);
+			if (tnk.pc == EXC_PC_UNRESOLVED) {
+				fprintf(stderr, "[EXC-NK] FATAL: sc at pc=%08x but KDP+0x390 (NK SC "
+				        "vector) unresolved — the NK install has not run (pre-S2b "
+				        "expected; gated-ON requires S2b). STOP rather than vector "
+				        "into junk (Stop-rule #6).\n", pc());
+				abort();
+			}
+			SheepExcSyscallShim(gpr(1), lr(), gpr(0));
+			regs().srr0 = tnk.srr0;
+			regs().srr1 = tnk.srr1;
+			regs().msr  = tnk.msr;
+			pc()        = tnk.pc;
+			return;  /* NO increment_pc — PC set absolutely; sc-as-illegal retired */
+		}
+		ExcTransition t = ExcEnter(pc(), regs().msr, EXC_SC, &g_exc_entry_table);
+		if (t.pc == EXC_PC_UNRESOLVED) {
+			if (sc_legacy_mode) {
+				execute_illegal(opcode);
+				increment_pc(4);
+				return;
+			}
+			fprintf(stderr, "[EXC] FATAL: sc at pc=%08x with unresolved syscall entry "
+			        "(SRR0=%08x SRR1=%08x msr=%08x lr=%08x r1=%08x) - set SS_EXC_ENTRY or SS_EXC_SC=legacy\n",
+			        pc(), t.srr0, t.srr1, regs().msr, lr(), gpr(1));
+			/* NK-syscall-surface Task 0 (plan rev 2 P-M2): the dying sc IS the
+			 * conformance-vector sample point — print the selector (r0) and the
+			 * argument registers (r3..r10) before aborting. Capture-only telemetry. */
+			fprintf(stderr, "[EXC] FATAL: sc capture: r0=%08x r3=%08x r4=%08x r5=%08x "
+			        "r6=%08x r7=%08x r8=%08x r9=%08x r10=%08x\n",
+			        gpr(0), gpr(3), gpr(4), gpr(5), gpr(6), gpr(7), gpr(8), gpr(9), gpr(10));
+			abort();
+		}
+		/* NK-syscall-surface Task A: the resolved-entry pre-entry surface.
+		 * The real vector-0xC00 stub's postconditions (Q-S2, M3A-ENTRY-TABLE.md
+		 * "Syscall entry resolution") are exactly two SPR writes — SPRG1:=caller
+		 * r1, SPRG2:=caller LR — performed by the glue helper (§2d seam, the DEC
+		 * precedent). Must run BEFORE the transition is applied (it samples the
+		 * caller's live r1/LR; ExcEnter never touches them, but ordering here
+		 * mirrors the real stub: SPR saves, then dispatch). Also the delivered-sc
+		 * counter site (P-M4). */
+		SheepExcSyscallShim(gpr(1), lr(), gpr(0));
+		regs().srr0 = t.srr0;
+		regs().srr1 = t.srr1;
+		regs().msr  = t.msr;
+		pc()        = t.pc;
+		return;  /* NO increment_pc — PC set absolutely */
+	}
+	/* paravirtual: byte-identical legacy */
 	execute_illegal(opcode);
 #else
 	cr().set_so(0, execute_do_syscall && !execute_do_syscall(this));
@@ -1152,10 +1445,143 @@ void powerpc_cpu::execute_mffs(uint32 opcode)
 	increment_pc(4);
 }
 
+/* Forward declaration — ss_vclk_active is defined below near the SPR handlers.
+ * Needed by execute_mtmsr (EE-edge re-raise, M3a Task 3). */
+#ifdef SHEEPSHAVER
+static inline bool ss_vclk_active(void);
+#endif
+
 void powerpc_cpu::execute_mfmsr(uint32 opcode)
 {
-	operand_RD::set(this, opcode, 0xf072);
+	// Wave 0: return stored MSR (cold value 0xf072 = byte-identical to old hardcode).
+	operand_RD::set(this, opcode, regs().msr);
 	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtmsr(uint32 opcode)
+{
+	// Wave 0: store MSR (previously silently dropped via execute_illegal).
+	// Replicate the SS_LOG_ILLEGAL mtmsr/MSR[VEC] telemetry from execute_illegal
+	// (:167-171) — live AltiVec-probe diagnostic; must not be orphaned.
+	uint32 rs = rS_field::extract(opcode);
+	uint32 val = gpr(rs);
+#ifdef SHEEPSHAVER
+	uint32 old_msr = regs().msr;
+#endif
+	regs().msr = val;
+	if (getenv("SS_LOG_ILLEGAL") && *getenv("SS_LOG_ILLEGAL") &&
+	    *getenv("SS_LOG_ILLEGAL") != '0') {
+		fprintf(stderr, "[SS_LOG_ILLEGAL] mtmsr pc=%08x op=%08x rS=r%u val=%08x MSR[VEC]=%s\n",
+		        pc(), opcode, rs, val, (val & 0x02000000) ? "SET" : "clear");
+	}
+#ifdef SHEEPSHAVER
+	/* M3a Task 3 / rev 2 F2: EE 0→1 edge re-raise on newworld.
+	 * mtmsr is interpreter-only (JIT falls back), so it always ends JIT blocks —
+	 * the re-poll happens naturally right after increment_pc returns.
+	 * W2-0: edge predicate extracted to exc_core (ExcEdgeReRaise — fires iff
+	 * old EE=0 ∧ new EE=1 ∧ pending; behavior-identical composition). */
+	if (MachineProfileIsNewWorld() && ss_vclk_active() &&
+	    ExcEdgeReRaise(old_msr, val,   /* W2-3: + the level-held EXT source */
+	                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+	                    || SheepExcHostIrqPending()) ? 1 : 0)) {   /* M7: + host latch */
+		/* M8 slot-4 consumption Task A (SS_NW_IRQ_CONSUME, default OFF):
+		 * rfi-atomicity emulation. The riser stub's mtmsr raises EE BEFORE the
+		 * ctx reloads + bctr complete; firing this edge here delivers at a
+		 * block boundary INSIDE the reload region and saves a torn ctx (the
+		 * 0x9040-image self-loop — Task-0 recon Q-C1 [PROBE✓], observed
+		 * directly as `EXT delivered #1: restart=50318018`). Oracle: the raw
+		 * NK tail is `mtspr SRR0,r10; mtspr SRR1,r11; ...; rfi`
+		 * (rom901_inventory.bin 0x3244d8-0x324524) — MSR.EE and the resume PC
+		 * rise ATOMICALLY. Emulate that: when the edge fires with pc() inside
+		 * the riser stub window, LATCH it; check_spcflags' HANDLE arm holds
+		 * delivery until the first block boundary outside the stub+reload
+		 * windows (past the bctr). Windows are patch-time-filled by
+		 * rom_patches.cpp (single source, ACK note 1); riser-conditional by
+		 * construction (rev-2 A7): riser opted out => armed=0 + empty window
+		 * => this latch is dead and behavior is byte-identical.
+		 *
+		 * Re-pin 2026-06-12 (one-iteration rule, plan addendum): the latch
+		 * path does NOT trigger_interrupt() — the original shape (latch +
+		 * trigger + HANDLE re-arm hold) STARVED the guest: the JIT exits on
+		 * non-empty spcflags at block entry before executing, so a re-armed
+		 * HANDLE is a pure dispatcher spin (boot s4ta-b1r: held=1.12e9,
+		 * fired=0, guest frozen at 0x318018 with the defer-pass register
+		 * values). Passive form instead: latch silently, let the guest run
+		 * the reload+bctr unmolested, and let the NEXT natural kick (DEC
+		 * cadence / host edge re-check) poll delivery at an out-of-window
+		 * boundary where check_spcflags' fire check releases the latch.
+		 * Deferred-edge delivery latency is bounded by the next natural
+		 * kick — the diagnostic boot's DEC metronome. */
+		if (ExcIrqConsumeEnabled() && g_exc_riser_window.armed &&
+		    ExcDeferredEdgeLatch(pc(), g_exc_riser_window.stub_base,
+		                         g_exc_riser_window.stub_end)) {
+			g_exc_deferred_ee_edge = 1;
+			if (g_exc_consume_stats.deferred++ < 4)
+				fprintf(stderr, "[IRQ-CONSUME] EE edge deferred at pc=%08x (stub %08x-%08x)\n",
+				        pc(), g_exc_riser_window.stub_base, g_exc_riser_window.stub_end);
+		} else
+			trigger_interrupt();
+	}
+#endif
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsr(uint32 opcode)
+{
+	// Wave 0: store to segment register SR[n] (previously silently dropped).
+	uint32 mtsr_idx = SR_field::extract(opcode);
+	uint32 mtsr_val = gpr(rS_field::extract(opcode));
+	regs().sr[mtsr_idx] = mtsr_val;
+	if (nk_mmu_trace_enabled())
+		nk_mmu_trace_record(NK_MMU_MTSR, pc(), opcode, mtsr_idx, mtsr_val);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mtsrin(uint32 opcode)
+{
+	// Wave 0: store to SR indexed by high 4 bits of rB (previously silently dropped).
+	uint32 mtsrin_idx = gpr(rB_field::extract(opcode)) >> 28;
+	uint32 mtsrin_val = gpr(rS_field::extract(opcode));
+	regs().sr[mtsrin_idx] = mtsrin_val;
+	if (nk_mmu_trace_enabled())
+		nk_mmu_trace_record(NK_MMU_MTSRIN, pc(), opcode, mtsrin_idx, mtsrin_val);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mfsr(uint32 opcode)
+{
+	// Wave 0: return stored SR[n] (previously returned 0 from JIT / garbage from interp).
+	operand_RD::set(this, opcode, regs().sr[SR_field::extract(opcode)]);
+	increment_pc(4);
+}
+
+void powerpc_cpu::execute_mfsrin(uint32 opcode)
+{
+	// Wave 0: return stored SR indexed by high 4 bits of rB (previously returned 0).
+	operand_RD::set(this, opcode, regs().sr[gpr(rB_field::extract(opcode)) >> 28]);
+	increment_pc(4);
+}
+
+static inline uint64 get_tb_ticks(void);	// defined below; used by the synthetic decrementer
+
+/* M2 (MACHINE-LAYER-PLAN §2c): one gate for all virtual-clock SPR seams.
+ * Resolution (once): SS_SYNTH_DEC, if set, is honored as a deprecated alias
+ * (=0 forces the clock OFF on any profile - escape hatch; non-zero forces it ON,
+ * absorbing the old synthetic-DEC experiment); otherwise the newworld profile
+ * gets the clock, paravirtual stays frozen (byte-identical default). */
+static inline bool ss_vclk_active(void)
+{
+	static const int active = []() -> int {
+		const char *e = getenv("SS_SYNTH_DEC");
+		if (e) {
+			fprintf(stderr, "[VCLK] SS_SYNTH_DEC is deprecated (absorbed by the M2 "
+			        "virtual clock); honoring it as a force-%s override\n",
+			        e[0] != '0' ? "on" : "off");
+			return e[0] != '0';
+		}
+		return MachineProfileIsNewWorld() ? 1 : 0;
+	}();
+	return active != 0;
 }
 
 template< class SPR >
@@ -1169,13 +1595,54 @@ void powerpc_cpu::execute_mfspr(uint32 opcode)
 	case powerpc_registers::SPR_CTR:	d = ctr();		break;
 	case powerpc_registers::SPR_VRSAVE:	d = vrsave();	break;
 #ifdef SHEEPSHAVER
-	case powerpc_registers::SPR_SDR1:	d = 0xdead001f;	break;
+	case powerpc_registers::SPR_SDR1:
+		d = regs().sdr1;
+		break;
+	case powerpc_registers::SPR_SRR0:
+		d = regs().srr0;
+		break;
+	case powerpc_registers::SPR_SRR1:
+		d = regs().srr1;
+		break;
 	case powerpc_registers::SPR_PVR: {
 		extern uint32 PVR;
 		d = PVR;
 		break;
 	}
-	default: d = 0;
+	case powerpc_registers::SPR_SPRG0:
+	case powerpc_registers::SPR_SPRG0 + 1:
+	case powerpc_registers::SPR_SPRG0 + 2:
+	case powerpc_registers::SPR_SPRG3:
+		/* SPRG0-3: real scratch registers. The New World nanokernel stores its per-CPU/KernelData
+		 * pointer here and reads it back; dropping them (returning 0) caused a spinlock deadlock. */
+		d = regs().sprg[spr - powerpc_registers::SPR_SPRG0];
+		break;
+	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
+		d = regs().bat[spr - powerpc_registers::SPR_IBAT0U];
+		break;
+	case 22: {	/* DEC (decrementer) — M2 virtual clock (MACHINE-LAYER-PLAN §2c) */
+		/* Newworld (or SS_SYNTH_DEC force-on): a real down-counter honoring mtspr,
+		 * with the expiry condition latched (delivery is M3). Cold state (no mtspr
+		 * yet) is 0 - TB, bit-identical to M1's synthetic counter. VirtClockReady
+		 * guards the SS_TEST_HEX-style early paths (clock is init'd there too, but
+		 * belt-and-braces: an unready clock reads as the legacy synthetic value).
+		 *
+		 * History: SS_SYNTH_DEC first surfaced this need (parcels 9.0.1 nanokernel
+		 * spin-wait at ROM 0x3127a8). M1 made it newworld-default. M2 absorbs it
+		 * into the virtual clock — SS_SYNTH_DEC is now a deprecated force override. */
+		if (ss_vclk_active()) {
+			d = VirtClockReady(&g_virt_clock)
+			    ? VirtClockReadDEC(&g_virt_clock)
+			    : (uint32)(0u - (uint32)get_tb_ticks());
+			break;
+		}
+		d = 0;
+		if (ss_stub_on()) ss_stub_mfspr[ss_stub_phase][spr & 1023]++;
+		break;
+	}
+	default:
+		d = 0;
+		if (ss_stub_on()) ss_stub_mfspr[ss_stub_phase][spr & 1023]++;  /* faked-0 SPR read */
 #else
 	default: execute_illegal(opcode);
 #endif
@@ -1195,8 +1662,67 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 	case powerpc_registers::SPR_LR:		lr() = s;		break;
 	case powerpc_registers::SPR_CTR:	ctr() = s;		break;
 	case powerpc_registers::SPR_VRSAVE:	vrsave() = s;	break;
+#ifdef SHEEPSHAVER
+	case powerpc_registers::SPR_SDR1:
+		regs().sdr1 = s;
+		if (nk_mmu_trace_enabled())
+			nk_mmu_trace_record(NK_MMU_MTSDR1, pc(), opcode, 0, s);
+		break;
+	case powerpc_registers::SPR_SRR0:
+		regs().srr0 = s;
+		break;
+	case powerpc_registers::SPR_SRR1:
+		regs().srr1 = s;
+		break;
+	case powerpc_registers::SPR_SPRG0:
+	case powerpc_registers::SPR_SPRG0 + 1:
+	case powerpc_registers::SPR_SPRG0 + 2:
+	case powerpc_registers::SPR_SPRG3:	/* real scratch regs — see execute_mfspr note */
+		regs().sprg[spr - powerpc_registers::SPR_SPRG0] = s;
+		break;
+#endif
 #ifndef SHEEPSHAVER
 	default: execute_illegal(opcode);
+#else
+	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
+		regs().bat[spr - powerpc_registers::SPR_IBAT0U] = s;
+		if (nk_mmu_trace_enabled()) {
+			int bat_kind; uint32 bat_idx;
+			if (nk_mmu_classify_bat_spr(spr, &bat_kind, &bat_idx))
+				nk_mmu_trace_record(bat_kind, pc(), opcode, bat_idx, s);
+		}
+		break;
+	case 560 ... 575:	/* High BATs (SPR 0x230..0x23f): IBAT4-7U/L, DBAT4-7U/L.
+						 * Dead-code insurance (plan AD-2): feature-gated off on every
+						 * presentable PVR, so never read in production — but capture the
+						 * write rather than drop it via default. Mirrors the bat[16] arm. */
+		regs().high_bat[spr - 560] = s;
+		break;
+	case 22:	/* DEC — M2: honored on the virtual clock (was: dropped) */
+		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockNoteDECWritePC(&g_virt_clock, pc());  // W2-4 cadence capture
+			VirtClockWriteDEC(&g_virt_clock, s);
+			break;
+		}
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
+	case 284:	/* TBL write */
+		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockWriteTBL(&g_virt_clock, s);
+			break;
+		}
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
+	case 285:	/* TBU write */
+		if (ss_vclk_active() && VirtClockReady(&g_virt_clock)) {
+			VirtClockWriteTBU(&g_virt_clock, s);
+			break;
+		}
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
+	default:  /* SheepShaver drops all other SPR writes — stub */
+		if (ss_stub_on()) ss_stub_mtspr[ss_stub_phase][spr & 1023]++;
+		break;
 #endif
 	}
 
@@ -1245,8 +1771,14 @@ void powerpc_cpu::execute_mftbr(uint32 opcode)
 	uint32 tbr = TBR::get(this, opcode);
 	uint32 d = 0;
 	switch (tbr) {
-	case 268: d = (uint32)get_tb_ticks(); break;
-	case 269: d = (get_tb_ticks() >> 32); break;
+	case 268:
+		d = (uint32)((ss_vclk_active() && VirtClockReady(&g_virt_clock))
+		             ? VirtClockTB(&g_virt_clock) : get_tb_ticks());
+		break;
+	case 269:
+		d = (uint32)(((ss_vclk_active() && VirtClockReady(&g_virt_clock))
+		             ? VirtClockTB(&g_virt_clock) : get_tb_ticks()) >> 32);
+		break;
 	default: execute_illegal(opcode);
 	}
 	operand_RD::set(this, opcode, d);
@@ -1289,6 +1821,33 @@ void powerpc_cpu::execute_isync(uint32 opcode)
 {
 	execute_invalidate_cache_range();
 	increment_pc(4);
+}
+
+void powerpc_cpu::execute_rfi(uint32 opcode)
+{
+#ifdef SHEEPSHAVER
+	if (MachineProfileIsNewWorld()) {
+		/* M3a Task 3: full OEA rfi restore (pc + MSR) on newworld profile.
+		 * rev 2 F2 / EE-edge re-raise: if EE transitions 0→1, re-deliver any pending DEC
+		 * (the 60 Hz re-trigger safety net does NOT exist on the newworld diagnostic boot —
+		 * confirmed by M3A-ENTRY-TABLE.md; the EE-edge raise is load-bearing). */
+		uint32 old_msr = regs().msr;
+		uint32 new_pc, new_msr;
+		ExcRfi(regs().srr0, regs().srr1, old_msr, &new_pc, &new_msr);
+		regs().msr = new_msr;
+		pc()       = new_pc;
+/* W2-0: edge predicate extracted to exc_core (ExcEdgeReRaise) —
+		 * behavior-identical to the inline old/new EE-bit composition. */
+		if (ss_vclk_active() &&
+		    ExcEdgeReRaise(old_msr, new_msr,   /* W2-3: + the level-held EXT source */
+		                   (VirtClockDECPending(&g_virt_clock) || SheepExcExtPending()
+		                    || SheepExcHostIrqPending()) ? 1 : 0))   /* M7: + host latch */
+			trigger_interrupt();
+		return;
+	}
+#endif
+	/* paravirtual / non-SHEEPSHAVER: byte-identical legacy */
+	pc() = regs().srr0;
 }
 
 /**

@@ -43,6 +43,7 @@ prefs_desc common_prefs_items[] = {
 	{"seriala", TYPE_STRING, false,     "device name of Mac serial port A"},
 	{"serialb", TYPE_STRING, false,     "device name of Mac serial port B"},
 	{"rom", TYPE_STRING, false,         "path of ROM file"},
+	{"machine", TYPE_STRING, false,     "machine profile: paravirtual (default) or newworld"},
 	{"bootdrive", TYPE_INT32, false,    "boot drive number"},
 	{"bootdriver", TYPE_INT32, false,   "boot driver number"},
 	{"ramsize", TYPE_INT32, false,      "size of Mac RAM in bytes"},
@@ -60,6 +61,8 @@ prefs_desc common_prefs_items[] = {
 	{"ignoresegv", TYPE_BOOLEAN, false, "ignore illegal memory accesses"},
 	{"jit", TYPE_BOOLEAN, false,        "enable JIT compiler"},
 	{"jit68k", TYPE_BOOLEAN, false,     "enable 68k DR emulator"},
+	{"jitcachesize", TYPE_INT32, false, "JIT code cache size in KB (default 256 MB)"},
+	{"altivec", TYPE_BOOLEAN, false,    "advertise AltiVec to the guest ('ppcf' gestalt) so apps use the vector unit (opt-in; aarch64 JIT compiles AltiVec->NEON). See USER-HANDBOOK."},
 	{"keyboardtype", TYPE_INT32, false, "hardware keyboard type"},
 	{"hardcursor", TYPE_BOOLEAN, false, "hardware mouse cursor"},
 	{"hotkey", TYPE_INT32, false,       "hotkey modifier"},
@@ -92,7 +95,7 @@ void AddPrefsDefaults(void)
 	PrefsAddInt32("bootdriver", 0);
 	PrefsAddInt32("bootdrive", 0);
 	PrefsAddInt32("ramsize", 16 * 1024 * 1024);
-	PrefsAddInt32("frameskip", 8);
+	PrefsAddInt32("frameskip", 1);
 	PrefsAddBool("gfxaccel", true);
 	PrefsAddBool("nocdrom", false);
 	PrefsAddBool("nonet", false);
@@ -105,13 +108,19 @@ void AddPrefsDefaults(void)
 	PrefsAddBool("noclipconversion", false);
 	PrefsAddBool("ignoresegv", true);
 
-#if USE_JIT
-	// JIT compiler specific options
+	// Machine Layer profile (docs/planning/MACHINE-LAYER-PLAN.md). paravirtual =
+	// today's proven path; newworld = the Core99 fidelity profile (M0+).
+	PrefsAddString("machine", "paravirtual");
+
+	// On aarch64 the native JIT (ppc-jit.cpp, USE_AARCH64_JIT) runs unconditionally;
+	// this pref controls the legacy kpx_cpu codegen JIT only. Default true on all builds.
 	PrefsAddBool("jit", true);
-#else
-	PrefsAddBool("jit", false);
-#endif
 	PrefsAddBool("jit68k", false);
+	// AltiVec detection enabler: default OFF (opt-in). The aarch64 JIT always compiles AltiVec
+	// (PPC->NEON); this pref only makes the guest OS *advertise* the vector unit so apps use it.
+	// Off by default because 8.6/9.0 here don't VR-context-switch — safe for single-app compute,
+	// not general preemptive vector use. See emul_op.cpp force_altivec_idle_service + USER-HANDBOOK.
+	PrefsAddBool("altivec", false);
 
 	PrefsAddInt32("keyboardtype", 5);
 

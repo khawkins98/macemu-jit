@@ -1,0 +1,302 @@
+# The Milestone Workflow — multi-agent, multi-stream development for RE-heavy work
+
+> Distilled 2026-06-11 from the Machine Layer sessions that shipped M3a, M3b Wave 1,
+> M6a rung 2, and the NK syscall surface — four milestones whose later iterations ran
+> with **zero falsified contracts**. Every rule below was earned by a specific incident
+> (cited). This is the reusable process; the canonical worked example of the plan
+> format is `docs/superpowers/plans/2026-06-11-nk-syscall-surface.md` (body + Rev 2).
+>
+> **▶ Operating overlay:** for *who does what* when running this as a coordinator driving a team of
+> spawned subagents (Planner → PROCESS+TECHNICAL+ADVERSARY red-team → fold → gated serial implementers →
+> measure-the-wall frontier loop), and the jobs the coordinator never delegates (real `make e2e`/probe
+> gates, diff review, serial commits, agent-death salvage), see the companion playbook
+> **`docs/MULTI-AGENT-FEATURE-WORKFLOW.md`** (proven 2026-06-15: two milestones + a live RE bringup in one
+> overnight session). Say **"use the feature workflow"** to invoke it.
+
+## 1. The shape of the problem this fits
+
+Reverse-engineering-heavy emulation work has a specific cost profile: **recon is the
+expensive, decisive phase; implementation is small once contracts are pinned** (the
+"recon-heavy / implementation-light" pattern held 5-for-5 across the M6 walls — e.g.
+the MixedMode switch was two seed words + a world-flip once three recon docs existed).
+The workflow optimizes for that: front-load falsifiable recon, make implementation
+mechanical, and parallelize everything that doesn't contend for the two scarce
+resources (the emulator, and a small set of hot source files).
+
+## 2. The milestone machine (the lifecycle)
+
+Every milestone runs the same ladder. Each step is a fresh agent with curated context
+— agents never inherit the coordinator's history; the coordinator writes exactly what
+they need into the prompt (file paths, pinned facts, constraints, report contract).
+
+```
+frontier captured (the P-M4 artifact, from the previous milestone's acceptance)
+  → PLAN draft        (read-only Plan agent, on the house template)
+  → RED-TEAM round    (2 parallel reviewers: PROCESS + TECHNICAL/CONTRACTS)
+  → rev-2 fold        (coordinator merges findings as BINDING amendments; commit)
+  → TASK 0 recon      (BINDING: blocking-answer table, budgets — gates all impl tasks)
+  → impl tasks A→…    (sequential per shared-file set; env-gated, default OFF)
+  → ACCEPTANCE        (gates env-on first; default flip LAST; revert-on-red)
+  → DOCS task         (trackers, CHANGELOG, DIAGNOSTICS, LEARNINGS, stale-claim grep)
+  → frontier captured → next milestone
+```
+
+Key properties of each step:
+
+- **The plan template** (copy the syscall plan's structure): Goal with honest
+  PASS/FAIL-vs-DIAGNOSTIC separation; Authoritative-inputs table (docs cited by
+  section); Codebase-facts (carried, "implementers re-verify"); tasks with checkbox
+  steps and explicit gates; a stop-rule with operationalized one-iteration mechanics;
+  a Self-review record (incl. tensions flagged FOR the red team); an empty Red-team
+  record. Plans that pre-pin static facts must mark them "re-verify before use".
+- **The red-team round is pre-implementation and adversarial.** Two reviewers, run in
+  parallel: one attacks process (gating honesty, budgets, blocking maps, stop-rule
+  coverage, falsifiability), one independently re-verifies every technical claim
+  against sources/dumps/oracles. This round has positive expected value every single
+  time it has run: it found a real memory-layout collision (the MM pool vs Hnfo
+  scratch), killed a planned change that would have broken working code (the
+  [KDP+0x5f0] retarget), and twice *solved milestones statically* before a boot was
+  spent (the FE1F slot-8 finding; the syscall selector/r3 conformance vector).
+- **Task 0 is BINDING recon** with: a **blocking-answer table** (which implementation
+  task blocks on which question — ALL blocking answers pinned before ANY
+  implementation starts; the table is a residue-disposition map, not a start-order
+  license); **budgets** (boot caps with co-scheduling, per-question static time-boxes
+  with written residue fallbacks — unbounded disassembly killed two agents before
+  this rule); evidence **tag discipline** ([RAW-ROM]/[PATCH]/[STATIC]/[PROBE✓]);
+  and provenance ritual for /tmp artifacts (md5 anchors recorded in tracked docs).
+- **Implementation tasks** are env-gated (default OFF) so the baseline stays
+  byte-identical until acceptance; every gate is **falsifiable in advance** (expected-
+  register tables, value predicates, enumerated parked-PC sets — never "sane" or
+  post-hoc "expected"); gates that are baseline-true must be annotated as validating
+  the contract, not the change (the vacuous-pass lesson).
+- **Acceptance**: full battery env-on first; the default **flip is the LAST step**;
+  any gate failure post-flip ⇒ revert the flip in-task. A **fix budget** exists
+  (telemetry freely; ONE small in-scope fix per falsified contract, full gates re-run)
+  because acceptance-time unlocks are the norm, not violations (the CV-10 lesson).
+- **The stop-rule** names its triggers in advance (incl. "the tempting wrong fix" —
+  e.g. host-side HLE where real guest code should run) and operationalizes the
+  one-iteration rule: falsified contract → dated addendum entry → ONE bounded re-pin
+  → resume; a SECOND falsification of the same contract → stop, re-scope, re-plan.
+  Stop-rules firing is the process working (M6a rung 2 fired twice and both
+  re-scopes were cheap and correct).
+- **The docs task** closes every milestone: knob reference (DIAGNOSTICS), CHANGELOG
+  with oracle SHAs and acceptance numbers, tracker rows — **explicitly including the
+  ROADMAP header/status line and the MACHINE-LAYER-PLAN frontier block** (doc-sweep-3
+  found two consecutive close-outs had skipped the ROADMAP header, leaving it an event
+  stale) — LEARNINGS for durable lessons, and a **cross-tracker grep** for stale
+  current-state claims (historical sections stay; only current-state claims get
+  corrected).
+  Every ~3 milestones (or at each re-score), the docs task ALSO triggers the
+  **periodic doc-sync sweep** over the meta-docs (CONTRIBUTING/README/AGENT-CONTEXT/
+  this file/tracker headers/DIAGNOSTICS) — checklist in CONTRIBUTING.md
+  "Documentation Lifecycle §0".
+
+## 3. The parallel layer (streams)
+
+Beyond one milestone's internal ladder, independent **workstreams** run concurrently,
+coordinated by file ownership and resource leases — same branch, no worktrees.
+
+**What parallelizes freely:** read-only recon, planning drafts and red-teams, pure new
+modules (new files + a pre-wired Makefile target), docs tasks, and (with the slot
+protocol) diagnostic boots.
+
+**What serializes:** tasks editing the same file set (declare ownership in every
+prompt; ONE task in flight per file set), and the default-config emulator until the
+slot protocol's leases apply.
+
+**The de-conflict toolbox** (each proven in live use):
+- **Pre-wire shared files**: the coordinator commits the shared touchpoint (Makefile
+  target, gitignore entries) BEFORE dispatching parallel implementers, so their
+  commits stay disjoint.
+- **Pin interfaces**: when two parallel modules must meet, the coordinator pins the
+  header/contract in both prompts (or decouples with an injected callback so there is
+  no compile-time dependency at all — the dev_cuda/adb_stub pattern).
+- **Explicit-path staging**: agents commit only their own files by explicit path —
+  never `git add -A` (other agents' untracked work may be in the tree).
+- **Always-green fusion**: every code commit carries the canonical gate set, so the
+  shared branch is continuously releasable and streams fuse by simply committing —
+  no merge phase, no integration debt. This is what makes same-branch parallelism
+  cheaper than worktrees here.
+- **The slot protocol** (`SheepShaver/tools/ss-slot-boot.sh` + `ss-reap.sh`): leased
+  per-slot prefs/logs/diag paths; NEVER global `pkill` — reap only stale leases.
+
+**Review pipelining**: reviews are read-only over committed SHAs — they run in
+PARALLEL with the next task's implementation when the reviewed work is low
+fix-probability (mechanical, template-following); any CHANGES-NEEDED fixes queue to
+the live implementer rather than re-spawning. Serialize reviews only for high-risk
+commits (new mechanisms, LAW-module edits).
+
+**Convergence is designed, not accidental**: streams are chosen so their outputs feed
+each other (tooling multiplies recon throughput; ahead-of-need recon de-risks the
+critical path's future milestones; verification streams de-fuse named surprises
+before construction streams hit them).
+
+## 4. The rules and the incidents that earned them
+
+| Rule | The incident |
+|---|---|
+| Verify-first task framing ("confirm the hypothesis before building on it") | "TVector excursions running" looked like boot progress; verification showed a faster reboot loop (M6a rung-2 Task W) |
+| Red-team before implementation, always | The 0x5f0/4 retarget recommended by three docs would have destroyed the working switch-back; a red-team killed it pre-implementation |
+| Occupancy maps over "free gap" comments | The MM pool was placed on the Hnfo scratch our own earlier commit used; the falsifying writer was in-repo (rung-2 C1) |
+| Blocking-answer tables; no improvisation on residues | The syscall plan's P-C1: a task consuming an unblocked answer is how plans go wrong at 2am |
+| Boot/static budgets with written fallbacks | Two recon agents died in unbounded disassembly before time-boxes existed |
+| Counters for counts, probes for ABI | Logarithmic probe sampling undercounts; the delivered-sc counter exists because probes can't count |
+| SIGTERM + SS_TERM_DUMP for capture boots | SIGALRM/SIGKILL skip atexit dumps; evidence was silently lost until this was learned |
+| Struct fields appended LAST + explicit header deps | A mid-struct insert + no dep tracking produced garbage counters from stale .o files (twice) |
+| Oracle SHA citation + documented divergences | Behavioral extraction is reviewable only if every divergence from the donor is written at the site |
+| Instrument subtleties get documented AND fixed | Ring dedup masked round-trip evidence and nearly produced a wrong park-shape verdict |
+| The baseline is part of the gate | "Byte-identical" must enumerate its fields (jitter counters excluded) or it's unfalsifiable |
+| Verify a slot is truly dead before stopping it — "unknown" ≠ "dead" | M6a rung-2 Task U replaced the mirror entry-vector slots' raw `twi` words with loud parked stops on the theory the slots were dead/unwritten; FE1F Task 0 (rev 3) falsified it — the `twi` placeholders ARE the design (trap-to-0x700 NK-dispatch trampolines, each encoding its slot id), so the stops had replaced load-bearing trap instructions. The "dead slots get loud stops" policy is retired; restore-and-route is the fix (FE1F plan rev 3) |
+| Construction tasks split at natural commit boundaries — a dispatch bundling a LAW edit + new models + wiring is 3-4 dispatches with pipelined reviews, not one | The W2-3 construction task ran 181 tool calls / 48 min / 375k tokens as a single dispatch; each internal commit boundary was a place a fresh agent could have started warm while the previous slice was in (pipelined) review |
+| Task-0 questions that are boot-disjoint split across parallel agents — one agent per boot-independent question, fused by the coordinator | The desync Task 0 serially worked questions that needed no shared boot or state; with the slot protocol proven safe for concurrent boots, the serialization bought nothing and sat on the critical path |
+| Ring analysis via `tools/ring-walk.py` (`--window`/`--r24-flow`/`--find-pc`/`--regs-at`), never agents reading raw ring text | The desync Task 0 burned a large share of its budget hand-reading multi-MB trace-ring/R24RING dumps line by line; the extraction is mechanical (absolute record windows, r24 transition classification) and is now a script |
+
+## 5. Roles and report contracts
+
+- **Coordinator** (the main session): curates context into prompts; pre-resolves
+  conflicts; runs the review loops (implementer → spec review → quality review →
+  fix loop → re-review); folds red-teams; enforces serialization; fuses results;
+  keeps the workstream map (the task list) current. The coordinator implements
+  directly only for small mechanical folds where dispatch overhead exceeds the work.
+  Every dispatch carries two economics decisions (§6b): the **model tier** (stated
+  in the prompt) and a **≤50-line task card** distilled inline (the plan remains
+  the authority; the card is the working spec).
+- **Planner** (read-only): drafts on the template; reports the plan verbatim plus
+  open questions converted to Task-0 items and tensions for the red team.
+- **Red-teamers** (read-only, adversarial): findings as Critical/Major/minor with
+  file:line/offset evidence and concrete fixes; explicit verdicts on items the
+  coordinator names as must-answer.
+- **Recon agents**: bounded tools, partial-findings-beat-stalling, addendum +
+  blocking-table as the deliverable.
+- **Implementers**: report DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED;
+  per-task commits with gates run and numbers stated; never expand scope silently.
+- **Reviewers**: spec compliance first (nothing missing, nothing extra), THEN code
+  quality (with mutation spot-checks: "would the suite catch this?"); fix loops
+  re-review the diff.
+
+## 6. The gate tiers (this repo; rev 2026-06-11 — latency-tuned)
+
+- **Per-commit (inner tier, ~1 min warm)**: `make build-ss` ·
+  `SS_HARNESS_BATCH=1 make test-jit` (353/353) · `make -C SheepShaver/src/machine test`.
+- **Per-task (the final commit)**: + plain `make test-jit` (the authoritative legacy
+  run) · `make e2e-test`.
+- **Risk-based**: paravirtual `make e2e` is REQUIRED when the change touches code
+  reachable on paravirtual; when every new line is structurally inside
+  newworld/env gates, the inertness argument + the gated-off byte-identical A/B boot
+  substitute (state which in the commit message). Doc-only commits: no gates.
+- **NewWorld observe line (report-only, never blocks)**: `cd SheepShaver && make
+  nw-northstar` boots the all-on cluster and prints a `[NW-PROG verdict]` — the single
+  "how far did the NewWorld boot get?" signal. Run it at task close on any milestone
+  that touches the newworld path; quote the verdict line in the close-out. It is an
+  **observe** line, NOT a failing gate (the boot is non-deterministic — a bare SIGSEGV
+  is not a regression; the verdict already classifies by durable markers). A
+  `REGRESSED(...)` verdict means a real below-frontier break — investigate before commit.
+
+The flat "full set on every commit" of the first sessions was correct for trust-building
+and is still available on demand; the tiers preserve the authoritative gates at task
+granularity while halving typical task wall-time. Standing facts, recipes, constants and
+instrument caveats live in `docs/AGENT-CONTEXT.md` (agents read ONE pack, not four docs).
+
+**Tiers run via `tools/gates.sh <inner|task|full> [--reason "…"]`** — one summary line
+per gate (`GATE <name>: PASS|FAIL (<detail>, <N>s)`) plus a final machine-readable
+`GATES <tier>: PASS|FAIL` verdict; on FAIL it prints the failing gate's last 20 lines
+and exits non-zero. Agents read the summary lines, not raw gate logs (per-gate logs
+are kept in a tmpdir, path printed, for audit).
+
+## 6b. Dispatch economics (rev 2026-06-11)
+
+Three rules that price each dispatch, earned by the W2-3 single-dispatch blowout and
+the post-mortem's token accounting:
+
+- **Model tiering.** Docs sweeps, checkbox formalization, and evidence-only tasks
+  (transcribe/verify/tabulate against already-pinned facts) dispatch on a **cheaper
+  model tier**. Reviews, recons, LAW-module edits, and construction stay on the
+  **strong tier** — these are the tasks where a missed subtlety is expensive. The
+  coordinator **states the tier choice in each dispatch** so a wrong tiering is
+  visible in the report and correctable next dispatch.
+- **Task cards.** The coordinator distills a **≤50-line task card inline in every
+  dispatch**: deliverables, owned paths (claims), pinned facts the task depends on,
+  the gate tier to run, and the report contract. **The plan remains the authority;
+  the card is the working spec.** Agents read the plan only to resolve ambiguities
+  in the card — not as a default first step. This caps the per-agent context bill
+  and forces the coordinator to notice when a task can't be stated in 50 lines
+  (usually a sign it should be split, per the §4 dispatch-splitting rule).
+- **Verdicts over logs.** Agents consume gates via `tools/gates.sh` and boot
+  assertions via `ss-slot-boot.sh --expect 'PAT;;…' [--absent 'PAT;;…']`
+  (`EXPECT: n/m present, k absent-violations` + `BOOT-VERDICT: PASS|FAIL`,
+  exit-status-bearing). **Agents stop reading full gate/log output** — the raw
+  logs stay on disk (gate tmpdir, slot rundir) and are read only when a verdict
+  is FAIL and the printed tail isn't enough.
+
+## 6c. Process-health signals (added 2026-06-13)
+
+Two cheap signals that watch the process itself — both matter more now that
+implementation dispatches run on a cheaper model tier (§6b), since a weaker tier
+degrades *subtle RE* (disassembly judgement, "is this slot dead?") far more than
+mechanical plumbing — exactly where the historical falsifications cluster.
+
+- **Falsification tally in the close-out.** Each milestone close-out states one line:
+  `FALSIFICATIONS: <n> (re-pins <n>); tasks: <which>; tier: <strong|cheap>`. The
+  one-iteration rule (§2) already forces a dated addendum per falsified contract — this
+  just sums them. Watch the trend, *especially the tier column*: a rising count on
+  cheap-tier recon/RE tasks is the leading indicator that the cheap tier has crept into
+  subtle-RE territory (re-tier those task classes back to strong). Append each milestone's
+  line to a running list in `LEARNINGS.md`.
+- **QEMU oracle before static RE.** When a Task-0 question is "what does a working boot
+  do at address/stage X?", run the QEMU rig (`tools/qemu-rig.sh`; `info qtree`/`info
+  mtree` for device-tree/wiring/NVRAM, `x`/`--disasm` for behavior) BEFORE static RE —
+  it answers by observation in seconds. Tag findings `[QEMU-BEHAVIORAL]`. **Load-bearing
+  caveat: never cite a QEMU MMIO address as a reference value** (QEMU MacIO is at
+  `0x80000000`, ours at `0xF3000000`) — topology/wiring/behavior only, not addresses.
+
+## 7. Why this works (the evidence)
+
+Four milestones in one day, the later two with zero falsified contracts and unspent
+fix budgets — because by the time implementation starts, every load-bearing fact has
+survived two adversarial passes and the gates were written before the code. The
+expensive-looking overhead (red-teams, Task 0s, review loops) is where the speed
+comes from: walls that Path A priced as reimplementation keep resolving as seeds,
+and the one time a fix would have broken working code, a reviewer caught it on paper.
+
+---
+
+## 8. Solo mode / Light-gear sprint rules (added 2026-06-12)
+
+Use for seed-class walls where the ceremony costs more than the wall. The full machine
+(§§1–7) is still required for delivery/world-switch semantics or paravirtual-reachable
+changes.
+
+**Rule 0: No new recon docs committed.** Session notes live in `/tmp/session-YYYY-MM-DD.md`
+(never committed). At end of session: one finding moves into an active doc; the rest is
+deleted.
+
+**Rule 1: Milestones are 3 bullets max.**
+```
+## MN: short name
+- [ ] Fix: evidence-tagged root cause → gated fix
+- [ ] Verify: falsifiable gate (command + expected output)
+- [ ] Ship: one-line CHANGELOG entry
+```
+
+**Rule 2: 5-line fix discipline.** Before any investigation:
+1. Can this be solved with a ≤5-line code change? → do it.
+2. Can this be bracketed with a ≤5-line probe/gate? → do it.
+3. Only if both "no" → deeper investigation, max 30 minutes before booting a VM.
+
+**Rule 3: When in doubt, boot it.** Cost of a boot: ~30 seconds. Cost of a wrong
+assumption: ~3 hours. If you've spent 30 minutes on a problem without new data, launch
+a VM. The QEMU rig is your first tool, not your last resort.
+
+Quick tooling:
+```bash
+ss-slot-boot.sh --label test1 --timeout 30        # headless test
+SS_PROBE_68K=0x5000xxxx:N ss-slot-boot.sh ...     # 68k probe
+SheepShaver/tools/qemu-rig.sh --timeout 50        # behavioral oracle
+SheepShaver/tools/ss-reap.sh                      # cleanup
+```
+
+**Rule 4: Commit attribution.** Normal commits: no attribution lines. Do not add
+`Co-Authored-By` for AI tools.
+
+One consolidated review + docs pass at sprint end (the sprint accumulates review debt
+deliberately — schedule the hardening pass).

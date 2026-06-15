@@ -72,8 +72,9 @@ AC_ARG_ENABLE(sdl-video,    [  --enable-sdl-video      use SDL for video graphic
 AC_ARG_ENABLE(sdl-audio,    [  --enable-sdl-audio      use SDL for audio [default=no]], [WANT_SDL_AUDIO=$enableval], [WANT_SDL_AUDIO=yes])
 AC_ARG_ENABLE(sdl-framework,    [  --enable-sdl-framework  use SDL framework [default=no]], [WANT_SDL_FRAMEWORK=$enableval], [WANT_SDL_FRAMEWORK=no])
 AC_ARG_ENABLE(sdl-framework-prefix,    [  --enable-sdl-framework-prefix=PFX    default=/Library/Frameworks], [SDL_FRAMEWORK="$enableval"], [SDL_FRAMEWORK=/Library/Frameworks])
-AC_ARG_WITH(sdl1,            [  --with-sdl1             use SDL 1.x, rather than SDL 2.x [default=no]], [WANT_SDL_VERSION_MAJOR=1], [])
-AC_ARG_WITH(sdl3,            [  --with-sdl3             use SDL 3.x, rather than SDL 2.x [default=no]], [WANT_SDL_VERSION_MAJOR=3], [])
+AC_ARG_WITH(sdl1,            [  --with-sdl1             use SDL 1.x [default=no]], [WANT_SDL_VERSION_MAJOR=1], [])
+AC_ARG_WITH(sdl2,            [  --with-sdl2             use SDL 2.x, rather than the default SDL 3.x [default=no]], [WANT_SDL_VERSION_MAJOR=2], [])
+AC_ARG_WITH(sdl3,            [  --with-sdl3             use SDL 3.x (this fork's default) [default=yes]], [WANT_SDL_VERSION_MAJOR=3], [])
 
 dnl Checks for programs.
 AC_PROG_CC_C99
@@ -191,6 +192,8 @@ if [[ "x$WANT_SDL" = "xyes" ]]; then
   if [[ "x$WANT_SDL_FRAMEWORK" = "xyes" ]]; then
     TEMP_WANT_SDL_VERSION_MAJOR=$WANT_SDL_VERSION_MAJOR
     if [[ "x$TEMP_WANT_SDL_VERSION_MAJOR" = "x" ]]; then
+      dnl The SDL.framework path supports SDL 1/2 only; default it to 2.
+      dnl (The pkg-config path below defaults to SDL 3 on this fork.)
       TEMP_WANT_SDL_VERSION_MAJOR=2
     fi
     if [[ "x$TEMP_WANT_SDL_VERSION_MAJOR" = "x2" ]]; then
@@ -211,7 +214,8 @@ if [[ "x$WANT_SDL" = "xyes" ]]; then
   if [[ "x$ac_cv_framework_SDL" = "xno" ]]; then
     TEMP_WANT_SDL_VERSION_MAJOR=$WANT_SDL_VERSION_MAJOR
     if [[ "x$TEMP_WANT_SDL_VERSION_MAJOR" = "x" ]]; then
-      TEMP_WANT_SDL_VERSION_MAJOR=2
+      dnl This fork defaults to SDL 3.x; pass --with-sdl2 to opt back to SDL 2.x.
+      TEMP_WANT_SDL_VERSION_MAJOR=3
     fi
 
     dnl use PKG_PROG_PKG_CONFIG to declare PKG_CONFIG variables.  Otherwise,
@@ -761,6 +765,11 @@ AS_IF([test  "x$have_libvhd" = "xyes" ], [
 ])
 
 
+AC_ARG_WITH(vdeplug,
+AS_HELP_STRING([--with-vdeplug], [Enable VDE virtual network support]),
+[],
+[with_vdeplug=yes])
+
 
 
 dnl Is the slirp library supported?
@@ -781,6 +790,13 @@ if [[ -n "$CAN_SLIRP" ]]; then
     ../slirp/ip_input.c  ../slirp/socket.c     ../slirp/udp.c"
 fi
 AC_SUBST(SLIRP_SRCS)
+
+dnl Is libvdeplug available?
+have_vdeplug=no
+AS_IF([test "x$with_vdeplug" = "xyes"], [
+have_vdeplug=yes
+AC_CHECK_LIB(vdeplug, vde_close, [], [have_vdeplug=no])
+])
 
 dnl SDL overrides
 if [[ "x$WANT_SDL" = "xyes" ]]; then
@@ -1558,6 +1574,25 @@ if [[ "x$HAVE_GCC30" = "xyes" ]]; then
   CFLAGS="$SAVED_CFLAGS"
 fi
 
+dnl Check whether the compiler rejects K&R-style function definitions (C23 removed them).
+dnl If the test fails (e.g. clang with autoconf-baked -std=gnu23), add -std=gnu89 to
+dnl SLIRP_CFLAGS so the vendored slirp sources compile correctly.  A later -std= flag
+dnl overrides an earlier one, so this cancels out any -std=gnu23 injected into $(CC).
+AC_CACHE_CHECK([whether slirp needs -std=gnu89 for K&R definitions],
+  ac_cv_slirp_needs_gnu89, [
+  AC_LANG_PUSH(C)
+  AC_COMPILE_IFELSE(
+    [AC_LANG_SOURCE([int f(x) int x; { return x; }
+int main() { return f(0); }])],
+    [ac_cv_slirp_needs_gnu89=no],
+    [ac_cv_slirp_needs_gnu89=yes])
+  AC_LANG_POP(C)
+])
+if [[ "x$ac_cv_slirp_needs_gnu89" = "xyes" ]]; then
+  SLIRP_CFLAGS="$SLIRP_CFLAGS -std=gnu89"
+  AC_SUBST(SLIRP_CFLAGS)
+fi
+
 dnl Add -mdynamic-no-pic for MacOS X (XXX icc10 will support MacOS X)
 if [[ "x$HAVE_GCC30" = "xyes" -a "x$HAVE_ICC" = "xno" ]]; then
   SAVED_CFLAGS="$CFLAGS"
@@ -1587,7 +1622,17 @@ if [[ "x$EMULATED_PPC" = "xyes" ]]; then
 
   dnl Enable JIT compiler, if possible
   if [[ "x$WANT_JIT" = "xyes" ]]; then
-    if [[ "x$host_cpu" = "xaarch64" ]]; then
+    dnl macOS arm64 reports host_cpu as "arm" (arm-apple-darwin*) rather than
+    dnl "aarch64" (as Linux does), so check both names for the aarch64 JIT path.
+    dnl Bare "arm" is gated on Darwin to avoid matching 32-bit ARM Linux hosts.
+    dnl (Newer config.guess versions emit aarch64-apple-darwin* on macOS, which
+    dnl  the aarch64 arm above already handles.)
+    aarch64_host=no
+    case $host_cpu in
+      aarch64) aarch64_host=yes ;;
+      arm) case $host_os in darwin*) aarch64_host=yes ;; esac ;;
+    esac
+    if [[ "x$aarch64_host" = "xyes" ]]; then
       dnl This fork provides a direct AArch64 PPC JIT backend. It does not use
       dnl the classic dyngen path, so wire the backend source and compile-time
       dnl guard directly into normal SheepShaver builds.
@@ -1787,6 +1832,7 @@ echo SDL support ...................... : $SDL_SUPPORT
 echo SDL major-version ................ : $WANT_SDL_VERSION_MAJOR
 echo BINCUE support ................... : $have_bincue
 echo LIBVHD support ................... : $have_libvhd
+echo VDE support ...................... : $have_vdeplug
 echo FBDev DGA support ................ : $WANT_FBDEV_DGA
 echo XFree86 DGA support .............. : $WANT_XF86_DGA
 echo XFree86 VidMode support .......... : $WANT_XF86_VIDMODE

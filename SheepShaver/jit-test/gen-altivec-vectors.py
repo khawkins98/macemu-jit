@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+# gen-altivec-vectors.py — generate AltiVec test-jit vectors for jit-test/run.sh.
+#
+# TWO TRAPS THIS FILE EXISTS TO AVOID (both hit real shipped vectors, 2026-06-04):
+#
+# 1. VX-FORM XO IS UNSHIFTED. Unlike X-form/A-form (where XO sits at bits 21-30
+#    and is emitted as xo<<1), VX-form AltiVec ops put an 11-bit XO at bits 21-31
+#    with NO shift. An earlier batch shifted it (xo<<1) → every op decoded to an
+#    illegal/no-op, left vD untouched, and "passed" the harness vacuously because
+#    the result GPR stayed 0 in both interpreter and JIT (0==0).
+#
+# 2. RESULT MUST REACH A GPR, AND OPERANDS MUST EXERCISE THE OP. REGDUMP captures
+#    GPRs only. So: op into v2 -> stvx v2 to memory -> lwz a result word into r5.
+#    AND for splats, the source vector needs DISTINCT per-lane bytes (load via lvx
+#    from a 00,01,..,0F memory pattern) — splat-immediate (vspltisb) makes all
+#    lanes identical, so the splat INDEX would not be tested.
+#
+# Verify every generated vector with `make test-jit` (it diffs JIT vs the
+# interpreter). A failure is either a construction bug OR a real JIT divergence.
+
+def lis(r,i):  return 0x3C000000|(r<<21)|(i&0xFFFF)
+def ori(r,i):  return 0x60000000|(r<<21)|(r<<16)|(i&0xFFFF)        # ori r,r,imm
+def li(r,i):   return 0x38000000|(r<<21)|(i&0xFFFF)
+def stw(r,d,a):return 0x90000000|(r<<21)|(a<<16)|(d&0xFFFF)
+def lwz(r,d,a):return 0x80000000|(r<<21)|(a<<16)|(d&0xFFFF)
+def lvx(v,a,b):return 0x7C000000|(v<<21)|(a<<16)|(b<<11)|(103<<1)  # X-form: XO<<1
+def stvx(v,a,b):return 0x7C000000|(v<<21)|(a<<16)|(b<<11)|(231<<1)
+def vx(vD,fA,fB,xo): return (4<<26)|(vD<<21)|(fA<<16)|(fB<<11)|xo  # VX-form: XO UNSHIFTED
+def va(vD,vA,vB,vC,xo): return (4<<26)|(vD<<21)|(vA<<16)|(vB<<11)|(vC<<6)|xo  # VA-form
+def H(w): return "%08X"%(w&0xFFFFFFFF)
+
+OFF=0x600  # 16-byte aligned scratch slot under the (seeded) r1
+def load_pattern(vT, base):  # vT.bytes = base, base+1, ..., base+15 (distinct lanes)
+    out=[]
+    for k in range(0,16,4):
+        out += [lis(3, ((base+k)<<8)|(base+k+1)),
+                ori(3, ((base+k+2)<<8)|(base+k+3)),
+                stw(3, OFF+k, 1)]
+    return out + [li(3,OFF), lvx(vT,1,3)]
+def load_distinct(vT):  # vT.bytes = 00,01,02,...,0F (so splat index is testable)
+    return load_pattern(vT, 0x00)
+def load_bytes(vT, bs):  # vT.bytes = bs[0..15] (arbitrary; for non-linear operands)
+    out=[]
+    for k in range(0,16,4):
+        out += [lis(3,(bs[k]<<8)|bs[k+1]), ori(3,(bs[k+2]<<8)|bs[k+3]), stw(3,OFF+k,1)]
+    return out + [li(3,OFF), lvx(vT,1,3)]
+# Boundary-crossing operand pair for add/sub/avg saturation tests: per-lane values straddle
+# signed (0x7F/0x80) and unsigned (0x00/0xFF) limits with VARYING differences, so subtraction
+# is not a constant (load_pattern's linear slope makes a-b uniform -> vacuous).
+_SAT_A=[0x7F,0x80,0x01,0xFF,0x40,0xC0,0x10,0x90, 0x7E,0x81,0x02,0xFE,0x41,0xC1,0x11,0x91]
+_SAT_B=[0x01,0x80,0xFF,0x02,0xC0,0x40,0x90,0x10, 0x02,0x7F,0xFE,0x03,0xC1,0x41,0x91,0x11]
+def satop(xo): return load_bytes(1,_SAT_A)+load_bytes(3,_SAT_B)+[vx(2,1,3,xo)]+grab()
+def vspltisb(vT,simm): return vx(vT, simm&0x1F, 0, 780)
+def grab(): return [li(3,OFF), stvx(2,1,3), lwz(5,OFF,1)]  # set r3=OFF, store v2, result word -> r5
+                                                            # (li here makes grab self-contained — do NOT
+                                                            # rely on a prior li, or arith kernels stvx to
+                                                            # the wrong address and go vacuous)
+# Two-distinct-operand vector op: vA=v1=00..0F, vB=v3=10..1F, vD=v2 (grab stores v2).
+# Distinct lanes so a wrong element-select / A<->B swap can't pass coincidentally.
+def merge2(xo): return load_pattern(1,0x00)+load_pattern(3,0x10)+[vx(2,1,3,xo)]+grab()
+# Variable shift/rotate: vA=v1=data, vB=v3=per-element shift amount, vD=v2.
+# Strong operands per the 2026-06-06 hunt: high-bit data (distinguishes logical from
+# arithmetic right shift) + per-lane amounts 0..15 (>=8 exercises AltiVec's mod-width
+# masking, which a raw NEON shift lacks). Byte ops are byte-order-safe (each lane
+# independent); halfword/word variants need ev_mixed-aware operands — not added yet.
+def shift2(xo, dbase, abase): return load_pattern(1,dbase)+load_pattern(3,abase)+[vx(2,1,3,xo)]+grab()
+
+PASS=[]   # vectors that pass make test-jit (committed to run.sh)
+BUG=[]    # vectors that expose a CONFIRMED JIT divergence (NOT committed; kept as repro)
+def p(n,w,c): PASS.append((n," ".join(H(x) for x in w),c))
+def b(n,w,c): BUG.append((n," ".join(H(x) for x in w),c))
+
+# --- passing: word splat + integer multiplies ---
+p("av_vspltw_0", load_distinct(1)+[vx(2,0,1,652)]+grab(), "vspltw v2,v1,0 -> 0x00010203")
+p("av_vspltw_2", load_distinct(1)+[vx(2,2,1,652)]+grab(), "vspltw v2,v1,2 -> 0x08090A0B")
+p("av_vspltb_0",  load_distinct(1)+[vx(2,0,1,524)] +grab(), "vspltb v2,v1,0  -> 0x00000000 (ev_mixed remap)")
+p("av_vspltb_3",  load_distinct(1)+[vx(2,3,1,524)] +grab(), "vspltb v2,v1,3  -> 0x03030303")
+p("av_vspltb_15", load_distinct(1)+[vx(2,15,1,524)]+grab(), "vspltb v2,v1,15 -> 0x0F0F0F0F")
+p("av_vsplth_0",  load_distinct(1)+[vx(2,0,1,588)] +grab(), "vsplth v2,v1,0  -> 0x00010001")
+p("av_vsplth_3",  load_distinct(1)+[vx(2,3,1,588)] +grab(), "vsplth v2,v1,3  -> 0x06070607")
+p("av_vsplth_7",  load_distinct(1)+[vx(2,7,1,588)] +grab(), "vsplth v2,v1,7  -> 0x0E0F0E0F")
+
+# --- arithmetic / logical / compare: two splat-immediate operands (v0=0x05.., v1=0x03..).
+# These REPLACE 12 pre-existing vec_* vectors that were confirmed VACUOUS (r5=r6=0,
+# their setup ops were doubled-XO no-ops). VXO is the unshifted 11-bit XO. ---
+def two(xo): return [vspltisb(0,5),vspltisb(1,3),vx(2,0,1,xo)]+grab()
+p("av_vadduwm", two(128),  "vadduwm: 0x05050505+0x03030303=0x08080808")
+p("av_vsubuwm", two(1152), "vsubuwm: 0x05..-0x03..=0x02020202")
+p("av_vand",    two(1028), "vand: 0x05&0x03=0x01010101")
+p("av_vor",     two(1156), "vor: 0x05|0x03=0x07070707")
+p("av_vxor",    two(1220), "vxor: 0x05^0x03=0x06060606")
+p("av_vnor",    two(1284), "vnor: ~(0x05|0x03)=0xF8F8F8F8")
+p("av_vmaxsw",  two(386),  "vmaxsw: signed-word max=0x05050505")
+p("av_vminsw",  two(898),  "vminsw: signed-word min=0x03030303")
+p("av_vcmpequw",[vspltisb(0,5),vx(2,0,0,134)]+grab(), "vcmpequw v2,v0,v0: equal -> 0xFFFFFFFF")
+
+# --- even/odd unsigned BYTE multiplies (vmuloub/vmuleub) FIXED 2026-06-04: the old
+# codegen emitted a non-widening MUL.8B and ignored ev_mixed even/odd selection.
+# Fix (ppc-jit.cpp emit_vmul_byte): REV32.16B normalize -> UZP1/UZP2.16B select even/
+# odd byte -> [U]MULL.8H widen -> REV32.8H output. DISTINCT operands (vA=00..0F,
+# vB=10..1F) test BOTH the selection AND the widening: even-lane products like
+# 0x0A*0x1A=260 (>255) would truncate under the old MUL.8B, so a non-widening op
+# diverges visibly. (Signed vmulosb/vmulesb share the helper but have no signed test
+# vector yet; halfword vmul*h still broken — ROADMAP A2.)
+p("av_vmuloub", merge2(8),   "vmuloub v2,v1,v3: odd  unsigned byte multiply -> halfword products")
+p("av_vmuleub", merge2(520), "vmuleub v2,v1,v3: even unsigned byte multiply -> halfword products")
+# even/odd HALFWORD multiplies FIXED 2026-06-07 (ppc-jit.cpp emit_vmul_hword): REV32.8H normalize
+# -> UZP1/2.8H even/odd select -> [SU]MULL.4S widen (16x16->32) -> word output (no normalize).
+# Operands include high-bit-set halfwords (0x8000,0xFFFF,0x7FFF) so signed vs unsigned products
+# DIFFER (non-vacuous signedness). vA={0002,8000,0003,FFFF,0004,7FFF,0005,0006}, vB={0003,0002,FFFE,0002,0010,0002,0007,0008}.
+_MH_A=[0x00,0x02, 0x80,0x00, 0x00,0x03, 0xFF,0xFF, 0x00,0x04, 0x7F,0xFF, 0x00,0x05, 0x00,0x06]
+_MH_B=[0x00,0x03, 0x00,0x02, 0xFF,0xFE, 0x00,0x02, 0x00,0x10, 0x00,0x02, 0x00,0x07, 0x00,0x08]
+def mulhop(xo): return load_bytes(1,_MH_A)+load_bytes(3,_MH_B)+[vx(2,1,3,xo)]+grab()
+p("av_vmulouh", mulhop(72),  "vmulouh: odd  unsigned halfword multiply -> word products (UMULL.4S)")
+p("av_vmulosh", mulhop(328), "vmulosh: odd  signed   halfword multiply -> word products (SMULL.4S)")
+p("av_vmuleuh", mulhop(584), "vmuleuh: even unsigned halfword multiply -> word products (UMULL.4S)")
+p("av_vmulesh", mulhop(840), "vmulesh: even signed   halfword multiply -> word products (SMULL.4S)")
+
+# --- ev_mixed element-order class: byte/halfword/word MERGES and the PACK.
+# DISTINCT operands (vA=v1=00..0F, vB=v3=10..1F) so every output byte uniquely
+# identifies its source element AND vA/vB ordering is tested — a self-operand vector
+# (v1,v1) can rubber-stamp a wrong ZIP1<->ZIP2 / A<->B swap. The full 128-bit result
+# (v2) is compared via the REGDUMP VR dump, so one all-distinct pattern is complete
+# positional coverage for a permute.
+# Byte/halfword merges FIXED 2026-06-04: ev_mixed-aware codegen (REV32.16B normalize ->
+# ZIP1/ZIP2.{16B,8H} -> REV32.16B back; ppc-jit.cpp emit_vmrg). Verified xpass with
+# distinct operands; promoted from quarantine to the scored gate.
+p("av_vmrghb", merge2(12),  "vmrghb v2,v1,v3: high-byte merge (ev_mixed-normalized)")
+p("av_vmrglb", merge2(268), "vmrglb v2,v1,v3: low-byte merge (ev_mixed-normalized)")
+p("av_vmrghh", merge2(76),  "vmrghh v2,v1,v3: high-halfword merge (ev_mixed-normalized)")
+p("av_vmrglh", merge2(332), "vmrglh v2,v1,v3: low-halfword merge (ev_mixed-normalized)")
+# vmrghw/vmrglw FIXED 2026-06-04 (correct ZIP1.4S/ZIP2.4S; word_element is identity so
+# no rev) — now on DISTINCT operands too, proving the word fix is not coincidental.
+p("av_vmrghw", merge2(140), "vmrghw v2,v1,v3 -> high-word merge [A0,B0,A1,B1]")
+p("av_vmrglw", merge2(396), "vmrglw v2,v1,v3 -> low-word merge [A2,B2,A3,B3]")
+p("av_vpkuhum",merge2(14),  "vpkuhum v2,v1,v3: halfword->byte pack (ev_mixed-normalized UZP2.16B)")
+# --- saturating HALFWORD->byte packs FIXED 2026-06-07 (ppc-jit.cpp emit_vpk_h2b): REV32+REV16
+# normalize -> [SU]QXTN/QXTN2 (vA low, vB high) -> REV32 back. Operands CROSS the saturation
+# boundaries (negatives AND >255) so the three signednesses are DISTINCT (a non-saturating
+# operand set makes SQXTUN and UQXTN identical -> false PASS, the trap the earlier attempt hit).
+# big-endian halfwords: vA={0001,0100,7FFF,8000,FF00,00FF,0080,017F}, vB={1234,FFFF,0010,8001,7F00,007F,ABCD,0005}.
+_PK_A=[0x00,0x01, 0x01,0x00, 0x7F,0xFF, 0x80,0x00, 0xFF,0x00, 0x00,0xFF, 0x00,0x80, 0x01,0x7F]
+_PK_B=[0x12,0x34, 0xFF,0xFF, 0x00,0x10, 0x80,0x01, 0x7F,0x00, 0x00,0x7F, 0xAB,0xCD, 0x00,0x05]
+def packop(xo): return load_bytes(1,_PK_A)+load_bytes(3,_PK_B)+[vx(2,1,3,xo)]+grab()
+p("av_vpkshss", packop(398), "vpkshss: halfword->byte signed source, signed-saturate (SQXTN)")
+p("av_vpkshus", packop(270), "vpkshus: halfword->byte signed source, unsigned-saturate (SQXTUN)")
+p("av_vpkuhus", packop(142), "vpkuhus: halfword->byte unsigned source, unsigned-saturate (UQXTN)")
+# --- saturating WORD->halfword packs FIXED 2026-06-07 (ppc-jit.cpp emit_vpk_w2h): NO input
+# normalize (raw .4S already = correct word values; word_element identity), [SU]QXTN/QXTN2
+# .4S->.4H (vA low, vB high), then halfword-output normalize REV32+REV16. Word operands cross
+# the int16 saturation boundaries (negatives + >65535 + >32767) so signedness is DISTINCT.
+# big-endian words: vA={00000001,00010000,00008000,80000000}, vB={FFFF0000,00007FFF,12345678,0000FFFF}.
+_PKW_A=[0x00,0x00,0x00,0x01, 0x00,0x01,0x00,0x00, 0x00,0x00,0x80,0x00, 0x80,0x00,0x00,0x00]
+_PKW_B=[0xFF,0xFF,0x00,0x00, 0x00,0x00,0x7F,0xFF, 0x12,0x34,0x56,0x78, 0x00,0x00,0xFF,0xFF]
+def packwop(xo): return load_bytes(1,_PKW_A)+load_bytes(3,_PKW_B)+[vx(2,1,3,xo)]+grab()
+p("av_vpkswss", packwop(462), "vpkswss: word->halfword signed source, signed-saturate (SQXTN.4H)")
+p("av_vpkswus", packwop(334), "vpkswus: word->halfword signed source, unsigned-saturate (SQXTUN.4H)")
+p("av_vpkuwus", packwop(206), "vpkuwus: word->halfword unsigned source, unsigned-saturate (UQXTN.4H)")
+# vpkuwum: word->halfword MODULO (truncate low 16 bits, no saturation) — XTN.4H/XTN2.8H via
+# emit_vpk_w2h. Operands have NONZERO high halfwords + distinct low halfwords, so a saturate/
+# ignore-vA/lane bug diverges. vA={1111AAAA,2222BBBB,3333CCCC,4444DDDD}, vB={5555EEEE,66660001,77770002,88880003}.
+_PKM_A=[0x11,0x11,0xAA,0xAA, 0x22,0x22,0xBB,0xBB, 0x33,0x33,0xCC,0xCC, 0x44,0x44,0xDD,0xDD]
+_PKM_B=[0x55,0x55,0xEE,0xEE, 0x66,0x66,0x00,0x01, 0x77,0x77,0x00,0x02, 0x88,0x88,0x00,0x03]
+p("av_vpkuwum", load_bytes(1,_PKM_A)+load_bytes(3,_PKM_B)+[vx(2,1,3,78)]+grab(), "vpkuwum: word->halfword modulo (low 16 bits, XTN)")
+# vpkpx FIXED 2026-06-07 (ppc-jit.cpp emit_vpkpx): pack 4+4 words -> 8 1-5-5-5 pixels via per-word
+# USHR+AND bit-field extract ((a>>9)&0xfc00 | (a>>6)&0x3e0 | (a>>3)&0x1f) then word->halfword pack tail.
+# Distinct words exercising all 3 fields + the high bits that DON'T appear in the pixel (so a missing
+# mask diverges). Words built one-per-stw via a 4-word lvx load.
+def _lw4(vT, words):
+    out=[]
+    for k,w in enumerate(words): out+=[lis(3,(w>>16)&0xFFFF), ori(3,w&0xFFFF), stw(3,OFF+k*4,1)]
+    return out+[li(3,OFF), lvx(vT,1,3)]
+p("av_vpkpx", _lw4(1,[0xFFAABBCC,0x12345678,0x80FF00FF,0x00010203])+_lw4(3,[0xDEADBEEF,0xCAFEBABE,0x7FFFFFFF,0x01020304])+[vx(2,1,3,782)]+grab(), "vpkpx: pack 4+4 words -> 1-5-5-5 pixels")
+# vupkhpx/vupklpx FIXED 2026-06-07 (ppc-jit.cpp emit_vupkpx): expand 4 1-5-5-5 pixel halfwords
+# (high/low half of vB) -> 4 words: sign-bit->0xff000000 alpha + 5-5-5 field expand. 8 distinct
+# pixels mixing sign-bit set/clear so the alpha synthesis + half-select are non-vacuous. vupkhpx
+# takes halfwords 0-3, vupklpx takes 4-7 (so the two ops give different results). vD=v2, vB=v3.
+def _lh8(vT, hws):
+    out=[]
+    for k in range(0,8,2): out+=[lis(3,hws[k]&0xFFFF), ori(3,hws[k+1]&0xFFFF), stw(3,OFF+k*2,1)]
+    return out+[li(3,OFF), lvx(vT,1,3)]
+_PX8=[0x8421,0x7FFF,0x0000,0xFFFF, 0x83E0,0x041F,0xFC00,0x1234]
+p("av_vupkhpx", _lh8(3,_PX8)+[vx(2,0,3,846)]+grab(), "vupkhpx: unpack high 4 pixels -> words (sign-bit alpha + 5-5-5)")
+p("av_vupklpx", _lh8(3,_PX8)+[vx(2,0,3,974)]+grab(), "vupklpx: unpack low 4 pixels -> words")
+# --- variable byte shifts: FIXED 2026-06-06 (ppc-jit.cpp case 260/516/772). Were
+# emitting unmasked, signed, rounding NEON shifts; vsrb shifted the wrong direction.
+# data=0x80..0x8F (high bit -> logical vs arith fill), amounts=0x00..0x0F (>=8 -> mask mod 8). ---
+p("av_vslb",  shift2(260, 0x80, 0x00), "vslb v2,v1,v3: byte shift-left, amount masked mod 8")
+p("av_vsrb",  shift2(516, 0x80, 0x00), "vsrb v2,v1,v3: byte LOGICAL shift-right (zero-fill), mask mod 8")
+p("av_vsrab", shift2(772, 0x80, 0x00), "vsrab v2,v1,v3: byte ARITHMETIC shift-right (sign-fill), mask mod 8")
+# Halfword/word shifts: FIXED 2026-06-06 (same fix, .8H/.4S element sizes; validated against
+# byte-ASYMMETRIC lvx operands, so the ev_mixed byte order is covered). abase chosen so each
+# element's amount EXCEEDS its width (halfword: 0x10 base -> low bytes >=16; word: 0x20 -> >=32),
+# exercising the mod-width mask. Strong + non-vacuous (distinct high-bit lanes).
+p("av_vslh",  shift2(324, 0x80, 0x10), "vslh: halfword shift-left, amount masked mod 16")
+p("av_vsrh",  shift2(580, 0x80, 0x10), "vsrh: halfword LOGICAL shift-right (zero-fill), mask mod 16")
+p("av_vsrah", shift2(836, 0x80, 0x10), "vsrah: halfword ARITHMETIC shift-right (sign-fill), mask mod 16")
+p("av_vslw",  shift2(388, 0x80, 0x20), "vslw: word shift-left, amount masked mod 32")
+p("av_vsrw",  shift2(644, 0x80, 0x20), "vsrw: word LOGICAL shift-right (zero-fill), mask mod 32")
+p("av_vsraw", shift2(900, 0x80, 0x20), "vsraw: word ARITHMETIC shift-right (sign-fill), mask mod 32")
+# Rotates: FIXED 2026-06-06 — NEON has no vector rotate, synthesized as
+# (x<<k)|(x>>>(w-k)), k=amt&(w-1). data=0x80.. so wrapped bits are observable (a plain
+# shift would drop them); amounts exercise the mod-width mask. Validated byte-asymmetric.
+p("av_vrlb",  shift2(4,   0x80, 0x00), "vrlb: rotate-left byte (mod 8), wrap-around")
+p("av_vrlh",  shift2(68,  0x80, 0x10), "vrlh: rotate-left halfword (mod 16), wrap-around")
+p("av_vrlw",  shift2(132, 0x80, 0x20), "vrlw: rotate-left word (mod 32), wrap-around")
+# --- WHOLE-VECTOR shifts (vsl bit-shift, vslo/vsro octet-shift). Authoritative XOs:
+# vsl=452 vsr=708 vslo=1036 vsro=1100 (ppc-decode.cpp). The JIT had these SCRAMBLED:
+# case 452 (really vsl) ran vsldoi EXT code; 1036 (vslo) ran per-byte SSHL; 1100 (vsro) ran
+# per-byte NEG+USHL; vsr/vsldoi fell back to interp (correct); 1356/1420 were dead. These
+# operate on the FULL 128-bit register, NOT per-lane, so the per-lane NEON ops were wrong.
+# Operands: vA=v1 distinct bytes 0x10..0x1F; vB=v3 carries the shift count.
+def shiftwv(xo, vb): return load_pattern(1,0x10)+load_bytes(3,vb)+[vx(2,1,3,xo)]+grab()
+# vslo/vsro shift count = vB bits 121-124 (octet count); byte15=sh<<3. sh=4 -> 0x20 (set all bytes).
+p("av_vslo", shiftwv(1036, [0x20]*16), "vslo: shift whole vector LEFT 4 octets, zero-fill")
+p("av_vsro", shiftwv(1100, [0x20]*16), "vsro: shift whole vector RIGHT 4 octets, zero-fill")
+# vsl/vsr shift count = vB bits 125-127 (bit count 0-7); all bytes' low 3 bits must match. sh=3.
+p("av_vsl",  shiftwv(452,  [0x03]*16), "vsl: shift whole vector LEFT 3 bits, cross-byte carry")
+p("av_vsr",  shiftwv(708,  [0x03]*16), "vsr: shift whole vector RIGHT 3 bits, cross-byte carry")
+# --- FP round-to-integer (vrfin/vrfiz/vrfip/vrfim) + FP compares (vcmpgefp/vcmpgtfp).
+# XOs were SCRAMBLED (label != XO); authoritative: vrfin=522 vrfiz=586 vrfip=650 vrfim=714,
+# vcmpgefp=454 vcmpgtfp=710. Single-precision float lanes; interp (frsi*/fp compare) is ground truth.
+def _lw4f(vT, words):  # load 4 float-bit words into vT (reuses the word-loader shape)
+    out=[]
+    for k,w in enumerate(words): out+=[lis(3,(w>>16)&0xFFFF), ori(3,w&0xFFFF), stw(3,OFF+k*4,1)]
+    return out+[li(3,OFF), lvx(vT,1,3)]
+def vrfop(xo, words): return _lw4f(1,words)+[vx(2,0,1,xo)]+grab()  # vrfin vD,vB (vA field=0)
+_RND=[0x40200000, 0xC0200000, 0x40600000, 0xC0600000]  # 2.5, -2.5, 3.5, -3.5 (distinguishes all 4 modes)
+p("av_vrfin", vrfop(522,_RND), "vrfin: round to nearest (interp frsin is ground truth re: ties)")
+p("av_vrfiz", vrfop(586,_RND), "vrfiz: round toward zero -> 2,-2,3,-3")
+p("av_vrfip", vrfop(650,_RND), "vrfip: round toward +inf -> 3,-2,4,-3")
+p("av_vrfim", vrfop(714,_RND), "vrfim: round toward -inf -> 2,-3,3,-4")
+def vcmpfp(xo, wa, wb): return _lw4f(1,wa)+_lw4f(3,wb)+[vx(2,1,3,xo)]+grab()  # non-record form (no CR6)
+_CA=[0x40000000, 0x40400000, 0x40000000, 0x7FC00000]  # 2.0, 3.0, 2.0, NaN
+_CB=[0x40000000, 0x40000000, 0x40400000, 0x40000000]  # 2.0, 2.0, 3.0, 2.0
+p("av_vcmpgefp", vcmpfp(454,_CA,_CB), "vcmpgefp: >= per lane -> [FF,FF,00,00] (eq true, NaN false)")
+p("av_vcmpgtfp", vcmpfp(710,_CA,_CB), "vcmpgtfp: > per lane -> [00,FF,00,00] (eq false)")
+# Saturating add/sub + signed averages: FIXED 2026-06-06. Were emitting the wrong NEON op
+# (SABA/UABA abs-diff for adds, SMAXP for signed avg) and/or swapped signedness (sat-sub).
+# Now SQADD/UQADD/SQSUB/UQSUB/SRHADD (capstone-verified). Boundary operands exercise the
+# saturation clamp + signedness; results are lane-asymmetric (non-vacuous).
+p("av_vaddubs", satop(512),  "vaddubs: unsigned saturating add, byte")
+p("av_vadduhs", satop(576),  "vadduhs: unsigned saturating add, halfword")
+p("av_vadduws", satop(640),  "vadduws: unsigned saturating add, word")
+p("av_vaddsbs", satop(768),  "vaddsbs: signed saturating add, byte")
+p("av_vaddshs", satop(832),  "vaddshs: signed saturating add, halfword")
+p("av_vaddsws", satop(896),  "vaddsws: signed saturating add, word")
+p("av_vsububs", satop(1536), "vsububs: unsigned saturating sub, byte")
+p("av_vsubuhs", satop(1600), "vsubuhs: unsigned saturating sub, halfword")
+p("av_vsubuws", satop(1664), "vsubuws: unsigned saturating sub, word (newly JIT-accelerated)")
+p("av_vsubsbs", satop(1792), "vsubsbs: signed saturating sub, byte")
+p("av_vsubshs", satop(1856), "vsubshs: signed saturating sub, halfword")
+p("av_vsubsws", satop(1920), "vsubsws: signed saturating sub, word")
+p("av_vavgsb",  satop(1282), "vavgsb: signed rounding average, byte")
+p("av_vavgsh",  satop(1346), "vavgsh: signed rounding average, halfword")
+p("av_vavgsw",  satop(1410), "vavgsw: signed rounding average, word")
+
+# --- sum-across (horizontal reduce + SIGNED/UNSIGNED saturate). XOs: vsum4ubs=1928,
+# vsum4sbs=1672, vsum4shs=1608, vsum2sws=1800, vsumsws=1932 (ppc-jit.cpp). The interp
+# (execute_vector_sum) accumulates in int64 (v4si_sat_operand sat_type=int64) and clamps
+# — true ground truth. Operands below drive each lane's sum PAST the int32/uint32 boundary
+# so a JIT that reduces/adds vB with a PLAIN (wrapping) add diverges from the clamp.
+# vA=v1, vB=v3, vD=v2 (grab stores the full v2). Lanes carry distinct values so a lane/
+# element-placement bug is also non-vacuous.
+def sumop(xo, A, B): return load_bytes(1,A)+load_bytes(3,B)+[vx(2,1,3,xo)]+grab()
+# Authoritative XOs (ppc-decode.cpp): vsum4ubs=1544 vsum4sbs=1800 vsum4shs=1608 vsum2sws=1672
+# vsumsws=1928. (The JIT had these SCRAMBLED until 2026-06-07 — these vectors caught it.)
+_VS4UBS_A=[0xFF]*16                                                                  # each word: 4*0xFF = 1020
+_VS4UBS_B=[0xFF,0xFF,0xFF,0xFF, 0xFF,0xFF,0xFF,0x00, 0x00,0x00,0x10,0x00, 0x00,0x00,0x00,0x00]
+p("av_vsum4ubs", sumop(1544,_VS4UBS_A,_VS4UBS_B), "vsum4ubs: 4 ubytes + vB word, UNSIGNED-saturate to 0xFFFFFFFF (w0/w1 overflow)")
+_VS4SBS_A=[0x7F,0x7F,0x7F,0x7F, 0x80,0x80,0x80,0x80, 0x01,0x01,0x01,0x01, 0x00,0x00,0x00,0x00]
+_VS4SBS_B=[0x7F,0xFF,0xFF,0xFF, 0x80,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00]
+p("av_vsum4sbs", sumop(1800,_VS4SBS_A,_VS4SBS_B), "vsum4sbs: 4 sbytes + vB word, SIGNED-saturate (w0->+INT_MAX, w1->-INT_MIN)")
+_VS4SHS_A=[0x7F,0xFF,0x7F,0xFF, 0x80,0x00,0x80,0x00, 0x00,0x10,0x00,0x20, 0x00,0x00,0x00,0x00]
+_VS4SHS_B=[0x7F,0xFF,0xFF,0xFF, 0x80,0x00,0x00,0x00, 0x00,0x00,0x00,0x10, 0x00,0x00,0x00,0x00]
+p("av_vsum4shs", sumop(1608,_VS4SHS_A,_VS4SHS_B), "vsum4shs: 2 shorts + vB word, SIGNED-saturate (w0->+INT_MAX, w1->-INT_MIN)")
+_VS2SWS_A=[0x50,0x00,0x00,0x00, 0x50,0x00,0x00,0x00, 0x50,0x00,0x00,0x00, 0x50,0x00,0x00,0x00]
+_VS2SWS_B=[0xAA,0xAA,0xAA,0xAA, 0x10,0x00,0x00,0x00, 0xBB,0xBB,0xBB,0xBB, 0x10,0x00,0x00,0x00]
+p("av_vsum2sws", sumop(1672,_VS2SWS_A,_VS2SWS_B), "vsum2sws: 2 words + vB odd word, SIGNED-saturate (both halves overflow +INT_MAX)")
+_VSUMSWS_A=[0x40,0x00,0x00,0x00, 0x40,0x00,0x00,0x00, 0x40,0x00,0x00,0x00, 0x00,0x00,0x00,0x00]
+_VSUMSWS_B=[0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22, 0x33,0x33,0x33,0x33, 0x40,0x00,0x00,0x00]
+p("av_vsumsws", sumop(1928,_VSUMSWS_A,_VSUMSWS_B), "vsumsws: all 4 words + vB.w3, SIGNED-saturate to +INT_MAX (sum=0x100000000)")
+# Negative-direction saturation for the two WIDE ops: their clamp is SQXTN.2S (64->32 narrow),
+# a DIFFERENT mechanism than the per-word SQADD — the +INT_MAX vectors above only exercise the
+# positive side, so these add the negative clamp (sum < INT_MIN -> 0x80000000).
+_VSUMSWS_N_A=[0xC0,0x00,0x00,0x00, 0xC0,0x00,0x00,0x00, 0xC0,0x00,0x00,0x00, 0x00,0x00,0x00,0x00]  # 3 words = -2^30
+_VSUMSWS_N_B=[0x11,0x11,0x11,0x11, 0x22,0x22,0x22,0x22, 0x33,0x33,0x33,0x33, 0xC0,0x00,0x00,0x00]  # vB.w3 = -2^30
+p("av_vsumsws_neg", sumop(1928,_VSUMSWS_N_A,_VSUMSWS_N_B), "vsumsws: sum=-0x100000000 -> -INT_MIN 0x80000000 (SQXTN negative clamp)")
+_VS2SWS_N_A=[0xC0,0x00,0x00,0x00]*4
+_VS2SWS_N_B=[0xAA,0xAA,0xAA,0xAA, 0xC0,0x00,0x00,0x00, 0xBB,0xBB,0xBB,0xBB, 0xC0,0x00,0x00,0x00]
+p("av_vsum2sws_neg", sumop(1672,_VS2SWS_N_A,_VS2SWS_N_B), "vsum2sws: both halves underflow -> 0x80000000 (SQXTN negative clamp)")
+
+if __name__ == "__main__":
+    print("# ==== AltiVec coverage (generated by gen-altivec-vectors.py) =================")
+    for n,h,c in PASS:
+        print("# %s"%c); print('T_%s="%s"'%(n,h)); print("TEST_ORDER+=(%s)"%n)
+    print("# --- repro for the confirmed vspltb/vsplth JIT bug (NOT in TEST_ORDER) ---")
+    for n,h,c in BUG:
+        print("# BUG %s: %s"%(n,c)); print('# T_%s="%s"'%(n,h))

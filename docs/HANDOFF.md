@@ -3,8 +3,18 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION (re-banded 2026-06-15):** **S1's mechanism is DONE; S1's LIVE paged MMU is DEFERRED
->   and INSEPARABLE FROM S3 — the next real work is S3 (months-scale, a user decision).** S1 mechanism =
+> - **▶ NEXT ACTION (2026-06-15): S3 Task-0 is DONE → GREEN-PASS, architecture = REPLACE. ▶ S3-IMPL
+>   AWAITS USER AUTHORIZATION (the program's most dangerous flip).** S3 recon (4-reviewer red-teamed):
+>   `FINDINGS-s3-{two-supervisor,nk-ownership,ss-reusemap}.md`, plan `2026-06-15-ss-m18-s3-two-supervisor-task0.md`
+>   rev-2. **Architecture = REPLACE** (retire SS's synthetic supervisor under `SS_M18_NK_SUPERVISOR ∧
+>   MachineProfileIsNewWorld()`, run the real NK resident; CO-OWN/yield-fully scored out — co-residency
+>   statically impossible; thin-shim = strictly-larger-surface of REPLACE). **The window substrate is
+>   PROVEN** (`acd89dce` single + `cd7a62b6` multi-entry: atomic one-step `mach_vm_map(FIXED|OVERWRITE)`,
+>   concurrent-reader-safe, 16K-coarse fork — the live-MMU's biggest risk de-risked). **S3-impl is
+>   LAW-adjacent (supervisor handover) → needs the user's explicit GO; KEEP exc_core vectoring (PEM=LAW),
+>   paravirtual provably unreachable, revert-on-red=branch revert.** Owed to S3-impl's own boot: the
+>   device-IRQ→NK-EXT seam, the sc path, the G3.a/c positive probe (the QEMU rig stalls pre-NK-install).
+>   *(S1 history below for context.)* S1 mechanism =
 >   DONE: Task A `paged_mmu_translate()` + oracle test committed (`fc3ca256`/`2bf1526b`/`191fe67c`+fix;
 >   `make test-jit`=100, `test_paged_mmu` 36/36) and the static NK-MMU constants derived
 >   (`FINDINGS-s1-mmu-constants.md`, `f77702d9`). **Verdict:** there is no live `(SR/BAT/SDR1)` map until

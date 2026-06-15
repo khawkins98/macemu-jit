@@ -18,9 +18,14 @@
 >   blows past the zero-gap wall, makes 95 OF-CI calls, and issues `[S2B-MMU-STUB] /mmu translate
 >   in[0]=0x01000000` — REACHED THE `/mmu` PHASE (legit relocation code at `pc=0x2026e0`, no wild jump).**
 >   ▶▶▶▶▶ **S1's live `/mmu` is NOW the genuine immediate next wall** (Outcome shifted B→A): the `/mmu`
->   translate is the NON-ACCEPTANCE recording stub → returns degenerate. Cheap next probe (the S1 plan's
->   anticipated first sub-task): a MINIMALLY-REAL `/mmu` translate (identity for claimed/RAM regions) to see
->   if the Trampoline reaches `NanoKernelEntry 0x50310000`. Then the full S1 window/softmmu per the Task-0. Plan + full ladder:
+>   translate is the NON-ACCEPTANCE recording stub → returns degenerate. Minimally-real V=P `/mmu` LANDED (`fb0d0f19`, gated, NON-ACCEPTANCE-honest): correct + exercised (1
+>   identity translate `0x01000000->0x01000000`) but did NOT move the wall. **NEW WALL (pinned upstream of
+>   the NK): the Trampoline's own RELOCATION LOOP at guest `pc=0x2026e0` → SIGSEGV** — `stw r8,8(r31)` with
+>   `r31=0x01fffff8` walking past the `0x180000` claim, loop vars garbage (`r30=0x3e18696d` ≈ ASCII → it's
+>   reading the WRONG table). iNK=0 still. **NEXT: RE the `0x2026e0` relocation loop — what table/count it
+>   walks + where that pointer is loaded from (likely the still-provisional r3/r4 CHRP bootinfo ABI, or a
+>   relocation-source/`/memory`-derived input). This precedes the NK install + non-identity `/mmu`.** Then
+>   the full S1 window/softmmu per the Task-0. Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl
 >   T1–T5 + S3-impl T1–T4) are now validated running together gated-OFF-safe + gated-ON-executing.**
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.

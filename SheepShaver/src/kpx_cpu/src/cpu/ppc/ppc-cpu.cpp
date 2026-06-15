@@ -1967,6 +1967,26 @@ int ExcIrqConsumeEnabled(void)
 	}
 	return v;
 }
+
+/* SS_M18 S3 (Operation NewSheep) T1 — the master gate for the
+ * two-supervisor restructure (REPLACE + EXT-injection shim). Resolved ONCE at
+ * boot: env SS_M18_NK_SUPERVISOR (default OFF) AND MachineProfileIsNewWorld().
+ * Boot-time mode-select ONLY — mirrors the newworld arm below (line ~1991);
+ * MUST NOT become a per-block/per-access branch. g_profile is fixed at
+ * MachineProfileInit() time, so the first call latches the resolved boolean.
+ * Default OFF (env unset) => structurally inert: the gated body at the spcflag
+ * poll (below) is reachable-but-empty, paravirtual byte-identical. T2/T3 land
+ * the EXT-injection poll / synthetic-supervisor retirement behind this gate. */
+static int g_nk_supervisor = -1;
+bool NkSupervisorEnabled(void)
+{
+	if (g_nk_supervisor < 0) {
+		const char *e = getenv("SS_M18_NK_SUPERVISOR");
+		bool env_on = (e && e[0] && e[0] != '0');
+		g_nk_supervisor = (env_on && MachineProfileIsNewWorld()) ? 1 : 0;
+	}
+	return g_nk_supervisor != 0;
+}
 #endif
 
 bool powerpc_cpu::check_spcflags()
@@ -2023,6 +2043,17 @@ bool powerpc_cpu::check_spcflags()
 						fprintf(stderr, "[IRQ-CONSUME] deferred edge fired at pc=%08x (held=%u)\n",
 						        (uint32)pc(), g_exc_consume_stats.held);
 				}
+			}
+			/* SS_M18 S3 T1 scaffold (inert, default OFF). When the master
+			 * gate is ON the EXT-injection poll (T2) and the synthetic-
+			 * supervisor retirement (T3) land here, replacing the
+			 * SheepExcDeliverPending() path below. Empty body for T1: gated
+			 * ON or OFF, control falls through to the legacy poll unchanged,
+			 * so paravirtual (and gated-OFF newworld) stay byte-identical.
+			 * We are already inside MachineProfileIsNewWorld(); NkSupervisorEnabled()
+			 * additionally AND-s the env flag, resolved once at boot. */
+			if (NkSupervisorEnabled()) {
+				/* T2/T3 land here */
 			}
 			if (SheepExcDeliverPending())
 				return true;

@@ -193,3 +193,22 @@ only via `SheepShaver/tools/ss-slot-boot.sh`.** Baseline tag: `newsheep-baseline
 - Session logs / older history: `docs/archive/2026-06/LEARNINGS-2026-06.md`,
   `docs/archive/2026-06/HANDOFF-SESSIONS-M9-M12.md`; current interrupt-delivery diagnosis (reframes the
   old session log) = `docs/planning/M13-FINDINGS-interrupt-delivery.md`.
+
+## ▶▶ PARALLEL ACCELERATION FAN-OUT (2026-06-15, user-directed) — oracles + zero-dep prep, serial S1↔S3 spine
+The NK now executes → harvest its real behavior as OFFLINE ORACLES, fan out zero-dependency build/RE in
+parallel, keep the S1↔S3 INTEGRATION a single serial evidence-grounded thread. Discipline gate (every
+parallel deliverable): (a) findings doc w/ a falsifiable claim, (b) unit-tested standalone component behind
+a pinned interface, or (c) an oracle/fixture — never "go implement S3"; test-jit=100 + gated-OFF byte-identical.
+- **Track A (CRITICAL-PATH SPINE PREP):** the NK-MMU-write RECORDER (extend the `[ROMPATCH] sr_load`/BAT
+  interception to log reg+value+PC+order to a file) + the NK-image STAGING fix (so the NK body runs) →
+  HARVEST the full mtsr/mtsrin/mtdbat*/mtibat*/mtspr-SDR1 + sc/EXT trace = the S1/S3 ORACLE FIXTURE.
+- **Track B (parallel, zero-dep, file-disjoint):** B1 Dolphin Dynamic-BAT shadow-arena standalone module
+  (behind `paged_mmu_translate`, unit-tested vs synthetic + QEMU + the A oracle) — the bulk of S1, no live
+  boot; B2 S3 static RE of the resident NK image (0xC00000 / the dump) → exception-vector/sc/EXT contract
+  diff vs SS's synthetic supervisor; B3 S4 Cuda IFR/IER offline fix + unit test vs dev_cuda/dev_via6522
+  (DingusPPC `ViaCuda::update_irq` donor, M14 bug pinned); B4 S4 disk IM-init→CGRP RE + 9.2 boot-target
+  characterization (findings).
+- **The SPINE stays serial + single-owned:** S1↔S3 have no live SR/BAT map until the real NK install runs,
+  so their COMPOSITION is the milestone — the parallel agents produce validated components + oracles; the
+  actual S1↔S3 integration is one careful disasm/watchpoint-grounded thread (UNBLOCK-vs-REPRODUCE settled by
+  evidence, not cost). Do NOT let two agents both declare S1/S3 "done" against separate oracles.

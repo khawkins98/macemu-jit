@@ -1936,7 +1936,24 @@ int main(int argc, char **argv)
 		// struct (placed at ~0x01002080 by Mac OS init; deref of [0xcf0]+0x48 crashes
 		// with ea=0x010020c8 when the range is unmapped).  32MB stays well below
 		// RAMBase (which vm_mac_acquire places at 0x2000000+ on this path).
-		const uint32 lowmem_size = MachineProfileIsNewWorld() ? 0x2000000 : 0x3000;
+		//
+		// SS_M18 (post-quiesce relocation wall, 2026-06-15): the real NanoKernel
+		// Trampoline models physical DRAM at base 0 (real-Mac invariant) and
+		// operates entirely in low RAM — the OF claim arena is at 0x01000000 and
+		// every claim/translate lands in [0,0x02000000).  After OF quiesce/exit it
+		// relocates a stage to a phys target (observed 0x0ab00000) that lies in the
+		// unbacked gap [0x02000000, RAM_BASE=0x10000000) between the 32MB NW lowmem
+		// and the main Mac RAM area (which DIRECT_ADDRESSING places at RAM_BASE).
+		// Back the full phys-0 RAM window [0,RAM_BASE) so the guest's phys-0
+		// relocation lands in backed RAM.  Contiguous with the main RAM area at
+		// [0x10000000,0x20000000); no overlap with ROM (0x50000000) or KernelData
+		// (0x68ffe000).  Gated to the trampoline boot — translation stays V=P
+		// (NOT S1 live MMU); paravirtual and plain-NW boots keep 0x2000000/0x3000.
+		bool m18_tramp = MachineProfileIsNewWorld() &&
+		                 ({ const char *e = getenv("SS_M18_TRAMPOLINE");
+		                    e && *e && strcmp(e, "0") != 0; });
+		const uint32 lowmem_size = m18_tramp ? RAM_BASE
+		                         : (MachineProfileIsNewWorld() ? 0x2000000 : 0x3000);
 		if (vm_mac_acquire_fixed(0, lowmem_size) < 0) {
 			sprintf(str, GetString(STR_LOW_MEM_MMAP_ERR), strerror(errno));
 			ErrorAlert(str);

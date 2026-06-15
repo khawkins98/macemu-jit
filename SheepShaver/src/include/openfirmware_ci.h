@@ -80,6 +80,15 @@ typedef int (*of_call_method_fn)(void *opaque, const char *method,
 of_ci_context *of_ci_create_core99(void);
 void of_ci_destroy(of_ci_context *ctx);
 
+/* SS_M18 OF-CI early-environment fidelity (gated trampoline launch path).
+ *  - of_ci_set_memory_size: write the real guest RAMSize into the /memory reg
+ *    SIZE cell (default 0 preserved for the standalone unit test).
+ *  - of_ci_set_claim_arena: retarget the `claim` bump-allocator arena to a
+ *    guest-physical [base, limit) window (limit==0 == unbounded). Honors the
+ *    SS_M18_CLAIM_BASE env override (hex). */
+void of_ci_set_memory_size(of_ci_context *ctx, uint32_t ram_size);
+void of_ci_set_claim_arena(of_ci_context *ctx, uint32_t base, uint32_t limit);
+
 /* Register a call-method backend (test double). Matched by exact method name.
  * Returns false if the backend table is full. */
 bool of_ci_register_method(of_ci_context *ctx, const char *method,

@@ -3721,6 +3721,15 @@ void init_emul_ppc(void)
 			 * of_ci_callback directly. After this, a guest bctrl through r5 marshals a
 			 * real CHRP call into the dispatcher. */
 			g_s2b_ofci_ctx = of_ci_create_core99();
+			/* SS_M18 OF-CI early-environment fidelity: publish the real guest
+			 * RAMSize into /memory reg, and arm the `claim` bump-allocator with a
+			 * guest-physical arena above the loaded MacOS.elf image (which tops out
+			 * ~0x211000) and below RAMSize. This stops the Trampoline consuming
+			 * claim()=0 / size=0 and relocating into the zero gap. */
+			of_ci_set_memory_size(g_s2b_ofci_ctx, RAMSize);
+			of_ci_set_claim_arena(g_s2b_ofci_ctx, 0x01000000u, RAMSize);
+			fprintf(stderr, "[S2B-OFCI] env fidelity: /memory reg size=0x%x, "
+			        "claim arena [0x01000000,0x%x)\n", RAMSize, RAMSize);
 			int n_backends = tramp_ofci_install_backends(g_s2b_ofci_ctx);
 			tramp_ofci_set_stop_fn(s2b_shim_collide_abort);
 			ss_ofci_shim_bind(g_s2b_ofci_ctx, of_ci_callback);

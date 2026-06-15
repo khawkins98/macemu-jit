@@ -26,6 +26,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* ---------------------------------------------------------------------- */
 /* Device-tree data model                                                 */
@@ -68,6 +69,16 @@ struct of_ci_context {
 	int n_ihandles;
 
 	unsigned unresolved;
+
+	/* S2b/OF-CI early-environment fidelity (SS_M18 trampoline path only):
+	 * a per-context /memory reg blob (so the size cell can be set to the real
+	 * guest RAMSize without mutating shared static data — the unit test default
+	 * stays size=0), and a bump-allocator arena backing the `claim` service. */
+	uint8_t reg_memory[8];          /* BE (base, size); pointed-to by /memory reg */
+	uint32_t mem_size;              /* RAMSize cell mirrored into reg_memory[4..7] */
+	uint32_t claim_next;            /* next free guest-physical addr (bump ptr) */
+	uint32_t claim_base;            /* arena floor (for reset/diagnostics) */
+	uint32_t claim_limit;           /* arena ceiling (0 == unbounded) */
 };
 
 /* ---- node / property construction ------------------------------------ */
@@ -169,6 +180,17 @@ of_ci_context *of_ci_create_core99(void)
 	of_ci_context *ctx = (of_ci_context *)calloc(1, sizeof(*ctx));
 	ctx->next_phandle = 1; /* 0 reserved as OF_INVALID_PHANDLE */
 
+	/* Per-context /memory reg blob: starts at the static template (base
+	 * 0x10000000, size 0) so the standalone unit test sees the historical
+	 * default; of_ci_set_memory_size() patches the size cell to the real
+	 * RAMSize on the gated trampoline launch path. */
+	memcpy(ctx->reg_memory, REG_MEMORY, 8);
+	/* claim bump-allocator arena: default floor 16 MiB into guest RAM (above the
+	 * loaded MacOS.elf image, which tops out ~0x211000), unbounded by default.
+	 * of_ci_set_claim_arena() retargets it from the real RAMSize on launch. */
+	ctx->claim_base = ctx->claim_next = 0x01000000u;
+	ctx->claim_limit = 0u;
+
 	struct of_node *root = node_new(ctx, "");
 	ctx->root = root;
 	node_add_str(root, "name", "device-tree");
@@ -217,7 +239,7 @@ of_ci_context *of_ci_create_core99(void)
 	struct of_node *memory = node_add_child(root, node_new(ctx, "memory@0"));
 	node_add_str(memory, "name", "memory");
 	node_add_str(memory, "device_type", "memory");
-	node_add_cells(memory, "reg", REG_MEMORY, 8);
+	node_add_cells(memory, "reg", ctx->reg_memory, 8);
 
 	struct of_node *aaplrom = node_add_child(root, node_new(ctx, "AAPL,ROM"));
 	node_add_str(aaplrom, "name", "AAPL,ROM");
@@ -299,6 +321,30 @@ void of_ci_destroy(of_ci_context *ctx)
 	if (!ctx) return;
 	node_free(ctx->root);
 	free(ctx);
+}
+
+/* Set the /memory reg SIZE cell (and the mirrored mem_size) to the real guest
+ * RAMSize. The base cell (0x10000000 template hi byte) is left as the DT shape;
+ * only the low 32-bit size word is written, big-endian. */
+void of_ci_set_memory_size(of_ci_context *ctx, uint32_t ram_size)
+{
+	if (!ctx) return;
+	ctx->mem_size = ram_size;
+	ctx->reg_memory[4] = (uint8_t)(ram_size >> 24);
+	ctx->reg_memory[5] = (uint8_t)(ram_size >> 16);
+	ctx->reg_memory[6] = (uint8_t)(ram_size >> 8);
+	ctx->reg_memory[7] = (uint8_t)(ram_size);
+}
+
+/* Retarget the claim bump-allocator arena. base/limit are guest-physical;
+ * limit==0 means unbounded. Honors SS_M18_CLAIM_BASE (hex) as an override. */
+void of_ci_set_claim_arena(of_ci_context *ctx, uint32_t base, uint32_t limit)
+{
+	if (!ctx) return;
+	const char *env = getenv("SS_M18_CLAIM_BASE");
+	if (env && *env) base = (uint32_t)strtoul(env, NULL, 0);
+	ctx->claim_base = ctx->claim_next = base;
+	ctx->claim_limit = limit;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -487,7 +533,7 @@ static int do_nextprop(of_ci_context *ctx, of_phandle ph,
 	return 1;
 }
 
-int of_ci_callback(of_ci_context *ctx, of_cell *array)
+static int of_ci_dispatch(of_ci_context *ctx, of_cell *array)
 {
 	if (!ctx || !array) return OF_CI_FAIL;
 
@@ -634,13 +680,78 @@ int of_ci_callback(of_ci_context *ctx, of_cell *array)
 		 * producer consumes the canon OUTPUT BUFFER or a /aliases getprop; if so,
 		 * canon must write a real canonical path and /aliases must be populated. */
 		if (n_rets >= 1) rets[0] = 0;
+	} else if (strcmp(service, "claim") == 0) {
+		/* IEEE-1275 claim(virt, size, align) -> allocated base.
+		 *  - align == 0: allocate at the exact `virt` (caller-chosen address);
+		 *    honor it verbatim (this is how the OF caller pins a fixed region).
+		 *  - align != 0: ignore `virt`, hand out `size` bytes from the bump arena
+		 *    aligned up to max(align, page). Page-round the advance so successive
+		 *    claims never overlap.
+		 * This replaces the S2a stub return of 0, which the Trampoline consumed as
+		 * "allocated at address 0" and then relocated/jumped into the zero gap. */
+		uint32_t virt  = (uint32_t)args[0];
+		uint32_t size  = (uint32_t)args[1];
+		uint32_t align = (uint32_t)args[2];
+		uint32_t result;
+		if (align == 0) {
+			result = virt;                       /* fixed-address claim */
+		} else {
+			uint32_t a = (align < 0x1000u) ? 0x1000u : align;
+			uint32_t base = (ctx->claim_next + (a - 1)) & ~(a - 1);
+			uint32_t adv  = (size + 0xfffu) & ~0xfffu;
+			result = base;
+			ctx->claim_next = base + adv;
+		}
+		if (n_rets >= 1) rets[0] = (of_cell)result;
 	} else {
-		/* close, seek, exit, read, write, test, quiesce, claim:
+		/* close, seek, exit, read, write, test, quiesce:
 		 * benign accepted handlers (seam exists; real semantics out of S2a
 		 * scope). They RESOLVE, so the gate stays satisfied. */
 		if (n_rets >= 1) rets[0] = 0;
 	}
 	return OF_CI_OK;
+}
+
+/* Public entry: dispatch + an env-gated per-call trace (SS_M18_OFCI_TRACE).
+ * The trace prints the resolved service, its raw input cells, and the first
+ * return cell — the diagnostic ladder for the early CHRP boot-setup sequence
+ * (finddevice/getprop/claim) before the /mmu phase. Default OFF = silent. */
+int of_ci_callback(of_ci_context *ctx, of_cell *array)
+{
+	static int trace = -1;
+	if (trace < 0) {
+		const char *e = getenv("SS_M18_OFCI_TRACE");
+		trace = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+	}
+	if (!trace || !ctx || !array)
+		return of_ci_dispatch(ctx, array);
+
+	const char *service = cell_str(array[0]);
+	int n_args = (int)array[1];
+	int n_rets = (int)array[2];
+	of_cell *args = &array[3];
+	of_cell *rets = &array[3 + n_args];
+
+	int rc = of_ci_dispatch(ctx, array);
+
+	char abuf[160]; size_t off = 0; abuf[0] = '\0';
+	for (int i = 0; i < n_args && i < 6; i++) {
+		int w = snprintf(abuf + off, sizeof(abuf) - off,
+		                 "%s0x%llx", i ? "," : "",
+		                 (unsigned long long)args[i]);
+		if (w < 0 || (size_t)w >= sizeof(abuf) - off) break;
+		off += (size_t)w;
+	}
+	const char *detail = "";
+	char dbuf[80];
+	if (service && strcmp(service, "call-method") == 0 && n_args >= 1) {
+		snprintf(dbuf, sizeof(dbuf), " method=%s", cell_str(args[0]) ? cell_str(args[0]) : "?");
+		detail = dbuf;
+	}
+	fprintf(stderr, "[OFCI-TRACE] service=%s%s nargs=%d args=[%s] -> ret=0x%llx (rc=%d)\n",
+	        service ? service : "(null)", detail, n_args, abuf,
+	        (unsigned long long)(n_rets >= 1 ? rets[0] : 0), rc);
+	return rc;
 }
 
 unsigned of_ci_unresolved_count(const of_ci_context *ctx)

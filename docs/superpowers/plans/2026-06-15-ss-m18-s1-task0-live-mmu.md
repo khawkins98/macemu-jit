@@ -618,3 +618,14 @@ The NK runs but its launch stub mis-hands-off in PHYSICAL space — S1's live `/
   pin whether to (i) jump the Trampoline/launch directly to `0xF10000` (ConfigInfo-relative entry), or (ii)
   supply the correct boot-args/config block so the stub's `[r21+0x18]` = `0xF10000`. Then measure: does the
   real NK body run + start programming SR/BAT (= the genuine S1 re-activation point)?
+
+
+### ★ S1 GO GRANTED (2026-06-15, user) — standing authorization
+Ken: "i'm happy for you to start S1 whenever you feel is right." The earlier guardrail #4 ("S1 live MMU
+OUT OF SCOPE; defers to S3 with explicit GO") is now SUPERSEDED — S1 may start at the coordinator's
+discretion. **Judgment on timing:** launch S1 at the GENUINE re-activation point — when the real NK BODY
+(`0xF10000`) runs + programs its own SR/BAT/SDR1 and faults because those writes are JIT no-ops. The
+current wall (the NK launch-stub handoff to `0xF030B8` vs the body `0xF10000`) is pre-S1 (physical/identity
+space) — fix that FIRST. Ground the S1 design (window vs softmmu) in the NK's OBSERVED SR/BAT/SDR1
+programming (concrete) rather than the abstract Task-0 fork. When triggered: run the full S1 milestone
+(red-team this Task-0's voting list → window/softmmu impl) autonomously.

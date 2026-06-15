@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_nk_supervisor_yield test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_trampoline_ofci_wiring test_shm_arena_spike test_shm_arena_multientry
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_nk_supervisor_yield test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_trampoline_ofci_wiring test_shm_arena_spike test_shm_arena_multientry test_nk_mmu_trace test_dolphin_bat_arena
 
 test: $(TESTS)
 	./test_machine_profile
@@ -30,6 +30,8 @@ test: $(TESTS)
 	./test_trampoline_ofci_wiring
 	./test_shm_arena_spike
 	./test_shm_arena_multientry
+	./test_nk_mmu_trace
+	./test_dolphin_bat_arena
 
 test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/machine_profile.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_machine_profile.cpp machine_profile.cpp
@@ -164,3 +166,14 @@ clean:
 	rm -rf $(addsuffix .dSYM,$(TESTS))
 
 .PHONY: test clean
+
+test_nk_mmu_trace: test_nk_mmu_trace.cpp nk_mmu_trace.cpp ../include/nk_mmu_trace.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_nk_mmu_trace.cpp nk_mmu_trace.cpp
+
+# SS_M18 S1 (standalone): Dolphin Dynamic-BAT shadow-arena. Links the BAT
+# shadow-arena (mach_vm_map FIXED|OVERWRITE re-alias, proven by the SHM spikes) +
+# paged_mmu.cpp as the EA->PA agreement oracle. No kpx_cpu / emulator link; inert
+# in the binary until S1 integration. Dolphin GPLv2 SHA 144d19433aa734c1.
+test_dolphin_bat_arena: test_dolphin_bat_arena.cpp dolphin_bat_arena.cpp paged_mmu.cpp \
+                        ../include/dolphin_bat_arena.h ../include/paged_mmu.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_dolphin_bat_arena.cpp dolphin_bat_arena.cpp paged_mmu.cpp

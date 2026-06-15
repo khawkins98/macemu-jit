@@ -320,3 +320,17 @@ GATED-MERGE-RESIDUE + disambiguated vs Task-0-rev-2:line-113's BLOCKING recon re
 added to G(T1)/G(T2) hot-path gates). KEEP-AS-IS votes (T5-authorize/serialization/ordering/PEM-boundary/
 oracle/sc/atomicity-placement) carried unchanged. Minors m1-m5 (SHA re-pin, serialize T2/T3 reviews, split
 T4 commits) folded into the task discipline.
+
+
+## ★ CD-1 GATE (2026-06-15, from FINDINGS-s3-nk-image-contract) — BLOCKS S3 integration trusting the EXT-shim
+The S3 NK-image static RE found the install seam (`0x50311390`) caches the vector-table base in **SPRG3** and
+writes slots +0x37c/+0x39c = `relocbase+0x4b80/0x4bc0` (NOT the primary handlers); **NO direct store into
++0x374** (the slot the landed `exc_inject` EXT-shim reads) was found. So the shim's `KDP+0x374` assumption is
+STATICALLY UNCONFIRMED and possibly wrong (the primary EXT/SC/DEC/PROGRAM vectors may live in the separate
+low-mem ExceptionTable parcel `@0x50300000`). **BINDING GATE: before any S3 integration LEANS ON the
+EXT-injection shim, RUN THE PROBE** — now that the NK executes, dump `[SPRG3+0x14]` (= table+0x374)
+post-install and ASSERT it contains `0x50314880`. If it holds `0x50314b80`/garbage → CD-1 falsified → re-point
+the shim at the low-mem ExceptionTable trampoline (a load-bearing change). This is the serial S1↔S3
+integration thread's first evidence-grounded step. **Also CD-3:** the NK EXT handler READS its interrupt-source
+block (`KDP−0x338/+0x20`), not a pending bit — the shim must POPULATE it (the M14/S4 Cuda IFR/IER seam), or
+the NK services nothing. Both are owed to S3-impl's own boot, do NOT let a parallel agent close them.

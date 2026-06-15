@@ -114,6 +114,18 @@ extern void VIABindScheduler(VIA6522 *v, EventScheduler *sched,
 // stored sr/orb echo. The ORB write-value trace (orb_wtrace) runs in BOTH modes.
 extern void VIABindCuda(VIA6522 *v, CudaDevice *c);
 
+// S4 (Operation NewSheep): set IFR bits + recompute the IRQ summary output from
+// OUTSIDE the VIARead/VIAWrite register path.  This is the delivery surface the
+// timer-delayed Cuda SR int uses (CudaBindTimerDelivery's latch callback) — it
+// reproduces DingusPPC ViaCuda::assert_sr_int + update_irq (viacuda.cpp
+// @ b2660e29201730efc2179a43ec6a0a5fb22ad120; GPLv3, cite, never PR upstream).
+// `bits` are masked to 0x7F; the IFR&IER gate in via_update_irq still decides
+// whether the CPU IRQ asserts (so an SR int set while IER.SR is disabled stays
+// latched until the guest enables it — the M14 ordering the lazy path could not
+// honor).  PROSPECTIVE — needs validation against a live S4 boot.  Prod calls
+// this under the VIA region lock (the Cuda scheduling adapter wraps locked_call).
+extern void VIALatchIFRBits(VIA6522 *v, uint8_t bits);
+
 // Wave-2 W2-3: bind the summary-interrupt output seam AFTER VIAReset (reset
 // clears the binding). fn fires on summary-level transitions (see the struct
 // comment for the predicate, recompute points, lock order, and the lazy-

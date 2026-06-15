@@ -9,6 +9,31 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-15 (Operation NewSheep — S1 paged-MMU mechanism, standalone)
+
+- **[SheepShaver]** **Dolphin Dynamic-BAT shadow-arena ported as a standalone, unit-tested
+  module** (`src/machine/dolphin_bat_arena.{cpp,h}` + `test_dolphin_bat_arena.cpp`; machine
+  Makefile target). Given the 4 DBAT descriptor pairs it maintains a host shadow mapping
+  (named SHM store + two aliased VA views + `mach_vm_map(FIXED|OVERWRITE)` sub-range re-alias —
+  the primitive PROVEN by `test_shm_arena_spike.cpp`/`test_shm_arena_multientry.cpp`) so a bare
+  guest access at `window+EA` lands on `phys+PA`, with no per-access translation (the JIT fast
+  path is untouched). Validated three ways: (1) pure BAT decode + the
+  `CanCreateHostMappingForGuestPages` 16 KB feasibility gate (incl. the COARSE 256 MB case +
+  an adversarial misaligned-PA slow-path row); (2) **agreement with `paged_mmu_translate()`** —
+  for every covered EA a sentinel stamped at the oracle PA is read back through the bare window
+  (coarse block, two-block RAM+ROM, context switch, identity-revert, out-of-arena slow path);
+  (3) a replay-fixture loader that consumes the real harvested NK MMU-trace
+  (`/tmp/nk-mmu-trace.log`) AND an `expect EA PA` differential format for the QEMU/NK oracle.
+  Reimplemented-to-spec from Dolphin (GPLv2, pinned SHA `144d19433aa734c19c34e5978a1b817d2aa12663`:
+  `HW/Memmap.cpp` `UpdateDBATMappings`/`CanCreateHostMappingForGuestPages`, `PowerPC/MMU.cpp`
+  `UpdateBATs`, `Common/MemArena.cpp`), cited at the porting site.
+  **NEEDS VALIDATION:** the live-NK mapping set is not yet observed (QEMU rig stalls
+  pre-NK-MMU-install); coverage adequacy on a real boot is OWED to live S1 integration (G1.e),
+  and the trace-replay `expect`-row oracle path is prospective until a trace with oracle PAs is
+  harvested. **Inert** — linked only into the machine unit-test harness, not the SheepShaver
+  binary; `make test-jit` and the paravirtual build are byte-identical (no kpx_cpu/JIT files
+  touched).
+
 ## 2026-06-14 (strategy pivot — Operation NewSheep)
 
 - **[docs]** **The M8→M17 "forge" arc is CLOSED (banked NO-GO).** M15 verified the FORGE verdict;

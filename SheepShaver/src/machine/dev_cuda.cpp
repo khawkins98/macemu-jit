@@ -30,6 +30,9 @@
 
 #define HSK  ((uint8_t)(CUDA_TACK | CUDA_TIP))   // host-driven handshake bits
 #define ACR_SR_OUT 0x10                          // ACR bit 4: shift OUT (host->Cuda)
+#define IFR_SR_BIT 0x04                          // VIA IFR bit 2 (shift-register int)
+
+static uint8_t take_pending(CudaDevice *c);      // fwd (defined below w/ CudaSettle)
 
 void CudaReset(CudaDevice *c, uint32_t (*now_mac)(void *), void *now_opaque)
 {
@@ -44,6 +47,45 @@ void CudaBindADB(CudaDevice *c, CudaADBHandler fn, void *opaque)
 {
 	c->adb_fn = fn;
 	c->adb_opaque = opaque;
+}
+
+void CudaBindTimerDelivery(CudaDevice *c, CudaScheduleFn schedule, void *sched_opaque,
+                           CudaLatchFn latch, void *via_opaque)
+{
+	c->sr_schedule = schedule;
+	c->sr_sched_opaque = sched_opaque;
+	c->sr_latch = latch;
+	c->sr_via_opaque = via_opaque;
+}
+
+// S4 timer-delivery callback (DingusPPC schedule_sr_int fire site, viacuda.cpp
+// @ b2660e29201730efc2179a43ec6a0a5fb22ad120 — PROSPECTIVE, needs live-S4 validation).
+// Runs when the one-shot armed by arm_sr_int() expires (prod: under the VIA region
+// lock via the scheduling adapter).  Consume-once via take_pending: if the raise
+// hasn't already been delivered/cleared, set IFR.SR on the VIA — independent of any
+// guest IFR read.  This is the M14 wall fix: the NK waits for an interrupt-driven SR
+// int, never polling IFR, so lazy CudaSettle never fired (M14-FINDINGS §3/§4b).
+static void cuda_sr_timer_fire(void *opaque)
+{
+	CudaDevice *c = (CudaDevice *)opaque;
+	if (take_pending(c) & CUDA_SEAM_RAISE_SR_INT) {
+		c->sr_timer_fires++;
+		if (c->sr_latch)
+			c->sr_latch(c->sr_via_opaque, IFR_SR_BIT);
+	}
+}
+
+// Latch the SR-int-pending raise AND (if the timer seam is bound) arm a one-shot
+// to deliver IFR.SR ~CUDA_SR_DELAY_NS later (DingusPPC assert_sr_int + schedule_sr_int).
+// Unbound (default/lazy-only): only the latch is set — delivery stays deferred to
+// CudaSettle on the guest's IFR read (byte-identical to the pre-S4 model).
+static inline void arm_sr_int(CudaDevice *c)
+{
+	c->sr_int_pending = 1;
+	if (c->sr_schedule) {
+		c->sr_timer_arms++;
+		c->sr_schedule(c->sr_sched_opaque, CUDA_SR_DELAY_NS, cuda_sr_timer_fire, c);
+	}
 }
 
 // Warning latch (loud-stub rule; emission on safe threads only).  Latch-if-
@@ -473,7 +515,7 @@ uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr)
 				} else {
 					c->in_overflows++;
 				}
-				c->sr_int_pending = 1;
+				arm_sr_int(c);
 			} else if (c->out_pos < c->out_size) {
 				// Cuda -> host: load the next response byte into SR;
 				// TREQ negates as the LAST byte loads (QEMU lines 138-147).
@@ -481,7 +523,7 @@ uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr)
 				c->bytes_out++;
 				if (c->out_pos >= c->out_size)
 					c->treq_asserted = 0;
-				c->sr_int_pending = 1;
+				arm_sr_int(c);
 			}
 		}
 	} else if (last & CUDA_TIP) {
@@ -497,7 +539,7 @@ uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr)
 				c->treq_asserted = 1;
 				c->syncs++;
 			}
-			c->sr_int_pending = 1;
+			arm_sr_int(c);
 		} else if (c->out_size > 0 && c->out_pos == 0) {
 			// idle write with an untouched queued response: keep signalling
 			// (QEMU "signal if there is data to read")
@@ -521,7 +563,7 @@ uint8_t CudaORBWritten(CudaDevice *c, uint8_t orb, uint8_t acr)
 			// Untouched response still queued: host must come back for it.
 			c->treq_asserted = 1;
 		}
-		c->sr_int_pending = 1;     // QEMU: "always an IRQ at the end of transfer"
+		arm_sr_int(c);             // QEMU: "always an IRQ at the end of transfer"
 	}
 
 	c->last_b = b;

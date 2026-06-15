@@ -92,6 +92,13 @@ void VIABindCuda(VIA6522 *v, CudaDevice *c)
 // re-poll here — the mutating entry point that just ran already settled any
 // relevant timer; re-polling would recurse into timer_fire). Fires the seam
 // on transitions only, under the caller's lock. No malloc/stdio (§2g).
+//
+// The (ifr_latched & ier & 0x7F) gate is exactly DingusPPC ViaCuda::update_irq
+// (devices/common/viacuda.cpp @ b2660e29201730efc2179a43ec6a0a5fb22ad120):
+//   active_ints = _via_ifr & _via_ier & 0x7F;  ack_int(irq_id, active_ints ? 1 : 0);
+// bit 7 = the composite IRQ to the CPU.  The S4 fix is NOT this gate (already
+// correct) but the DELIVERY TIMING — see VIALatchIFRBits + dev_cuda's
+// CudaBindTimerDelivery (M14-FINDINGS §3/§4b).
 static void via_update_irq(VIA6522 *v)
 {
 	uint8_t out = ((v->ifr_latched & v->ier & 0x7F) != 0) ? 1 : 0;
@@ -102,6 +109,17 @@ static void via_update_irq(VIA6522 *v)
 	else     v->irq_lowers++;
 	if (v->irq_fn)
 		v->irq_fn(v->irq_opaque, out != 0);
+}
+
+// S4: out-of-band IFR latch (contract in header). The delivery surface for the
+// timer-delayed Cuda SR int — it sets the IFR bit and recomputes the IRQ summary
+// WITHOUT a register read, so the int reaches the CPU even though the NewWorld NK
+// never polls IFR (M14 wall). DingusPPC assert_sr_int + update_irq, viacuda.cpp
+// @ b2660e29201730efc2179a43ec6a0a5fb22ad120 (PROSPECTIVE — needs live-S4 validation).
+void VIALatchIFRBits(VIA6522 *v, uint8_t bits)
+{
+	v->ifr_latched |= (bits & 0x7F);
+	via_update_irq(v);
 }
 
 void VIABindIRQOutput(VIA6522 *v, void (*fn)(void *opaque, bool asserted), void *opaque)

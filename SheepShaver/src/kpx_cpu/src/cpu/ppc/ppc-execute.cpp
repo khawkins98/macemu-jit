@@ -43,6 +43,7 @@
 #include "machine_profile.h"
 #include "virt_clock.h"
 #include "exc_core.h"
+#include "nk_mmu_trace.h"
 #endif
 
 #if ENABLE_MON
@@ -1216,6 +1217,8 @@ void powerpc_cpu::execute_fp_round(uint32 opcode)
 void powerpc_cpu::execute_syscall(uint32 opcode)
 {
 #ifdef SHEEPSHAVER
+	if (nk_mmu_trace_enabled())
+		nk_mmu_trace_record(NK_MMU_SC, pc(), opcode, 0, gpr(0));
 	if (MachineProfileIsNewWorld()) {
 		/* M3a Task 3: sc as a real PPC exception on the newworld profile.
 		 * CFLOW_TRAP ensures this handler owns the PC absolutely — no increment_pc
@@ -1526,14 +1529,22 @@ void powerpc_cpu::execute_mtmsr(uint32 opcode)
 void powerpc_cpu::execute_mtsr(uint32 opcode)
 {
 	// Wave 0: store to segment register SR[n] (previously silently dropped).
-	regs().sr[SR_field::extract(opcode)] = gpr(rS_field::extract(opcode));
+	uint32 mtsr_idx = SR_field::extract(opcode);
+	uint32 mtsr_val = gpr(rS_field::extract(opcode));
+	regs().sr[mtsr_idx] = mtsr_val;
+	if (nk_mmu_trace_enabled())
+		nk_mmu_trace_record(NK_MMU_MTSR, pc(), opcode, mtsr_idx, mtsr_val);
 	increment_pc(4);
 }
 
 void powerpc_cpu::execute_mtsrin(uint32 opcode)
 {
 	// Wave 0: store to SR indexed by high 4 bits of rB (previously silently dropped).
-	regs().sr[gpr(rB_field::extract(opcode)) >> 28] = gpr(rS_field::extract(opcode));
+	uint32 mtsrin_idx = gpr(rB_field::extract(opcode)) >> 28;
+	uint32 mtsrin_val = gpr(rS_field::extract(opcode));
+	regs().sr[mtsrin_idx] = mtsrin_val;
+	if (nk_mmu_trace_enabled())
+		nk_mmu_trace_record(NK_MMU_MTSRIN, pc(), opcode, mtsrin_idx, mtsrin_val);
 	increment_pc(4);
 }
 
@@ -1654,6 +1665,8 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 #ifdef SHEEPSHAVER
 	case powerpc_registers::SPR_SDR1:
 		regs().sdr1 = s;
+		if (nk_mmu_trace_enabled())
+			nk_mmu_trace_record(NK_MMU_MTSDR1, pc(), opcode, 0, s);
 		break;
 	case powerpc_registers::SPR_SRR0:
 		regs().srr0 = s;
@@ -1673,6 +1686,11 @@ void powerpc_cpu::execute_mtspr(uint32 opcode)
 #else
 	case powerpc_registers::SPR_IBAT0U ... powerpc_registers::SPR_DBAT3L:
 		regs().bat[spr - powerpc_registers::SPR_IBAT0U] = s;
+		if (nk_mmu_trace_enabled()) {
+			int bat_kind; uint32 bat_idx;
+			if (nk_mmu_classify_bat_spr(spr, &bat_kind, &bat_idx))
+				nk_mmu_trace_record(bat_kind, pc(), opcode, bat_idx, s);
+		}
 		break;
 	case 560 ... 575:	/* High BATs (SPR 0x230..0x23f): IBAT4-7U/L, DBAT4-7U/L.
 						 * Dead-code insurance (plan AD-2): feature-gated off on every

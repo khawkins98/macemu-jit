@@ -212,3 +212,14 @@ a pinned interface, or (c) an oracle/fixture — never "go implement S3"; test-j
   so their COMPOSITION is the milestone — the parallel agents produce validated components + oracles; the
   actual S1↔S3 integration is one careful disasm/watchpoint-grounded thread (UNBLOCK-vs-REPRODUCE settled by
   evidence, not cost). Do NOT let two agents both declare S1/S3 "done" against separate oracles.
+
+### Fan-out coordination notes (2026-06-15)
+- **B3 (S4 Cuda) DIED mid-task (API socket).** Its edits are isolated to `dev_cuda.cpp`/`dev_via6522.cpp`
+  (+headers) — its own domain, no overlap with A (ppc-execute.cpp recorder + nk_mmu_trace.* + staging) or B1
+  (dolphin_bat_arena.*). The tree still builds (B3's `test_dev_cuda` built). **Recovery:** when A+B1 land,
+  commit each by EXPLICIT paths, REVERT B3's dead `dev_cuda/via` edits, then REDISPATCH B3 serially (so it
+  edits the shared `machine/Makefile`/`Makefile.in` when nothing else is). **Lesson (file-ownership):** 3
+  implementers sharing the Makefiles was under-managed — serialize shared-file (Makefile/ppc-execute) edits.
+- **Staging fork (Track A): lean FAITHFUL** — stage the COMPRESSED prcl container + let the real Trampoline
+  decompressor build a correct KernelCode image (the "let real code do it" principle), NOT a decompressed-
+  contiguous patch (a stopgap; label it if taken). Steered A accordingly.

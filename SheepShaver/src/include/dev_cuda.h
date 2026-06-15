@@ -146,6 +146,41 @@ enum {
 	CUDA_SEAM_RAISE_SR_INT = 2,   // set IFR bit 2 (shift complete / attention)
 };
 
+// --- S4 timer-delayed SR-int delivery seam (Operation NewSheep) -----------------
+// Behavioral port of DingusPPC ViaCuda's interrupt model — devices/common/viacuda.cpp
+// @ b2660e29201730efc2179a43ec6a0a5fb22ad120 (GPLv3; cite, never PR upstream):
+//   assert_sr_int()  -> sets VIA IFR.SR
+//   schedule_sr_int(timeout_ns) -> posts a one-shot that LATER raises the SR int
+//   update_irq()     -> active = _via_ifr & _via_ier & 0x7F (the IFR&IER gate our
+//                       via_update_irq already implements)
+// The lazy-only CudaSettle model (delivery on the guest's IFR read) was M14's wall:
+// the NewWorld NK enables IER.SR and waits for an INTERRUPT-driven SR int — it does
+// NOT poll IFR — so the latched sr_int_pending was never converted to IFR.SR (65,539
+// IER reads vs 2 IFR reads; M14-FINDINGS §3/§4b). This seam reproduces DingusPPC's
+// schedule_sr_int: each Cuda edge that latches sr_int_pending arms a one-shot
+// CUDA_SR_DELAY_NS later; the callback delivers IFR.SR via the VIA latch callback,
+// independent of any guest IFR read. The 20µs delay matches QEMU's cuda_delay_set_sr_int
+// (sr_delay_ns) and preserves CV-10 (the int lands AFTER the guest's follow-up SR read).
+//
+// PROSPECTIVE — needs validation against a live S4 boot. Offline unit tests prove the
+// VIA-layer mechanism (IFR.SR set without an IFR read, IER masking honored, the
+// assert/clear edges). M14 Smoke H showed the live VIA→PIC edge fires; the remaining
+// NK→DR forwarding gap is OUT OF SCOPE here (NK/supervisor layer, not this device).
+//
+// Gated/opt-in: default UNBOUND => lazy-only CudaSettle path, byte-identical. Prod
+// binds this only under the NewWorld machine profile. dev_cuda stays lock-free (§2g):
+// the scheduling adapter (prod: main_unix) is responsible for running the delivery
+// callback under the VIA bus region lock, exactly like the VIA's own timer_arm.
+#define CUDA_SR_DELAY_NS 20000u   // QEMU cuda.h sr_delay_ns; DingusPPC schedule_sr_int
+
+// Schedule a one-shot `delay_ns` in the future that invokes cb(cb_opaque). Prod wraps
+// EventScheduler::add_oneshot_timer (+ locked_call); tests inject a fake scheduler.
+typedef void (*CudaScheduleFn)(void *sched_opaque, uint64_t delay_ns,
+                               void (*cb)(void *), void *cb_opaque);
+// Set the given IFR bits on the bound VIA and recompute its IRQ summary output.
+// Prod binds VIALatchIFRBits; runs under the VIA region lock (via the adapter).
+typedef void (*CudaLatchFn)(void *via_opaque, uint8_t ifr_bits);
+
 // ADB handler (Task 2's adb_stub binds here in Task 3; tests bind a mock).
 // cmd byte = [addr:4][cmd:2][reg:2]; listen_data/listen_len = Listen payload.
 // Fills reply[] with DATA bytes only (no Cuda framing).  Returns:
@@ -217,11 +252,26 @@ struct CudaDevice {
 	// addresses were the probe-cycle loop-ender (the "boot never reads them"
 	// assumption falsified).  Zero-init; distinct from the PRAM array.
 	uint8_t  mcu_ram[256];
+	// --- S4 timer-delayed SR-int delivery (APPENDED LAST; gated, default unbound
+	// = lazy-only byte-identical).  See the seam contract above + CudaBindTimerDelivery. ---
+	CudaScheduleFn sr_schedule;     // NULL => lazy-only (CudaSettle on IFR read)
+	void          *sr_sched_opaque;
+	CudaLatchFn    sr_latch;        // sets IFR bits + recomputes the VIA IRQ summary
+	void          *sr_via_opaque;
+	uint64_t       sr_timer_arms;   // telemetry: one-shots scheduled
+	uint64_t       sr_timer_fires;  // telemetry: timer deliveries that raised IFR.SR
 };
 
 extern void CudaReset(CudaDevice *c,
                       uint32_t (*now_mac)(void *opaque), void *now_opaque);
 extern void CudaBindADB(CudaDevice *c, CudaADBHandler fn, void *opaque);
+
+// S4: bind the timer-delayed SR-int delivery seam (default unbound = lazy-only).
+// schedule/sched_opaque post one-shots; latch/via_opaque deliver IFR.SR on fire.
+// Pass NULLs (or never call) to keep the byte-identical lazy CudaSettle path.
+extern void CudaBindTimerDelivery(CudaDevice *c,
+                                  CudaScheduleFn schedule, void *sched_opaque,
+                                  CudaLatchFn latch, void *via_opaque);
 
 // --- VIA seam entry points (all run under the VIA's region lock) -------------
 

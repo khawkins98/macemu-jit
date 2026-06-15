@@ -361,13 +361,39 @@ int TrampolineStageParcels(void)
 	g_parcel_size = size;
 	if (src_owned) free(src_owned);
 
-	/* NanoKernelEntry the Trampoline will derive (KernelCodeOffset @ ConfigInfo+0x4C). */
-	uint32_t nk_entry = rom_virt + 0x310000u;
+	/* Derive the NanoKernel launch geometry from the STAGED ConfigInfo rather
+	 * than hardcoding it — the log must reflect what the Trampoline actually
+	 * computes, not a constant (2026-06-15 watchpoint-grounded offset model):
+	 *
+	 *   ConfigInfo lives at image+0x30D000.
+	 *   KernelCodeBase   = ConfigInfo[+0x38]   (image-relative, =0x300000 on 9.0.1)
+	 *   KernelCodeOffset = ConfigInfo[+0x4C]   (=0x3000 on 9.0.1)
+	 *
+	 *   LAUNCH STUB  = rom_virt + KernelCodeBase + KernelCodeOffset   (=0xF03000)
+	 *                  A legit BAT-clearing launch shim the NK package intends;
+	 *                  the Trampoline jumps HERE first. It reads the continuation
+	 *                  from its boot-args block ([r21+0x18]) and blr's to it.
+	 *   NK BODY entry = rom_virt + ConfigInfoOff(0x30D000) + KernelCodeOffset (=0xF10000)
+	 *                  This is the CONTINUATION the stub jumps to. Watchpoint-proven:
+	 *                  the Trampoline writes exactly this into boot_args[+0x18].
+	 *
+	 * Both anchors share KernelCodeOffset but DIFFER in base (KernelCodeBase
+	 * 0x300000 stub vs ConfigInfo 0x30D000 body) — the 0xD000 dual-anchor that
+	 * earlier passes mis-read as an "entry-offset confusion". */
+	auto cfg_be = [](uint32_t off) -> uint32_t {
+		return ((uint32_t)ROMBaseHost[off] << 24) | ((uint32_t)ROMBaseHost[off+1] << 16) |
+		       ((uint32_t)ROMBaseHost[off+2] << 8) | (uint32_t)ROMBaseHost[off+3];
+	};
+	uint32_t kcode_base = cfg_be(0x30D038);     /* ConfigInfo+0x38 */
+	uint32_t kcode_off  = cfg_be(0x30D04C);     /* ConfigInfo+0x4C */
+	uint32_t nk_stub    = rom_virt + kcode_base + kcode_off;
+	uint32_t nk_entry   = rom_virt + 0x30D000u + kcode_off;
 	fprintf(stderr, "[S2B-PARCEL] staged %u KB ROM image into guest [0x%08x,0x%08x) from %s; "
-	        "AAPL,toolbox-parcels=(0x%08x,0x%08x); NanoKernelEntry=0x%08x\n",
+	        "AAPL,toolbox-parcels=(0x%08x,0x%08x); KernelCodeBase=0x%x KernelCodeOffset=0x%x; "
+	        "NK launch-stub=0x%08x -> NK body(continuation)=0x%08x\n",
 	        size / 1024, rom_virt, rom_virt + size,
 	        (parcel_file && parcel_file[0]) ? parcel_file : "ROM aperture 0x50000000",
-	        rom_virt, size, nk_entry);
+	        rom_virt, size, kcode_base, kcode_off, nk_stub, nk_entry);
 	return 0;
 }
 

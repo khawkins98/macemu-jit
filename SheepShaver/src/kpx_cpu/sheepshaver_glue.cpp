@@ -3739,10 +3739,16 @@ void init_emul_ppc(void)
 			if (TrampolineStageParcels() == 0) {
 				of_ci_set_toolbox_parcels(g_s2b_ofci_ctx,
 				                          TrampolineRomVirt(), TrampolineParcelSize());
+				/* NanoKernelEntry = the CONTINUATION the launch stub jumps to =
+				 * rom_virt + ConfigInfo(0x30D000) + KernelCodeOffset(0x3000) =
+				 * rom_virt + 0x310000. Watchpoint-proven (2026-06-15): the Trampoline
+				 * writes exactly this into its boot_args[+0x18]; the launch STUB itself
+				 * sits one anchor earlier at rom_virt + KernelCodeBase(0x300000) +
+				 * KernelCodeOffset = rom_virt + 0x303000. [S2B-PARCEL] logs both. */
 				fprintf(stderr, "[S2B-OFCI] /rom/macos AAPL,toolbox-parcels=(0x%08x,0x%08x) "
-				        "published; NanoKernelEntry=0x%08x\n",
+				        "published; NK body(continuation)=0x%08x (launch-stub=0x%08x)\n",
 				        TrampolineRomVirt(), TrampolineParcelSize(),
-				        TrampolineRomVirt() + 0x310000u);
+				        TrampolineRomVirt() + 0x310000u, TrampolineRomVirt() + 0x303000u);
 			} else {
 				fprintf(stderr, "[S2B-OFCI] WARNING: parcel staging failed - the Trampoline "
 				        "will read a garbage NanoKernelEntry (iNK will stay 0)\n");

@@ -40,9 +40,14 @@
 >   down the real handoff. **▶▶ NEW WALL: fault at guest `pc=0x2031e4` (`lwz r30,0(r24)`, `r24=0xffffffff`
 >   from `[[r19]+0xa8]`) IMMEDIATELY AFTER the first non-identity `/mmu map` (virt `0x10000`→phys
 >   `0xf3040000` MacIO/MMIO, mode 0x2a).** The Trampoline maps the MMIO aperture, walks a struct, derefs a
->   `-1` sentinel. **NEXT RE: the `0x2031e4` struct base (`[r19]+0xa8`) + `bl 0x207fe8(arg=-1)` → is it a DT
->   node/property returning -1 (cheap OF fidelity) OR does the MMIO map need a LIVE host remap (the genuine
->   S1 `/mmu` escalation / S3 co-land)?** iNK still 0. Each wall = bounded RE + small gated fix + measured
+>   `-1` sentinel. **`0x2031e4` RE'd → Hypothesis A (NOT S1):** it's the NewWorld interrupt-controller/vector-table init
+>   (`0x202c58`); `G->[0xa8]` (vectormasktable ptr) is a FIXED `0x68080000`-class constant the Trampoline
+>   expects PRE-INITIALIZED before `main` (inherited IC ConfigInfo) — even a perfect S1 `/mmu` leaves it -1,
+>   so B is ruled out. **▶▶ NEW WALL (precedes NK + S1): reproduce the inherited primary interrupt-controller
+>   descriptor + its vector/mask/cascade/priority tables** in low memory. No speculative seed landed (would
+>   just move the fault to the empty table — fabrication). **NEXT RE: where the TOC-global `[r2-0x98]`
+>   (`0x11703c`) IC descriptor + its `0xa8` table are meant to be seeded.** iNK still 0; S1 live `/mmu` owed
+>   but downstream. Each wall = bounded RE + small gated fix + measured
 >   commit; trajectory unmistakable (real producer boots further each step). Process playbook:
 >   `docs/MULTI-AGENT-FEATURE-WORKFLOW.md`. Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl

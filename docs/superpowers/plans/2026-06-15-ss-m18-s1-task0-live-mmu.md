@@ -401,3 +401,30 @@ The SIGSEGV loop is `0x202698–0x202704`, a **range-coalesce / relocation-apply
   match what the CHRP range engine consumes (trace back from `0xbc(r1)`/`0xc8(r1)`/`0xcc(r1)` to the OF-CI
   getprop that fills them). Precedes the NK install. This is the next iterative bringup wall (Route A's
   "MONTHS" grind: each OF-CI/ABI input refined in turn until the Trampoline reaches `0x50310000`).
+
+### Wall RE (2026-06-15) — `0x2031e4` is interrupt-controller setup, NOT S1 /mmu (Hypothesis A)
+The fault at `pc=0x2031e4` is inside `0x202c58`, the NewWorld **interrupt-controller / interrupt-vector
+initializer** (proven by its format strings `"SCSIIntVect"`/`"SCCAIntVect"`/`"VIAIntVect"`/`"ADBIntVect"`/
+`"NMIIntVect"` + the sibling `"Can't add vectorlookuptable/vectormasktable/CascadeInfo/VectorPriorityTable
+memory relocation entry"`).
+- `r19 = [r2-0x98]` (TOC global, guest `0x11703c`) → `G = [r19]` = the **primary IC descriptor**.
+  `G->[0x18]` = device handle (non-null, passes the guard); `G->[0xa8]` = the **vectormasktable /
+  vector-lookup-table pointer**. The fault is `lwz r30,0(r24)` with `r24 = G->[0xa8] = 0xffffffff`.
+- `ciMapRange(size=0x30000, virt=0x10000)` (at `0x20e160`) IS the `virt 0x10000 → phys 0xf3040000` MacIO
+  map (mode 0x2a) in the log; `bl 0x207fe8(arg=-1)` is a device-register-configure helper (the `-1` is a
+  hardcoded polled/no-interrupt call-site flag, NOT an error return).
+- **Decisive: `G->[0xa8]` is a FIXED `0x68xx_xxxx` low-mem-mirror constant** set by the descriptor
+  constructor `0x20c094` (`stw 0x68080000 → [r31+0xa8]`) / `0x205b28` (`[r26+0xa8]=0x68fefcfc`) — completely
+  independent of the MMIO aperture's host backing. **Even a perfect S1 live `/mmu` leaves `G->[0xa8]==-1`.**
+  → Hypothesis B (live host remap) RULED OUT.
+- **Ordering smoking gun:** in `main`, the consumer `0x202c58` runs at `0x205750` but the descriptor
+  constructor `0x20c094` runs LATER at `0x205784` — so the primary IC descriptor at the TOC global is
+  expected **pre-initialized before `main`** (inherited from the preceding NewWorld boot environment's
+  ConfigInfo / vector tables). In our synthesized OF-CI environment it's uninitialized → `0xa8 == -1`.
+- **No fix landed (honest):** seeding `G->[0xa8]=0x68080000` only moves the fault to the empty
+  vector/mask table at that address — it needs the actual tables, not just the pointer (Stop-rule #2/#3).
+- **NEW WALL (precedes NK install + S1):** reproduce the inherited **primary interrupt-controller
+  descriptor + its vector/mask/cascade/priority tables** in low memory (the "*memory relocation entry*"
+  family) that the Trampoline expects pre-populated. **Next RE:** trace where the TOC global `[r2-0x98]`
+  (`0x11703c`) descriptor + its `0xa8` table are meant to be seeded (an earlier constructor/ConfigInfo the
+  boot environment provides). OF/device-environment fidelity, gated, NON-ACCEPTANCE.

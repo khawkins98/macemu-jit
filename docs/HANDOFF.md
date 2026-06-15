@@ -223,3 +223,20 @@ a pinned interface, or (c) an oracle/fixture — never "go implement S3"; test-j
 - **Staging fork (Track A): lean FAITHFUL** — stage the COMPRESSED prcl container + let the real Trampoline
   decompressor build a correct KernelCode image (the "let real code do it" principle), NOT a decompressed-
   contiguous patch (a stopgap; label it if taken). Steered A accordingly.
+
+### Fan-out RECOVERED (2026-06-15) — all 5 deliverables landed + verified
+B1 + B3 both FINISHED their work before dying on API errors (died during reporting). Recovery complete:
+- **A** NK-MMU-write recorder (nk_mmu_trace.*, gated SS_M18_NK_TRACE) — test-jit=100; partial oracle (Trampoline
+  BAT-clear only; full SR/BAT/SDR1 awaits the staging fix). Staging wall pinned watchpoint-grounded at
+  pc=0x0159c37c (runtime parcel decompress/relocate COMPUTES garbage from our decompressed input — value
+  0x3882009f exists in no static source). FAITHFUL fix (compressed container via SS_M18_PARCEL_FILE) owed +
+  needs RE of the toolbox-parcels decompressor + a compressed MacROM.lzss artifact (not in the dump yet).
+- **B1** Dolphin shadow-arena standalone module — 43 checks pass; INERT until S1 wiring; loads A's trace as a
+  state-only replay (PROSPECTIVE until the NK body programs SR/BAT → `expect EA PA` oracle rows).
+- **B2** S3 NK-image contract diff — REPLACE matches all sync seams; CD-1/CD-3 EXT-seam divergences (gated).
+- **B3** Cuda IFR/IER fix (dev_cuda/via) — 4794+83 unit checks pass; e2e PASS (no paravirtual regression).
+- **B4** S4 CGRP=coherence-group (disk krnl0 builder) + 9.2 boot target — genuine retail ISOs, R2 gap closed.
+- **★ COORDINATOR LESSON:** a `git commit -am` swept concurrent agents' tracked edits (A's ppc-execute +
+  B3's dev_cuda) into a docs commit, leaving HEAD referencing untracked files (broken from clean checkout).
+  **NEVER `git commit -a` with concurrent agents in flight — ALWAYS explicit-path staging.** Fixed by
+  committing the orphaned files + verifying build. Serialize shared-file (Makefile/ppc-execute) edits.

@@ -1,6 +1,15 @@
 # SS_M18 Stage 2b — Trampoline loader + OF-CI handoff + /mmu: DEEP Task-0 recon (BINDING; gates the S2b-impl milestone)
 
-> **Status:** rev-0 (2026-06-15) — DRAFT for red-team. This plan is recon + design ONLY. It pins
+> **Status:** rev-1 (2026-06-15) — red-team FOLDED (PROCESS + TECHNICAL + ADVERSARY, all GO-WITH-FIXES, no
+> BLOCK). Five binding amendments folded (see "Red-team record" + inline ★rev-1 marks): (1) **CRITICAL** —
+> `decode_parcels` does NOT surface `MacOS.elf` (it processes only `'rom '` parcels into a flat
+> `ROMBaseHost`); the asset-free path is NEW code with wrong-bytes risk → **default to staging the
+> md5-verified 9.0.1 `MacOS.elf` asset**; (2) Q-S2b.3 must pin the guest↔host CHRP-array marshalling + `ctx`
+> binding + guest-callable r5 stub (a hidden G2b.a prerequisite — `of_ci_callback` is 2-arg/host-cell, NOT
+> directly r5-wireable); (3) Q-S2b.4 caps at **RESIDUE-PASS pre-S1** (inherits S1 via the `/mmu` stub) +
+> bind the predicate to `of_ci_unresolved_count()==0` sampled at the handoff PC; (4) the post-handoff NK
+> fault is **EXPECTED pre-S1/S3** (severed EXT path + no live MMU) — not a Q-S2b.4 falsification; (5) re-point
+> the `ppc-cpu.cpp:1991` env-gate cite to the real glue precedents. This plan is recon + design ONLY. It pins
 > S2b's four blocking questions (loader source/placement, CHRP entry ABI + launch seam, OF-CI wiring,
 > NanoKernelEntry handoff) and SPECs the loader+handoff acceptance; it writes NO `SheepShaver/src/**`.
 > S2b implementation (loader-gating `rom_patches.cpp` `PatchROM_NW_trampoline`, the `sheepshaver_glue.cpp`
@@ -123,13 +132,18 @@ carries a `MacOS.elf` parcel compatible with the RE'd 9.0.1 one. Reaching the NK
 - **The committed OF-CI artifact is REAL + inert (verified):** `SheepShaver/src/machine/openfirmware_ci.cpp`
   + `SheepShaver/src/include/openfirmware_ci.h` exist; compiled by `machine/Makefile`'s `TESTS` target
   (`test_openfirmware_ci.cpp`), NOT linked into the SheepShaver binary. S2b links it behind the gate.
-- **The parcels-decode path already exists (verified):** `rom_patches.cpp` includes `rom_decode.hpp`
-  (`decode_lzss`/`decode_parcels`/`decode_rom_image`/`rom_detect_type`); `decode_parcels()` walks the CHRP
-  `'rom '` parcel chain. The active ROM is a `ROM_FMT_CHRP_PARCELS` container → **`MacOS.elf` is a parcel in
-  the ROM image already in `ROMBaseHost`** (Q-S2b.1's primary candidate source: extract via the existing
-  decode path, not a new asset). **Caveat:** the active project boot ROM is the 1.1 ROM
-  `e0fc03faa589ee066c411b4603e0ac89`; the RE binary is the staged 9.0.1 `66210b4f…` — confirm the loaded
-  ROM carries a compatible `MacOS.elf` (the staged dump's is 94144 B). This is a Q-S2b.1 tension.
+- **★rev-1 CORRECTED — the parcels-decode path does NOT surface `MacOS.elf`:** `rom_patches.cpp:46`
+  includes `rom_decode.hpp`; `decode_parcels()` (`rom_decode.hpp:86-100`) walks the `prcl` chain but
+  processes **only** parcels of type `FOURCC('r','o','m',' ')` (`:93`), LZSS-decompressing each into a
+  single flat `dest` (= `ROMBaseHost`, via `decode_rom_image:168`). **`MacOS.elf` is the top-level
+  Trampoline ELF — a SIBLING of the `Parcels` container in the tbxi dump, NOT a `'rom '` parcel — so the
+  existing path NEVER writes it into `ROMBaseHost` and returns no per-parcel extent to locate it.** The
+  "asset-free extract via decode_parcels" idea is therefore NEW extraction code, not an existing path.
+  **★rev-1 DEFAULT FLIP:** stage the md5-verified 9.0.1 `MacOS.elf` (94144 B, `66210b4f…` parcel set) as an
+  ASSET; ROM-extraction-in-tree is a later optimization gated on a parcel-identity check. **Wrong-bytes
+  risk reinforces this:** the active boot ROM is the 1.1 ROM `e0fc03faa589ee066c411b4603e0ac89`, NOT the
+  RE'd 9.0.1 — extracting from the loaded ROM could yield an un-characterized Trampoline. Q-S2b.1 weighs
+  asset-staging (default) vs in-tree extraction (needs new code + identity guard).
 - **The current forge (verified):** `rom_patches.cpp` `PatchROM_NW_trampoline` (~`:716`+, `SS_NW_TRAMPOLINE`)
   is the register-fixup trampoline + entry-vector synthesis at mirror `0x50429b40` (48-word budget). S2b
   makes it **loader-gated** — OFF (byte-identical to today) when `SS_M18_TRAMPOLINE` is OFF; bypassed when
@@ -162,7 +176,8 @@ carries a `MacOS.elf` parcel compatible with the RE'd 9.0.1 one. Reaching the NK
 |---|---|---|
 | ELF loader: place the 2 `PT_LOAD` at vaddr `0x100000`/`0x200000` from the parcel source under the gate | **Q-S2b.1** | `MacOS.elf` not extractable from the loaded ROM / not placeable in the aperture → "loader-source-UNKNOWN → LOADER-INFEASIBILITY" (with evidence) OR "needs-staged-asset → asset-manifest entry". RESIDUE-PASS → blocks impl. |
 | CHRP launch: set `r5`/`r2`/`r3`/`r4`, jump to `0x20f078` from the glue seam, gated `SS_M18_TRAMPOLINE` | **Q-S2b.2** | r3/r4 unresolved → "CHRP-ABI-residue → confirm at first gated boot; do NOT guess". Blocks the launch claim, not the loader placement. |
-| Wire `of_ci_callback` as the `r5` target; link `openfirmware_ci` into the binary behind the gate | **Q-S2b.3** | A call-method without an owner → "backend-ownership-UNKNOWN"; `/mmu` stub = NON-ACCEPTANCE (expected, → S1); disk → S4. Never claim backend completeness. |
+| **★rev-1 — Guest-callable r5 marshalling shim** (single-arg PPC entry @ guest addr; bind `ctx`; marshal guest-32-BE CHRP array ↔ host `of_cell[]` incl. pointer translation) | **Q-S2b.3** | Hidden G2b.a prerequisite — without it `of_ci_callback` (2-arg/host-cell) cannot be the r5 target. Shim-contract-UNKNOWN → blocks G2b.a. |
+| Wire `of_ci_callback` (via the shim above) as the `r5` target; link `openfirmware_ci` into the binary behind the gate | **Q-S2b.3** | A call-method without an owner → "backend-ownership-UNKNOWN"; `/mmu` stub = NON-ACCEPTANCE (expected, → S1); disk → S4. Never claim backend completeness. |
 | The handoff: Trampoline reaches `NanoKernelEntry` w/ 0 unresolved OF calls; hand to S3 | **Q-S2b.4** | Handoff address/mechanism unpinned → "handoff-UNKNOWN → boot-path-risk". RESIDUE-PASS → blocks impl. |
 | `/mmu` claim/translate/map real backend | **S1 (+ S3 co-land)** | Pre-S1 recording stub (build/unit ONLY, NON-ACCEPTANCE per Stop-rule #7). S2b PASS waits on the real `/mmu`. |
 | Loader-gate the existing `PatchROM_NW_trampoline` forge | **Q-S2b.1 + S3-impl coordination** | Collision with S3's forge-retire (`rom_patches.cpp:716`) → serialize (see File ownership). Forge stays byte-identical when the gate is OFF. |
@@ -187,8 +202,16 @@ the concrete seam in `sheepshaver_glue.cpp` where the gated jump to `0x20f078` i
 `SS_M18_TRAMPOLINE ∧ MachineProfileIsNewWorld()`. **Residue:** "r3/r4-UNKNOWN → first-gated-boot owner".
 
 **Q-S2b.3 — wire `of_ci_callback` + backend ownership.** WINDOW: `openfirmware_ci.h` callback signature +
-the program backend map. Pin: the committed `of_ci_callback` is the `r5` target (link `openfirmware_ci`
-into the binary behind the gate); the call-method backend ownership — `/mmu` claim/translate/map →
+the program backend map. **★rev-1 — `of_ci_callback` is NOT directly r5-wireable; pin the marshalling
+shim.** Signature (`openfirmware_ci.h:101`) is `int of_ci_callback(of_ci_context *ctx, of_cell *array)` —
+**two** args, `of_cell = uint64_t` HOST width, `array[0]` = a host `const char*` cast to a cell. The real
+CHRP `r5` callback is a **single-arg, guest-callable** entry receiving a **guest** pointer to a **big-endian
+32-bit** cell array (strings are guest addresses). So S2b must build a **guest-address trampoline** that
+(a) presents a single-arg PPC-callable entry at a guest address for `r5`, (b) binds `ctx`, and (c) marshals
+the guest 32-bit-BE CHRP array ↔ host `of_cell[]`, translating every guest string/buffer pointer host↔guest.
+**This marshalling shim is load-bearing S2b code and a hidden G2b.a prerequisite** (added to the blocking
+table). Pin its I/O contract here, NOT just "link + pass pointer." Then the call-method backend ownership —
+`/mmu` claim/translate/map →
 **S1/S3 (recording stub pre-S1, NON-ACCEPTANCE)**; disk `read-blocks`/`write-blocks`/`block-size` →
 **S4**; DT queries / display no-op / RTAS stub / `interpret` `key?`/`key`/`reset-all` **resolve now**. The
 S2a residues (interrupt-map tuple shape + §5-Q8 inputs) are answered by the DT returning the provisional;
@@ -197,11 +220,23 @@ acceptance.
 
 **Q-S2b.4 — the handoff.** WINDOW: the Trampoline's tail (post-`/mmu`-build → `NanoKernelEntry` jump) +
 the NK entry `0x50310000` + the S3 hand-off contract. Pin: what `NanoKernelEntry` is (the address +
-how the Trampoline computes it), the falsifiable predicate ("reaches `NanoKernelEntry` with 0 unresolved
-OF calls"), and the seam to S3 ("the NK install runs"). Name the probe-boot exposure: the QEMU rig stalls
-in OF→OS handoff PRE-NK-install (`FINDINGS-discriminator-a.md` Evidence B) — S2b is the in-tree path that
-gets past it; the positive corroboration is owed to S2b-impl's own gated boot. **Hard stop:** do NOT disasm
-the whole 105280 B parcel — bound to the handoff window. **Residue:** "handoff-UNKNOWN → boot-path-risk".
+how the Trampoline computes it), the falsifiable predicate, and the seam to S3 ("the NK install runs").
+**★rev-1 — bind the predicate to an INSTRUMENT, cap pre-S1, declare the expected fault:**
+- **Predicate instrument:** "reaches `NanoKernelEntry` with 0 unresolved OF calls" = `of_ci_unresolved_count()`
+  (`openfirmware_ci.h:105`) reads `0` **sampled at the handoff PC**, not asserted narratively.
+- **Q-S2b.4 caps at RESIDUE-PASS pre-S1.** It inherits S1's dependency through the `/mmu` stub: the
+  Trampoline does REAL `claim`/`translate`/`map` and dereferences the result; a recording stub returning
+  identity/plausible claims MAY let it progress to the jump OR it MAY fault on a `translate` before the
+  handoff (unknowable statically). GREEN-closure waits on the post-S1 real-`/mmu` boot.
+- **The post-handoff NK fault is EXPECTED pre-S1/S3, NOT a falsification.** Per `FINDINGS-s3-two-supervisor.md`
+  §BINDING-AMENDMENT, pure REPLACE severs the device-IRQ→NK-EXT path (the shim is S3-T2) and the NK is a
+  resident paged supervisor needing the live MMU SS lacks pre-S1. So "reached `NanoKernelEntry`" is
+  immediately followed by an NK fault by construction — record it as EXPECTED, do NOT read the first gated
+  boot's NK fault as a regression (the same honest-limit move S3 §5 made).
+Name the probe-boot exposure: the QEMU rig stalls in OF→OS handoff PRE-NK-install
+(`FINDINGS-discriminator-a.md` Evidence B) — S2b is the in-tree path that gets past it; positive
+corroboration is owed to S2b-impl's own gated boot. **Hard stop:** do NOT disasm the whole 105280 B
+parcel — bound to the handoff window. **Residue:** "handoff-UNKNOWN → boot-path-risk".
 
 ## Budgets (caps with WRITTEN residue fallbacks — unbounded disasm killed predecessor agents)
 
@@ -242,8 +277,10 @@ the whole 105280 B parcel — bound to the handoff window. **Residue:** "handoff
 
 ## Env-gate
 
-`SS_M18_TRAMPOLINE` (default **OFF**) ∧ `MachineProfileIsNewWorld()`; selected once at boot (reuse the
-`ppc-cpu.cpp:1991` profile-gating precedent; never a per-access branch). When OFF, the existing
+`SS_M18_TRAMPOLINE` (default **OFF**) ∧ `MachineProfileIsNewWorld()`; selected once at boot (reuse a
+profile-gating precedent — **★rev-1: the real precedents are `sheepshaver_glue.cpp:1082/1554/1984/2747`**
+and the S3-T1 `NkSupervisorEnabled()` boot-latch in `kpx_cpu/src/cpu/ppc/ppc-cpu.cpp`; never a per-access
+branch). When OFF, the existing
 `PatchROM_NW_trampoline` forge runs byte-identical to today. **Proof obligation:** "paravirtual provably
 unreachable" = `MachineProfileIsNewWorld()==false` audited at the gate site + G2b.e real-`make e2e`
 byte-identity. Acceptance: env-on-first (full battery with the gate ON, each G-gate recorded with numbers),
@@ -334,6 +371,32 @@ design ONLY — no `SheepShaver/src/**`. Route A + program shape + S2a/S2b split
 
 No residual self-review tension beyond these four.
 
-## Red-team record
+## Red-team record (rev-1 FOLD — 2026-06-15; PROCESS + TECHNICAL + ADVERSARY, all GO-WITH-FIXES, no BLOCK)
 
-_(empty — to be filled by the pre-implementation red-team round; fold binding amendments here and inline.)_
+The plan's scope discipline, budgets, stop-rules, and S2b-first serialization were endorsed unchanged
+(adversary explicitly rejected co-landing the forge disposition; S2b-first keeps each milestone
+independently revert-on-red). Five binding amendments FOLDED (inline ★rev-1 marks + the status header):
+
+1. **CRITICAL (TECHNICAL + ADVERSARY) — Q-S2b.1 source.** `decode_parcels()` (`rom_decode.hpp:86-100`)
+   processes ONLY `'rom '` parcels into a flat `ROMBaseHost`; `MacOS.elf` is the top-level Trampoline ELF
+   (sibling of the `Parcels` container), never surfaced by the existing path. The "asset-free extract" was
+   NEW code resting on a nonexistent path + carried 1.1-vs-9.0.1 wrong-bytes risk. **FOLDED:** default
+   flipped to staging the md5-verified 9.0.1 `MacOS.elf` asset; in-tree extraction demoted to a later
+   optimization behind a parcel-identity guard.
+2. **MAJOR (TECHNICAL + ADVERSARY) — Q-S2b.3 marshalling shim.** `of_ci_callback(ctx, of_cell*)` is 2-arg,
+   host-pointer/64-bit-cell — NOT directly r5-wireable (the real r5 entry is single-arg, guest-callable,
+   guest 32-bit-BE array). **FOLDED:** Q-S2b.3 now pins the guest-callable r5 trampoline + `ctx` bind +
+   guest↔host array marshalling as load-bearing S2b code + a hidden G2b.a prerequisite (added to the
+   blocking table).
+3. **MAJOR (PROCESS + ADVERSARY) — Q-S2b.4 caps at RESIDUE-PASS pre-S1 + instrument.** It inherits S1 via
+   the `/mmu` stub (the Trampoline dereferences real `translate` results; the stub may fault before the
+   handoff). **FOLDED:** Q-S2b.4 capped at RESIDUE-PASS pre-S1; predicate bound to
+   `of_ci_unresolved_count()==0` (`openfirmware_ci.h:105`) sampled at the handoff PC.
+4. **MAJOR (ADVERSARY) — post-handoff NK fault is EXPECTED.** Pure REPLACE severs device-IRQ→NK-EXT (shim
+   is S3-T2) + no live MMU pre-S1, so "reached `NanoKernelEntry`" is immediately followed by an NK fault by
+   construction. **FOLDED:** declared EXPECTED, not a Q-S2b.4 falsification.
+5. **minor (TECHNICAL) — env-gate cite.** `ppc-cpu.cpp:1991` re-pointed to the real glue precedents
+   (`:1082/1554/1984/2747`) + the S3-T1 `NkSupervisorEnabled()` boot-latch.
+
+All other line cites + the inert-artifact / forge / file-collision claims verified accurate against source.
+**Verdict: GO-WITH-FIXES folded → S2b Task-0 recon (the four Q-S2b questions) may dispatch.**

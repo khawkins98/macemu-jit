@@ -459,3 +459,32 @@ primary). Image int-vector names: ADB/NMI/SCCA/SCCB/SCSI/VIA IntVect (6). **Open
 the int-vector NUMBER values (src `[r17+0x30xxxx]`), the 0x148-strided record format, `G->[0xa8]` =
 `0x68080000` (child) vs `0x68fefcfc` (primary `0x205b28`). Donor: the OpenPIC/IC ConfigInfo path in
 DONOR-NOTES.
+
+### QEMU-spec recon (2026-06-15) — LINK NOT PROVEN: SECOND SEAM (the pivot's guardrail #1 paid off)
+**A real IC `interrupt-map` does NOT move `0x2031e4`.** Direct register evidence (gated-ON boot slot0
+`20260615-120728`): `r19=0x11703c`, `G=[r19]=0x01183000` (PRIMARY descriptor), `r24=[G+0xa8]=0xffffffff` →
+deref-trap. But the descriptor `0x202c58` builds has `+0xa8 = a fresh claim 0x1587000` — a DIFFERENT
+instance. So `G=0x01183000` was planted by an EARLIER inherited phase whose `[0xa8]` masktable was never
+built. The IC node IS read (finddevice `/…/interrupt-controller@40000`→phandle 0x10 + full nextprop walk
+incl. `interrupt-map` len 0x1c / `-mask` len 0x8 = our placeholders), and IC-init `0x202c58` claims its
+tables successfully (backed RAM, V=P translate). **But the int-vector NUMBERS are IMAGE constants** (memcpy
+0x40B from TOC `[r2-0x78]` via `0x20fe70`), NOT OF-derived. **Conclusion: the IC node is the CONTENT layer
+(necessary-not-sufficient); the immediate wall is the unbuilt `G->[0xa8]` vectormasktable owned by the
+inherited "memory-relocation entry" table-builder — a SEPARATE build.** Caught before a speculative IC node
+was landed (exactly the failure the pivot prevents).
+
+**Real IC-node design (build it as the content layer, QEMU shapes + OUR addrs):** keep
+`/pci@f2000000/mac-io@c/interrupt-controller@40000` `device_type=open-pic` `compatible="chrp,open-pic"`
+`reg=(0xF3040000,0x40000)` `#interrupt-cells=2`; add the presence-only `interrupt-controller` marker; leaf
+`interrupts=(input,sense)`+`interrupt-parent=<0x10>`. **IRQ numbers (CORE99 §2 / QEMU semantic oracle, OUR
+0xF3040000 OpenPIC):** SCCA=0x25, SCCB=0x24, VIA=0x19 (confirmed); ADB(rides Cuda/VIA), SCSI(MESH), NMI(GPIO)
+= RESIDUE (cross-check DingusPPC/Apple — QEMU-only values; Cuda IFR/IER is the QEMU-misleads gap, an S4
+concern). Backed by `dev_openpic` (already raises inputs by number @ `0xF3040000`). **vectormasktable
+format:** `{ u32 count; record[count] each 0x148 bytes }` (from the `0x2031e4-0x203204` loop).
+
+**▶ THE DECISIVE OPEN QUESTION (settle by disasm BEFORE any build — red-team items 1+3):** is the masktable
+builder (a) a REACHABLE Trampoline function we're not reaching because an EARLIER input (ABI/claim/an OF
+prop) is wrong → UNBLOCK it (cheap + genuinely real), or (b) genuinely INHERITED boot state we must
+REPRODUCE? Settling disasm: trace the writer of TOC `[0x11703c]` / the phase that claims `0x01183000` +
+where `G->[0xa8]` is meant to be set; check whether its masktable-fill reads phandle-0x10 `interrupt-map` or
+only the image const `[r2-0x78]`/`[r17+0x30xxxx]`. This decides reproduce-vs-unblock + the build order.

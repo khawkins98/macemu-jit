@@ -31,6 +31,7 @@
 #include "main.h"
 #include "prefs.h"
 #include "machine_profile.h"
+#include "trampoline_loader.h"	// SS_M18 S2b T5: TrampolineLoaderGateEnabled() — loader-gate the forge
 #include "exc_core.h"		// M8 Task A: ExcRiserWindow (trap_return window export)
 #include "cpu_emulation.h"
 #include "emul_op.h"
@@ -1512,7 +1513,34 @@ bool PatchROM(void)
 			        "re-asserted guest-side; [KDP+0x67c] left for NK cold-init (NK sets=0x68fff070)\n");
 		}
 	};
-	PatchROM_NW_trampoline();
+	// SS_M18 S2b T5 — loader-gate the forge (★rev-2 P-3 pinned interface).
+	//
+	// PREDICATE = TrampolineLoaderGateEnabled() (the GATE), *not* TrampolineLoaderRan().
+	// Call-order trace: PatchROM() (and this PatchROM_NW_trampoline() call) runs at
+	// ROM-patch time inside InitAll() (main.cpp:161), which is BEFORE init_emul_ppc()
+	// (kpx_cpu/sheepshaver_glue.cpp:2878) where TrampolineLoaderRun() is invoked
+	// (glue:2917). So at THIS point TrampolineLoaderRan() is *always* false — using it
+	// here would never bypass the forge even with the gate on. The gate decision
+	// (SS_M18_TRAMPOLINE ∧ MachineProfileIsNewWorld() ∧ 9.0.1-ROM-identity) IS known at
+	// patch time (the ROM is already decoded; the checksum word is readable), and a
+	// gate-ON boot guarantees the real loader will run in init_emul_ppc() and OWN the
+	// entry-vector synthesis the forge fakes here. So the gate is the patch-time-correct
+	// equivalent of "the loader ran".
+	//
+	// ★ S3-T4 REBASE POINT (P-3 ADDITIVE-CLAUSE, MANDATORY shape): this is the
+	// `if (!PREDICATE) { ...forge... }` pinned interface. S3-impl T4 RETIRES the forge by
+	// extending the guard to a ONE-LINE ADDITIVE clause —
+	//     if (!TrampolineLoaderGateEnabled() && !NkSupervisorEnabled()) { ...forge... }
+	// — NOT a rewrite. Do NOT retire/delete the forge here (Stop-rule #1: S2b GATES, S3
+	// RETIRES). Default-OFF: TrampolineLoaderGateEnabled()==false ⇒ the forge runs
+	// byte-identically to today.
+	if (!TrampolineLoaderGateEnabled()) {
+		PatchROM_NW_trampoline();
+	} else {
+		fprintf(stderr, "[S2B-FORGE-BYPASS] SS_M18_TRAMPOLINE gate ON (9.0.1 ROM, "
+		        "NewWorld) — skipping PatchROM_NW_trampoline; the real Trampoline "
+		        "(loaded in init_emul_ppc) owns entry-vector synthesis\n");
+	}
 
 	// SS_DUMP_ROM: dump decompressed ROM image for offline disassembly.
 	// Lives here (PatchROM) not in patch_68k() so it fires even when patch_68k fails on parcels.

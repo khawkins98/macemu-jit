@@ -532,3 +532,35 @@ the real Trampoline's final handoff landing WRONG (garbage `r24=1`/`ctr=0xffffff
 why its final jump computes a garbage target (r24=1 / ctr=-2) instead of NanoKernelEntry `0x50310000`** —
 i.e. what the real Trampoline's last hand-off reads, and which still-stubbed/wrong input poisons it. This is
 the wall between "the Trampoline runs its whole bringup" and "the NanoKernel executes."
+
+### ENDGAME VERDICT (2026-06-15) — (b)/(c): the BootX pre-stage is MISSING (we never load the parcel image into RAM)
+Why the NanoKernel never runs: **we load only the 94KB `MacOS.elf` (the Trampoline alone)**
+(`trampoline_loader.cpp` places its 2 PT_LOAD at 0x100000/0x200000). The real NewWorld model is **BootX
+loads the ENTIRE 4MB "Mac OS ROM" parcel container into RAM** (Configfile-1 + BootScript +
+NanoKernel-v02.27 @ BASE+0x310000 + 68k-emulator + HWInit), THEN jumps to the Trampoline; the Trampoline's
+**BootScript reads Configfile-1 from that RAM image** to relocate the NK + compute the real NanoKernelEntry.
+In our setup that RAM image is ABSENT (the 4MB MacROM is only at SheepShaver ROM `0x50000000`, which the
+running Trampoline never reads — zero `0x50xxxxxx` in any OF-CI call), so the BootScript's relocation source
++ `NanoKernelEntry` field are zero/garbage → it relocates garbage to `0x0ab00000`, runs it, computes a
+garbage "go" target, and falls into zero-fill walking to `0x20000000`. RE specifics: `r24=1` is a `li r24,1`
+loop flag in the Trampoline's BootScript interpreter (`0x20751c`, opcode dispatch `bctr@0x2075cc`, 26-entry
+table @ `r2+0x2cc8`); NO literal `0x310000`/`0x50310000` in the whole text — the NK entry is READ at runtime
+from the (absent) Configfile. The OF phase is CLEAN (all translate V=P-correct, exit+quiesce succeed) → NOT
+(a) an OF-CI stub. Two `getproplen → -1` are the (c) facet (the Trampoline querying OF for the loaded-image
+location, getting nothing).
+- **(a) OF-CI stub poison — NO.** OF phase completes clean.
+- **(b) NK image not present — YES, primary.** The NK + parcel/Configfile image is never placed in guest RAM.
+- **(c) missing Configfile value — YES, as the mechanism of (b).** NanoKernelEntry/KernelCodeOffset live in
+  the absent RAM image's Configfile table.
+
+**NEXT (a real new component — the BootX pre-stage; bigger than the wall-by-wall fixes):** model BootX —
+stage the full Mac OS ROM parcel image (the 4MB MacROM / its Configfile-1 + BootScript + NanoKernel-v02.27 +
+68k-emulator parcels, present at `/tmp/newsheep/dump-9.0.1/Parcels.src/MacROM`) into guest RAM at BootX's
+load base BEFORE entering the Trampoline, + answer the OF `/chosen` load-location getprop(s) the BootScript
+reads, so it can read the Configfile, relocate the NK, and compute the real NanoKernelEntry. Concretely:
+extend `trampoline_loader.cpp` / the S2b launch seam to stage the parcel image + the load-location props,
+instead of relying on the SheepShaver ROM at `0x50000000`. **Owed recon (bounded, before impl):** pin (1)
+BootX's load base for the MacROM image, (2) the exact `/chosen` props the BootScript reads to find it, (3)
+the Configfile-1 read/relocate mechanism (how the BootScript derives NanoKernelEntry). Until the parcel
+image is RAM-resident, the BootScript's "go" computes garbage regardless of OF-CI fidelity — this is THE
+wall between "Trampoline runs its whole bringup" and "the NanoKernel executes."

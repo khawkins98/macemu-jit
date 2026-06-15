@@ -564,3 +564,35 @@ BootX's load base for the MacROM image, (2) the exact `/chosen` props the BootSc
 the Configfile-1 read/relocate mechanism (how the BootScript derives NanoKernelEntry). Until the parcel
 image is RAM-resident, the BootScript's "go" computes garbage regardless of OF-CI fidelity — this is THE
 wall between "Trampoline runs its whole bringup" and "the NanoKernel executes."
+
+### BootX pre-stage RECON (2026-06-15) — FULLY SPEC'D (plaintext CHRP <BOOT-SCRIPT>); small change, no new asset
+The missing pre-stage IS the OF Forth CHRP boot-script `/tmp/newsheep/dump-9.0.1/Bootscript` (`<BOOT-SCRIPT>`).
+It: `claim-mem(parcels-pages, 0x400000-align)` → rom-phys; `claim-virt(page-align)` → rom-virt; `do-map`
+V=P (mode 0x10); COPIES the 4MB parcel ROM image in; `/rom/macos` node + `AAPL,toolbox-parcels =
+encode-int(rom-virt), encode-int(parcels-size)`; `/openprom supports-bootinfo`; then copies MacOS.elf +
+`init-program`+`go`. **We do init-program/go but SKIP the parcel staging + /rom/macos property** → the
+Trampoline reads a garbage NanoKernelEntry → iNK=0. (The string `AAPL,toolbox-parcels` + `"Can't add
+toolbox rom memory relocation entry one/two!"` are present in MacOS.elf — it reads that prop.)
+- **(A) Load base:** NOT fixed — claimed (4MB-aligned phys); the Trampoline learns it from `/rom/macos`
+  `AAPL,toolbox-parcels` (addr,size). We control rom-virt → pick any 4MB-aligned RAM base + publish it.
+- **(B) Props to add (the fix surface; memory/mmu ihandles already wired):** `/rom/macos` +
+  `AAPL,toolbox-parcels=(rom-virt,0x400000)`; `/openprom supports-bootinfo`. The two `getproplen→-1` in the
+  trace are almost certainly `/rom/macos AAPL,toolbox-parcels`.
+- **(C) ConfigInfo (byte-verified @ ROM+0x30D000):** ROMImageBaseOffset@0x28=0xFFCF3000 (−0x30D000),
+  ROMImageSize@0x2C=0x400000, **KernelCodeOffset@0x4C=BASE+0x310000 (NanoKernelEntry), KernelCodeSize@0x50=
+  0x10000** (NK-v02.27 md5 ✓), EmulatorCode@0x54=BASE+0x360000, **LA_DispatchTable@0xA8=0x68080000** (= the
+  vectormasktable the IC wall chased!), LA_KernelData@0xA0=0x68FFE000, **LA_HardwarePriv@0x374=0xFFF0C000**
+  (= the KDP+0x374 EXT sentinel). PageMappingInfo/BatMappingInfo EMPTY → NK builds its own (consistent w/
+  S3 live mtsrin/BAT/SDR1). **NanoKernelEntry = rom-virt + 0x310000.**
+- **(D) Image — NO NEW ASSET:** copy the existing 4MB MacROM from SheepShaver's ROM aperture `0x50000000`
+  to rom-virt (4MB-aligned), then publish the prop. (Verify-at-impl: read guest `0x5030D028` expect
+  `0xFFCF3000` = the aperture holds the decompressed image w/ ConfigInfo at +0x30D000; else stage
+  `Parcels.src/MacROM`.)
+- **(E) Scope — SMALL, gated:** (1) launch seam/trampoline_loader: before go, claim 4MB rom-virt + copy the
+  image; (2) openfirmware_ci: the 2 DT props. Falsifiable gate: NanoKernelEntry (rom-virt+0x310000) fires →
+  **iNK>0 (the NanoKernel executes)** — the transition this whole arc targets; re-activates S1's live /mmu.
+- **★ HIGHEST RISK (verify FIRST, RT #3):** the real script copies the COMPRESSED `MacROM.lzss` + the
+  Trampoline decompresses it. If the Trampoline decompresses `AAPL,toolbox-parcels` UNCONDITIONALLY,
+  providing the decompressed `0x50000000` bytes would corrupt → must stage the COMPRESSED form. If it reads
+  ConfigInfo in-place (no decompress), the decompressed copy is right. RE the Trampoline's toolbox-parcels
+  reader before choosing which bytes to stage.

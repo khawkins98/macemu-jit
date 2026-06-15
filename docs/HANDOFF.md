@@ -14,8 +14,13 @@
 >   entered); the wall is **OF-CI ENVIRONMENT FIDELITY** — `claim()→0` + `/memory reg` size=0 + bootpath=0
 >   (S2a-scope stubs in `machine/openfirmware_ci.cpp`). The Trampoline consumes `claim()=0` as an allocated
 >   base → relocates/jumps to ~0 → wild-executes the unmapped `0x180000–0x1f0000` gap → `twi @ 0x16c`. The
->   r3/r4 sweep is LOW-value. **REFINED NEXT TASK = OF-CI early-environment fidelity (S2b-owned, gated): a
->   real `claim` bump-allocator + `/memory reg`=RAMSize + bootpath — which PRECEDES S1's `/mmu`.** Plan + full ladder:
+>   r3/r4 sweep is LOW-value. **OF-CI fidelity LANDED (`af3f7717`): `claim` bump-allocator + `/memory`=RAMSize → the Trampoline now
+>   blows past the zero-gap wall, makes 95 OF-CI calls, and issues `[S2B-MMU-STUB] /mmu translate
+>   in[0]=0x01000000` — REACHED THE `/mmu` PHASE (legit relocation code at `pc=0x2026e0`, no wild jump).**
+>   ▶▶▶▶▶ **S1's live `/mmu` is NOW the genuine immediate next wall** (Outcome shifted B→A): the `/mmu`
+>   translate is the NON-ACCEPTANCE recording stub → returns degenerate. Cheap next probe (the S1 plan's
+>   anticipated first sub-task): a MINIMALLY-REAL `/mmu` translate (identity for claimed/RAM regions) to see
+>   if the Trampoline reaches `NanoKernelEntry 0x50310000`. Then the full S1 window/softmmu per the Task-0. Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl
 >   T1–T5 + S3-impl T1–T4) are now validated running together gated-OFF-safe + gated-ON-executing.**
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.

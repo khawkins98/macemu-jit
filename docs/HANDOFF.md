@@ -45,9 +45,17 @@
 >   expects PRE-INITIALIZED before `main` (inherited IC ConfigInfo) — even a perfect S1 `/mmu` leaves it -1,
 >   so B is ruled out. **▶▶ NEW WALL (precedes NK + S1): reproduce the inherited primary interrupt-controller
 >   descriptor + its vector/mask/cascade/priority tables** in low memory. No speculative seed landed (would
->   just move the fault to the empty table — fabrication). **NEXT RE: where the TOC-global `[r2-0x98]`
->   (`0x11703c`) IC descriptor + its `0xa8` table are meant to be seeded.** iNK still 0; S1 live `/mmu` owed
->   but downstream. Each wall = bounded RE + small gated fix + measured
+>   just move the fault to the empty table — fabrication). **PIVOT (user-directed) → build-real, QEMU as structural oracle.** Recon PROVED (guardrail #1) the IC wall
+>   was NOT a missing inherited table — `main` builds its own masktable via `call-method translate`, and our
+>   `/mmu` translate stub returned the wrong out-cell arity (n_out=4 flag where the IC builder routes out[3]→
+>   `G->[0xa8]` expecting phys). FIXED (`9e96d18d`, out[3]=phys reconciles both consumers; watchpoint-verified
+>   `G->[0xa8]=0x01587000`, `0x2031e4` passes, IC masktable builds). **▶▶ NEW WALL: post-quiesce relocation
+>   copy** — after OF quiesce/exit the Trampoline enters a fresh region `0x01590000` and SIGSEGVs in a
+>   block-copy loop at guest `pc=0x0159cd84` (`stwu r0,-16(r4)`, r4=`0x0ab03ed8`) writing **unbacked guest
+>   `~0x0ab00000`**. iNK still 0 (NanoKernelEntry `0x50310000` not yet). **NEXT RE: the post-quiesce
+>   relocation copy + where `0x0ab00000` comes from (a claim/translate/`/memory`-base value? likely the final
+>   NK relocation before the jump).** The real IC-node design (QEMU recon) is banked for the content layer.
+>   S1 live `/mmu` OUT OF SCOPE (deferred to S3 with explicit GO). Each wall = bounded RE + small gated fix + measured
 >   commit; trajectory unmistakable (real producer boots further each step). Process playbook:
 >   `docs/MULTI-AGENT-FEATURE-WORKFLOW.md`. Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl

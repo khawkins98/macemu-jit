@@ -146,10 +146,22 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 		 * (phys, mode, and a success boolean true=-1), or a single `false` on a
 		 * miss. The CIF rets array is [catch, phys, mode, flag] (the topmost Forth
 		 * result -> the LAST rets cell). The real 9.0.1 Trampoline calls translate
-		 * with n_rets=4 and BRANCHES on the trailing flag; an unwritten/garbage flag
-		 * cell sent it down a degenerate handoff path (rfi target == 0, all-zero
-		 * boot-info, SIGSEGV at physical 0). So we MUST write out[3] explicitly:
-		 * true on a hit, false on a miss.
+		 * with n_rets=4 (n_out=4 here for EVERY call, proven by SS_M18_OFCI_TRACE
+		 * 2026-06-15). TWO guest consumers read the out-cells differently:
+		 *   (a) boot-info / RAM-descriptor builder takes phys from out[1], mode from
+		 *       out[2], BRANCHES on a trailing success flag in out[3] (07003fa1: an
+		 *       unwritten/garbage out[3] -> discard every result -> rfi srr0==0 ->
+		 *       SIGSEGV at phys 0).
+		 *   (b) the interrupt-controller vectormasktable builder (consumer 0x202c58,
+		 *       call-method marshaller 0x20dcc0) routes the out[3] cell to
+		 *       r4 = &G->[0xa8] EXPECTING phys. The 0x011830a8 watchpoint proved
+		 *       out[3] (NOT out[1]) lands in [0xa8]; with out[3]==0xffffffff the IC
+		 *       walked a -1 sentinel -> lwz r30,0(0xffffffff) trap at 0x2031e4.
+		 * RECONCILE: write phys into out[3] on a hit. (b) gets the phys it routes to
+		 * [0xa8]; (a)'s branch still sees a Forth-truthy (nonzero) cell since phys is
+		 * nonzero for every real aperture address. out[1]=phys / out[2]=mode UNCHANGED
+		 * (reader (a)'s out[1] phys = the known-good post-07003fa1 value). A miss
+		 * writes out[3]=0 (false) so (a) still discards a NOT-MAPPED translate.
 		 * If virt is in a guest RAM/ROM identity aperture -> phys=virt with a
 		 * cacheable-RW mode. Else -> NOT-MAPPED (phys=0, mode=0, flag=false) and a
 		 * distinct log: we do NOT fabricate a PA for an address outside the V=P
@@ -162,14 +174,14 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 			/* Honor a recorded (possibly non-identity) /mmu map FIRST. */
 			if (n_out >= 2) out[1] = (of_cell)rec_phys;
 			if (n_out >= 3) out[2] = (of_cell)rec_mode;
-			if (n_out >= 4) out[3] = (of_cell)0xffffffffu; /* translate success flag (true) */
+			if (n_out >= 4) out[3] = (of_cell)rec_phys;   /* out[3]=phys: IC marshaller (0x20dcc0) routes this cell to r4=&G->[0xa8]; nonzero phys is also Forth-truthy for the boot-info success branch */
 			fprintf(stderr, "[S2B-MMU-MAP] translate virt=0x%08x -> phys=0x%08x "
 			        "mode=0x%08x (recorded map) #%d\n",
 			        virt, rec_phys, rec_mode, g_translate_calls);
 		} else if (mmu_addr_is_identity(virt)) {
 			if (n_out >= 2) out[1] = (of_cell)virt;            /* phys = virt   */
 			if (n_out >= 3) out[2] = (of_cell)MMU_MODE_CACHEABLE_RW;
-			if (n_out >= 4) out[3] = (of_cell)0xffffffffu; /* translate success flag (true) */
+			if (n_out >= 4) out[3] = (of_cell)virt;       /* out[3]=phys (V=P => phys=virt): IC marshaller routes this cell to r4=&G->[0xa8]; nonzero phys is also Forth-truthy for the boot-info success branch */
 			fprintf(stderr, "[S2B-MMU-MINREAL] translate virt=0x%08x -> phys=0x%08x "
 			        "mode=0x%02x (V=P identity, bringup) #%d\n",
 			        virt, virt, MMU_MODE_CACHEABLE_RW, g_translate_calls);

@@ -2847,6 +2847,17 @@ bool ss_run_opcode_test(void)
 		return false;
 	return ss_run_one_vector(hex);
 }
+/* SS_M18 S2b T3 (Operation NewSheep) — the CHRP launch seam state.
+ * Armed ONCE, at the bottom of the newworld init block, when the T1 loader has
+ * placed the real MacOS.elf (TrampolineLoaderRan()) under the boot-latched gate.
+ * When armed, emul_ppc() enters PPC execution at the Trampoline's ELF entry
+ * (0x20f078) INSTEAD of the forge's NanoKernelEntry (ROMBase+0x310000). The forge
+ * body still runs (T5 loader-gates it); T3 only re-points the boot PC + the CHRP
+ * entry registers. Default-OFF: g_s2b_launch_armed stays false, emul_ppc() is
+ * byte-identical, the forge path is unchanged. */
+static bool   g_s2b_launch_armed = false;
+static uint32 g_s2b_launch_entry = 0;
+
 void init_emul_ppc(void)
 {
 	// Export jitcachesize pref as env var for ppc-cpu.cpp (which can't include prefs.h).
@@ -3472,6 +3483,64 @@ void init_emul_ppc(void)
 				}
 			}
 		}
+
+		/* SS_M18 S2b T3 (Operation NewSheep) — the CHRP launch seam.
+		 * Sited at the BOTTOM of the newworld init block so it overrides the
+		 * register state the forge above staged (gpr3/4/5, SPRG0, MSR, ...). Armed
+		 * ONLY when the T1 loader actually placed the real MacOS.elf
+		 * (TrampolineLoaderRan() — true iff TrampolineLoaderGateEnabled() held AND
+		 * the load succeeded). Default-OFF: TrampolineLoaderRan()==false, this whole
+		 * block is skipped, the forge path is byte-identical.
+		 *
+		 * What T3 wires (the launch-seam half of G2b.a, structurally):
+		 *   - r5 = the T2 marshalling shim's guest entry (TRAMP_SHIM_ENTRY); the
+		 *          ss_ofci_shim_opcode() EXEC_NATIVE intercept word is written there.
+		 *   - r2 = 0x1001e8 (TRAMP_LAUNCH_R2, pinned TOC/SDA base).
+		 *   - r3/r4 = documented provisional 0 (carried S2a residue), env-overridable
+		 *          via SS_M18_R3/SS_M18_R4 (T-5) so first-boot bringup can sweep the
+		 *          ABI without a recompile. NEVER a hidden ABI — logged in [S2B-LAUNCH]
+		 *          and confirmed at the first post-S1 gated boot (Stop-rule #8).
+		 *   - the boot PC is re-pointed to the Trampoline ELF entry 0x20f078 via
+		 *          g_s2b_launch_armed (consumed in emul_ppc()), INSTEAD of the forge's
+		 *          ROMBase+0x310000 NanoKernelEntry.
+		 *
+		 * NOT T3: the forge body is NOT deleted/disabled here (that is T5's
+		 * loader-gating of PatchROM_NW_trampoline + the glue forge staging). T3 only
+		 * RE-POINTS; when the gate flips ON post-S1 the launch takes over, when OFF
+		 * the forge runs unchanged. The gated-ON live observable (PIC stub
+		 * self-relocates, first OF-CI call resolves) is DEFERRED-TO-post-S1-boot as a
+		 * LIMIT (needs T4's wired backend + S1's live /mmu) — not a checkable T3 gate. */
+		if (TrampolineLoaderRan()) {
+			/* r3/r4 documented provisional (default 0), env-overridable (T-5). */
+			uint32 r3_prov = 0, r4_prov = 0;
+			if (const char *e3 = getenv("SS_M18_R3")) r3_prov = (uint32)strtoul(e3, NULL, 0);
+			if (const char *e4 = getenv("SS_M18_R4")) r4_prov = (uint32)strtoul(e4, NULL, 0);
+
+			/* Write the EXEC_NATIVE intercept opcode at the shim's reserved guest
+			 * entry (= r5). Big-endian via WriteMacInt32; ss_ofci_shim_opcode()
+			 * returns the natural-order opcode value. The shim stays host-side INERT
+			 * until T4 binds the ctx + callback (ss_ofci_shim_invoke returns -1). */
+			WriteMacInt32(TRAMP_SHIM_ENTRY, ss_ofci_shim_opcode());
+
+			/* CHRP entry registers (override the forge's gpr setup above). */
+			ppc_cpu->gpr(2) = TRAMP_LAUNCH_R2;
+			ppc_cpu->gpr(3) = r3_prov;
+			ppc_cpu->gpr(4) = r4_prov;
+			ppc_cpu->gpr(5) = TRAMP_SHIM_ENTRY;
+
+			/* Re-point the boot PC: emul_ppc() will enter at the Trampoline ELF entry
+			 * instead of the forge's ROMBase+0x310000. */
+			g_s2b_launch_armed = true;
+			g_s2b_launch_entry = TRAMP_ENTRY;
+
+			fprintf(stderr, "[S2B-LAUNCH] CHRP entry: pc=0x%08x r2=0x%08x r3=0x%08x "
+			        "r4=0x%08x r5=0x%08x (shim opcode=0x%08x) — forge path BYPASSED "
+			        "(r3/r4 provisional%s%s, confirm at first post-S1 gated boot)\n",
+			        TRAMP_ENTRY, TRAMP_LAUNCH_R2, r3_prov, r4_prov, TRAMP_SHIM_ENTRY,
+			        ss_ofci_shim_opcode(),
+			        getenv("SS_M18_R3") ? " [SS_M18_R3 override]" : "",
+			        getenv("SS_M18_R4") ? " [SS_M18_R4 override]" : "");
+		}
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);
 
@@ -3557,6 +3626,14 @@ void emul_ppc(uint32 entry)
 #if 0
 	ppc_cpu->start_log();
 #endif
+	/* SS_M18 S2b T3: when the CHRP launch seam is armed (the T1 loader placed the
+	 * real MacOS.elf under the gate), enter at the Trampoline ELF entry (0x20f078)
+	 * instead of the forge's NanoKernelEntry. Default-OFF: not armed, byte-identical. */
+	if (g_s2b_launch_armed) {
+		fprintf(stderr, "[S2B-LAUNCH] entering Trampoline at 0x%08x (forge entry 0x%08x bypassed)\n",
+		        g_s2b_launch_entry, entry);
+		entry = g_s2b_launch_entry;
+	}
 	// start emulation loop and enable code translation or caching
 	ppc_cpu->execute(entry);
 }

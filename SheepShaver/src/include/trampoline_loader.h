@@ -48,6 +48,33 @@
 #define TRAMP_EXEC_FILESZ        0x10260u
 #define TRAMP_APERTURE_TOP       0x210260u   /* highest placed guest addr (exec vaddr + memsz) */
 
+/* ------------------------------------------------------------------ *
+ *  CHRP launch ABI (T3 — the launch seam). Pinned from                *
+ *  FINDINGS-s2b-loader-handoff.md Q-S2b.2 (r5/r2/entry SETTLED).       *
+ * ------------------------------------------------------------------ */
+
+/* r2 at CHRP entry = the Trampoline's TOC/SDA base (`[r2-0x60]` is read by the
+ * PIC stub; r2=0x1001e8 pinned, NOT guessed). Entry is TRAMP_ENTRY (0x20f078). */
+#define TRAMP_LAUNCH_R2          0x1001e8u
+
+/* The r5 marshalling shim's loader-owned guest entry address (T2's
+ * ss_ofci_shim_opcode() is written here by the T3 seam; this value becomes r5).
+ * Chosen as the first page-aligned page ABOVE the staged-ELF footprint
+ * (data 0x100000-0x119920, exec 0x200000-0x210260=TRAMP_APERTURE_TOP), with a
+ * gap below the next page boundary: 0x210260 rounds up to page 0x211000. It is
+ * therefore DISJOINT from both PT_LOAD ranges, inside the low guest-RAM aperture
+ * the loader already writes (T1 places up to 0x210260 via Mac2HostAddr), and far
+ * below the high kernel memory the Trampoline claims via /mmu (~0x68xxxxxx). The
+ * shim needs only this single guest word (the EXEC_NATIVE intercept opcode); its
+ * marshalling scratch is host-side (host of_cell[]), so no guest scratch buffer
+ * is reserved. T4's /mmu recording stub asserts-fail ([S2B-SHIM-COLLIDE],
+ * Stop-rule #13) if the Trampoline ever claims/maps this range — converting a
+ * silent post-S1 collision into a logged tripwire. "Expected-free" is a static
+ * argument (above the ELF top, below the kernel claim arena); a first-boot
+ * memory-map probe to CONFIRM it is unclaimed is the named residue (Self-review
+ * #1 / T-3). */
+#define TRAMP_SHIM_ENTRY         0x211000u
+
 /* ROM-identity guard (A-1, Stop-rule #12). The staged ELF is the 9.0.1
  * Trampoline; it derives NanoKernelEntry from the LIVE ROM's component table at
  * runtime, so it MUST be launched against the 9.0.1 ROM. Both the active 1.1 ROM

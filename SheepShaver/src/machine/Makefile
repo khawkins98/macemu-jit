@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_shm_arena_spike test_shm_arena_multientry
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_shm_arena_spike test_shm_arena_multientry
 
 test: $(TESTS)
 	./test_machine_profile
@@ -25,6 +25,7 @@ test: $(TESTS)
 	./test_openfirmware_ci
 	./test_trampoline_loader
 	./test_trampoline_ofci_shim
+	./test_trampoline_launch
 	./test_shm_arena_spike
 	./test_shm_arena_multientry
 
@@ -110,6 +111,16 @@ test_trampoline_ofci_shim: test_trampoline_ofci_shim.cpp trampoline_ofci_shim.cp
                            ../include/trampoline_ofci_shim.h ../include/openfirmware_ci.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -DTRAMPOLINE_OFCI_SHIM_STANDALONE_TEST -o $@ \
 	    test_trampoline_ofci_shim.cpp trampoline_ofci_shim.cpp openfirmware_ci.cpp
+
+# SS_M18 S2b T3: the CHRP launch-seam static assertion (the gated-ON checkable
+# half of G(T3) — the live launch is DEFERRED-TO-post-S1). Standalone: pins the
+# reserved r5 shim region placement, the BE-32 shim-opcode round-trip, and the
+# pinned CHRP entry ABI (r2/entry). Both emulator wrappers excluded.
+test_trampoline_launch: test_trampoline_launch.cpp trampoline_ofci_shim.cpp \
+                        ../include/trampoline_loader.h ../include/trampoline_ofci_shim.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -DTRAMPOLINE_OFCI_SHIM_STANDALONE_TEST \
+	    -DTRAMPOLINE_LOADER_STANDALONE_TEST -o $@ \
+	    test_trampoline_launch.cpp trampoline_ofci_shim.cpp
 
 # SS_M18 S3-Task-0 item-0: Dolphin SHM-arena platform-feasibility spike.
 # Standalone (no kpx_cpu, no paged_mmu link); proves the mach VM aliasing/remap

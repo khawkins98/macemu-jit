@@ -428,3 +428,34 @@ memory relocation entry"`).
   family) that the Trampoline expects pre-populated. **Next RE:** trace where the TOC global `[r2-0x98]`
   (`0x11703c`) descriptor + its `0xa8` table are meant to be seeded (an earlier constructor/ConfigInfo the
   boot environment provides). OF/device-environment fidelity, gated, NON-ACCEPTANCE.
+
+### STRATEGY PIVOT (2026-06-15, user-directed) — QEMU-spec'd real environment, not reactive stubs
+The wall-by-wall stub-walking kept producing subtly-wrong stubs (translate flag, map arg-order) that
+surfaced walls later, and is now re-deriving public IEEE-1275/Apple-OF semantics by RE. **Pivot:** use
+QEMU/OpenBIOS as a STRUCTURAL + SEMANTIC oracle (NOT an address oracle — LAW: QEMU MacIO `0x80000000` vs
+ours `0xF3040000`; the Cuda IFR/IER runtime is the known gap QEMU misleads on) to spec the REAL OF/device
+environment, backed by the existing Machine Layer device models (`dev_openpic` behind `SS_NW_PIC` @
+`0xF3040000`, `dev_via6522`, `dev_cuda`), validated against the RE'd consumption contract. Keep the real
+OF-CI infra we built (loader, dispatcher, marshalling shim, `claim`, `/chosen` ihandles); CONVERT the
+stubs (the IC node's `interrupt-map`/`-mask` Q-S2a.3 PROVISIONAL placeholders → real; `/memory`/DT → real)
+to the real thing. **User guardrails (BINDING):** (1) **PROVE THE LINK** — recon must show that populating
+the real OpenPIC node + interrupt-map actually causes the guest to build the NK IC ConfigInfo at TOC-global
+`0x11703c` / the vectormasktable at `0x68080000`, NOT a second hand-off seam (don't wire a beautiful IC
+node and find the ConfigInfo still empty a wall later — the exact failure this pivot exists to stop). (2)
+QEMU = node/property shapes + IRQ semantics ONLY; map QEMU PCI addrs → our fixed `0xF3040000`. (3) the
+consumption contract is both spec AND bounding box — build real only for what the Trampoline genuinely
+consumes, not a full Core99 machine. (4) **S1 live `/mmu` is OUT OF SCOPE** (the IC pointer is a fixed
+`0x68xxxxxx` constant, NOT translation-dependent — `/mmu` stays as-is; live MMU defers to S3 with explicit
+GO). (5) keep the IC node / `SS_NW_PIC` gated, paravirtual byte-identical, test-jit=100; don't land a
+speculative seed.
+
+**IC-descriptor RE (feeds the design):** the primary IC descriptor `G` is runtime-allocated in BSS, planted
+at `[0x11703c]`, ≥0x364 bytes; int-vector NUMBERS runtime-copied from a source struct `[r17+0x30xxxx]` (not
+image constants); `G->[0xa8]` = vectormasktable ptr → a POPULATED table (count word + 0x148-strided
+records) built by the inherited vectorlookuptable/vectormasktable/CascadeInfo/VectorPriorityTable
+memory-relocation subsystem. In the real boot `G->[0xa8]` is already valid at `0x205750` (consumer) — set
+by an earlier inherited phase, BEFORE the constructor `0x20c094` (which builds a CHILD/cascade, not the
+primary). Image int-vector names: ADB/NMI/SCCA/SCCB/SCSI/VIA IntVect (6). **Open unknowns for the recon:**
+the int-vector NUMBER values (src `[r17+0x30xxxx]`), the 0x148-strided record format, `G->[0xa8]` =
+`0x68080000` (child) vs `0x68fefcfc` (primary `0x205b28`). Donor: the OpenPIC/IC ConfigInfo path in
+DONOR-NOTES.

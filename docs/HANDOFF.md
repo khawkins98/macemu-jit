@@ -3,8 +3,26 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEXT ACTION (2026-06-15): S3 Task-0 is DONE → GREEN-PASS, architecture = REPLACE. ▶ S3-IMPL
->   AWAITS USER AUTHORIZATION (the program's most dangerous flip).** S3 recon (4-reviewer red-teamed):
+> - **▶ NEWEST PROGRESS (2026-06-15 overnight) — S3-impl RESTRUCTURE half landed gated-OFF + the S2b
+>   critical-path opened:** S3-impl plan **rev-2** re-scoped (`fa44698e`) to **RESTRUCTURE + GATED-MERGE-RESIDUE**
+>   this milestone — **GREEN-PASS (T5 + the gate flip) is DEFERRED behind S2b** (T4's "S2 landed" precondition is
+>   FALSIFIED: the forge substitutes the unbuilt loader). **S3-impl T1 + T2 COMMITTED green, gated-OFF:** T1
+>   master gate `SS_M18_NK_SUPERVISOR` + inert scaffold (`3d057df2`); **T2 the load-bearing host→NK
+>   EXT-injection shim** (`22db4818`, `exc_inject.{h,cpp}`: resolves the NK EXT vector from live **KDP+0x374**,
+>   never hardcodes, builds a LOCAL table — never `g_exc_entry_table`, PEM untouched; micro-test 20/20,
+>   test-jit=100, e2e PASS, bench codegen-identical). **S2b Task-0 recon DONE → RESIDUE-PASS** (`90e59fd1`,
+>   `FINDINGS-s2b-loader-handoff.md`): NanoKernelEntry pinned **`0x50310000`**, loader source = **stage the
+>   md5-verified 9.0.1 `MacOS.elf` asset** (`decode_parcels` does NOT surface it), CHRP seam + the
+>   guest-callable r5 **marshalling-shim** contract pinned, `/mmu`→S1 (recording stub = NON-ACCEPTANCE).
+>   **▶▶ ACTIVE NEXT ACTION: S2b-impl-FIRST** (decided — S2b lands first on the shared `rom_patches.cpp`+`glue`
+>   per the file-ownership LAW; S3 GREEN-PASS is blocked behind it anyway). S2b-impl BUILD plan is drafting
+>   (`…2026-06-15-ss-m18-s2b-impl-loader-launch.md`) → red-team → gated serial impl (staged-asset loader →
+>   marshalling shim → CHRP launch seam → wire of_ci_callback + `/mmu` recording stub → loader-gate
+>   `PatchROM_NW_trampoline`). Then return to **S3 T3/T4/T5** rebased on S2b's gate structure (the loader
+>   replaces the forge → the install runs → GREEN-PASS becomes reachable). **S2b-impl PASS is gated on S1
+>   (`/mmu`); its BUILD/UNIT is cleared now (no blocking residue on Q1/Q2).** *(S3 Task-0 history below.)*
+> - **(SUPERSEDED 2026-06-15) S3 Task-0 DONE → GREEN-PASS, architecture = REPLACE; S3-IMPL was
+>   USER-AUTHORIZED and is now IN FLIGHT (T1+T2 landed; T3+ paused behind S2b).** S3 recon (4-reviewer red-teamed):
 >   `FINDINGS-s3-{two-supervisor,nk-ownership,ss-reusemap}.md`, plan `2026-06-15-ss-m18-s3-two-supervisor-task0.md`
 >   rev-2. **Architecture = REPLACE** (retire SS's synthetic supervisor under `SS_M18_NK_SUPERVISOR ∧
 >   MachineProfileIsNewWorld()`, run the real NK resident; CO-OWN/yield-fully scored out — co-residency

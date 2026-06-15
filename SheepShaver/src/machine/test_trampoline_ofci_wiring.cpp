@@ -65,13 +65,20 @@ int main(void)
 	int n = tramp_ofci_install_backends(ctx);
 	CHECK(n == 11, "install_backends registered the 11 pinned call-method names");
 
-	/* ---- (i)+(ii): /mmu translate routes to the recording stub --------------
+	/* ---- (i)+(ii): /mmu translate routes to the MINIMALLY-REAL backend ------
+	 * SS_M18 S1-bringup: the /mmu backend is V=P (phys==virt) for addresses
+	 * inside a published guest RAM/ROM aperture, and NOT-MAPPED outside it.
+	 * Publish a RAM window covering VIRT so the in-aperture identity path is
+	 * exercised; a second sub-case asserts the out-of-aperture NOT-MAPPED path.
 	 * call-method array at 0x1000:
 	 *   [0]=0x2000(->"call-method") [1]=n_args=3 [2]=n_rets=3
 	 *   [3]=0x2100(->"translate" method name) [4]=0x7 ihandle
 	 *   [5]=0x68001234 virt(scalar nested arg0)
 	 *   [6]=catch [7]=phys [8]=mode (rets)                                      */
 	{
+		/* RAM window [0x68000000, +0x01000000) covers VIRT below; ROM unused. */
+		tramp_ofci_set_mmu_extent(0x68000000u, 0x01000000u, 0x50000000u, 0x00500000u);
+
 		memset(g_ram, 0, sizeof(g_ram));
 		put_str(0x2000, "call-method");
 		put_str(0x2100, "translate");
@@ -91,12 +98,24 @@ int main(void)
 		                            &out_ret, err, sizeof(err));
 		CHECK(rc == 0, "marshal of /mmu translate call-method succeeded");
 		CHECK(out_ret == OF_CI_OK, "dispatcher resolved call-method -> backend (OF_CI_OK)");
-		/* catch-result cell == 0 (the stub's success code), proving the dispatcher
+		/* catch-result cell == 0 (the backend's success code), proving the dispatcher
 		 * routed to a registered backend (an UNREGISTERED method -> OF_CI_FAIL). */
 		CHECK(get_be32(0x1000 + 4 * 6) == 0, "catch-result == 0 (routed to mmu_backend)");
-		/* (ii) identity claim: phys == virt written back BE-32 */
-		CHECK(get_be32(0x1000 + 4 * 7) == VIRT, "/mmu translate returned phys == virt (identity stub)");
+		/* (ii) V=P identity: phys == virt written back BE-32 for in-aperture virt */
+		CHECK(get_be32(0x1000 + 4 * 7) == VIRT, "/mmu translate returned phys == virt (V=P in-aperture)");
+		CHECK(get_be32(0x1000 + 4 * 8) != 0, "/mmu translate returned a non-zero cacheable-RW mode");
 		CHECK(of_ci_unresolved_count(ctx) == 0, "translate did NOT bump the unresolved counter");
+
+		/* (ii-b) out-of-aperture virt -> NOT-MAPPED (phys==0), honest about the
+		 * V=P boundary (does NOT fabricate a PA). */
+		const uint32_t OOB = 0x90000000u;
+		put_be32(0x1000 + 4 * 5, OOB);
+		put_be32(0x1000 + 4 * 7, 0xAAAAAAAA);
+		out_ret = -999;
+		rc = tramp_ofci_marshal(of_ci_callback, ctx, 0x1000, mock_xlate, NULL,
+		                        &out_ret, err, sizeof(err));
+		CHECK(rc == 0 && out_ret == OF_CI_OK, "marshal of out-of-aperture translate succeeded");
+		CHECK(get_be32(0x1000 + 4 * 7) == 0, "/mmu translate out-of-aperture -> phys == 0 (NOT-MAPPED)");
 	}
 
 	/* ---- (i): getprop resolves in the DT (no backend) ----------------------- */

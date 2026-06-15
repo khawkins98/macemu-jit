@@ -62,6 +62,24 @@ void tramp_ofci_set_stop_fn(tramp_ofci_stop_fn fn);
 /* Number of [S2B-SHIM-COLLIDE] tripwires that have fired (test observability). */
 int  tramp_ofci_collision_count(void);
 
+/* SS_M18 S1-bringup: publish the guest-physical apertures the /mmu MINIMALLY-REAL
+ * translate/map honor as V=P identity (the recording stub is upgraded to a
+ * bringup-real backend behind SS_M18_TRAMPOLINE). The backend TU is PURE (no
+ * emulator globals), so the gated launch seam pushes RAMBase/RAMSize/ROMBase/
+ * ROM size here right after tramp_ofci_install_backends().
+ *
+ * NON-ACCEPTANCE: this is a V=P bringup approximation, NOT S1's full live
+ * (SR/BAT/SDR1) paged MMU. It is correct ONLY while the NK's intended map is
+ * identity; the moment a non-identity segment/BAT is installed it must be
+ * replaced by paged_mmu_translate against the live regs. See
+ * docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md. */
+void tramp_ofci_set_mmu_extent(uint32_t ram_base, uint32_t ram_size,
+                               uint32_t rom_base, uint32_t rom_size);
+
+/* Counts of MINIMALLY-REAL /mmu calls (test/diagnostic observability). */
+int  tramp_ofci_mmu_translate_count(void);
+int  tramp_ofci_mmu_map_count(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -3732,6 +3732,14 @@ void init_emul_ppc(void)
 			        "claim arena [0x01000000,0x%x)\n", RAMSize, RAMSize);
 			int n_backends = tramp_ofci_install_backends(g_s2b_ofci_ctx);
 			tramp_ofci_set_stop_fn(s2b_shim_collide_abort);
+			/* SS_M18 S1-bringup: hand the /mmu MINIMALLY-REAL backend the guest
+			 * RAM/ROM apertures so translate/map honor V=P identity (phys==virt)
+			 * for the Trampoline's pre-NK-install addresses. NON-ACCEPTANCE: V=P
+			 * is a bringup approximation, not S1's live (SR/BAT/SDR1) MMU. */
+			tramp_ofci_set_mmu_extent(RAMBase, RAMSize, ROMBase, ROM_AREA_SIZE);
+			fprintf(stderr, "[S2B-OFCI] /mmu MINIMALLY-REAL V=P extents: "
+			        "RAM[0x%08x,+0x%08x) ROM[0x%08x,+0x%08x) (NON-ACCEPTANCE bringup)\n",
+			        RAMBase, RAMSize, ROMBase, (uint32_t)ROM_AREA_SIZE);
 			ss_ofci_shim_bind(g_s2b_ofci_ctx, of_ci_callback);
 			fprintf(stderr, "[S2B-OFCI] wired of_ci_callback: Core99 DT context + %d "
 			        "call-method backends installed (/mmu=RECORDING STUB, NON-ACCEPTANCE "

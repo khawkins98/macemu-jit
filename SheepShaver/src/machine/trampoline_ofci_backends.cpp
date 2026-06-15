@@ -28,8 +28,55 @@
 static tramp_ofci_stop_fn g_stop_fn   = NULL;
 static int                g_collisions = 0;
 
+/* ---- /mmu MINIMALLY-REAL backend state (SS_M18 S1-bringup) -----------------
+ * The guest-physical apertures the V=P identity translate/map honor, published
+ * by the gated launch seam (tramp_ofci_set_mmu_extent). Until set, all extents
+ * are zero -> the standalone unit test keeps the historical identity behaviour
+ * for in-aperture==[low guest RAM] and falls through to NOT-MAPPED logging for
+ * the rest (it never sets extents, so its assertions on the recorded calls are
+ * unchanged in the success path).
+ *
+ * NON-ACCEPTANCE: V=P is a BRINGUP approximation. It is correct only while the
+ * NK's intended map is identity; a non-identity SR/BAT install must route to
+ * S1's paged_mmu_translate. See the S1 Task-0 plan. */
+static uint32_t g_ram_base = 0, g_ram_size = 0;   /* NATMEM/DT RAM window      */
+static uint32_t g_rom_base = 0, g_rom_size = 0;   /* ROM aperture              */
+static int      g_translate_calls = 0;
+static int      g_map_calls       = 0;
+
+/* A sane cacheable, read/write WIMG+PP mode default for V=P RAM/ROM at this
+ * early stage (WIMG=0b0010 M=coherent, PP=0b10 RW). Bringup placeholder — the
+ * real per-EA mode comes from the NK's PTE/BAT once S1's live MMU is wired. */
+#define MMU_MODE_CACHEABLE_RW  0x12u
+
 void tramp_ofci_set_stop_fn(tramp_ofci_stop_fn fn) { g_stop_fn = fn; }
 int  tramp_ofci_collision_count(void)              { return g_collisions; }
+
+void tramp_ofci_set_mmu_extent(uint32_t ram_base, uint32_t ram_size,
+                               uint32_t rom_base, uint32_t rom_size)
+{
+	g_ram_base = ram_base; g_ram_size = ram_size;
+	g_rom_base = rom_base; g_rom_size = rom_size;
+}
+
+int tramp_ofci_mmu_translate_count(void) { return g_translate_calls; }
+int tramp_ofci_mmu_map_count(void)       { return g_map_calls; }
+
+/* Is `virt` inside a V=P identity aperture? At this pre-NK-install stage the
+ * Trampoline addresses (a) low guest-physical [0, RAMSize) where the loaded
+ * MacOS.elf image (~0x200000), BSS, and the claim arena (0x01000000..) live,
+ * (b) the DT-declared RAM window [RAMBase, RAMBase+RAMSize), and (c) the ROM
+ * aperture. All three are identity-mapped (phys==virt) before the NK programs
+ * its own segments. Returns 1 if identity-valid. */
+static int mmu_addr_is_identity(uint32_t virt)
+{
+	if (g_ram_size && virt < g_ram_size)                       return 1; /* low GPA */
+	if (g_ram_size && virt >= g_ram_base &&
+	    virt < g_ram_base + g_ram_size)                        return 1; /* RAM win */
+	if (g_rom_size && virt >= g_rom_base &&
+	    virt < g_rom_base + g_rom_size)                        return 1; /* ROM     */
+	return 0;
+}
 
 /* Does the half-open guest range [base, base+size) overlap the reserved shim
  * page? size==0 is treated as a single byte (a point claim still trips). */
@@ -64,10 +111,29 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 	fprintf(stderr, "  (NON-ACCEPTANCE recording stub - real /mmu owed to S1)\n");
 
 	if (strcmp(method, "translate") == 0) {
-		/* translate (virt -- catch phys mode): identity phys = virt. */
+		/* translate (virt -- catch phys mode): MINIMALLY-REAL V=P.
+		 * If virt is in a guest RAM/ROM identity aperture -> phys=virt with a
+		 * cacheable-RW mode. Else -> NOT-MAPPED (phys=0, mode=0) and a distinct
+		 * log: we do NOT fabricate a PA for an address outside the V=P regime
+		 * (Stop-rule #2/#3). A NOT-MAPPED hit here is itself the FINDING that the
+		 * Trampoline/NK has moved past identity -> S1's live paged MMU is owed. */
 		uint32_t virt = (n_in >= 1) ? (uint32_t)in[0] : 0;
-		if (n_out >= 2) out[1] = (of_cell)virt;     /* phys = virt (identity) */
-		if (n_out >= 3) out[2] = (of_cell)0;        /* mode placeholder */
+		g_translate_calls++;
+		if (mmu_addr_is_identity(virt)) {
+			if (n_out >= 2) out[1] = (of_cell)virt;            /* phys = virt   */
+			if (n_out >= 3) out[2] = (of_cell)MMU_MODE_CACHEABLE_RW;
+			fprintf(stderr, "[S2B-MMU-MINREAL] translate virt=0x%08x -> phys=0x%08x "
+			        "mode=0x%02x (V=P identity, bringup) #%d\n",
+			        virt, virt, MMU_MODE_CACHEABLE_RW, g_translate_calls);
+		} else {
+			if (n_out >= 2) out[1] = (of_cell)0;               /* no phys       */
+			if (n_out >= 3) out[2] = (of_cell)0;               /* no mode       */
+			fprintf(stderr, "[S2B-MMU-MINREAL] translate virt=0x%08x -> NOT-MAPPED "
+			        "(outside V=P aperture RAM[0x%08x,+0x%08x)/ROM[0x%08x,+0x%08x); "
+			        "live (SR/BAT/SDR1) MMU owed to S1) #%d\n",
+			        virt, g_ram_base, g_ram_size, g_rom_base, g_rom_size,
+			        g_translate_calls);
+		}
 		return 0;
 	}
 	if (strcmp(method, "claim") == 0) {
@@ -80,12 +146,30 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 		return 0;
 	}
 	if (strcmp(method, "map") == 0) {
-		/* map (phys virt size mode -- catch): benign ok; tripwire on the mapped
-		 * virtual range overlapping the reserved shim page. */
+		/* map (phys virt size mode -- catch): MINIMALLY-REAL V=P. At this stage
+		 * the NK intends identity, so a map where phys==virt is a no-op-success
+		 * (the underlying NATMEM page is already there). We RECORD the request
+		 * and flag a non-identity (phys!=virt) map loudly: that would be the
+		 * first real divergence from V=P -> S1's live remap is owed, do NOT
+		 * silently accept it as if mapped. Tripwire still fires on a virtual
+		 * range overlapping the reserved shim page. */
+		uint32_t phys = (n_in >= 1) ? (uint32_t)in[0] : 0;
 		uint32_t virt = (n_in >= 2) ? (uint32_t)in[1] : 0;
 		uint32_t size = (n_in >= 3) ? (uint32_t)in[2] : 1;
+		uint32_t mode = (n_in >= 4) ? (uint32_t)in[3] : 0;
+		g_map_calls++;
 		if (range_hits_shim(virt, size))
 			return shim_collide(method, virt, size);
+		if (phys == virt) {
+			fprintf(stderr, "[S2B-MMU-MINREAL] map phys=0x%08x virt=0x%08x size=0x%08x "
+			        "mode=0x%08x (V=P no-op success, bringup) #%d\n",
+			        phys, virt, size, mode, g_map_calls);
+		} else {
+			fprintf(stderr, "[S2B-MMU-MINREAL] map phys=0x%08x virt=0x%08x size=0x%08x "
+			        "mode=0x%08x — NON-IDENTITY map requested; recorded but NOT "
+			        "remapped (live MMU owed to S1) #%d\n",
+			        phys, virt, size, mode, g_map_calls);
+		}
 		return 0;
 	}
 	/* Any other /mmu method is still recorded; benign ok. */

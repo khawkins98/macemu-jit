@@ -1,7 +1,9 @@
 # SS_M18 Stage 3 — two-supervisor reconciliation: DEEP Task-0 recon (BINDING; gates ALL S3 implementation tasks)
 
-> **Status:** rev-0 draft (2026-06-15) — for the three-reviewer pre-implementation red-team (PROCESS +
-> TECHNICAL + ADVERSARY). **This plan is recon + design ONLY.** It pins the three S3 blocking questions,
+> **Status:** rev-2 (2026-06-15) — 4-reviewer pre-implementation red-team folded (PROCESS GO-WITH-FIXES,
+> TECHNICAL GO-WITH-FIXES, ADVERSARY OPTIMISTIC-BUT-OK, SPIKE-FAITHFULNESS FAITHFUL-WITH-GAPS). Binding
+> amendments captured in "Red-team record (rev-2)" below; key inline edits applied. **This plan is recon +
+> design ONLY.** It pins the three S3 blocking questions,
 > SCORES the four candidate architectures, and surfaces the infeasibility branch; it writes NO
 > `SheepShaver/src/**`. S3 implementation (retire-the-forge restructure in `exc_core.cpp` /
 > `sheepshaver_glue.cpp` / `event_sched`/`virt_clock.cpp` / `rom_patches.cpp`, AND the live paged-MMU
@@ -16,7 +18,7 @@
 
 S3 = make SheepShaver STOP forging the NanoKernel's outputs (the `SS_NW_TRAMPOLINE` register-fixup forge
 at `rom_patches.cpp:716`, the C-assigned `SDR1`/zeroed-HTAB/forged-`MSR=0x7072` at
-`sheepshaver_glue.cpp:2806/2805/2918`, the entry-vector synthesis, the synthetic scheduler) and instead
+`sheepshaver_glue.cpp:2806/2804/2918`, the entry-vector synthesis, the synthetic scheduler) and instead
 RUN the real, md5-verified NanoKernel-v02.27 as the **live, permanently-resident, paged, translated-mode
 PPC supervisor**. The real NK has **no handoff boundary** (Q1; re-confirmed `FINDINGS-s3-nk-ownership.md`):
 it `rfi`s @`0x5031003c` into translated supervisor mode and OWNS the live exception vectors (EXT
@@ -57,10 +59,14 @@ A named, NK-independent platform risk is being built **in parallel**
 (`docs/superpowers/specs/2026-06-15-ss-m18-s1-shm-arena-spike.md`): a standalone/synthetic/gated-off proof
 that on macOS arm64 we can stand up SHM segment + aliased RW views + 16 KB-host-page granularity + safe
 overwrite-under-concurrent-reader. This is the single biggest S1-live platform risk, and S1-live co-lands
-in S3. **This Task-0 FOLDS the spike's result as a precondition INPUT (cite by state GREEN/RED/UNKNOWN):**
-spike GREEN → the live-MMU sub-deliverable inherits a de-risked substrate; spike RED/UNKNOWN → any S3
-arch that needs the live MMU carries a platform-risk residue and the close-out band drops one notch. A
-missing spike result = live-MMU substrate UNKNOWN. *(Red-team tension #5 questions this coupling.)*
+in S3. **This Task-0 FOLDS the spike's result as a precondition INPUT.** The spike is now **PROVEN**
+(`test_shm_arena_spike`, commit `acd89dce`) → spike-CONSTRUCTION = GREEN; the live-MMU sub-deliverable
+inherits a de-risked substrate for the SINGLE-remap primitive. **M4 (rev-2): the spike is DECOUPLED from
+the supervisor architecture GREEN-PASS** — the live-MMU substrate is a separately-tracked residue gating
+S3-impl START, not a term in the architecture verdict (resolves tension #4/#5). **Critical carried residue
+(adversary + spike-faithfulness):** the spike proved CONSTRUCTION (the single-remap primitive), NOT LIVE
+OPERATION — the NK's `mtspr`-storm does MULTI-BAT-entry table updates, and multi-entry TRANSACTIONAL
+ATOMICITY remains unproven (see "Carried risk re-aim" below + the spike's OWED list O1–O6).
 
 ## Goal (PASS-vs-DIAGNOSTIC)
 
@@ -81,7 +87,7 @@ PASSES when all of:
    while NK live" predicate.
 3. **Q-S3.3 answered** — the candidate architectures **enumerated AND scored**: REPLACE / CO-OWN
    (scored OUT, evidence) / yield-fully (scored OUT, Q1 no-yield) / thin-shim; a single PICK or a ≤2
-   shortlist (REPLACE vs thin-shim), citing `ppc-cpu.cpp:1986` as the profile-gating precedent. **Includes
+   shortlist (REPLACE vs thin-shim), citing `ppc-cpu.cpp:1991` as the profile-gating precedent. **Includes
    the INFEASIBILITY TEST** + its budget.
 4. **The `sc` syscall sub-wall dispositioned** — the Path A double-increment (`sc`→`execute_illegal`→PC+=8;
    `HANDOFF-NEWWORLD-SUPERVISOR-MMU.md:299-313`) mapped to the chosen arch: under REPLACE the NK's real SC
@@ -90,17 +96,26 @@ PASSES when all of:
    sub-task.
 5. **The live-MMU co-land sub-deliverable SPEC'd at recon level** — which DEFERRED S1 plan
    (window vs softmmu) the chosen arch selects, folding the SHM-arena spike state. NO live MMU built here.
+   **Minor (c): this is a DEFERRED CONDITIONAL spec — a decision tree keyed on spike-state + NK-table shape
+   at first probe — and is BARRED from blocking the supervisor GREEN-PASS** (it cannot be decided at recon
+   when the tables only exist once the architecture is built; re: tension #3).
 6. **Gate-item-0 (parcel provenance):** NK-v02.27 md5 `61c176e90b6365e84e5c660d703e56af` (105280 B) +
    canonical ROM md5 `66210b4f71df8a580eb175f52b9d0f88` re-verified.
 
 **PASS taxonomy (the floor):**
 - **GREEN-PASS** = Q-S3.1/.2 pinned affirmatively AND Q-S3.3 yields a single hostable architecture (or a
-  ≤2 shortlist both proven hostable) AND the SHM-arena spike GREEN → S3-impl may start.
+  ≤2 shortlist both proven hostable, M3-discriminator named) → S3-impl architecture is unblocked.
+  **M4 — the supervisor architecture verdict GREEN-PASSes INDEPENDENTLY of the SHM-arena spike.** The spike
+  is now **PROVEN** (`test_shm_arena_spike`, commit `acd89dce`) → record spike-construction = GREEN. The
+  **live-MMU substrate is a SEPARATELY-TRACKED residue** that gates S3-impl START but does NOT muddy the
+  architecture verdict. (Resolves tension #4: the supervisor pick GREEN-PASSes on its own; the substrate is
+  tracked alongside, not folded into, the architecture grade.)
 - **RESIDUE-PASS** = ≥1 question closed with a conservative residue → a finding, not a green light: BLOCKS
   S3-impl, triggers re-band.
-- **INFEASIBILITY-VERDICT** = Q-S3.3's infeasibility test fires (no architecture hosts a resident
-  translated-mode PPC supervisor in budget) → a reportable program-level blocker, recorded with evidence,
-  NOT a license to forge.
+- **INFEASIBILITY-VERDICT** = Q-S3.3's infeasibility test fires on **positive evidence that no concrete
+  seam set exists** for any surviving candidate (NOT from budget-exhaustion — that yields
+  INFEASIBILITY-UNKNOWN; M2) → a reportable program-level blocker, recorded with evidence, NOT a license to
+  forge.
 
 **DIAGNOSTIC (never a gate):** which SS pieces land REPLACED vs YIELDED; the Execute68k-pair disposition;
 counter-design notes; how far a probe NK boot is expected to get. Unexpected live markers ESCALATED.
@@ -109,10 +124,10 @@ counter-design notes; how far a probe NK boot is expected to get. Unexpected liv
 
 | Doc / source | What it fixes for this Task-0 |
 |---|---|
-| `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` — "Stage 3" | The S3 charter (Q-S3.1/.2/.3, the 4 candidates, gates G3.a–d, env-gate, file ownership, B4 `ppc-cpu.cpp:1986`, the `sc` sub-wall). External doc. Route A + shape NOT relitigated. |
+| `docs/superpowers/plans/2026-06-14-ss-m18-trampoline-lle-program.md` — "Stage 3" | The S3 charter (Q-S3.1/.2/.3, the 4 candidates, gates G3.a–d, env-gate, file ownership, B4 `ppc-cpu.cpp:1991`, the `sc` sub-wall). External doc. Route A + shape NOT relitigated. |
 | `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md` (CANONICAL) | Why the live MMU co-lands with S3; the standing guard; the SHM-arena spike folds as item-0. |
 | `docs/planning/newsheep/FINDINGS-s3-nk-ownership.md` (this recon) | DECISIVE: NK = sole resident owner of DEC/exceptions/68k-dispatch, never yields → CO-OWN/yield-fully scored OUT; the SS Execute68k pair is an SS synthetic. |
-| `docs/planning/newsheep/FINDINGS-s3-ss-reusemap.md` (this recon) | The SS-side KEEP/TOGGLE/RETIRE/YIELD map + the 3 collision points + the env-gate census (`SS_M18_NK_SUPERVISOR` to create; the existing arm at `ppc-cpu.cpp:1986`). |
+| `docs/planning/newsheep/FINDINGS-s3-ss-reusemap.md` (this recon) | The SS-side KEEP/TOGGLE/RETIRE/YIELD map + the 3 collision points + the env-gate census (`SS_M18_NK_SUPERVISOR` to create; the existing arm at `ppc-cpu.cpp:1991`). |
 | `docs/planning/newsheep/FINDINGS-trampoline-re.md` Q1 | SETTLED: resident supervisor, no handoff. |
 | `docs/archive/2026-06/planning/{MMU-NANOKERNEL-MP-PLAN,HANDOFF-NEWWORLD-SUPERVISOR-MMU}.md` | Path A reuse/obstacle map + the `sc` double-increment (`HANDOFF:299-313`). Parked = study. |
 | `docs/planning/M13-FINDINGS-interrupt-delivery.md` (+ RETRACTION) | NewWorld 68k interrupt DELIVERY WORKS — do NOT re-chase. |
@@ -120,14 +135,17 @@ counter-design notes; how far a probe NK boot is expected to get. Unexpected liv
 
 ## Codebase facts (carried; re-verify at recon AND impl — drift ±1–5)
 
-- **Supervisor surface ALREADY newworld-gated** — `check_spcflags` arm `ppc-cpu.cpp:1986` (B4). S3 toggles
+- **Supervisor surface ALREADY newworld-gated** — `check_spcflags` arm `ppc-cpu.cpp:1991` (B4). S3 toggles
   an existing arm.
 - **`exc_core.cpp`** — `ExcEnter:12`/`ExcRfi:104`; **PEM masks = LAW**; they SURVIVE as hardware vectoring.
   `ExcDeliveryDecision:58` survives (pure gate). S3 retires SS's *handler substitution*, not the math.
+  **Guard (minor a): retirement happens at the CALL-SITE/gate** (`ppc-cpu.cpp:2027` hook,
+  `g_exc_entry_table` bypass) — **NEVER inside `exc_core.cpp` mask math.** Touching a PEM-mask line trips
+  the re-plan stop-rule on the FIRST edit.
 - **`sheepshaver_glue.cpp`** (= `src/kpx_cpu/sheepshaver_glue.cpp`): `g_exc_entry_table:142` (RETIRE/gate);
   `execute_68k:1461` (Q-S3.1); Execute68k-pair `:1504-1505` (written `:3140-3143`); `interrupt():1002`;
   `deliver_pending_dec_exception():1122` (RETIRE — the synthetic supervisor body); EXT/DEC ExcEnter
-  `:1254/:1342`; forge `:2806/2805/2918`; `ppc_cpu` static `:1683` (KEEP); `reset_supervisor_for_test()`
+  `:1254/:1342`; forge `:2806/2804/2918`; `ppc_cpu` static `:1683` (KEEP); `reset_supervisor_for_test()`
   TEST-ONLY `:560/:566` (no `machine/reset_supervisor*` file — B2).
 - **The Execute68k pair** points at SS's OWN JIT emulator (`0x50480000/0x50460000`), NOT the ROM's
   `0x50360000`. The parcel has no ref to either KDP slot or `0x50360000` → the pair is an SS synthetic
@@ -136,8 +154,10 @@ counter-design notes; how far a probe NK boot is expected to get. Unexpected liv
   SC handler is `0x50314ac0` (`-1/-2/-3` fast-traps). The NK idle `sc` (r0=0x2e) dead-loops in SS today.
 - **Scheduler (YIELD candidates):** `virt_clock.cpp:108 VirtClockDECPending` (advisory under NK),
   `:71 VirtClockWriteDEC`, `event_sched.cpp:66 process_timers`. The M0–M13 device models survive beneath.
-- **`ppc-cpu.cpp` S3 hook:** `check_spcflags():1986`, `SheepExcDeliverPending():1687` (the hook to retire),
-  the call site `:2027`. (Reusemap pinned `:1991`/`:2027`; re-verify.)
+- **`ppc-cpu.cpp` S3 hook:** `check_spcflags()` is at **`:1972`** (the newworld arm at **`:1991`**);
+  `SheepExcDeliverPending():1687` (the hook to retire) lives in **`sheepshaver_glue.cpp`**, NOT
+  `ppc-cpu.cpp` — only the call site `:2027` is in `ppc-cpu.cpp`. (Reusemap pinned `:1991`/`:2027`;
+  re-verify at impl.)
 - **Master gate to CREATE:** `SS_M18_NK_SUPERVISOR` (default OFF) ∧ `MachineProfileIsNewWorld()`.
 - **Parcel provenance:** NK md5 `61c176e90b6365e84e5c660d703e56af`; ROM md5 `66210b4f71df8a580eb175f52b9d0f88`.
 
@@ -149,7 +169,7 @@ counter-design notes; how far a probe NK boot is expected to get. Unexpected liv
 | Retire SS handler substitution (`exc_core` KEEP vectoring) + dispose `deliver_pending_dec_exception` | **Q-S3.2** | No clean model → "exception-ownership UNKNOWN"; never edit a PEM-mask LAW line ad-hoc. |
 | Quiesce/yield the SS scheduler so NK DEC `0x50313200` is the live rescheduler | **Q-S3.2** | Can't show SS-ticks→0 while NK live → "scheduler-yield UNKNOWN → months". |
 | **PICK the architecture** (REPLACE vs thin-shim; CO-OWN/yield-fully scored out) + gate `SS_M18_NK_SUPERVISOR ∧ newworld` | **Q-S3.3** | No hostable arch → **INFEASIBILITY-VERDICT** (program blocker); ≤2 hostable → A/B to impl. |
-| Retire the forge (`rom_patches.cpp:716`, `glue:2806/2805/2918`, entry-vector synthesis) under the gate | **Q-S3.3** | Scope unbounded → "restructure-scope UNKNOWN → re-plan". |
+| Retire the forge (`rom_patches.cpp:716`, `glue:2806/2804/2918`, entry-vector synthesis) under the gate | **Q-S3.3** | Scope unbounded → "restructure-scope UNKNOWN → re-plan". |
 | Make NK SC `0x50314ac0` live; retire SS `sc`-as-illegal | **`sc` sub-wall** | Still routed through `execute_illegal` → "sc-delivery-gap → named S3-impl sub-task"; do NOT fix double-increment alone + claim closure. |
 | Co-land the live paged MMU (window vs softmmu against NK-installed tables) | **Q-S3.3 + spike (item-0)** | Install can't run under the arch → "live-MMU-UNKNOWN → program-blocking"; spike RED → "substrate UNKNOWN → platform-risk". |
 | Whole S3 effort band | **Q-S3.1 ∧ .2 ∧ .3** | Single hostable arch + clean yield ⇒ months; no hostable arch ⇒ INFEASIBILITY. |
@@ -157,8 +177,8 @@ counter-design notes; how far a probe NK boot is expected to get. Unexpected liv
 ## Q-S3.3 — the candidate architectures + the INFEASIBILITY test
 
 > Enumerate AND score each on: (i) **hosts a resident translated-mode PPC supervisor?** (load-bearing),
-> (ii) reuses the gated arm (`ppc-cpu.cpp:1986`) vs guts, (iii) live-MMU co-land path, (iv) `sc` path,
-> (v) paravirtual-provably-unreachable, (vi) effort band. Cite `ppc-cpu.cpp:1986` for all.
+> (ii) reuses the gated arm (`ppc-cpu.cpp:1991`) vs guts, (iii) live-MMU co-land path, (iv) `sc` path,
+> (v) paravirtual-provably-unreachable, (vi) effort band. Cite `ppc-cpu.cpp:1991` for all.
 
 1. **REPLACE** — SS's synthetic supervisor disabled under the gate; the NK owns EXT/SC/DEC/PROGRAM live;
    `execute_68k` dead under newworld (NK reaches 68k via its own ECB + ROM EmulatorCode `0x50360000`);
@@ -171,25 +191,60 @@ counter-design notes; how far a probe NK boot is expected to get. Unexpected liv
    adapting the `sc`/ECB/Execute68k seams while the resident NK runs translated; SS keeps the bare core.
    The live shortlist alternative to REPLACE.
 
+> **M3 — REPLACE vs thin-shim has NO falsifiable discriminator at recon via G3.a.** Both satisfy
+> SS-scheduler-ticks=0 (G3.a cannot tell them apart). The real discriminator is **static seam-necessity**:
+> **thin-shim REQUIRES live `sc`/ECB/Execute68k shim seams** (it interposes at the lone `bctr`@`0x5031a8b8`
+> 68k entry); **REPLACE RETIRES those seams**. **A ≤2-shortlist is BARRED from GREEN-PASS unless the static
+> discriminator is named AND deferred to a falsifiable S3-impl gate; otherwise the shortlist is a
+> RESIDUE-PASS, not a GREEN-PASS.** (re: tension #2.)
+
 **The INFEASIBILITY test (mandatory).** Q-S3.3 MUST test "what if NEITHER REPLACE NOR thin-shim hosts a
 resident, translated-mode, paged PPC supervisor within budget":
 - **Predicate:** for each surviving candidate, is there a concrete seam set (exception vectoring + DEC +
   68k dispatch + `sc` + live MMU install) under which the NK runs resident WITHOUT SS forging an output? If
   NO candidate has one within budget → **INFEASIBILITY-VERDICT**.
-- **Budget:** ≤90 min static + ≤2 QEMU boots (runbook below) across the surviving candidates. At cap and
-  inconclusive → **INFEASIBILITY-UNKNOWN → program-blocking-risk** (conservative), NOT an optimistic
-  default. *(Red-team tension #1: is this cap responsible?)*
+- **M2 (decisive) — the VERDICT needs POSITIVE no-seam evidence, never exhaustion.** INFEASIBILITY-VERDICT
+  may be emitted ONLY on positive evidence that **no concrete seam set exists** for any surviving candidate.
+  **Budget-EXHAUSTION can ONLY produce INFEASIBILITY-UNKNOWN**, never the VERDICT. **Stop-rule: emitting
+  INFEASIBILITY-VERDICT from budget-exhaustion rather than positive no-seam evidence = STOP.** This is what
+  makes the ≤90 min / ≤2-boot cap responsible (re: tension #1).
+- **Budget:** ≤90 min static + ≤2 QEMU boots (runbook below; INSIDE the ≤4 cap) across the surviving
+  candidates. At cap and inconclusive → **INFEASIBILITY-UNKNOWN → program-blocking-risk** (conservative),
+  NOT INFEASIBILITY-VERDICT and NOT an optimistic default.
 - **Disposition if it fires:** a reportable program-level blocker (Route A may need re-pricing), recorded
   with evidence; NOT a license to forge (Stop-rule #1/#3). "INFEASIBLE/months is the answer" is not a
   trigger to relitigate Route A (Stop-rule #9).
+
+## ★ Carried-risk re-aim (ADVERSARY + SPIKE-FAITHFULNESS convergence — IMPORTANT)
+
+> **The INFEASIBILITY test is aimed at the WELL-PINNED thing and AWAY from the real risk.** Both the
+> adversary and spike-faithfulness reviewers converged here: supervisor reconciliation (REPLACE-is-clearly-
+> hostable, the program's B4) is *already well-pinned* by the NK-ownership finding — the infeasibility menu
+> is largely settled. **S3's biggest CARRIED risk is NOT the supervisor menu; it is the live paged-MMU's
+> MULTI-ENTRY TRANSACTIONAL ATOMICITY.** The NK's `mtspr`-storm performs multi-BAT table updates as a set;
+> the SHM-arena spike (commit `acd89dce`) proved only the **SINGLE-remap** primitive (construction), NOT a
+> map-a-SET/atomic-per-region-set transaction under live CPU-thread access.
+>
+> **Design directive (binding for the S3-impl window port):** port the window using the **ATOMIC one-step
+> `mach_vm_map(VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE)` per-region form** (spike-proven hole-free), **NOT
+> Dolphin's unmap-then-map** sequence (which exposes a transient-unmapped fault window). The spike's OWED
+> list **O1–O6** (`docs/superpowers/specs/2026-06-15-ss-m18-s1-shm-arena-spike.md` §5 S5-note + appendix)
+> is carried by reference as the live-operation residual.
+>
+> **Follow-on de-risk (next S3 item):** a **multi-entry-transaction spike** — extend `test_shm_arena_spike`
+> to the map-a-SET / atomic-per-region-set case + the mixed-perm 4×4KB fork (spike OWED O4, the real
+> Discriminator-A decision). Schedule this as the next S3 platform-risk item, before the live window is
+> built.
 
 ## Probe-boot runbook (QEMU behavioral, address-oracle LAW; ≤4 boots)
 
 1. `bash SheepShaver/tools/qemu-rig.sh --gdbstub --timeout 90`; drive with `SheepShaver/tools/gdbcli.py`.
 2. **Q-S3.2 / G3.a:** bp NK DEC `0x50313200`; observe the NK is the live rescheduler in a genuine mac99
    boot (DEC loop iterating).
-3. **Q-S3.1:** observe the NK reaching 68k via its own ECB + ROM EmulatorCode `0x50360000` (NOT the SS
-   `[KDP+0x1074/0x1078]` pair) — corroborates the static negative-space finding.
+3. **Q-S3.1 (the POSITIVE probe owed by G3.c):** bp the lone `bctr`@`0x5031a8b8` (`mtctr r9; bctr`,
+   r9 runtime-loaded); observe the NK reaching 68k via its own ECB + ROM EmulatorCode `0x50360000` (NOT the
+   SS `[KDP+0x1074/0x1078]` pair). This is the *positive* observation that closes Q-S3.1 — the static
+   negative-space (no hardcoded `0x50360000` branch) does NOT close it on its own.
 4. **`sc` sub-wall:** observe NK SC `0x50314ac0` servicing a real fast-trap.
 5. Record `[QEMU-BEHAVIORAL]`. Residue: unclassifiable in ≤4 boots → "INFEASIBILITY-UNKNOWN →
    program-blocking-risk". **Caveat (S1 G1.e exposure):** the rig may stall before NK MMU-install — if so,
@@ -206,7 +261,10 @@ resident, translated-mode, paged PPC supervisor within budget":
 - **`sc` sub-wall (static):** ~20 min. Residue: "sc-delivery-gap → named S3-impl sub-task."
 - **Live-MMU co-land SPEC (static + fold spike state):** ~30 min. Residue: "live-MMU-substrate UNKNOWN →
   platform-risk; band drops a notch."
-- **QEMU boots: ≤4 total.** More = Stop-rule violation. Do NOT disasm the whole parcel.
+- **QEMU boots: ≤4 TOTAL is the hard cap (M1).** This is NOT additive to 5. A single gdbstub boot serves
+  MANY breakpoints (DEC `0x50313200`, the `bctr`/`0x50360000` 68k dispatch, SC `0x50314ac0`) — one boot,
+  many bp. The infeasibility test's ≤2 boots AND the one-iteration rule's ≤1 re-pin boot are both INSIDE
+  the 4, not on top of it. More than 4 = Stop-rule violation. Do NOT disasm the whole parcel.
 
 ## Gates G3.a–d (S3-IMPL gates restated falsifiable-in-advance)
 
@@ -222,18 +280,19 @@ resident, translated-mode, paged PPC supervisor within budget":
 ## Env-gate (the program's most dangerous flip)
 
 `SS_M18_NK_SUPERVISOR` (default OFF) ∧ `MachineProfileIsNewWorld()`; selected once at boot (reuse
-`ppc-cpu.cpp:1986` precedent). **Transfers the supervisor role — paravirtual must be PROVABLY
-unreachable.** Acceptance: env-on-first, flip-LAST, **revert-on-red = BRANCH revert** (the restructure is
-merged regardless of the flag).
+`ppc-cpu.cpp:1991` precedent). **Transfers the supervisor role — paravirtual must be PROVABLY
+unreachable.** **Proof obligation (minor b):** "paravirtual provably unreachable" = `MachineProfileIsNewWorld()==false`
+audited at the gate SITE + G3.d real-`make e2e` byte-identity. Acceptance: env-on-first, flip-LAST,
+**revert-on-red = BRANCH revert** (the restructure is merged regardless of the flag).
 
 ## File ownership (LAW, sole-in-flight — S3-IMPL, NOT this Task-0)
 
 - `machine/exc_core.cpp` (retire handler substitution; KEEP ExcEnter/ExcRfi — PEM masks = LAW).
 - `SheepShaver/src/kpx_cpu/sheepshaver_glue.cpp` (interrupt/`deliver_pending_dec_exception`/`execute_68k`
-  seams + Execute68k-pair re-bind/retire; forge `:2806/2805/2918`).
+  seams + Execute68k-pair re-bind/retire; forge `:2806/2804/2918`).
 - `machine/event_sched.cpp` + `machine/virt_clock.cpp` (scheduler yield).
 - `rom_patches.cpp` (retire entry-vector synthesis + reg-fixup forge `:716`).
-- `ppc-cpu.cpp` (the `:1986`/`:2027` hook).
+- `ppc-cpu.cpp` (the `:1991`/`:2027` hook; `check_spcflags` body at `:1972`).
 - **Live-MMU co-land:** whichever DEFERRED S1 plan the chosen arch selects (S3 inherits S1's
   memory-translation surface for the co-land).
 - **S3 owns the supervisor+exception+scheduler+forge-retirement surface AND (for the co-land) the
@@ -259,6 +318,8 @@ merged regardless of the flag).
    closure (`HANDOFF:311-313`).
 9. **#8 — "months/INFEASIBLE is the answer," not a trigger to relitigate Route A.** Coordinator re-prices.
 10. **Proceed to S3-impl on a RESIDUE-PASS or INFEASIBILITY-UNKNOWN.** Blocks; coordinator re-bands first.
+11. **#M2 — Emit INFEASIBILITY-VERDICT from budget-exhaustion** rather than positive evidence that no
+    concrete seam set exists. STOP — exhaustion yields INFEASIBILITY-UNKNOWN only.
 
 **One-iteration rule.** Falsified pin → dated entry → ONE bounded re-pin (≤1 window; ≤1 boot from the ≤4
 cap) → resume. SECOND falsification of the same answer ⇒ STOP, re-plan.
@@ -285,7 +346,50 @@ inputs (not re-derived); Route A + shape NOT relitigated.
    `0x50360000` store (a NEGATIVE). Is static-absence + a behavioral boot sound, or does G3.c need a
    positive observation of the NK dispatching 68k via `0x50360000`?
 
-## Red-team record
+## Red-team record (rev-2)
 
-*(empty — to be filled by the three-reviewer pre-implementation red-team: PROCESS + TECHNICAL + ADVERSARY.
-Voting list submitted alongside.)*
+**Round:** 4 reviewers, pre-implementation. **Verdicts:** PROCESS = GO-WITH-FIXES; TECHNICAL =
+GO-WITH-FIXES; ADVERSARY = OPTIMISTIC-BUT-OK; SPIKE-FAITHFULNESS = FAITHFUL-WITH-GAPS. All binding
+amendments folded into rev-2 (inline edits + this record).
+
+**PROCESS (4 Majors + minors):**
+- **M1 — boot budget non-additivity.** ≤4 boots TOTAL is the hard cap; one gdbstub boot serves many
+  breakpoints; the ≤2 infeasibility boots and the ≤1 re-pin reserve are INSIDE the 4. Fixed the
+  additive-to-5 ambiguity. → folded in "Budgets" + runbook header.
+- **M2 (decisive) — INFEASIBILITY-VERDICT needs positive no-seam evidence.** Budget-EXHAUSTION can ONLY
+  produce INFEASIBILITY-UNKNOWN. Added stop-rule: VERDICT-from-exhaustion = STOP. → folded in the
+  INFEASIBILITY test + PASS taxonomy + Stop-rules.
+- **M3 — REPLACE vs thin-shim has no G3.a discriminator.** Discriminator is static seam-necessity
+  (thin-shim needs live `sc`/ECB/Execute68k seams at `bctr`@`0x5031a8b8`; REPLACE retires them). ≤2-shortlist
+  is BARRED from GREEN-PASS unless the discriminator is named + deferred to a falsifiable S3-impl gate, else
+  RESIDUE-PASS. → folded after the thin-shim candidate + GREEN-PASS taxonomy.
+- **M4 — DECOUPLE the SHM-spike from the supervisor GREEN-PASS.** Spike now PROVEN
+  (`test_shm_arena_spike`, commit `acd89dce`) → spike-construction = GREEN; supervisor architecture
+  (Q-S3.1/.2/.3) GREEN-PASSes INDEPENDENTLY; live-MMU substrate = separately-tracked residue gating
+  S3-impl START. → folded in item-0 + GREEN-PASS taxonomy. (Resolves tensions #4/#5.)
+- **minors:** (a) PEM-mask KEEP/RETIRE happens at the call-site/gate (`ppc-cpu.cpp:2027` hook,
+  `g_exc_entry_table` bypass), NEVER inside `exc_core.cpp` mask math → guard added to the `exc_core`
+  codebase fact. (b) Env-gate "paravirtual provably unreachable" proof obligation =
+  `MachineProfileIsNewWorld()==false` audited at the gate site + G3.d real-e2e byte-identity → folded in
+  Env-gate. (c) Live-MMU criterion 5 → a DEFERRED CONDITIONAL spec (decision tree on spike-state + NK-table
+  shape at first probe), barred from blocking GREEN-PASS → folded in PASS item 5 (re: tension #3).
+  (d) **Gating-honesty:** Q-S3.1/.2 are largely CLOSED by the 2 committed findings
+  (`FINDINGS-s3-nk-ownership.md` + the SS-side glue corroboration); Task-0's MARGINAL remaining work =
+  the M3 discriminator + the infeasibility test + the `sc` disposition + the conditional live-MMU spec +
+  the ≤4-boot positive corroboration. The Task-0 grade rests on those, not on re-deriving the (settled)
+  ownership findings.
+
+**TECHNICAL (line-drift fixes, all applied):**
+- `check_spcflags` is at `ppc-cpu.cpp:1972` (the newworld arm at `:1991`) — body text corrected (the
+  parenthetical already had `:1991`).
+- `SheepExcDeliverPending():1687` lives in **`sheepshaver_glue.cpp`**, NOT `ppc-cpu.cpp` — only the call
+  site `:2027` is in `ppc-cpu.cpp`. File label corrected.
+- Forge HTAB memset `:2805` → `:2804` (all four occurrences of the forge triple).
+
+**ADVERSARY (OPTIMISTIC-BUT-OK) + SPIKE-FAITHFULNESS (FAITHFUL-WITH-GAPS) — convergent strategic re-aim:**
+The infeasibility test is aimed at the well-pinned thing (supervisor reconciliation — REPLACE clearly
+hostable, B4) and AWAY from the real risk: the live paged-MMU's **MULTI-ENTRY TRANSACTIONAL ATOMICITY**
+(the NK's `mtspr`-storm does multi-BAT updates; the spike proved only the SINGLE-remap primitive). Captured
+as the prominent "Carried-risk re-aim" section, with the design directive (atomic one-step
+`mach_vm_map(FIXED|OVERWRITE)` per-region, NOT Dolphin unmap-then-map), the spike OWED list O1–O6 carried
+by reference, and the follow-on multi-entry-transaction spike (O4) scheduled as the next S3 item.

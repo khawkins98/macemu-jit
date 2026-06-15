@@ -206,3 +206,34 @@ transaction* (unmap a set / map a set per `mtspr` storm) with the CPU thread bar
 arena. S5 does NOT prove multi-region transactional atomicity or real `mtspr`-churn behavior — that
 residual is OWED to S3's live window milestone. The FALSIFIED dispositions + the S5 residual must be
 reported as loudly as a PASS so S3 does not over-read a green probe as "the live window is fully proven."
+
+---
+
+## Appendix — POST-BUILD faithfulness review (added 2026-06-15, S3 Task-0 rev-2 fold)
+
+**Verdict: FAITHFUL-WITH-DISCLOSED-GAPS.** The built `test_shm_arena_spike` (commit `acd89dce`) is a
+faithful probe of the Dolphin SHM-arena platform primitive — it **PROVEN-de-risks CONSTRUCTION** (named
+SHM backing, true aliasing, sub-range OVERWRITE remap hole-free, the 16 KB granule), **NOT LIVE
+OPERATION**.
+
+**Form-mismatch + design directive (binding for the S3-impl window port):** the spike proved the
+**single-remap** primitive. The live BAT context switch is a **multi-entry transaction** (a `mtspr`-storm
+maps/unmaps a SET of regions) with the CPU thread bare-accessing the whole arena. **Design directive: port
+the window using the ATOMIC one-step `mach_vm_map(VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE)` per-region form
+(spike-proven hole-free), NOT Dolphin's unmap-then-map sequence** (which exposes a transient-unmapped fault
+window to the concurrent reader).
+
+**OWED list (carried to S3's live window milestone — the residuals this spike does NOT close):**
+- **O1** — per-region atomicity vs a *concurrent bare-arena reader*; OR prove the inline-single-thread
+  invariant (that no concurrent reader exists during a BAT swap) so O1 is moot.
+- **O2** — guard-page layout + the ~14 GiB VA scale + `KERN_NO_SPACE` behavior at full guest-RAM + guard
+  reservation.
+- **O3** — measure remap latency under live `mtspr` churn (the swap is on the hot supervisor path).
+- **O4** — the **mixed-perm / non-contiguous 4×4KB fork** = the real Discriminator-A decision (coarse vs
+  fine mappability); the single most load-bearing carried unknown.
+- **O5** — `MAP_JIT` code-cache coexistence (the JIT arena + the SHM arena in one address space).
+- **O6** — a multi-thread torn+fault detector, REQUIRED iff O1 finds a genuine concurrent reader.
+
+**Process note:** a CHANGELOG entry + an UPSTREAM-LINEAGE-SYNC entry are OWED for the Dolphin port (SHA
+`144d19433aa734c19c34e5978a1b817d2aa12663`, GPLv2, "needs validation" / reimplemented-to-spec synthetic
+probe — per the §4 citation ritual).

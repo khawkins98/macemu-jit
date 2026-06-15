@@ -83,13 +83,25 @@ the hardware low-mem vectors (in the separate ExceptionTable parcel @`0x50300000
 
 **Primary evidence (negative-space, decisive on the "own path" half):**
 - EmulatorCode + the DR pair are in **separate parcels** (Configfile: `EmulatorCode @BASE+0x360000`), not
-  in NanoKernel-v02.27. Full-parcel word scan: **zero 4-aligned references** to `0x50360000`/`0x50460000`/
-  `0x50480000`, and **no `lis` immediate** loading hi-half `0x5036/0x5046/0x5048` (the two stray `0x5048`
-  halfword hits are mid-instruction, not word-aligned `addis` immediates).
-- → the NK does NOT branch to the 68k emulator by a hardcoded address; it loads an entry pointer from a
-  **runtime structure** (the ECB / KDP-relative dispatch slots populated at boot) and dispatches via the
-  task-resume path (`b 0x50312cb0`/`bl 0x50312700`). The 68k world is just another task the resident NK
+  in NanoKernel-v02.27. Full-parcel word scan: **zero 4-aligned references** to the three regions
+  `0x50360000`/`0x50460000`/`0x50480000` (verified), and **no `addis` builds** any of
+  `0x50360000`/`0x50460000`/`0x50480000`. The sole word-aligned `lis r8, 0x5048` (`0x5031f388`) composes
+  the ASCII tag `0x50485953`="PHYS" via the very next `ori r8,r8,0x5953` (then `stw r8,4(r9)`) — a
+  property/gestalt tag, NOT an emulator pointer; the other immediate-position `0x5048` (of the ~13 halfword
+  hits) is an `andi.` mask, not an `addis`/`lis` immediate.
+- → the NK does NOT branch to the 68k emulator by a hardcoded address. The lone runtime-pointer 68k entry
+  is the **`bctr`@`0x5031a8b8`** (`mtctr r9; bctr`, with r9 runtime-loaded): the NK loads an entry pointer
+  from a **runtime structure** (the ECB / KDP-relative dispatch slots populated at boot) and dispatches via
+  the task-resume path (`b 0x50312cb0`/`bl 0x50312700`). The 68k world is just another task the resident NK
   schedules and `rfi`s into.
+- **Audit-trail caveat:** the architecture conclusion (NK reaches 68k via a runtime pointer, not a
+  hardcoded branch) HOLDS, but Q-S3.1 closure is NOT discharged by this static negative alone — it is owed
+  a *positive* probe (UNPROVABLE-2/3 / gate G3.c: observe the NK loading r9 and dispatching through the
+  `bctr`). The static negative-space proves only the absence of a hardcoded branch.
+- **SS-side corroboration (the *positive* half of "the pair is an SS synthetic"):** the
+  `[KDP+0x1074/0x1078]=0x50480000/0x50460000` pair is SS-FORGED at `sheepshaver_glue.cpp:3140-3141`
+  (ROMBase+0x480000 / ROMBase+0x460000, the SS "mirror" world). So the pair is provably an SS construct
+  (positive evidence), not a real-NK structure — complementing the parcel's negative-space absence.
 - **SS's `execute_68k` (`sheepshaver_glue.cpp:1461`) is orthogonal and NOT on this path.** The NK never
   `blr`-returns to a host caller (Q1) and never references SS host code. SS's `execute_68k` is the
   forge-era host-side shortcut; the real NK's 68k entry is its own ECB-driven task dispatch.

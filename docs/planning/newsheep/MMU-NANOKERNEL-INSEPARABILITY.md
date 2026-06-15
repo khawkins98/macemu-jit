@@ -26,8 +26,11 @@ run it.** The current NewWorld boot runs the `SS_NW_TRAMPOLINE` **output-forge**
   `rom_patches.cpp:716`.
 - `sheepshaver_glue.cpp:2806` — `SDR1` is assigned **in C** (to `htab_base`); the HTAB is a **zeroed**
   64 KB region (`:2805`), `HTABMASK = 0`.
-- `sheepshaver_glue.cpp:563`/`:566` — the segment registers are reset to **0** and **never
-  programmed** by guest code in the boot path.
+- The segment registers are **never guest-programmed in the boot path** — because the NK's SR install
+  (the unrolled `mtsr 0..15` @`0x503104b4` and the `mtsrin` context loop @`0x50315290`) is **never
+  reached** (the NK install never runs; see step 4). *(Evidence is the un-reached install, NOT
+  `sheepshaver_glue.cpp:566` `reset_supervisor_for_test`, which is a TEST-ONLY helper — advisory
+  2026-06-15 correction.)*
 - `sheepshaver_glue.cpp:2918` — the boot `MSR` is forged to `0x7072` (IR=1, **DR=1**) — translation is
   nominally "on" from instruction one, against the empty/forged tables.
 
@@ -81,14 +84,27 @@ once S3 runs*. There is no intermediate boot in which the MMU is live but the NK
   before S3, so debating which to build first (the 2026-06-15 red-team) resolved to "build neither
   yet." Both plans are preserved DEFERRED (`…s1-taskB-window-build.md`, `…s1-softmmu-first.md`) with
   their reusable analysis intact for the S3 era.
-- **This is the original `S1 → S3 → S4` sequencing, now proven from the code** rather than assumed in
-  the program plan. It strengthens, it does not change, the charter.
+- **S1's deliverable SPLITS (the honest model — advisory 2026-06-15):** the *mechanism*
+  (`paged_mmu_translate()` + the translation/arena machinery) genuinely **precedes** S3 and is
+  buildable/de-riskable NK-independently (Task A is the proof); the *live MMU* (real tables, validated)
+  **co-lands with S3** (it is born when the NK runs). So "S3 blocked by S1" means blocked by
+  **S1-mechanism (DONE)** — NOT a deadlock. This is a *refinement* of the S1→S3 sequencing, not merely
+  a confirmation: it moves S1's *live* sub-deliverable into the S3 node while keeping S1's mechanism a
+  true (and satisfied) prerequisite.
 
 ## Standing guard (for future agents / the S3 planner)
 
-1. **Do NOT attempt a standalone S1 live MMU (window or softmmu) before S3.** There is no live map to
-   translate, and arming translation against the forge kills the boot. Three independent attempts in
-   one night each re-derived this; this doc is the kill-switch for a fourth.
+1. **Do NOT ARM or VALIDATE live translation against today's forge boot** (window or softmmu wired into
+   the running boot). There is no live map to translate; arming against the forged/empty tables faults
+   every access and kills the one working boot. Three independent attempts in one night each re-derived
+   this. **BUT this is NOT a ban on building/de-risking the NK-INDEPENDENT machinery** (advisory
+   2026-06-15 correction): the translation core (Task A, DONE) and — importantly — the **Dolphin
+   SHM-arena foundation feasibility spike** (a standalone, synthetic, gated-off, paravirtual-byte-
+   identical test of SHM segment + aliased RW views + 16 KB-page granularity + safe overwrite-under-
+   concurrent-reader on macOS arm64) ARE buildable now and SHOULD be de-risked before/at S3 kickoff
+   (MILESTONE-WORKFLOW §3, de-fuse named surprises). What is gated on S3 is the LIVE WIRING + VALIDATION,
+   not the platform-primitive de-risk. The deferred window plan's "topology mismatch" is an argument
+   for ADOPTING Dolphin's separate-arena design, not for deferring the whole approach.
 2. **When S3 is opened, the live MMU comes *with* it, not after it.** Its own deep Task-0 should treat
    "the NK programs SR/BAT/SDR1 and we host the resulting regime" and "a paged MMU exists" as the same
    deliverable. The window vs softmmu choice is then a real (and measurable) decision, made against the

@@ -17,7 +17,10 @@
 >   test) is committed; the remaining low-risk step is the STATIC derivation of the genuine NK MMU
 >   constants from the md5-verified parcel + oracle validation (live retirement owed to G1.e/S3) + a cheap
 >   `SS_PROBE_PC` forge-state instrumentation pass (documents the forge, confirms M16). **After that, S1
->   is at its honest ceiling until S3.** Plans: `…2026-06-15-ss-m18-s1-softmmu-first.md` rev-2 (DEFERRED,
+>   is at its honest ceiling until S3.** **★ The full reasoning (why the live MMU ⟺ S3) is the canonical
+>   doc `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md`** — read it before any future S1
+>   live-MMU attempt (it is the kill-switch for re-deriving this a fourth time). Plans:
+>   `…2026-06-15-ss-m18-s1-softmmu-first.md` rev-2 (DEFERRED,
 >   reasons) + `…s1-taskB-window-build.md` rev-2 (DEFERRED) + `…ss-m18-s1-impl-paged-mmu.md`.
 >   *(superseded softmmu-first next-action below):* Task A
 >   is DONE + committed (`fc3ca256` high-BAT insurance, `2bf1526b` translation core + test, `191fe67c`

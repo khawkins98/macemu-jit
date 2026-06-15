@@ -629,3 +629,28 @@ current wall (the NK launch-stub handoff to `0xF030B8` vs the body `0xF10000`) i
 space) — fix that FIRST. Ground the S1 design (window vs softmmu) in the NK's OBSERVED SR/BAT/SDR1
 programming (concrete) rather than the abstract Task-0 fork. When triggered: run the full S1 milestone
 (red-team this Task-0's voting list → window/softmmu impl) autonomously.
+
+## ★ S1 FORMAL MILESTONE FRAMING (2026-06-15, user-directed) — the fast-path spike IS S1's Task-0
+Open S1 as its OWN milestone in FRESH context, WORKTREE-ISOLATED. Run the machine (Task-0 recon →
+3-reviewer red-team → plan) BEFORE any live wiring. The **JIT fast-path spike is S1's Task-0** — standalone
+(oracle + the B1 `dolphin_bat_arena` module in hand, NO live-boot dependency), which is why it goes first.
+
+**Two HARD DoD requirements (BINDING — must be satisfied before the window-vs-softmmu call):**
+1. **Benchmark against REALISTIC access patterns AND steady-state remap frequency — NOT the 139-row bringup
+   write-burst.** The harvested write-trace proves translation CORRECTNESS only; it says nothing about
+   access HOTNESS or steady-state CHURN. Specifically **measure remap cost under the NK's MTSRIN
+   per-context-switch loop @`0xf1529c`**: if segments remap per context switch, the window approach
+   (`mach_vm_map(FIXED|OVERWRITE)` per mapping) may be a SYSCALL STORM — that must be IN EVIDENCE (measured)
+   before the window-vs-softmmu decision, NOT discovered during integration. The spike benchmarks
+   arena-consult vs today's V=P `NATMEM_OFFSET` on realistic access + the steady-state remap cadence.
+2. **Scope S1 CO-JOINTLY with the S3 EXT-seam — they are ONE wall.** Per
+   `MMU-NANOKERNEL-INSEPARABILITY.md`, the live MMU and the resident-supervisor takeover are the same wall:
+   the NK now runs as a RESIDENT and programs its own translations, so **CD-1** (the EXT vector-slot — does
+   the shim read KDP+0x374 or the low-mem ExceptionTable? — `FINDINGS-s3-nk-image-contract.md`) and **CD-3**
+   (the interrupt-source block the NK EXT handler reads) land ON TOP OF S1 integration. Keep the B2
+   contract-diff HOT; treat **S1+S3 as one co-designed thread, not sequential milestones**. The serial
+   single-owned integration spine owns both.
+
+Throughout: gated-OFF byte-identical, `make test-jit`=100, disasm/watchpoint-grounded; UNBLOCK-vs-REPRODUCE
+settled by evidence not cost. Inputs ready for the spike: the oracle (`nk-faithful-oracle.log`), the B1
+shadow-arena module, the proven SHM-arena spikes, the window/softmmu DEFERRED plans (re-validate).

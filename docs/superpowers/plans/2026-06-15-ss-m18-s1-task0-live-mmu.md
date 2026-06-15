@@ -308,5 +308,41 @@ T3/T4 → probes `0x503104b4`/`0x50315290`/`0x503152c4`/`0x50310604` firing (NK 
 **Outcome A**) → `[EXC-NK] FATAL` / sentinel abort (the fault PC) → `[DR68K] first instruction` (past the
 wall). Cleanup: `SheepShaver/tools/ss-reap.sh`.
 
-### FINDING (appended by the coordinator after the run)
-*(pending)*
+### FINDING (coordinator run, 2026-06-15, slot0 `20260615-094921`) — **OUTCOME B (refined), RESIDUE-PASS**
+
+**The gated-ON chain RUNS THE REAL TRAMPOLINE for the first time in-tree** — a major end-to-end
+validation of S2b-impl + S3-impl. The ladder (EXIT=134, abort at SIGTERM-adjacent):
+- `[NK-SUP] T3+T4` all fired — S3 forge-retirement live: SDR1/HTAB forge retired (backing
+  `[69000000..69010000)` mapped, SDR1/HTAB-zero left to the NK), boot-MSR forge retired, Execute68k pair
+  retired, synthetic supervisor retired (g_exc_entry_table DEC/EXT/SC/PROGRAM nulled; sc/program resolve
+  live from KDP+0x390/0x37c).
+- `[S2B-LAUNCH] CHRP entry: pc=0x0020f078 r2=0x001001e8 r3=0 r4=0 r5=0x00211000 (shim opcode=0x180019c2)` —
+  the loader placed `MacOS.elf` + the launch seam set the CHRP ABI + wrote the shim opcode at r5.
+- `[S2B-OFCI] wired of_ci_callback: Core99 DT + 11 backends (/mmu=RECORDING STUB …)`.
+- `[S2B-LAUNCH] entering Trampoline at 0x0020f078 (forge entry 0x50310000 bypassed)` — **the `emul_ppc`
+  override worked; control entered the REAL Trampoline.**
+- The Trampoline EXECUTED — interp/JIT ran its loaded code (`0x00180000…0x001f0000`); heartbeats climbed
+  21M→105M blocks over 50s (`iNK=0 iDR=0 iRAM=105M`, `exc=0/…`, `mmio=S:0/V:0`).
+- `[EXC-NK] EXT-injection STOP: KDP+0x374 unresolved` ×6 — the T2 EXT-shim correctly hit its sentinel.
+- **FATAL: `twi` trap at `pc=0x0000016c`, KDP+0x37c (NK PROGRAM vector) unresolved → STOP (Stop-rule #6).**
+
+**What it means (the refined wall):**
+1. **`0x50310000` (NanoKernelEntry) NEVER fired** (`iNK=0`); **NO `[S2B-MMU-STUB]` call ever issued.** The
+   Trampoline never reached its OF-CI `/mmu` work and never reached the NK install → **no live
+   `(SR/BAT/SDR1)` map was produced.** This is **Outcome B**, not A.
+2. **So S1's live `/mmu` is NOT the immediate next blocker.** An EARLIER wall sits in front of it: the
+   real Trampoline spins in its own early code (105M blocks, no forward progress, no OF-CI `/mmu` call)
+   and then traps `twi @ 0x16c` (a guest assertion/branch-to-low-address, vectoring to the unresolved NK
+   PROGRAM handler). **The next action is Trampoline early-bringup, BEFORE S1.**
+3. **Candidate causes (for the bringup sub-task, cheap → expensive):** (a) the provisional **r3/r4 = 0**
+   CHRP ABI (env-overridable `SS_M18_R3`/`SS_M18_R4` — sweep first, no recompile); (b) whether the
+   Trampoline's `bctrl` to r5=`0x211000` actually invokes the EXEC_NATIVE shim (no `[S2B-MMU-STUB]`
+   suggests the OF-CI path is never entered — the shim opcode/invocation needs a probe); (c) an early
+   Trampoline dependency (a memory/device value) that spins.
+
+**Disposition: RESIDUE-PASS** (the honest expected case). The restructure (S2b+S3) is VALIDATED running
+end-to-end; the live map is not produced; **the next wall is Trampoline early-progress (r3/r4 / r5-shim
+invocation / early-init), pinned at `twi @ 0x16c`, which precedes S1's live `/mmu`.** S1-live remains
+owed but is gated behind this earlier bringup. Re-run candidate: `SS_M18_R3`/`R4` sweep + an
+`SS_PROBE_PC=0x211000` (shim entry) / `0x20f078` (ELF entry) trace to see how far early init gets and
+whether r5 is ever called.

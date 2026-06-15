@@ -1,6 +1,9 @@
 /*
  *  paged_mmu.cpp - PowerPC classic 32-bit MMU translation core (SS_M18 S1 Task A2)
  *
+ *  NOTE: compiled ONLY by the machine/ unit-test Makefile; NOT linked into the
+ *  SheepShaver binary yet (S1/S2a are inert until S3/S2b wiring).
+ *
  *  Pure, mechanism-agnostic effective->physical translation:
  *    1. BAT match first (the 4 DBAT pairs: BEPI/BL/BRPN, Vs/Vp validity).
  *    2. segment + hashed-PTE (HTAB) walk: SR -> VSID, primary/secondary PTEG

@@ -12,8 +12,10 @@
 >
 > ---
 >
-> *(original rev-1 body retained below for the eventual window milestone — re-validate against the
-> softmmu-harvested constants + the overwrite spike before use.)*
+> *Everything below is the SUPERSEDED rev-1 body — including the "UN-PARKED / WINDOW-SAFE" verdict,
+> which rev-2 (this header) REVERSED. Do not action it.* (Retained for the eventual S3-era window
+> milestone — re-validate against the NK-installed tables before use; see
+> `docs/planning/newsheep/MMU-NANOKERNEL-INSEPARABILITY.md`.)
 >
 > This plan builds **Task B (the window)** — the
 > host-side `vm_remap` shadow-remap of the NATMEM RAM/ROM reservations at `mtspr` BAT/SDR1/SR time —

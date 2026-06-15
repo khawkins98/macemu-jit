@@ -1,5 +1,10 @@
 # S1 window de-risk recon — does the live NK PTE engine touch JIT-covered RAM/ROM?
 
+> **⚠ SUPERSEDED 2026-06-15:** the window is DEFERRED and the live coverage question is owed to S3,
+> NOT a near-term build. This doc's "WINDOW-SAFE-BY-MECHANISM" verdict was the high-water optimism the
+> same night's `MMU-NANOKERNEL-INSEPARABILITY.md` finding reversed (there is no live `(SR/BAT/SDR1)` map
+> to cover until the real NK install runs, which only S3 provides). Read that doc.
+
 > **★ rev-2 (2026-06-15) — ADVERSARY fold (verdict CORRECTED; recon core upheld, one over-claim cut).**
 > The independent adversary re-derived the parcel and **rejected WINDOW-UNSAFE** (no primary evidence
 > any PTE/`tlbie` path writes a JIT-covered EA) **AND rejected "SAFE-BY-ANALYSIS" as an over-claim.**

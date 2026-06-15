@@ -1,6 +1,9 @@
 /*
  *  openfirmware_ci.cpp - OF-CI callback + Core99 device-tree model (SS_M18 S2a).
  *
+ *  NOTE: compiled ONLY by the machine/ unit-test Makefile; NOT linked into the
+ *  SheepShaver binary yet (S1/S2a are inert until S3/S2b wiring).
+ *
  *  STRUCTURALLY INERT (no emulator caller). See openfirmware_ci.h for scope.
  *
  *  Dispatch surface (statically closed per FINDINGS-trampoline-re Q0-A/B,

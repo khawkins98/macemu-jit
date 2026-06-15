@@ -21,8 +21,8 @@
 | Kickoff: Discriminator-A | ✅ DONE — COARSE → S1 path a | — | — |
 | Kickoff: donor studies (`DONOR-NOTES.md`) | ✅ DONE | — | — |
 | Kickoff: 9.2.x ISO | ✅ DONE — in hand (`ASSETS` R2) | copy into asset area at S4 | — |
-| **S1 — paged MMU** | **▶ Task A DONE; live MMU (window+softmmu) BOTH DEFERRED → live paged MMU is INSEPARABLE FROM S3** | **Task A complete + the autonomously-completable S1 ceiling** (`fc3ca256/2bf1526b/191fe67c`+fix, test-jit=100): `paged_mmu_translate()` translation core + oracle test. Window plan → DEFERRED (WRONG-BUILD-ORDER: `vm_remap`-OVERWRITE-on-live-NATMEM unproven+topology-mismatched). Softmmu-first plan → DEFERRED (**adversary FALSIFIED the premise from code: SS runs the `SS_NW_TRAMPOLINE` output-FORGE, NOT the NK MMU-install — SDR1 set in C, SRs never programmed, `mtsrin`@0x50315290 never runs → there is NO live map to harvest, and arming a softmmu vs the empty forged HTAB would kill the boot**). **KEY STRUCTURAL FINDING (confirms original S1→S3 sequencing): the live paged MMU needs a guest that actually programs SR/BAT/SDR1, which only the real NK install (Route A / S3 two-supervisor reconciliation) provides.** **NEXT (completable now, low-risk):** STATIC derivation of the genuine NK MMU constants from the md5-verified parcel + oracle validation (live retirement owed to G1.e/S3) + a cheap `SS_PROBE_PC` forge-state instrumentation pass. `…ss-m18-s1-impl-paged-mmu.md` | **live MMU: S3** |
-| S2a — OF-CI + Core99 DT | **Task-0 recon DONE → RESIDUE-PASS (3-reviewer folded); S2a-impl CLEARED** | open S2a-impl: new `openfirmware_ci.{cpp,h}` + DT model (incl scaffolding nodes `/chosen` `/aliases` `/options` `/rtas` `/cpus` `/rom/macos`) + unit test. **Binding (ADV-1):** finddevice = component-wise unit-address-insensitive match; battery uses SHORT static spellings. interrupt-map value + DT-coverage closure = named hand-offs to first integration boot | — (unblocked) |
+| **S1 — paged MMU** | **✅ Task A (mechanism) DONE + ✅ static NK-MMU constants DONE; live MMU (window+softmmu) BOTH DEFERRED → live paged MMU is INSEPARABLE FROM S3** | **Mechanism DONE** (`fc3ca256/2bf1526b/191fe67c`+fix, test-jit=100): `paged_mmu_translate()` translation core + oracle test. **Static NK-MMU constants DONE** (`FINDINGS-s1-mmu-constants.md`, `f77702d9`). **Verdict: S1 live MMU ⟺ S3 — there is no live `(SR/BAT/SDR1)` map until the real NK install runs (S3); do NOT attempt a standalone S1 live MMU. Full reasoning: `MMU-NANOKERNEL-INSEPARABILITY.md` (canonical).** Both live-MMU plans DEFERRED (re-validate at S3 against NK-installed tables): `…2026-06-15-ss-m18-s1-taskB-window-build.md` (DEFERRED), `…2026-06-15-ss-m18-s1-softmmu-first.md` (DEFERRED). **S1 residual next (only this remains pre-S3):** the cheap `SS_PROBE_PC` forge-state instrumentation pass; live MMU folded into S3. `…ss-m18-s1-impl-paged-mmu.md` | **live MMU: S3** |
+| S2a — OF-CI + Core99 DT | **✅ S2a-impl DONE (inert)** | S2a-impl complete (`14c9384e` + fixes `6c892840`): new `machine/openfirmware_ci.{cpp,h}` + DT model (scaffolding nodes `/chosen` `/aliases` `/options` `/rtas` `/cpus` `/rom/macos`) + unit test; compiled by the machine/ unit-test Makefile, NOT linked into the binary (inert until S2b wiring). **Binding (ADV-1):** finddevice = component-wise unit-address-insensitive match; battery uses SHORT static spellings. interrupt-map value + DT-coverage closure = named hand-offs to first integration boot | — |
 | S2b — loader + /mmu + handoff | blocked | — | S1 |
 | S3 — two-supervisor reconciliation | blocked | S3 deep Task-0 | S1 + S2 |
 | S4 — disk IM-init → CGRP | blocked | S4 Task-0 (live trace) | S3 (ISO in hand) |
@@ -41,6 +41,8 @@
   (`DIRECT_ADDRESSING`, host = `NATMEM_OFFSET + guest`) — the addressing mode the **paravirtual** profile
   uses. **CFM/PEF** = Code Fragment Manager / Preferred Executable Format (Mac shared-library code).
   **PEM masks** = the MSR entry/exit bitmasks in `exc_core.cpp` (treated as LAW — do not edit casually).
+  **G1.e** = the live paged-boot gate that retires the MMU coverage predicate (a real boot under
+  translation) — only fires under S3 (the live MMU is an S3 sub-deliverable).
 
 ## Program goal (PASS-vs-DIAGNOSTIC)
 
@@ -139,6 +141,10 @@ Stop-rule.
                    PASS: CGRP guest-built; next wall = Cuda IFR/IER
 ```
 
+> **⚠ 2026-06-15:** S1's LIVE MMU is now an S3 sub-deliverable (`MMU-NANOKERNEL-INSEPARABILITY.md`), so
+> the "S3 blocked by S1" edge is partly circular — the live-MMU node and S3 are one. S1's MECHANISM
+> (Task A) is the only truly-S1 prerequisite and is DONE. Reconcile the graph when S3 is opened.
+
 ## Blocking / dependency table
 
 | Concern | Blocked by | Residue disposition (partial-findings-beat-stalling) |
@@ -236,8 +242,8 @@ concurrently. S1 must NOT touch `sheepshaver_glue.cpp` (S2/S3).**
 - **Gates.** G2a.b unit test drives all 21 services + call-method names + `key?`/`key`/`reset-all` →
   unresolved = 0. G2a.c DT answers every finddevice/getprop/nextprop the Trampoline issues. G2a.e
   `make test-jit`=100; new-file inertness substitute OK (genuinely new code).
-- **File ownership.** New: `src/openfirmware_ci.cpp` + `src/include/openfirmware_ci.h` + a unit test under
-  `machine/` (Makefile target pre-wired). `call-method` backends wire via injected callbacks
+- **File ownership.** New: `src/machine/openfirmware_ci.cpp` + `src/machine/openfirmware_ci.h` + a unit
+  test under `machine/` (Makefile target pre-wired). `call-method` backends wire via injected callbacks
   (dev_cuda/adb_stub decoupling pattern).
 
 **S2b — loader + `/mmu` + NanoKernelEntry handoff (acceptance serialized behind S1).**

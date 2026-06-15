@@ -179,11 +179,15 @@ implementation has been planned as a staged program; kickoff recon is done. Stat
   (`FINDINGS-discriminator-a.md`); **donors extracted** (`DONOR-NOTES.md`); **9.2.x ISOs in hand**
   (`ASSETS-AND-TOOLING.md` R2 — S4 asset block cleared).
 
-**▶ NEXT ACTION: open Stage 1's OWN deep Task-0 + red-team** (the NewWorld paged MMU). Now leaning
-tractable (Discriminator-A COARSE): confirm the Dolphin shadow-arena maps onto our NATMEM/`vm_alloc`
-reservation layer + the 80 JIT `RMEMBASE` sites, and design the S1 MMU-oracle unit test (diff our
-shadow-arena vs a reference translator on identical `(SR/BAT/SDR1, EA)` → equal PA, under the JIT path).
-Stage details + the differential-oracle test ladder: the program plan rev-4. Do NOT relitigate Route A.
+**▶ NEXT ACTION (re-banded 2026-06-15):** **S1's mechanism is DONE** — Task A
+(`paged_mmu_translate()` + oracle test) is committed and the static NK-MMU constants are derived
+(`FINDINGS-s1-mmu-constants.md`). **S1's LIVE paged MMU (the window + the softmmu) is DEFERRED and is
+INSEPARABLE FROM S3** — there is no live `(SR/BAT/SDR1)` map until the real NanoKernel install runs,
+which only S3 (two-supervisor reconciliation) provides. **S1 live MMU ⟺ S3; do NOT attempt a standalone
+S1 live MMU — see `MMU-NANOKERNEL-INSEPARABILITY.md`** (the canonical finding + kill-switch). The only
+truly-S1 work remaining pre-S3 is a cheap `SS_PROBE_PC` forge-state instrumentation pass; the live MMU is
+folded into S3. **The next real work is S3 (months-scale, a user decision).** S2a-impl is DONE (inert).
+Live ▶ box: `docs/HANDOFF.md`. Do NOT relitigate Route A.
 
 **Standing rules for every milestone:** branch `macos-arm64`; never push unprompted; slot boots only
 (`ss-slot-boot.sh`, never global pkill); `make test-jit` = 100; all new code behind an env gate +

@@ -1,9 +1,22 @@
 # SS_M18 Stage 3 — two-supervisor reconciliation: S3-IMPL (REPLACE + EXT-injection shim) — IMPLEMENTATION milestone
 
-> **Status:** rev-1 DRAFT (2026-06-15) — awaiting red-team. **This is the S3-impl build plan.** It
-> executes the BINDING architecture verdict from `FINDINGS-s3-two-supervisor.md` (GREEN-PASS): **REPLACE +
-> a permanent, bounded host→NK EXT-injection shim**. It writes `SheepShaver/src/**` under a default-OFF
-> master gate, retires SS's synthetic supervisor / forge under that gate, and co-lands the live paged MMU.
+> **Status:** rev-2 (2026-06-15) — red-team FOLDED (PROCESS + TECHNICAL + ADVERSARY all landed). **This is
+> the S3-impl build plan.** It executes the BINDING architecture verdict from
+> `FINDINGS-s3-two-supervisor.md` (GREEN-PASS): **REPLACE + a permanent, bounded host→NK EXT-injection
+> shim**. It writes `SheepShaver/src/**` under a default-OFF master gate, retires SS's synthetic supervisor
+> / forge under that gate, and co-lands the live paged MMU.
+>
+> **★★ MILESTONE RE-SCOPE (rev-2 headline, ADVERSARY-forced):** this milestone delivers the **RESTRUCTURE +
+> MERGE-RESIDUE only** — T1–T4 land gated-OFF (paravirtual byte-identical, branch-revert-safe), and the
+> structural seam is in place. **GREEN-PASS (the gated NK boot reaching G3.a/b/c) is NOT reachable this
+> milestone**: T4's "S2 landed" precondition is FALSIFIED — S2b (the Trampoline loader / OF-CI / `/mmu`
+> handoff that *reaches* the NK) is unbuilt, and the forge IS the current substitute for that unbuilt
+> loader. Until S2b lands, the live KDP vector table is never installed, so T2's vector-resolve trips its
+> own sentinel when gated-ON and the install cannot run. **S2b is the parallel critical-path blocker for
+> GREEN-PASS.** What this milestone CAN deliver and merge: T1 (master gate scaffold), T2 (EXT-injection
+> shim, validated by a PLANTED-TABLE micro-test, not a live boot), T3 (synthetic-supervisor retirement,
+> gated-OFF), T4 (forge retirement, gated-OFF) — all structurally inert at default-OFF. T5 + the gate flip
+> are DEFERRED behind S2b.
 >
 > **★ The architecture is SETTLED, not relitigated.** Per the BINDING AMENDMENT
 > (`FINDINGS-s3-two-supervisor.md` §★): pure REPLACE for the **synchronous** seams (NK→host: `bctr`@
@@ -16,10 +29,16 @@
 > (resident supervisor, no handoff) SETTLED; co-residency-impossible SETTLED; REPLACE+EXT-shim is the
 > BINDING pick. CO-OWN / yield-fully / thin-shim are scored-out and NOT reopened.
 >
-> **★ S3-impl START preconditions (BINDING, from the verdict §6 + Task-0 M4):** (1) S2 landed (loader +
-> OF-CI + Core99 DT + `/mmu` handoff — the NK must be *reached* before it is *hosted*); (2) the
-> multi-entry-transaction (atomicity) spike landed (`cd7a62b6`). T1–T4 may start on S2-landed alone; **T5
-> (the live-MMU co-land) additionally requires the atomicity spike + a T4 install-runs pre-flight.**
+> **★ S3-impl START preconditions (BINDING — rev-2 SPLIT by milestone outcome):**
+> - **The RESTRUCTURE (T1–T4, gated-OFF, THIS milestone)** needs only: the multi-entry-transaction
+>   (atomicity) spike landed (`cd7a62b6`, DONE) + S1-mechanism (`paged_mmu_translate`, DONE). T1–T4 write
+>   the seam inert at default-OFF, validated by `make test-jit`/`make e2e`/`make bench` and (for T2) a
+>   PLANTED-TABLE micro-test — none of which need the live NK install.
+> - **GREEN-PASS (T5 + the gate flip)** ADDITIONALLY needs **S2 landed (loader + OF-CI + Core99 DT + `/mmu`
+>   handoff — the NK must be *reached* before it is *hosted*)**. ★ This precondition is currently
+>   **FALSIFIED** — S2b is unbuilt; the forge is the substitute for the unbuilt loader. So GREEN-PASS is
+>   DEFERRED behind S2b; T5 + the atomicity-spike-backed window + the T4 install-runs pre-flight all wait on
+>   S2b. **S2b is the parallel critical-path track.**
 
 ## Goal (PASS-vs-DIAGNOSTIC)
 
@@ -51,13 +70,17 @@ byte-identical. PASSES when all of:
 - **G3.d** — paravirtual byte-identical via REAL `make e2e` + multi-run soak (`SS_E2E_RUNS=N` median±CV%)
   — NOT the inertness substitute. **revert-on-red = BRANCH revert.** Checked at EVERY task gate T1–T5.
 
-**PASS taxonomy:**
+**PASS taxonomy (Maj3 — disambiguated; "RESIDUE" here MERGES, the opposite of Task-0-rev-2:line-113 where a recon residue BLOCKS):**
 - **GREEN-PASS** = T1–T5 green AND the gated newworld boot reaches G3.a/b/c with paravirtual G3.d
-  byte-identical → S3 complete, hand to S4.
-- **RESIDUE-PASS** = the restructure lands + paravirtual byte-identical, but the gated boot stalls before a
-  G3 landmark (e.g. pre-NK-install, the rig exposure Task-0 flagged) → a finding, not a green light: the
-  restructure MERGES (branch-revert keeps paravirtual safe), the gate stays OFF, the stall is a named
-  residue, coordinator re-bands the boot-bringup.
+  byte-identical → S3 complete, hand to S4. **NOT reachable this milestone** (needs S2b first — see the
+  rev-2 re-scope header).
+- **GATED-MERGE-RESIDUE** (rev-2 rename of "RESIDUE-PASS") = the restructure (T1–T4) lands + paravirtual
+  byte-identical, but the gated boot stalls before a G3 landmark (e.g. pre-NK-install — the EXPECTED case
+  this milestone, since S2b has not landed the loader that reaches the NK) → a finding, not a green light:
+  the restructure MERGES (branch-revert keeps paravirtual safe), the gate stays OFF, the stall is a named
+  residue, coordinator re-bands the boot-bringup behind S2b. **Carried OPEN residue: the owed live
+  EXT-shim confirmation (G(T2) — the planted-table micro-test stands in until S2b lets the real install
+  run).** This is THIS MILESTONE's target outcome.
 
 **DIAGNOSTIC (never a gate):** which SS pieces REPLACED vs YIELDED; the Execute68k disposition; how far the
 gated NK boot got; remap counts at T5. `0xDEADBEEF` where a real PA/vector is expected is ESCALATED.
@@ -98,13 +121,20 @@ gated NK boot got; remap counts at T5. `0xDEADBEEF` where a real PA/vector is ex
   `SS_NW_TRAMPOLINE` DEAD when master ON; `SS_NW_MM_SWITCH`/`MM_POOL` `:867` INHERIT iff NK respects
   `0x68ff5800`; `SS_NW_EE_RISER` `:2576` INHERIT/RETIRE the stub.
 - **NK real vectors (G3.b):** EXT `0x50314880`/SC `0x50314ac0`/DEC `0x50313200`/PROGRAM `0x50314700`,
-  installed into the runtime **KDP+0x360** at boot. SC `-1/-2/-3` fast-traps retire SS `sc`-as-illegal
+  installed into the runtime KDP vector table at boot. **★ TECHNICAL MINOR (rev-2):** the table BASE is
+  KDP+0x360; the **EXT vector slot is at KDP+0x374** (= the cell holding `0x50314880`), NOT KDP+0x360
+  itself. T2 reads the EXT entry from **KDP+0x374**. SC `-1/-2/-3` fast-traps retire SS `sc`-as-illegal
   (Path A double-increment, `HANDOFF:299-313` — moot once the real vector owns `sc`; fixing the increment
   ALONE is NOT closure, Stop-rule #5).
-- **`paged_mmu_translate()` (S1-mechanism DONE):** `machine/paged_mmu.cpp`, the
-  `(SR[16],BAT[16],HIGH_BAT[16],SDR1,EA)→PA` core T5 reuses.
-- **NATMEM = SEPARATE fixed mach allocations** (`main_unix.cpp`): RAM `:1974`, ROM `:2000`. T5 remaps the
-  separate sub-ranges (Dolphin SEPARATE-arena, NOT MEM_BULK).
+- **`paged_mmu_translate()` (S1-mechanism DONE):** `machine/paged_mmu.cpp:105`, signature
+  `paged_mmu_translate(sr[16], bat[16], sdr1, ea, msr_dr, *out_pa)` — **★ TECHNICAL MINOR (rev-2): there is
+  NO separate `HIGH_BAT[16]` param** (the high BATs are folded into the `bat[16]` array) AND it takes
+  **`msr_dr`** (real-mode bypass when DR=0). T5 reuses this exact signature.
+- **NATMEM allocation (`main_unix.cpp`): CONFIG-DEPENDENT.** RAM `:~1974`, ROM `:~2000`; the
+  `ram_rom_areas_contiguous` branch (`:~1972`) means RAM+ROM may be a SINGLE contiguous mach allocation OR
+  two separate fixed allocations depending on host layout. **★ TECHNICAL MINOR (rev-2): T5 must read the
+  actual area bases/sizes at runtime, NOT assume two always-separate allocations.** Remap the sub-ranges
+  Dolphin-SEPARATE-arena style, NOT MEM_BULK.
 - **Parcel provenance:** NK md5 `61c176e90b6365e84e5c660d703e56af`; ROM md5 `66210b4f71df8a580eb175f52b9d0f88`.
 
 ## The seam contradiction the EXT-injection shim resolves (read before T2)
@@ -133,22 +163,29 @@ polled host flag). **T2 is load-bearing; sequence it BEFORE any retirement (T3) 
 - [ ] Add an inert scaffold guard at `ppc-cpu.cpp:~2027` (`if (g_nk_supervisor) { /* T2/T3 land here */ }`
       empty body) — paravirtual byte-identical; the gated path is reachable-but-inert.
 - [ ] Audit `MachineProfileIsNewWorld()==false` at the gate SITE. CLEAN PPC recompile.
-- **G(T1):** `make test-jit`=100; real `make e2e` A/B confirms no paravirtual divergence. Satisfies none of
-  G3.a–c yet; establishes the gate G3.d polices all tasks.
+- **G(T1):** `make test-jit`=100; real `make e2e` A/B confirms no paravirtual divergence; **`make bench`
+  delta within noise (Maj4 — the gate scaffold sits in the spcflag hot path; prove the inert guard is free,
+  not just byte-identical).** Satisfies none of G3.a–c yet; establishes the gate G3.d polices all tasks.
 
 ### T2 — the EXT-injection shim (LOAD-BEARING)
 - [ ] Re-verify the host-IRQ source (`glue:270,325`), the EXT ExcEnter site (`:1254`), `g_exc_entry_table:142`.
 - [ ] Under the gate, in the spcflag poll (`ppc-cpu.cpp:~2027`): poll the host-IRQ pending flag (the KEPT
       device-model latch) instead of routing through `deliver_pending_dec_exception()`.
-- [ ] Resolve the NK's REAL EXT vector from the live KDP table (`KDP+0x360`) / installed MSR[IP] prefix;
-      cache it. **Do NOT hardcode `0x50314880`** (resolve from the live table — hardcoding is
-      QEMU-as-oracle-class). Sentinel guard: resolved vector `0x0`/`0xDEADBEEF` ⇒ STOP (install hasn't run).
+- [ ] Resolve the NK's REAL EXT vector from the live KDP table (**EXT slot = KDP+0x374**, table base
+      KDP+0x360) / installed MSR[IP] prefix; cache it. **Do NOT hardcode `0x50314880`** (resolve from the
+      live table — hardcoding is QEMU-as-oracle-class). Sentinel guard: resolved vector `0x0`/`0xDEADBEEF`
+      ⇒ STOP (install hasn't run — the EXPECTED gated-ON state this milestone, pre-S2b).
 - [ ] Inject EXT via the KEPT `ExcEnter(..., EXC_EXTERNAL, <NK table>)` re-pointed at the NK vector, NOT
       `g_exc_entry_table`. KEEP exc_core mask math (LAW). CLEAN PPC recompile.
-- **G(T2):** `make test-jit`=100; paravirtual byte-identical (gated OFF) via real `make e2e` A/B + soak; a
-  gated-ON micro-assertion (an asserted device IRQ resolves to parked-PC `0x50314880` via the shim, NOT
-  `g_exc_entry_table`) — if the live install hasn't run yet (pre-T4), the LIVE confirmation is owed to T5
-  (record the LIMIT, do not fabricate). Satisfies the host→NK-EXT half of G3.b.
+- **G(T2):** `make test-jit`=100; paravirtual byte-identical (gated OFF) via real `make e2e` A/B + soak;
+  **`make bench` delta within noise (Maj4 — the EXT-poll is in the spcflag hot path).** **★ C1 — the G(T2)
+  observable is a PLANTED-TABLE micro-test, NOT the live boot (which needs S2b):** inject a SYNTHETIC
+  ExcEntryTable at a known guest address, point the shim's resolver at it, assert an asserted device IRQ
+  (a) resolves the EXT slot from the planted table and (b) vectors via `ExcEnter(planted tbl)` to the
+  planted vector — and (c) that `g_exc_entry_table` is NOT consulted on that path. This makes G(T2)
+  non-vacuous without the live install. The LIVE confirmation (resolve from the NK's REAL KDP+0x374 after
+  the install runs) is **carried as OPEN residue to GREEN-PASS behind S2b** (record the LIMIT, do not
+  fabricate). Satisfies the host→NK-EXT half of G3.b (mechanism-proven; live-confirmation owed).
 
 ### T3 — retire the synthetic supervisor under the gate (DEPENDS ON T2)
 - [ ] Under the gate, STOP calling `deliver_pending_dec_exception()` at `:~2027` — the NK's own DEC handler
@@ -156,8 +193,12 @@ polled host flag). **T2 is load-bearing; sequence it BEFORE any retirement (T3) 
 - [ ] YIELD the scheduler under the gate: `process_timers` quiescent; `VirtClockWriteDEC` suppress the host
       `on_dec_write`; `VirtClockDECPending` advisory only (delivery gate must NOT consult it).
 - [ ] PEM-mask LAW: retirement at the call-site/gate ONLY. CLEAN PPC recompile.
-- **G(T3):** `make test-jit`=100; paravirtual byte-identical (gated OFF) via real `make e2e`+soak;
-  instrumented gated-ON: SS-scheduler-ticks=0 while NK live. Satisfies G3.a + the table-bypass half of G3.b.
+- **G(T3):** `make test-jit`=100; paravirtual byte-identical (gated OFF) via real `make e2e`+soak. **★ Maj1
+  — the gated-ON "SS-scheduler-ticks=0 while NK live" observable is UNOBSERVABLE this milestone** (no live
+  NK until S2b lets the install run): annotate it **DEFERRED-TO-T5/GREEN-PASS as a LIMIT**, not a checkable
+  T3 gate now. What IS checkable at T3: the retirement compiles inert, paravirtual byte-identical, and a
+  gated-ON static assertion that the `deliver_pending_dec_exception()` call-site is bypassed +
+  `g_exc_entry_table` nulled. Satisfies the table-bypass half of G3.b structurally; G3.a deferred.
 
 ### T4 — retire the forge under the gate so the NK's real install runs (DEPENDS ON T3)
 - [ ] Under the gate, retire `rom_patches.cpp:716` reg-fixup (`:729-900+`) so the NK's real install writes
@@ -168,9 +209,12 @@ polled host flag). **T2 is load-bearing; sequence it BEFORE any retirement (T3) 
       `bctr`@`0x5031a8b8`; account for the `:1504-1505` read (must not fire under the gate).
 - [ ] Confirm NK SC `0x50314ac0` owns `sc`; retire SS `sc`-as-illegal (NOT the double-increment fix alone).
       CLEAN PPC recompile.
-- **G(T4):** `make test-jit`=100; paravirtual byte-identical (gated OFF)+soak; gated-ON probe (co-checked at
-  T5): the NK install runs (SDR1 ≠ forged C value; real `mtsrin`/BAT writes present), NOT a pre-install
-  stall. Satisfies G3.c + the forge-retirement precondition T5 needs.
+- **G(T4):** `make test-jit`=100; paravirtual byte-identical (gated OFF)+soak. **★ Maj2 — the T4 pre-flight
+  observes that the install BEGINS real writes (a real `mtsrin`/BAT/SDR1 store distinct from the forged C
+  value), NOT that it COMPLETES** — the pre-flight must fire BEFORE the first window-dependent fault, so it
+  is a "install-started" landmark, not "install-finished". **This pre-flight is itself gated on S2b** (the
+  install only runs once the loader reaches the NK); this milestone records it as the owed GREEN-PASS probe,
+  not a T4-now gate. Satisfies the forge-retirement precondition T5 needs; G3.c deferred behind S2b.
 
 ### T5 — the live-MMU co-land (HEAVIEST; DEPENDS ON T4 letting the install run; +atomicity spike + T4 pre-flight)
 - [ ] Re-verify NATMEM (`main_unix.cpp` RAM `:1974`/ROM `:2000`) + the `paged_mmu_translate()` signature.
@@ -251,6 +295,27 @@ the same answer ⇒ STOP, re-plan.
 4. **Does the EXT-shim survive paravirtual byte-identity?** The poll in the spcflag hot path — is gated-OFF
    structural inertness genuinely free, or does T2 need a `make bench` ns/insn check (not just G3.d)?
 
-## Red-team record
+## Red-team record (rev-2 FOLD — 2026-06-15; all three reviewers landed)
 
-*(empty — to be filled by the three-reviewer pre-implementation red-team: PROCESS + TECHNICAL + ADVERSARY. Voting list 1–11 submitted alongside.)*
+**ADVERSARY (RESTRUCTURE-ONLY-THIS-MILESTONE; GREEN-PASS NEEDS-S2b-FIRST) — the rev-2 headline.** T4's "S2
+landed" precondition FALSIFIED: S2b is unbuilt, the forge IS the substitute for the unbuilt loader; with no
+loader the live KDP table is never installed, so T2's vector-resolve trips its own sentinel gated-ON and the
+install cannot run → GREEN-PASS unreachable this milestone. The restructure (T1–T4 gated-OFF) SURVIVES and
+is deliverable/safe. **FOLDED:** rev-2 re-scopes the milestone to RESTRUCTURE + GATED-MERGE-RESIDUE; T5 +
+the gate flip DEFERRED behind S2b; S2b is the named parallel critical-path track (START preconditions split
+by outcome; PASS taxonomy updated; G(T2)/G(T3)/G(T4) observables re-scoped to what's checkable pre-S2b).
+
+**TECHNICAL (GO-WITH-FIXES, no Critical).** T2 EXT-injection seam confirmed buildable (`ExcEnter(..., const
+ExcEntryTable *tbl)` caller-supplied, `external_entry` settable, device→`SheepExcExtSetPending`→`ppc-cpu.cpp:~2027`
+poll path exists, SS reads guest KDP via `ReadMacInt32`). **FOLDED minors:** EXT vector at **KDP+0x374**
+(not +0x360); `paged_mmu_translate(sr[16],bat[16],sdr1,ea,msr_dr,*out_pa)` — **no HIGH_BAT param**, includes
+`msr_dr`; NATMEM **config-dependent** (`ram_rom_areas_contiguous` branch — read bases at runtime).
+
+**PROCESS (GO-WITH-FIXES).** **FOLDED:** C1 (G(T2) was vacuous → PLANTED-TABLE micro-test added: synthetic
+table, assert resolve+`ExcEnter(planted)` vectors to it and `g_exc_entry_table` NOT consulted); Maj1 (G(T3)
+gated-ON SS-ticks=0 unobservable pre-S2b → annotated DEFERRED-TO-T5/GREEN-PASS LIMIT); Maj2 (T4 pre-flight =
+install BEGINS real writes, fires pre-fault, distinct from completes); Maj3 (RESIDUE-PASS renamed
+GATED-MERGE-RESIDUE + disambiguated vs Task-0-rev-2:line-113's BLOCKING recon residue); Maj4 (`make bench`
+added to G(T1)/G(T2) hot-path gates). KEEP-AS-IS votes (T5-authorize/serialization/ordering/PEM-boundary/
+oracle/sc/atomicity-placement) carried unchanged. Minors m1-m5 (SHA re-pin, serialize T2/T3 reviews, split
+T4 commits) folded into the task discipline.

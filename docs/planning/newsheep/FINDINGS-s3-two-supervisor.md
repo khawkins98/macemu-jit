@@ -211,3 +211,33 @@ positive-probe corroboration (S5) owed to S3-impl's own boot (the rig stalls pre
 **Unblocks:** S3-impl architecture (REPLACE under `SS_M18_NK_SUPERVISOR` AND `MachineProfileIsNewWorld()`,
 default OFF; env-on-first, flip-LAST, revert-on-red = BRANCH revert). **S3-impl START additionally gated**
 on: S2 landed + the multi-entry-transaction (atomicity) spike.
+
+---
+
+## ★ BINDING AMENDMENT (2026-06-15, REPLACE adversary) — REPLACE + a permanent EXT-injection shim
+
+The pick is refined from **pure REPLACE** to **REPLACE + a minimal, permanent host-side EXT-injection
+shim**. The seam-necessity discriminator above only scored the **NK→host** direction (the `bctr`@0x5031a8b8
+/ `sc` / Execute68k — there the no-yield property genuinely makes a shim redundant); it MISSED the
+**host→NK asynchronous direction**: an SS device IRQ asserting INTO the NK's EXT handler.
+
+**Evidence (load-bearing):** the only in-tree path device-IRQ → CPU EXT vector is `SheepExcExtSetPending`/
+host-IRQ latch (`glue:270,325`) → consumed ONLY at `deliver_pending_dec_exception()` (`glue:1122`, polled
+at block boundaries via `:1689`) → `ExcEnter(..., EXC_EXTERNAL, &g_exc_entry_table)` (`glue:1254`).
+REPLACE's RETIRE list kills BOTH `deliver_pending_dec_exception()` AND `g_exc_entry_table` → the device
+IRQ → NK EXT path is **severed**. The bare PPC core has no real EXT input pin wired to the device models
+(Cuda/VIA/SCC/OpenPIC) — that wiring IS the polled host flag. (This is the M14 Cuda IFR/IER wall; pure
+REPLACE has NO path for it.)
+
+**Consequence (binding for S3-impl):** a permanent EXT-injection shim MUST survive under the gate —
+**poll the host-IRQ pending flag in the execute-loop spcflag path, resolve the NK's REAL EXT vector from
+its KDP-installed table (`KDP+0x360`) / installed MSR[IP] prefix, and inject EXT via the KEPT `ExcEnter`
+re-pointed at the NK table** (not `g_exc_entry_table`). This is THE load-bearing seam S3-impl must define;
+it is a bounded thin-shim on exactly the async device→NK-EXT seam, NOT the full thin-shim architecture
+(the synchronous seams stay pure REPLACE). The §1 RETIRE list vs §2 vectoring-row apparent contradiction
+the adversary flagged is resolved this way: RETIRE the synthetic *delivery-decision*; KEEP the *vectoring
+mechanism* + add the EXT-injection poll re-pointed at the NK's real vectors.
+
+**Verdict unchanged: GREEN-PASS** (the refinement adds a named, bounded seam, not an infeasibility). A3
+(can the bare core run the NK's translated-mode supervisor under a live MMU) stays UNPROVABLE-NOW —
+honestly co-landed with unbuilt S1-live, owed to S3-impl's own boot.

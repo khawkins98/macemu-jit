@@ -136,6 +136,19 @@ static void node_add_cells(struct of_node *n, const char *name,
 	node_add_prop(n, name, cells, len, false);
 }
 
+/* add a 4-byte big-endian ihandle cell as an owned property (freed in
+ * node_free). Used to publish the /chosen instance-handle contract. */
+static void node_add_ihandle(struct of_node *n, const char *name, of_ihandle ih)
+{
+	uint8_t *cell = (uint8_t *)malloc(4);
+	cell[0] = (uint8_t)(ih >> 24); cell[1] = (uint8_t)(ih >> 16);
+	cell[2] = (uint8_t)(ih >> 8);  cell[3] = (uint8_t)(ih);
+	node_add_prop(n, name, cell, 4, true);
+}
+
+/* forward decl: opens an instance handle for a DT node (defined below). */
+static of_ihandle ihandle_open(of_ci_context *ctx, struct of_node *n);
+
 static void node_free(struct of_node *n)
 {
 	if (!n) return;
@@ -312,6 +325,28 @@ of_ci_context *of_ci_create_core99(void)
 	node_add_str(disk0, "name", "disk");
 	struct of_node *disk1 = node_add_child(scratch, node_new(ctx, "disk@1"));
 	node_add_str(disk1, "name", "disk");
+
+	/* --- OF /chosen instance-handle contract (S2b memory-map fidelity) -------
+	 * The CHRP Trampoline obtains the memory / mmu / console INSTANCE handles
+	 * from /chosen (getprop "memory"/"mmu"/"stdin"/"stdout"), then does
+	 * instance-to-package on the memory ihandle and getprop "reg" off the
+	 * resulting phandle to drive its /memory range-coalesce/relocation loop.
+	 * Without these properties getprop(/chosen,"memory")=-1 leaves the producer's
+	 * ihandle = 0, so instance-to-package(0)=0 and getprop(0,"reg")=-1; the loop
+	 * then reads count = 0xffffffff and walks its output cursor off mapped RAM
+	 * (SIGSEGV in MacOS.elf at 0x2026e0). Publish a real /mmu package node + open
+	 * memory/mmu/console instances and wire their ihandles into /chosen. */
+	struct of_node *mmu = node_add_child(root, node_new(ctx, "mmu"));
+	node_add_str(mmu, "name", "mmu");
+	node_add_str(mmu, "device_type", "mmu");
+
+	of_ihandle ih_memory  = ihandle_open(ctx, memory);
+	of_ihandle ih_mmu     = ihandle_open(ctx, mmu);
+	of_ihandle ih_console = ihandle_open(ctx, escc);
+	node_add_ihandle(chosen, "memory", ih_memory);
+	node_add_ihandle(chosen, "mmu",    ih_mmu);
+	node_add_ihandle(chosen, "stdin",  ih_console);
+	node_add_ihandle(chosen, "stdout", ih_console);
 
 	return ctx;
 }

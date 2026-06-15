@@ -488,3 +488,28 @@ prop) is wrong → UNBLOCK it (cheap + genuinely real), or (b) genuinely INHERIT
 REPRODUCE? Settling disasm: trace the writer of TOC `[0x11703c]` / the phase that claims `0x01183000` +
 where `G->[0xa8]` is meant to be set; check whether its masktable-fill reads phandle-0x10 `interrupt-map` or
 only the image const `[r2-0x78]`/`[r17+0x30xxxx]`. This decides reproduce-vs-unblock + the build order.
+
+### SETTLING DISASM (2026-06-15) — VERDICT: (a) UNBLOCK, not reproduce. "Inherited boot state" FALSIFIED.
+Direct evidence: `main` (0x204d54) itself claims G (`0x2051cc bl claim(0xc0) -> 0x1183000`), plants
+`[0x11703c]=G` (`0x2051d4 stw`), memsets it (`0x205200`, so `G->[0xa8]=0`). The consumer `0x202c58` builds
+its OWN masktable: `0x202cd0 claim(0x204)`, fills it, then `0x202d08 bl 0x20e05c` = OF **call-method
+"translate"** on the `/chosen` mmu ihandle (marshaller `0x20dcc0`, n_in=1 **n_out=3**) with `r4=&G->[0xa8]`
+— it translates the mask-buffer virt and writes the result into `G->[0xa8]`. **No inherited table exists;
+the guest claims+builds all four tables itself** (the `vectormasktable`/lookup/cascade/priority store sites
+`0x205a34`/`0x20c1a0` all run AFTER the consumer). WATCHPOINT PROOF: `[WATCH] pc=00202d18 addr=011830a8
+value=ffffffff (was 0)` — `G->[0xa8]` goes 0→0xffffffff exactly at the translate call; guard
+`[WATCH] addr=01183018 value=f3040000` (G->[0x18]=MacIO handle) enters the deref path → `0x2031e4
+lwz r30,0(0xffffffff)` traps.
+
+**ROOT CAUSE = our `/mmu translate` CALL-METHOD out-vector arity.** Apple-OF `translate ( virt -- false |
+phys mode true )`; the guest's call-method marshaller (`0x20dcc0`) distributes **n_out=3** to the caller's
+out-pointer, expecting the cell that lands in `r4=&G->[0xa8]` to be **phys**. Our stub computes the right
+phys (`translate virt=0x1587000 -> phys=0x1587000 mode=0x12 V=P`) but emits **n_out=4** (the out[3]
+success-flag we added in `07003fa1` for the DIRECT translate path) — which MISALIGNS the cell, so
+`G->[0xa8]` receives the `-1`/flag, not phys. **FIX (UNBLOCK, small, real — OF-CI contract fidelity, NOT
+S1 live-MMU):** the `/mmu translate` backend must return the success out-cells in the layout each
+marshaller expects — for the call-method path, the cell routed to the caller's out-pointer must be `phys`
+(V=P → `phys=virt`), with `{phys, mode, true}` in the right order/arity; the direct-translate path keeps
+its `( virt -- false|phys mode true )` layout. VERIFY: watch `011830a8` settles to `0x1587000`, `0x2031e4`
+no longer traps. (The real IC node from the QEMU recon is still worth building as the content layer, but is
+NOT what this wall needs.)

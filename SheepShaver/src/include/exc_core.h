@@ -285,4 +285,19 @@ extern int ExcIrqConsumeEnabled(void);      /* SS_NW_IRQ_CONSUME gate (default O
  */
 extern ExcEntryTable g_exc_entry_table;
 
+#ifdef SHEEPSHAVER
+/* SS_M18 S3-impl T4 (Operation NewSheep): the sc/program LIVE-vector resolvers
+ * (defined in sheepshaver_glue.cpp). Called from execute_syscall / execute_illegal's
+ * twi-arm UNDER NkSupervisorEnabled() (default OFF), in place of
+ * ExcEnter(&g_exc_entry_table). They resolve the NK's REAL sc/program vector from the
+ * LIVE KDP table (SC=KDP+0x390 / PROGRAM=KDP+0x37c — never hardcoded) and ExcEnter
+ * re-pointed at the NK vector (the T2 EXT-injection precedent). Returns a transition
+ * with pc==EXC_PC_UNRESOLVED iff the KDP slot is uninstalled / poisoned (the NK install
+ * has not run — EXPECTED gated-ON pre-S2b; the caller STOPs). Inert at default-OFF
+ * (never called paravirtual or gated-OFF newworld). Declared here (the ExcTransition
+ * home, shared by glue + ppc-execute.cpp) per the no-function-scope-externs rule. */
+extern "C" ExcTransition SheepExcSyscallVectorNk(uint32_t restart_pc, uint32_t cur_msr);
+extern "C" ExcTransition SheepExcProgramVectorNk(uint32_t restart_pc, uint32_t cur_msr);
+#endif
+
 #endif /* EXC_CORE_H */

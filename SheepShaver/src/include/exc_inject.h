@@ -56,4 +56,26 @@ ExcTransition ExcInjectExternal(uint32_t restart_pc, uint32_t cur_msr,
                                 uint32_t kdp_base, ExcGuestRead32 read32, void *ctx,
                                 uint32_t *out_vector);
 
+/* SS_M18 S3-impl T4 (Operation NewSheep) — the SYNCHRONOUS sc + program seams, same
+ * pattern as the EXT injector. The NK publishes its sc (vector 0xC00) handler at
+ * KDP+0x390 (=0x50314ac0 in the 9.0.1 boot) and its program (vector 0x700) handler at
+ * KDP+0x37c (=0x50314700); both are runtime-installed, NEVER hardcoded (Stop-rule
+ * #6/#9). Under the master gate the forged g_exc_entry_table.{syscall,program}_entry
+ * constants are NULLED, so execute_syscall / execute_illegal's twi-arm resolve LIVE
+ * here and ExcEnter re-pointed at a LOCAL table (g_exc_entry_table never consulted).
+ * Sentinel 0/DEADBEEF/~0 => 0 => pc==EXC_PC_UNRESOLVED (install not run — pre-S2b). */
+#define NK_KDP_SC_VECTOR_OFFSET       0x390u
+#define NK_KDP_PROGRAM_VECTOR_OFFSET  0x37cu
+
+uint32_t ExcResolveNkVector(uint32_t kdp_base, uint32_t slot_offset,
+                            ExcGuestRead32 read32, void *ctx);
+
+ExcTransition ExcInjectSyscall(uint32_t restart_pc, uint32_t cur_msr,
+                               uint32_t kdp_base, ExcGuestRead32 read32, void *ctx,
+                               uint32_t *out_vector);
+
+ExcTransition ExcInjectProgram(uint32_t restart_pc, uint32_t cur_msr,
+                               uint32_t kdp_base, ExcGuestRead32 read32, void *ctx,
+                               uint32_t *out_vector);
+
 #endif /* EXC_INJECT_H */

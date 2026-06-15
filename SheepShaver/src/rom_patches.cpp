@@ -46,6 +46,12 @@
 #include "thunks.h"
 #include "rom_decode.hpp"	// decode_lzss/decode_parcels/decode_rom_image/rom_detect_type
 
+// SS_M18 S3-impl T4: the NK-supervisor master gate (defined in
+// kpx_cpu/src/cpu/ppc/ppc-cpu.cpp; declared in ppc-cpu.hpp, which is not
+// includeable from this translation unit). Forward-declared here so the
+// P-3 additive-clause forge-retirement (below) can consult it.
+extern bool NkSupervisorEnabled(void);
+
 #define DEBUG 0
 #include "debug.h"
 
@@ -1534,12 +1540,20 @@ bool PatchROM(void)
 	// — NOT a rewrite. Do NOT retire/delete the forge here (Stop-rule #1: S2b GATES, S3
 	// RETIRES). Default-OFF: TrampolineLoaderGateEnabled()==false ⇒ the forge runs
 	// byte-identically to today.
-	if (!TrampolineLoaderGateEnabled()) {
+	//
+	// ★ S3-impl T4 RETIREMENT (P-3 additive clause, applied): the second
+	// `&& !NkSupervisorEnabled()` clause skips the forge ALSO when the NK supervisor
+	// gate is on, so the real NanoKernel owns entry-vector synthesis when IT runs the
+	// real install. Either gate ON ⇒ forge skipped. Default-OFF (both gates off) ⇒
+	// the predicate is true ⇒ the forge runs byte-identically to today.
+	if (!TrampolineLoaderGateEnabled() && !NkSupervisorEnabled()) {
 		PatchROM_NW_trampoline();
 	} else {
-		fprintf(stderr, "[S2B-FORGE-BYPASS] SS_M18_TRAMPOLINE gate ON (9.0.1 ROM, "
-		        "NewWorld) — skipping PatchROM_NW_trampoline; the real Trampoline "
-		        "(loaded in init_emul_ppc) owns entry-vector synthesis\n");
+		fprintf(stderr, "[S2B-FORGE-BYPASS] SS_M18_TRAMPOLINE gate=%d / "
+		        "SS_M18_NK_SUPERVISOR gate=%d (9.0.1 ROM, NewWorld) — skipping "
+		        "PatchROM_NW_trampoline; the real Trampoline / NanoKernel owns "
+		        "entry-vector synthesis\n",
+		        (int)TrampolineLoaderGateEnabled(), (int)NkSupervisorEnabled());
 	}
 
 	// SS_DUMP_ROM: dump decompressed ROM image for offline disassembly.

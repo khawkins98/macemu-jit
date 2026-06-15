@@ -1608,6 +1608,28 @@ void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 		printf("FATAL: Execute68k() not called from EMUL_OP mode\n");
 #endif
 
+	/* SS_M18 S3-impl T4 (Operation NewSheep) — Execute68k disposition probe (G3.c).
+	 * Under the master gate the NK is expected to own the 68k world via its OWN
+	 * ECB/KDP dispatch (bctr@0x5031a8b8), so SS's synchronous Execute68k should be
+	 * DEAD. We RETIRE conservatively: rather than hard-disable the path (which would
+	 * break a still-driven EMUL_OP caller we cannot prove absent without a live boot
+	 * — S2b is unbuilt this milestone), we surface a one-time landmark so the first
+	 * gated boot RESOLVES G3.c (dead vs still-driven). The [KDP+0x1074]/[KDP+0x1078]
+	 * read below now returns the NK's LIVE pair (the forge that staged the mirror
+	 * constants is retired under the gate), not the forged values. Documented residue.
+	 * Inert at default-OFF (never fires paravirtual or gated-OFF newworld). */
+	if (NkSupervisorEnabled()) {
+		static bool warned = false;
+		if (!warned) {
+			warned = true;
+			fprintf(stderr, "[NK-SUP] T4 WARNING: execute_68k REACHED under the gate "
+			        "(entry=%08x). The NK is expected to own 68k dispatch via "
+			        "bctr@0x5031a8b8; [KDP+0x1074]/[KDP+0x1078] read live-NK (forge "
+			        "retired). G3.c: this path is NOT dead — surface for boot triage.\n",
+			        entry);
+		}
+	}
+
 	// Save program counters and branch registers
 	uint32 saved_pc = pc();
 	uint32 saved_lr = lr();
@@ -1935,6 +1957,43 @@ extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
 		        "srr0=%08x — pool-sizing tripwire (was Task T's parked stop; "
 		        "now delivered to the NK slot-15 exit)\n",
 		        (unsigned long long)exc_stat_delivered_program, srr0);
+}
+
+/* SS_M18 S3-impl T4 (Operation NewSheep) — the sc/program LIVE-vector resolvers.
+ *
+ * The T2 EXT-injection precedent (deliver_ext_injection_nk / ExcInjectExternal),
+ * applied to the SYNCHRONOUS sc + program seams. Under the master gate the forged
+ * g_exc_entry_table.{syscall,program}_entry constants are NULLED (the T3 retirement
+ * block, extended by T4), so execute_syscall / execute_illegal MUST resolve the NK's
+ * REAL vector from the LIVE KDP table — NK-published [KDP+0x390]=0x50314ac0 (sc) /
+ * [KDP+0x37c]=0x50314700 (program) — and ExcEnter re-pointed at a LOCAL NK table, NOT
+ * g_exc_entry_table. This RETIRES the SS sc-as-illegal handling under the gate (the
+ * caller never falls to execute_illegal) and makes the NK SC vector own sc live
+ * (Stop-rule #5 closure: NK SC live AND sc-as-illegal retired — not the increment fix).
+ *
+ * Sentinel guard (Stop-rule #6): an uninstalled / poisoned KDP slot (0/DEADBEEF/~0)
+ * means the NK install has not run (EXPECTED gated-ON pre-S2b — no loader). The returned
+ * transition carries pc==EXC_PC_UNRESOLVED; the caller STOPs rather than vector into
+ * junk. Never hardcode the vector (QEMU-as-oracle-class — Stop-rule #9): it is read live.
+ *
+ * Returned BY VALUE through extern "C" (ExcTransition is POD). Inert at default-OFF: the
+ * callers gate on NkSupervisorEnabled(), so paravirtual + gated-OFF newworld never call
+ * these — byte-identical. */
+extern "C" ExcTransition SheepExcSyscallVectorNk(uint32_t restart_pc, uint32_t cur_msr)
+{
+	// Delegate to the PURE exc_inject module (the same resolve+re-point path the
+	// planted-table micro-test exercises). nk_kdp_read32 is the ReadMacInt32 adapter
+	// the EXT injector already uses. g_exc_entry_table is NEVER consulted.
+	uint32_t vec = 0;
+	return ExcInjectSyscall(restart_pc, cur_msr, (uint32_t)KERNEL_DATA_BASE,
+	                        nk_kdp_read32, NULL, &vec);
+}
+
+extern "C" ExcTransition SheepExcProgramVectorNk(uint32_t restart_pc, uint32_t cur_msr)
+{
+	uint32_t vec = 0;
+	return ExcInjectProgram(restart_pc, cur_msr, (uint32_t)KERNEL_DATA_BASE,
+	                        nk_kdp_read32, NULL, &vec);
 }
 
 // M3a Task 4 telemetry export (heartbeat + crash-path dump).
@@ -2984,6 +3043,21 @@ void init_emul_ppc(void)
 		if (vm_acquire_fixed(Mac2HostAddr(htab_base), htab_size) < 0) {
 			fprintf(stderr, "[NW-TRAMP] WARNING: failed to map HTAB region [%08x..%08x): %s\n",
 			        htab_base, htab_base + htab_size, strerror(errno));
+		} else if (NkSupervisorEnabled()) {
+			/* SS_M18 S3-impl T4 (Operation NewSheep): RETIRE the SDR1/HTAB forge
+			 * under the master gate. The real NanoKernel programs SDR1 (and the
+			 * HTAB it covers) LIVE via mtspr@0x50315290 (SR) / @0x503152c4 (BAT) /
+			 * the SDR1 store on its own install path — once S2b's loader reaches it.
+			 * We KEEP the vm_acquire_fixed BACKING (above): the guest physical pages
+			 * still need to exist for the NK to write its HTAB into; that backing is
+			 * NOT the register forge and its relocation is T5/S2b's concern (carried
+			 * as documented residue). We RETIRE only the forged register write +
+			 * the HTAB zeroing (the NK manages its own HTAB contents). Stop-rule #1:
+			 * do not forge a frozen output the real producer writes. */
+			fprintf(stderr, "[NK-SUP] T4: SDR1/HTAB forge RETIRED — backing mapped "
+			        "[%08x..%08x) (%u KB) but SDR1/HTAB-zero left to the NK's live "
+			        "install (mtspr SDR1; SR@0x50315290 / BAT@0x503152c4)\n",
+			        htab_base, htab_base + htab_size, htab_size / 1024);
 		} else {
 			memset(Mac2HostAddr(htab_base), 0, htab_size);
 			ppc_cpu->gpr(0) = 0;
@@ -3099,8 +3173,18 @@ void init_emul_ppc(void)
 		// defers (deferred_ee telemetry) until the NK genuinely raises EE, at which
 		// point the Task-3 EE-edge re-raise delivers at the correct moment.
 		// Paravirtual keeps 0xf072 (cold value in init_registers, untouched).
-		ppc_cpu->msr_reg() = 0x7072;
-		fprintf(stderr, "[EXC] boot MSR seeded 0x7072 (EE=0 until the NK enables interrupts)\n");
+		// SS_M18 S3-impl T4: RETIRE the boot-MSR forge under the master gate. The
+		// real NK boot path (S2b's CHRP launch seam below, glue:~3547, "overrides
+		// the register state the forge above staged ... MSR") programs MSR live; the
+		// forge here is a substitute for the unbuilt loader (Stop-rule #1). Gate OFF
+		// (paravirtual + gated-OFF newworld): the 0x7072 seed runs byte-identically.
+		if (!NkSupervisorEnabled()) {
+			ppc_cpu->msr_reg() = 0x7072;
+			fprintf(stderr, "[EXC] boot MSR seeded 0x7072 (EE=0 until the NK enables interrupts)\n");
+		} else {
+			fprintf(stderr, "[NK-SUP] T4: boot-MSR forge RETIRED — MSR left to the NK's "
+			        "live boot/launch path (cold init_registers value until the loader sets it)\n");
+		}
 		memset(Mac2HostAddr(kdp - 0x1000), 0, 0x1000);
 		WriteMacInt32(kdp - 4, kdp);
 		WriteMacInt32(kdp - 0x20, irp_base);  // [KDP-0x20] = IRP base
@@ -3321,11 +3405,27 @@ void init_emul_ppc(void)
 		 *                   live by the SS_SEED_MEM discriminator boot)
 		 * Same staging family as [KDP+0xf28]/[KDP+0xf2c] above. Structurally inert on
 		 * paravirtual: inside the MachineProfileIsNewWorld() trampoline block. */
-		WriteMacInt32(kdp + 0x1074, (uint32)ROMBase + 0x480000);
-		WriteMacInt32(kdp + 0x1078, (uint32)ROMBase + 0x460000);
-		fprintf(stderr, "[NW-TRAMP] Execute68k emulator pair staged: [KDP+0x1074]=%08x "
-		        "(mirror dispatch table) [KDP+0x1078]=%08x (mirror emulator base)\n",
-		        (uint32)ROMBase + 0x480000, (uint32)ROMBase + 0x460000);
+		// SS_M18 S3-impl T4: RETIRE the Execute68k emulator-pair forge under the
+		// master gate. Under the NK supervisor the NK reaches the 68k world via its
+		// OWN ECB/KDP dispatch (bctr@0x5031a8b8) and populates [KDP+0x1074]/[KDP+0x1078]
+		// (opcode-dispatch table / emulator base) LIVE on that path. Forging them here
+		// is a substitute for the unbuilt loader/NK init (Stop-rule #1). The paired
+		// READ in sheepshaver_cpu::execute_68k (gpr(29)/gpr(30) = ReadMacInt32(KDP+0x1074/
+		// 0x1078)) therefore reads the NK's LIVE values under the gate, not these forged
+		// mirror constants — so "the forged-value read must not fire under the gate" holds.
+		// (Execute68k reachability under the gate is G3.c, owed a boot; see the gated
+		// diagnostic in execute_68k.) Gate OFF: the staging runs byte-identically.
+		if (!NkSupervisorEnabled()) {
+			WriteMacInt32(kdp + 0x1074, (uint32)ROMBase + 0x480000);
+			WriteMacInt32(kdp + 0x1078, (uint32)ROMBase + 0x460000);
+			fprintf(stderr, "[NW-TRAMP] Execute68k emulator pair staged: [KDP+0x1074]=%08x "
+			        "(mirror dispatch table) [KDP+0x1078]=%08x (mirror emulator base)\n",
+			        (uint32)ROMBase + 0x480000, (uint32)ROMBase + 0x460000);
+		} else {
+			fprintf(stderr, "[NK-SUP] T4: Execute68k emulator-pair forge RETIRED — "
+			        "[KDP+0x1074]/[KDP+0x1078] left to the NK's live ECB/KDP dispatch "
+			        "(bctr@0x5031a8b8)\n");
+		}
 
 		/* M7 Task B-2 (interrupt-injection plan, "Coordinator sign-off: the
 		 * level-source staging", shape (i)) — the guest-memory half of the
@@ -3523,9 +3623,20 @@ void init_emul_ppc(void)
 				 * ppc-cpu.cpp), and T2's EXT-injection resolves the live NK EXT
 				 * vector from KDP+0x374 — NOT this table. The syscall_entry /
 				 * program_entry fields are LEFT INTACT for T4 (the sc/program forge
-				 * retirement owns them; they are still live under the gate at T3). */
+				 * retirement owns them; they are still live under the gate at T3).
+				 *
+				 * SS_M18 S3-impl T4: NULL syscall_entry + program_entry too. Under the
+				 * gate execute_syscall / execute_illegal's twi-arm no longer consult
+				 * g_exc_entry_table — they resolve the NK's REAL sc/program vectors LIVE
+				 * from the KDP table (SC=KDP+0x390 / PROGRAM=KDP+0x37c) via
+				 * SheepExcSyscallVectorNk / SheepExcProgramVectorNk and ExcEnter
+				 * re-pointed at the NK vector (the T2 EXT precedent). So the forged
+				 * constants here are retired: the NK SC vector 0x50314ac0 owns sc and
+				 * the SS sc-as-illegal fallback is gone (Stop-rule #5 closure). */
 				g_exc_entry_table.interrupt_entry = 0;
 				g_exc_entry_table.external_entry  = 0;
+				g_exc_entry_table.syscall_entry   = 0;
+				g_exc_entry_table.program_entry   = 0;
 				/* YIELD the SS scheduler. The NK's DEC loop 0x50313200 is the live
 				 * rescheduler, so: (1) suppress the host on_dec_write arming in
 				 * VirtClockWriteDEC — the guest's DEC writes STILL update the virtual
@@ -3535,10 +3646,11 @@ void init_emul_ppc(void)
 				 * gate-symbol-free; the gate flips these via setters here. */
 				VirtClockSuppressHostDEC(true);
 				EventSchedulerYield(true);
-				fprintf(stderr, "[NK-SUP] T3: synthetic supervisor retired — "
-				        "g_exc_entry_table DEC/EXT vectors nulled, host DEC arming "
-				        "suppressed, event scheduler yielded (NK owns DEC 0x50313200, "
-				        "self-re-arming mtspr 0x16@0x50313234)\n");
+				fprintf(stderr, "[NK-SUP] T3+T4: synthetic supervisor retired — "
+				        "g_exc_entry_table DEC/EXT/SC/PROGRAM vectors nulled (T4 adds "
+				        "SC/PROGRAM; sc/program now resolve LIVE from KDP+0x390/0x37c), "
+				        "host DEC arming suppressed, event scheduler yielded (NK owns "
+				        "DEC 0x50313200, self-re-arming mtspr 0x16@0x50313234)\n");
 			}
 		}
 

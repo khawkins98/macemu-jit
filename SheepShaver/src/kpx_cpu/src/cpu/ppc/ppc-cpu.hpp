@@ -616,6 +616,9 @@ extern "C" void SheepExcSyscallShim(uint32 caller_r1, uint32 caller_lr, uint32 s
  * exhaustion diagnostic). */
 extern "C" void SheepExcProgramShim(uint32 caller_r1, uint32 caller_lr,
                                     uint32 trap_word, uint32 srr0);
+/* SS_M18 S3-impl T4 (Operation NewSheep): the sc/program LIVE-vector resolvers
+ * (sheepshaver_glue.cpp) are declared in exc_core.h (the ExcTransition home), which
+ * ppc-execute.cpp includes alongside this header. */
 #endif
 
 #endif /* PPC_CPU_H */

@@ -221,6 +221,29 @@ if (ss_stub_on()) {
 			                   ((to & 0x02) && ((uint32)a <  (uint32)b)) ||
 			                   ((to & 0x01) && ((uint32)a >  (uint32)b));
 			if (taken) {
+				/* SS_M18 S3-impl T4: under the master gate the real NK PROGRAM
+				 * vector (0x50314700, NK-published [KDP+0x37c]) owns the 0x700
+				 * trap. Resolve it LIVE (the forged g_exc_entry_table.program_entry
+				 * is NULLED by the T3/T4 retirement) and ExcEnter re-pointed at the
+				 * NK vector — symmetric with the sc retirement above. Stop-rule #6:
+				 * an unresolved slot (install not run — pre-S2b) STOPs. Inert at
+				 * default-OFF (the legacy forged-table path below is byte-identical). */
+				if (NkSupervisorEnabled()) {
+					ExcTransition tnk = SheepExcProgramVectorNk(pc(), regs().msr);
+					if (tnk.pc == EXC_PC_UNRESOLVED) {
+						fprintf(stderr, "[EXC-NK] FATAL: trap (%s) taken at pc=%08x but "
+						        "KDP+0x37c (NK PROGRAM vector) unresolved — install not "
+						        "run (pre-S2b expected). STOP (Stop-rule #6).\n",
+						        is_twi ? "twi" : "tw", pc());
+						abort();
+					}
+					SheepExcProgramShim(gpr(1), lr(), opcode, tnk.srr0);
+					regs().srr0 = tnk.srr0;
+					regs().srr1 = tnk.srr1;
+					regs().msr  = tnk.msr;
+					pc()        = tnk.pc;
+					return;
+				}
 				ExcTransition t = ExcEnter(pc(), regs().msr, EXC_PROGRAM,
 				                           &g_exc_entry_table);
 				if (t.pc == EXC_PC_UNRESOLVED) {
@@ -1202,6 +1225,31 @@ void powerpc_cpu::execute_syscall(uint32 opcode)
 			const char *e = getenv("SS_EXC_SC");
 			return e && e[0] == 'l';  /* "legacy" prefix */
 		}();
+		/* SS_M18 S3-impl T4 (Operation NewSheep): under the master gate the real NK
+		 * SC vector (0x50314ac0, NK-published [KDP+0x390]) OWNS sc. Resolve it LIVE
+		 * (never the forged g_exc_entry_table.syscall_entry — that field is NULLED by
+		 * the T3/T4 retirement) and ExcEnter re-pointed at the NK vector. This RETIRES
+		 * the SS sc-as-illegal handling: under the gate sc NEVER falls to
+		 * execute_illegal / the legacy abort. Stop-rule #5 closure (NK SC live AND
+		 * sc-as-illegal retired). Stop-rule #6: an unresolved KDP slot (install not run
+		 * — EXPECTED pre-S2b) STOPs rather than vector into junk. Inert at default-OFF
+		 * (gate false => the legacy forged-table path below runs byte-identically). */
+		if (NkSupervisorEnabled()) {
+			ExcTransition tnk = SheepExcSyscallVectorNk(pc(), regs().msr);
+			if (tnk.pc == EXC_PC_UNRESOLVED) {
+				fprintf(stderr, "[EXC-NK] FATAL: sc at pc=%08x but KDP+0x390 (NK SC "
+				        "vector) unresolved — the NK install has not run (pre-S2b "
+				        "expected; gated-ON requires S2b). STOP rather than vector "
+				        "into junk (Stop-rule #6).\n", pc());
+				abort();
+			}
+			SheepExcSyscallShim(gpr(1), lr(), gpr(0));
+			regs().srr0 = tnk.srr0;
+			regs().srr1 = tnk.srr1;
+			regs().msr  = tnk.msr;
+			pc()        = tnk.pc;
+			return;  /* NO increment_pc — PC set absolutely; sc-as-illegal retired */
+		}
 		ExcTransition t = ExcEnter(pc(), regs().msr, EXC_SC, &g_exc_entry_table);
 		if (t.pc == EXC_PC_UNRESOLVED) {
 			if (sc_legacy_mode) {

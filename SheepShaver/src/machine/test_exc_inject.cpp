@@ -42,6 +42,21 @@ static uint32_t planted_read32(uint32_t addr, void *ctx)
 	return 0xCAFEF00Du;   /* wrong slot — must never be returned */
 }
 
+/* T4 reader: serves whichever of the three NK vector slots (EXT/SC/PROGRAM) is
+ * read, returning the planted value *ctx. Records the slot addr so the test can
+ * assert each injector consults ITS slot. A read of any other address returns the
+ * poison word (would fail the slot-addr asserts). */
+static uint32_t planted_read32_slot(uint32_t addr, void *ctx)
+{
+	g_last_read_addr = addr;
+	g_read_count++;
+	if (addr == PLANTED_KDP + NK_KDP_EXT_VECTOR_OFFSET ||
+	    addr == PLANTED_KDP + NK_KDP_SC_VECTOR_OFFSET ||
+	    addr == PLANTED_KDP + NK_KDP_PROGRAM_VECTOR_OFFSET)
+		return *(uint32_t *)ctx;
+	return 0xCAFEF00Du;   /* wrong slot — must never be returned */
+}
+
 int main()
 {
 	/* (a) resolve reads the EXT slot from the planted table at KDP+0x374. */
@@ -95,6 +110,58 @@ int main()
 
 	/* A null reader is also UNRESOLVED (defensive). */
 	CHECK(ExcResolveNkExtVector(PLANTED_KDP, NULL, &slot) == 0u);
+
+	/* ============================================================
+	 * SS_M18 S3-impl T4 — sc / program injectors (same planted-table
+	 * contract, the SYNCHRONOUS seams). Plant per-slot values and assert each
+	 * injector (a) reads ITS slot (SC=KDP+0x390 / PROGRAM=KDP+0x37c), (b) vectors
+	 * via ExcEnter to the planted vector with the right exc class, (c) never
+	 * consults g_exc_entry_table, and (d) honors the sentinel STOP. */
+	{
+		uint32_t sc_vec   = 0x50314ac0u;   /* NK-published sc handler */
+		uint32_t prog_vec = 0x50314700u;   /* NK-published program handler */
+
+		/* sc: reads KDP+0x390, EXC_SC (SRR0 = pc, NOT pc+4 — the kpx_cpu sc path
+		 * sets PC absolutely; ExcEnter's EXC_SC composes srr0 from cur_pc_restart). */
+		uint32_t scout = 0;
+		g_read_count = 0;
+		ExcTransition ts = ExcInjectSyscall(0x90004000u, msr_in,
+		                                    PLANTED_KDP, planted_read32_slot, &sc_vec, &scout);
+		CHECK(g_last_read_addr == PLANTED_KDP + NK_KDP_SC_VECTOR_OFFSET);  /* 0x390 */
+		CHECK(NK_KDP_SC_VECTOR_OFFSET == 0x390u);
+		CHECK(scout == sc_vec);
+		CHECK(ts.pc == sc_vec);
+		CHECK(ts.pc != g_exc_entry_table.syscall_entry);   /* poison not surfaced */
+		CHECK(ts.pc != g_exc_entry_table.program_entry);
+
+		/* not-hardcoded: a different planted sc vector is followed. */
+		uint32_t sc_alt = 0x5031abcdu;
+		ExcTransition ts2 = ExcInjectSyscall(0x90004100u, msr_in,
+		                                     PLANTED_KDP, planted_read32_slot, &sc_alt, &scout);
+		CHECK(scout == sc_alt);
+		CHECK(ts2.pc == sc_alt);
+
+		/* program: reads KDP+0x37c, EXC_PROGRAM. */
+		uint32_t pout = 0;
+		ExcTransition tp = ExcInjectProgram(0x90005000u, msr_in,
+		                                    PLANTED_KDP, planted_read32_slot, &prog_vec, &pout);
+		CHECK(g_last_read_addr == PLANTED_KDP + NK_KDP_PROGRAM_VECTOR_OFFSET);  /* 0x37c */
+		CHECK(NK_KDP_PROGRAM_VECTOR_OFFSET == 0x37cu);
+		CHECK(pout == prog_vec);
+		CHECK(tp.pc == prog_vec);
+		CHECK(tp.pc != g_exc_entry_table.program_entry);   /* poison not surfaced */
+
+		/* sentinel STOP for both synchronous injectors (the pre-S2b gated-ON state). */
+		uint32_t dead2 = 0xDEADBEEFu;
+		ExcTransition tsu = ExcInjectSyscall(0x90006000u, msr_in,
+		                                     PLANTED_KDP, planted_read32_slot, &dead2, &scout);
+		CHECK(scout == 0u);
+		CHECK(tsu.pc == EXC_PC_UNRESOLVED);
+		ExcTransition tpu = ExcInjectProgram(0x90006100u, msr_in,
+		                                     PLANTED_KDP, planted_read32_slot, &dead2, &pout);
+		CHECK(pout == 0u);
+		CHECK(tpu.pc == EXC_PC_UNRESOLVED);
+	}
 
 	printf("test_exc_inject: %d checks passed\n", n_pass);
 	return 0;

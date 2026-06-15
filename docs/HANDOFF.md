@@ -22,10 +22,17 @@
 >   identity translate `0x01000000->0x01000000`) but did NOT move the wall. **NEW WALL (pinned upstream of
 >   the NK): the Trampoline's own RELOCATION LOOP at guest `pc=0x2026e0` → SIGSEGV** — `stw r8,8(r31)` with
 >   `r31=0x01fffff8` walking past the `0x180000` claim, loop vars garbage (`r30=0x3e18696d` ≈ ASCII → it's
->   reading the WRONG table). iNK=0 still. **NEXT: RE the `0x2026e0` relocation loop — what table/count it
->   walks + where that pointer is loaded from (likely the still-provisional r3/r4 CHRP bootinfo ABI, or a
->   relocation-source/`/memory`-derived input). This precedes the NK install + non-identity `/mmu`.** Then
->   the full S1 window/softmmu per the Task-0. Plan + full ladder:
+>   reading the WRONG table). iNK=0 still. OF `/chosen` ihandles + `/mmu` node LANDED (`e58de6a4`): the relocation loop was over-running because
+>   `/chosen` had no `"memory"` ihandle → `instance-to-package(0)→getprop(0,"reg")→-1` → count=0xFFFFFFFF.
+>   Fixed → **the real Trampoline now completes its ENTIRE OpenFirmware phase** (OF-CI calls 183→722:
+>   `/memory`, 13× `/mmu translate`+`map`, claim/release, then **`quiesce`+`exit`** — the OF→OS handoff
+>   teardown). **▶▶▶▶▶▶ NEW WALL = the genuine S1 `/mmu`:** after `quiesce`/`exit` control wild-jumps into the
+>   data segment (~`0x100000`) → SIGSEGV; `NanoKernelEntry 0x50310000` never fired (iNK=0). The `/mmu`
+>   translate/map is still the **V=P identity recording stub** (NON-ACCEPTANCE) — the post-quiesce handoff
+>   target depends on REAL `/mmu` translation/map. **NEXT: a real recording `/mmu` (map records virt→phys;
+>   translate honors recorded mappings + claimed regions, V=P fallback for RAM/ROM) → measure whether the
+>   handoff lands on `0x50310000` (iNK>0 = the real NanoKernel running, a LANDMARK).** If it needs the full
+>   live-NK SR/BAT window, escalate to the full S1 milestone (window/softmmu per the Task-0). Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl
 >   T1–T5 + S3-impl T1–T4) are now validated running together gated-OFF-safe + gated-ON-executing.**
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.

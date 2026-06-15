@@ -32,6 +32,7 @@
 #include "dev_openpic.h"   // W2-3: crash-path [PIC] stats (registered-instance formatters)
 #include "virt_clock.h"
 #include "exc_core.h"
+#include "exc_inject.h"	// SS_M18 S3 T2: host->NK EXT-injection shim
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -647,6 +648,16 @@ public:
 	// M3a Task 4: deliver a pending DEC exception in place (newworld profile).
 	// Returns true iff delivered (live regs mutated); false if not pending or deferred.
 	bool deliver_pending_dec_exception();
+
+	// SS_M18 S3 (Operation NewSheep) T2: the host->NK EXT-injection shim
+	// (LOAD-BEARING). Gated behind NkSupervisorEnabled() at the call site
+	// (ppc-cpu.cpp spcflag poll). Polls the KEPT host-IRQ pending flag, resolves
+	// the NK's REAL EXT vector from the live KDP table (KDP+0x374), and injects
+	// via ExcEnter(EXC_EXTERNAL) RE-POINTED at the NK vector (NOT
+	// g_exc_entry_table). Returns true iff an EXT was injected (live regs
+	// mutated); false if nothing pending, deferred, or the vector is unresolved
+	// (install not run — the EXPECTED gated-ON state pre-S2b).
+	bool deliver_ext_injection_nk();
 
 	// Make sure the SIGSEGV handler can access CPU registers
 	friend sigsegv_return_t sigsegv_handler(sigsegv_info_t *sip);
@@ -1457,6 +1468,118 @@ bool sheepshaver_cpu::deliver_pending_dec_exception()
 	return true;
 }
 
+/* SS_M18 S3 (Operation NewSheep) T2: the host->NK EXT-injection shim
+ * (LOAD-BEARING). The async device-IRQ -> NK-EXT seam under the master gate.
+ *
+ * The seam contradiction it resolves (plan §"The seam contradiction..."): pure
+ * REPLACE retires deliver_pending_dec_exception() + g_exc_entry_table (T3),
+ * which severs the ONLY device-IRQ -> CPU-EXT path. T2 re-routes EXACTLY that
+ * async seam: poll the KEPT host-IRQ pending flag (the device-model latch),
+ * resolve the NK's REAL EXT vector from the LIVE KDP table (KDP+0x374 — never
+ * hardcoded), and inject via the KEPT ExcEnter(EXC_EXTERNAL) RE-POINTED at the
+ * NK vector. PEM mask math (exc_core) is LAW and UNTOUCHED — we CONSUME ExcEnter
+ * only, through the pure exc_inject module (planted-table micro-test: G(T2) C1).
+ *
+ * Gated behind NkSupervisorEnabled() at the call site (ppc-cpu.cpp spcflag
+ * poll), default OFF => structurally inert (never called paravirtual; gated-OFF
+ * newworld never calls it). Returns true iff an EXT was injected (live regs
+ * mutated; the dispatcher re-derives the handler block from pc()).
+ *
+ * Resolved-vector cache: the KDP slot is read once and cached on the first
+ * nonzero (installed) resolve; until then every poll re-reads (cheap, single
+ * ReadMacInt32) and hits the sentinel STOP — the EXPECTED gated-ON state this
+ * milestone (pre-S2b: no loader has run the install, so the slot is uninstalled).
+ */
+static uint32 g_nk_ext_vector_cached = 0;	// 0 = not yet resolved (install not run)
+static uint64_t g_nk_ext_sentinel_reports = 0;
+
+// Reader adapter: the pure exc_inject module reads guest memory through this
+// callback (ReadMacInt32 = big-endian 32-bit guest fetch). ctx is unused.
+static uint32_t nk_kdp_read32(uint32_t guest_addr, void * /*ctx*/)
+{
+	return ReadMacInt32(guest_addr);
+}
+
+bool sheepshaver_cpu::deliver_ext_injection_nk()
+{
+	// Poll the KEPT device-IRQ latch(es): the host once-per-edge latch OR the PIC
+	// level (the same two sources deliver_pending_dec_exception OR-composes —
+	// neither writes the other's word). Nothing pending => nothing to inject.
+	const int ext_pending = SheepExcHostIrqPending() | SheepExcExtPending();
+	if (!ext_pending)
+		return false;
+
+	// Gate on the architectural delivery decision EXACTLY as the legacy EXT path:
+	// pending -> depth -> EE -> native (the contract gate order; masks/decision in
+	// exc_core). Two-phase lazy run-mode sampling (the sanctioned idiom): pass 0
+	// first; only a provisional DELIVER pays the guest [XLM_RUN_MODE] read.
+	ExcDecision decision = ExcDeliveryDecision(ext_pending, current_execute_depth(),
+	                                           msr_reg(), 0);
+	if (decision == EXC_DECIDE_DELIVER)
+		decision = ExcDeliveryDecision(ext_pending, current_execute_depth(),
+		                               msr_reg(), ReadMacInt32(XLM_RUN_MODE));
+	if (decision != EXC_DECIDE_DELIVER)
+		return false;	// deferred: leave the level-held / latched source set
+
+	// Resolve the NK's REAL EXT vector from the live KDP table (cached once
+	// installed). Re-resolve only while still uninstalled.
+	uint32 vec = g_nk_ext_vector_cached;
+	if (vec == 0) {
+		uint32_t resolved = 0;
+		(void)ExcInjectExternal(pc(), msr_reg(), (uint32_t)KERNEL_DATA_BASE,
+		                        nk_kdp_read32, NULL, &resolved);
+		if (resolved == 0) {
+			// Sentinel STOP (Stop-rule #6): the KDP EXT slot is uninstalled /
+			// poisoned (0x0/0xDEADBEEF/0xFFFFFFFF). EXPECTED gated-ON pre-S2b —
+			// no loader has run the install yet. Report (bounded) and DO NOT
+			// vector; fall through to the legacy path (T3 retires that later).
+			if (g_nk_ext_sentinel_reports++ < 6)
+				fprintf(stderr, "[EXC-NK] EXT-injection STOP: KDP+0x%x unresolved "
+				        "(install not run — pre-S2b expected). Falling through.\n",
+				        (unsigned)NK_KDP_EXT_VECTOR_OFFSET);
+			return false;
+		}
+		g_nk_ext_vector_cached = vec = resolved;
+		fprintf(stderr, "[EXC-NK] EXT vector resolved from live KDP+0x%x = 0x%08x\n",
+		        (unsigned)NK_KDP_EXT_VECTOR_OFFSET, vec);
+	}
+
+	// Build the injection transition against the NK-resolved table (NOT
+	// g_exc_entry_table) and apply it. ExcInjectExternal re-reads + rebuilds; the
+	// cache short-circuit above keeps the steady-state cost to one ExcEnter.
+	uint32_t out_vec = 0;
+	ExcTransition te = ExcInjectExternal(pc(), msr_reg(),
+	                                     (uint32_t)KERNEL_DATA_BASE,
+	                                     nk_kdp_read32, NULL, &out_vec);
+	if (te.pc == EXC_PC_UNRESOLVED) {
+		// Vector vanished between resolve and inject (slot un-installed): treat as
+		// the sentinel STOP, drop the stale cache, fall through.
+		g_nk_ext_vector_cached = 0;
+		return false;
+	}
+
+	// Apply the 2-SPR shim + the architectural transition, identical to the
+	// legacy EXT body (the EXT handler's shared save prologue 0x313d40 consumes
+	// SPRG1:=caller r1, SPRG2:=caller LR — no KDP save shim; the published-route
+	// 2-SPR contract). SRR1.EE=1 is structurally guaranteed (the EE gate above).
+	sprg_reg(1) = gpr(1);
+	sprg_reg(2) = lr();
+	srr0_reg()  = te.srr0;
+	srr1_reg()  = te.srr1;
+	msr_reg()   = te.msr;
+	pc()        = te.pc;
+	exc_stat_delivered_ext++;
+	// CONSUME the host once-per-edge latch (the PIC level, C1, is NOT cleared —
+	// the guest's IACK/EOI/mask drops it).
+	exc_host_irq_consume();
+	if (exc_stat_delivered_ext <= 5)
+		fprintf(stderr, "[EXC-NK] EXT injected #%llu: restart=%08x srr1=%08x "
+		        "msr=%08x -> entry=%08x\n",
+		        (unsigned long long)exc_stat_delivered_ext, te.srr0, te.srr1,
+		        te.msr, te.pc);
+	return true;
+}
+
 // Execute 68k routine
 void sheepshaver_cpu::execute_68k(uint32 entry, M68kRegisters *r)
 {
@@ -1687,6 +1810,14 @@ static sheepshaver_cpu *ppc_cpu = NULL;
 bool SheepExcDeliverPending(void)
 {
 	return ppc_cpu && ppc_cpu->deliver_pending_dec_exception();
+}
+
+// SS_M18 S3 T2: free-function seam for the EXT-injection shim (same idiom as
+// SheepExcDeliverPending). Newworld-gated AND NkSupervisorEnabled()-gated at the
+// call site (ppc-cpu.cpp spcflag poll); inert by construction at default OFF.
+bool SheepExcDeliverExtInjection(void)
+{
+	return ppc_cpu && ppc_cpu->deliver_ext_injection_nk();
 }
 
 /* NK-syscall-surface Task A: the sc-side vector-stub shim (Q-S2 pinned ABI,

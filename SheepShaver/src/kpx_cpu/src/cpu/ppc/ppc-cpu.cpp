@@ -2053,7 +2053,18 @@ bool powerpc_cpu::check_spcflags()
 			 * We are already inside MachineProfileIsNewWorld(); NkSupervisorEnabled()
 			 * additionally AND-s the env flag, resolved once at boot. */
 			if (NkSupervisorEnabled()) {
-				/* T2/T3 land here */
+				/* T2 (LOAD-BEARING): the host->NK EXT-injection shim — the
+				 * async device-IRQ -> NK-EXT seam. Poll the KEPT host-IRQ
+				 * pending flag, resolve the NK's real EXT vector from the live
+				 * KDP table, inject via ExcEnter re-pointed at the NK vector
+				 * (NOT g_exc_entry_table). On a real install this delivers and
+				 * returns; pre-S2b (no install) it hits the sentinel STOP and
+				 * returns false, falling through to the legacy path below — T3
+				 * retires that legacy path under this same gate. Default OFF =>
+				 * NkSupervisorEnabled() is false and none of this is reached
+				 * (paravirtual byte-identical). */
+				if (SheepExcDeliverExtInjection())
+					return true;
 			}
 			if (SheepExcDeliverPending())
 				return true;

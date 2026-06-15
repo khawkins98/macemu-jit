@@ -552,6 +552,16 @@ extern void HandleInterrupt(powerpc_registers *r);
  * Returns false when nothing is pending or delivery was deferred (EE off /
  * execute_depth > 1) — the caller then falls through to the legacy path. */
 extern bool SheepExcDeliverPending(void);
+/* SS_M18 S3 (Operation NewSheep) T2: the host->NK EXT-injection shim
+ * (LOAD-BEARING). Called from check_spcflags' HANDLE arm on the newworld profile
+ * UNDER NkSupervisorEnabled() (default OFF), BEFORE the legacy
+ * SheepExcDeliverPending() path. Polls the KEPT host-IRQ pending flag, resolves
+ * the NK's real EXT vector from the live KDP table (KDP+0x374), and injects via
+ * ExcEnter(EXC_EXTERNAL) re-pointed at the NK vector (NOT g_exc_entry_table).
+ * Returns true iff an EXT was injected; false when nothing pending, deferred, or
+ * the vector is unresolved (install not run — EXPECTED pre-S2b). Inert at
+ * default OFF (never called paravirtual or gated-OFF newworld). */
+extern bool SheepExcDeliverExtInjection(void);
 /* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
  * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions).
  * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4).

@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_shm_arena_spike test_shm_arena_multientry
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_shm_arena_spike test_shm_arena_multientry
 
 test: $(TESTS)
 	./test_machine_profile
@@ -17,6 +17,7 @@ test: $(TESTS)
 	./test_event_sched
 	./test_exc_core
 	./test_exc_chain
+	./test_exc_inject
 	./test_dev_cuda
 	./test_adb_stub
 	./test_dev_openpic
@@ -58,6 +59,11 @@ test_event_sched: test_event_sched.cpp event_sched.cpp ../include/event_sched.h
 
 test_exc_core: test_exc_core.cpp exc_core.cpp ../include/exc_core.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_exc_core.cpp exc_core.cpp
+
+# SS_M18 S3 T2: the host->NK EXT-injection shim (LOAD-BEARING). PLANTED-TABLE
+# micro-test (G(T2) observable C1) — pure module + ExcEnter, no kpx_cpu link.
+test_exc_inject: test_exc_inject.cpp exc_inject.cpp exc_core.cpp ../include/exc_inject.h ../include/exc_core.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_exc_inject.cpp exc_inject.cpp exc_core.cpp
 
 # M3b Wave 2 W2-0: the delivery-decision chain (ExcDeliveryDecision/ExcEdgeReRaise)
 # composed with the real VirtClock latch (U1-U13, EE-CHAIN-RECON.md §C.1 + rev 2).

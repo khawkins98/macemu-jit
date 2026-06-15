@@ -5,6 +5,13 @@
 > with **zero falsified contracts**. Every rule below was earned by a specific incident
 > (cited). This is the reusable process; the canonical worked example of the plan
 > format is `docs/superpowers/plans/2026-06-11-nk-syscall-surface.md` (body + Rev 2).
+>
+> **▶ Operating overlay:** for *who does what* when running this as a coordinator driving a team of
+> spawned subagents (Planner → PROCESS+TECHNICAL+ADVERSARY red-team → fold → gated serial implementers →
+> measure-the-wall frontier loop), and the jobs the coordinator never delegates (real `make e2e`/probe
+> gates, diff review, serial commits, agent-death salvage), see the companion playbook
+> **`docs/MULTI-AGENT-FEATURE-WORKFLOW.md`** (proven 2026-06-15: two milestones + a live RE bringup in one
+> overnight session). Say **"use the feature workflow"** to invoke it.
 
 ## 1. The shape of the problem this fits
 

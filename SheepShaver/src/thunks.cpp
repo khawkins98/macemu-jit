@@ -96,6 +96,7 @@ uint32 NativeOpcode(int selector)
 	case NATIVE_GET_NAMED_RESOURCE:
 	case NATIVE_GET_1_NAMED_RESOURCE:
   	case NATIVE_MAKE_EXECUTABLE:
+	case NATIVE_OF_CI_SHIM:   // SS_M18 S2b T2: FN=1 so the routine returns via LR (bctrl caller)
 		opcode = POWERPC_NATIVE_OP(1, selector);
 		break;
 	default:

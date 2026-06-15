@@ -34,6 +34,7 @@
 #include "exc_core.h"
 #include "exc_inject.h"	// SS_M18 S3 T2: host->NK EXT-injection shim
 #include "trampoline_loader.h"	// SS_M18 S2b T1: staged-asset MacOS.elf loader
+#include "trampoline_ofci_shim.h"	// SS_M18 S2b T2: guest-callable r5 OF-CI marshalling shim
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -3717,6 +3718,13 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 	switch (selector) {
 	case NATIVE_PATCH_NAME_REGISTRY:
 		DoPatchNameRegistry();
+		break;
+	case NATIVE_OF_CI_SHIM:
+		/* SS_M18 S2b T2: the real Trampoline calls r5 (a guest bctrl) which lands
+		 * here via the EXEC_NATIVE intercept. r3 = guest BE-32 CHRP array ptr;
+		 * marshal it through of_ci_callback and return the int as r3. INERT until
+		 * T4 binds the live context+callback (ss_ofci_shim_invoke refuses, r3=-1). */
+		gpr(3) = ss_ofci_shim_invoke(gpr(3));
 		break;
 	case NATIVE_VIDEO_INSTALL_ACCEL:
 		VideoInstallAccel();

@@ -386,3 +386,18 @@ pinned one layer deeper:**
   precede the wild jump). **NEXT TASK = OF-CI early-environment fidelity, which precedes S1's `/mmu`.**
   *(High confidence the wall is the OF-CI environment + before `/mmu`/NK; medium on which stub fires first —
   the trace resolves it cheaply.)*
+
+### Relocation-loop RE (2026-06-15, capstone `0x2026a0`) — the wall after minimally-real /mmu
+The SIGSEGV loop is `0x202698–0x202704`, a **range-coalesce / relocation-apply loop**:
+- indexed by `r29` (stride +8) against a COUNT at `0xbc(r1)`; `r31` = output cursor (8-byte entries:
+  `[r31+0]`,`[r31+4]`); `r30` accumulates a running total (`r30 += 0xcc(r1)` stride per iter); merges
+  adjacent ranges (`r0=[r31+0]+[r31+4]; cmpw r0,0xc8(r1); bne → stw r8,8(r31)` = the faulting store).
+- **Over-run mechanism:** the loop count (`0xbc(r1)`) / the range-entry stream is derived from the OF-CI
+  memory map we publish (`/memory reg` = a SINGLE entry, size=RAMSize, base `0x10000000`). The Trampoline's
+  range engine expects a richer structure (likely multiple `/memory` cells + an `available` property +
+  reg/available consistency), so the count is wrong → `r29 < r4` stays true while `r31` walks `0x01000000 →
+  0x01fffff8 →` off the end → SIGSEGV. `r30=0x3e18696d` is the runaway accumulated total, not ASCII.
+- **NEXT FIX (OF memory-map fidelity):** make `/memory` (reg + `available`) + the `/chosen` memory props
+  match what the CHRP range engine consumes (trace back from `0xbc(r1)`/`0xc8(r1)`/`0xcc(r1)` to the OF-CI
+  getprop that fills them). Precedes the NK install. This is the next iterative bringup wall (Route A's
+  "MONTHS" grind: each OF-CI/ABI input refined in turn until the Trampoline reaches `0x50310000`).

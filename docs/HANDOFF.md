@@ -29,10 +29,15 @@
 >   teardown). **▶▶▶▶▶▶ NEW WALL = the genuine S1 `/mmu`:** after `quiesce`/`exit` control wild-jumps into the
 >   data segment (~`0x100000`) → SIGSEGV; `NanoKernelEntry 0x50310000` never fired (iNK=0). The `/mmu`
 >   translate/map is still the **V=P identity recording stub** (NON-ACCEPTANCE) — the post-quiesce handoff
->   target depends on REAL `/mmu` translation/map. **NEXT: a real recording `/mmu` (map records virt→phys;
->   translate honors recorded mappings + claimed regions, V=P fallback for RAM/ROM) → measure whether the
->   handoff lands on `0x50310000` (iNK>0 = the real NanoKernel running, a LANDMARK).** If it needs the full
->   live-NK SR/BAT window, escalate to the full S1 milestone (window/softmmu per the Task-0). Plan + full ladder:
+>   target depends on REAL `/mmu` translation/map. Recording `/mmu` + Apple map arg-order fix LANDED (`e1d4d944`). The OF→NK handoff is now fully RE'd: it's
+>   a deliberate `rfi` to `translate(0x20f0b8)=0x20f0b8` (V=P, ALREADY correct, MSR=0x3000 translation-OFF) —
+>   so `/mmu` is NOT the wall. **▶▶ NEW WALL (still pre-NK, pre-S1): the Trampoline's post-rfi PHYSICAL-MODE
+>   RELOCATION ENGINE at guest `0x20f0b8+`** (clears all BATs, then relocates/copies driven by boot-info
+>   structs `[r1+0x500]` (written by `0x202074`) + `[r1+0x2fc]` (by `0x20fe78`/the getprop chain),
+>   `r27=[r4+0xc]`) → branches into the data segment `~0x100000` → SIGSEGV `pc=0x10031c`; iNK=0. **NEXT = the
+>   fidelity of those boot-info structs (which OF properties feed `[r1+0x500]`/`[r1+0x2fc]`).** The iterative
+>   bringup continues OF-property by OF-property toward `NanoKernelEntry 0x50310000`; S1's live SR/BAT `/mmu`
+>   is owed but downstream of this relocation bringup. Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl
 >   T1–T5 + S3-impl T1–T4) are now validated running together gated-OFF-safe + gated-ON-executing.**
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.

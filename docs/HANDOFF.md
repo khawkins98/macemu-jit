@@ -2,6 +2,20 @@
 
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
+> - **▶▶▶▶ KEYSTONE FINDING (2026-06-15, LATEST) — the real Trampoline RUNS in-tree (first time ever):** a
+>   gated-ON both-gates probe boot (`SS_M18_TRAMPOLINE=1 SS_M18_NK_SUPERVISOR=1`, 9.0.1 ROM, slot protocol)
+>   validated the ENTIRE S2b+S3 scaffolding end-to-end: S3 forge-retirement live (`[NK-SUP] T3+T4`), the
+>   loader placed `MacOS.elf`, the launch seam set the CHRP ABI, and the `emul_ppc` override **entered the
+>   real Trampoline at `0x20f078`** (forge bypassed) — which then EXECUTED (105M blocks in its
+>   `0x180000–0x1f0000` code). **BUT `NanoKernelEntry 0x50310000` never fired (`iNK=0`), NO `[S2B-MMU-STUB]`
+>   `/mmu` call ever issued, and it spun then trapped `twi @ pc=0x16c`** → **Outcome B / RESIDUE-PASS: no
+>   live map produced.** ▶▶▶▶ **REFINED NEXT WALL: S1's live `/mmu` is NOT the immediate blocker — a
+>   Trampoline EARLY-BRINGUP wall precedes it** (the Trampoline never reaches its OF-CI `/mmu` work). Cheap
+>   next probes (the finding names them): the provisional **r3/r4=0** CHRP ABI (env-overridable
+>   `SS_M18_R3`/`SS_M18_R4`, no recompile), whether `bctrl` to r5=`0x211000` ever invokes the EXEC_NATIVE
+>   shim (no `[S2B-MMU-STUB]` ⇒ probably not), an early-init dependency. Plan + full ladder:
+>   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl
+>   T1–T5 + S3-impl T1–T4) are now validated running together gated-OFF-safe + gated-ON-executing.**
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
 > - **▶▶ NEWEST PROGRESS (2026-06-15 overnight, LATEST) — S2b-impl is BUILD-RESIDUE-COMPLETE (T1–T5 all
 >   committed, gated-OFF, byte-identical):** the in-tree path that RUNS the real Trampoline now exists behind

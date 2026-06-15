@@ -3,7 +3,22 @@
 > ## ▶ RIGHT NOW (read this first)
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.
-> - **▶ NEWEST PROGRESS (2026-06-15 overnight) — S3-impl RESTRUCTURE half landed gated-OFF + the S2b
+> - **▶▶ NEWEST PROGRESS (2026-06-15 overnight, LATEST) — S2b-impl is BUILD-RESIDUE-COMPLETE (T1–T5 all
+>   committed, gated-OFF, byte-identical):** the in-tree path that RUNS the real Trampoline now exists behind
+>   `SS_M18_TRAMPOLINE` (default OFF). **T1** staged-asset `MacOS.elf` loader + 9.0.1-ROM-identity guard
+>   (`31eafd59`); **T2** guest-callable r5 marshalling shim — EXEC_NATIVE bridge + pointer-arg descriptor
+>   schema + BE-32↔host-cell (`d528a350`); **T3** CHRP launch seam — `emul_ppc` enters the Trampoline at
+>   `0x20f078` (`b3c16ffa`); **T4** OF-CI wiring — `of_ci_callback` bound, `/mmu` recording stub
+>   (NON-ACCEPTANCE) + `[S2B-SHIM-COLLIDE]` tripwire (`93545b6f`); **T5** forge loader-gated via the
+>   additive-clause `if (!TrampolineLoaderGateEnabled())` with the S3-T4 rebase point documented (`4580651d`).
+>   Plan rev-2 `47252b01` (red-team folded — ROM-identity guard cleared the ADVERSARY BLOCK). Each task:
+>   `make test-jit`=100 + real `make e2e` PASS (byte-identical gate-OFF) + per-task micro-test. **GREEN-PASS
+>   (the gated boot reaching `NanoKernelEntry 0x50310000` with `of_ci_unresolved_count()==0`) is DEFERRED
+>   behind S1's real `/mmu`.** ▶▶ **NEXT: the S3 RESTRUCTURE remainder (T3 retire synthetic supervisor / T4
+>   retire forge — now rebases cleanly on S2b's additive-clause gate / both gated-OFF, mergeable now), then
+>   S1 (the live paged `/mmu`) as the sole GREEN-PASS unlock for BOTH S2b and S3.** *(S3-impl T1+T2 history
+>   below.)*
+> - **▶ PRIOR PROGRESS (2026-06-15 overnight) — S3-impl RESTRUCTURE half landed gated-OFF + the S2b
 >   critical-path opened:** S3-impl plan **rev-2** re-scoped (`fa44698e`) to **RESTRUCTURE + GATED-MERGE-RESIDUE**
 >   this milestone — **GREEN-PASS (T5 + the gate flip) is DEFERRED behind S2b** (T4's "S2 landed" precondition is
 >   FALSIFIED: the forge substitutes the unbuilt loader). **S3-impl T1 + T2 COMMITTED green, gated-OFF:** T1

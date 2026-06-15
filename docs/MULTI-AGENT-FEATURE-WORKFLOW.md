@@ -144,3 +144,25 @@ so the resume chain is coherent for the next session (in-session task lists do n
 > the measure-the-wall loop: RE → probe → pin the wall → minimal gated fix → measure progress → commit →
 > next wall. Label every approximation NON-ACCEPTANCE honestly, keep `HANDOFF.md` current, and salvage any
 > agent that dies mid-task by finishing + verifying it yourself before committing.
+
+## Parallel CODE work → isolated worktrees (the 2026-06-15 lesson)
+
+When fanning out **implementer** agents that touch code, give each its **own git worktree** so they never
+contend on shared files (Makefiles, core `.cpp`) and commit hygiene is per-tree. Use the Agent tool's
+`isolation: "worktree"` (or manual `git worktree add`). Then merge **serially** with **explicit-path
+commits** — `git add <specific files>`, never `git commit -a`.
+
+**Why (earned the hard way):** a 5-agent fan-out where 3 implementers shared `machine/Makefile`/`Makefile.in`/
+`ppc-execute.cpp` in ONE working tree produced: (a) interleaved WIP from multiple tracks dirty at once, and
+(b) a `git commit -am` for *docs* that swept concurrent agents' tracked edits into the docs commit while
+leaving their NEW files untracked → HEAD referenced missing headers (broken from a clean checkout). Two
+recovery commits were needed. No work was lost (the salvage discipline held), but it was avoidable.
+
+**The rule going forward:**
+- **Recon / docs / findings agents** → share the main tree freely (they only write disjoint docs).
+- **Implementer agents that touch shared build files** → isolated worktree each; OR serialize them (one
+  in-flight at a time on the shared files, per the file-ownership LAW).
+- **Coordinator commits** → ALWAYS explicit `git add <paths>`; NEVER `-a`/`-A` while any agent is in flight.
+  Gate-verify each track (its build + test) before merging it, so the main tree stays always-green.
+- Prefer worktrees over serialization when the work is genuinely independent — it keeps the parallelism the
+  fan-out is *for* without the collision tax.

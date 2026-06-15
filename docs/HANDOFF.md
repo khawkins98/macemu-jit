@@ -1,6 +1,17 @@
 # Project Handoff — resume entry point
 
 > ## ▶ RIGHT NOW (read this first)
+> - **★★★ LANDMARK (2026-06-15): the real NanoKernel EXECUTES inside SheepShaver (iNK>0)** — Operation
+>   NewSheep's goal (run the Trampoline producer + NanoKernel, not forge) reached at the kernel-entry
+>   threshold (`3446006b`). The BootX pre-stage (claim 4MB + copy the ROM image from `0x50000000` to
+>   rom_virt=`0xC00000` + publish `/rom/macos AAPL,toolbox-parcels`) was the missing piece. Boot now:
+>   Trampoline full OF phase → clean quiesce/exit → enters the staged image at NanoKernelEntry
+>   (rom_virt+0x303000=`0x00F03000`) → the NK runs its opening MMU bringup (CLEARS ALL 8 BATs + isync).
+>   **▶▶ NEW WALL = S1's LIVE `/mmu` (now the active need; user reserved S1 for explicit GO):** the NK
+>   then `blr`s to a config-driven target (`r22=[r21+0x18]`) and SIGSEGVs at image+0x3030b8 because (a) the
+>   config pointer handed to the NK may be wrong, and/or (b) the NK's BAT/SR writes are JIT NO-OPS
+>   (`[ROMPATCH] sr_load SKIP`) so its translated jump isn't mapped — exactly the live (SR/BAT/SDR1) MMU S1
+>   owes. **NEXT: pin (a) vs (b), then (if S1) the live-MMU milestone per the S1 Task-0 (window/softmmu).**
 > - **Aim:** boot Mac OS 9.2 (NewWorld) by **running the Trampoline producer**, not forging its outputs (Operation NewSheep; the M8→M17 forge arc is closed).
 > - **▶▶▶▶ KEYSTONE FINDING (2026-06-15, LATEST) — the real Trampoline RUNS in-tree (first time ever):** a
 >   gated-ON both-gates probe boot (`SS_M18_TRAMPOLINE=1 SS_M18_NK_SUPERVISOR=1`, 9.0.1 ROM, slot protocol)

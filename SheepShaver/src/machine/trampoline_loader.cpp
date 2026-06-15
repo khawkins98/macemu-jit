@@ -150,6 +150,7 @@ int tramp_place_image(const uint8_t *elf, size_t size, const TrampImage *img,
 #include "sysdeps.h"
 #include "cpu_emulation.h"      /* Mac2HostAddr, ROMBaseHost, RAMBase, RAMSize */
 #include "machine_profile.h"    /* MachineProfileIsNewWorld */
+#include "prefs.h"              /* PrefsFindString("rom") - faithful-default ROM path */
 
 static int  g_gate = -1;        /* boot-latched gate (-1 unresolved) */
 static bool g_loader_ran = false;
@@ -282,6 +283,69 @@ static uint32_t g_parcel_size = 0;
 uint32_t TrampolineRomVirt(void)    { return g_rom_virt; }
 uint32_t TrampolineParcelSize(void) { return g_parcel_size; }
 
+/* Faithful-staging default: slice the COMPRESSED 'prcl' toolbox-parcels
+ * container out of the user's NewWorld .rom file at boot.
+ *
+ * WHY: the real Trampoline's AAPL,toolbox-parcels reader UNCONDITIONALLY
+ * decompresses the parcels image it is handed. SheepShaver decompresses the
+ * .rom into its ROM aperture at 0x50000000; staging THOSE already-decompressed
+ * bytes makes the Trampoline decompress them a SECOND time -> garbage into the
+ * KernelCode gap (the 2026-06-15 faithful-staging finding). Slicing the
+ * COMPRESSED container instead lets the real decompressor produce a correct
+ * NanoKernel image, and the NK body runs.
+ *
+ * This mirrors SheepShaver/tools/extract-toolbox-parcels.py and rom_decode.hpp's
+ * parcels-offset/parcels-size parse (no hardcoded 0x1bfc0/0x259c8c). The source
+ * is the user's ALREADY-PRESENT ROM asset, read at boot — NEVER a committed
+ * ROM-derived blob. Returns a malloc'd buffer (caller frees) + *out_len, or
+ * NULL with *err set. */
+static uint8_t *slice_compressed_prcl(size_t *out_len, char *err, size_t errsz)
+{
+	const char *rom_path = PrefsFindString("rom");
+	if (!rom_path || !rom_path[0]) { fail(err, errsz, "no 'rom' pref set"); return NULL; }
+
+	size_t file_len = 0;
+	uint8_t *data = read_asset(rom_path, &file_len, err, errsz);
+	if (!data) return NULL;
+
+	if (file_len < 11 || memcmp(data, "<CHRP-BOOT>", 11) != 0) {
+		free(data); fail(err, errsz, "ROM is not a <CHRP-BOOT> container"); return NULL;
+	}
+
+	/* NUL-terminate a copy so the constant searches cannot run off the end. */
+	char *text = (char *)malloc(file_len + 1);
+	if (!text) { free(data); fail(err, errsz, "out of memory"); return NULL; }
+	memcpy(text, data, file_len);
+	text[file_len] = '\0';
+
+	uint32_t off = 0, siz = 0;
+	bool ok = false;
+	char *s = strstr(text, "constant parcels-offset");
+	if (s && s >= text + 7 && sscanf(s - 7, "%06x", &off) == 1) {
+		s = strstr(text, "constant parcels-size");
+		if (s && s >= text + 7 && sscanf(s - 7, "%06x", &siz) == 1)
+			ok = true;
+	}
+	free(text);
+	if (!ok) { free(data); fail(err, errsz, "no parcels-offset/parcels-size constants (not a 'prcl'-container ROM)"); return NULL; }
+
+	if ((uint64_t)off + siz > file_len || siz < 4) {
+		free(data); fail(err, errsz, "parcels range exceeds ROM file"); return NULL;
+	}
+	if (memcmp(data + off, "prcl", 4) != 0) {
+		free(data); fail(err, errsz, "payload magic is not 'prcl' (offset/size parse wrong)"); return NULL;
+	}
+
+	uint8_t *blob = (uint8_t *)malloc(siz);
+	if (!blob) { free(data); fail(err, errsz, "out of memory"); return NULL; }
+	memcpy(blob, data + off, siz);
+	free(data);
+	*out_len = siz;
+	fprintf(stderr, "[S2B-PARCEL] faithful default: sliced compressed 'prcl' container "
+	        "(offset=0x%x size=0x%x) from ROM '%s'\n", off, siz, rom_path);
+	return blob;
+}
+
 int TrampolineStageParcels(void)
 {
 	/* rom_virt: 4MB-aligned guest-physical base (env-overridable). */
@@ -293,16 +357,16 @@ int TrampolineStageParcels(void)
 		return -1;
 	}
 
-	/* Source selection (PHASE-0 verdict).
-	 *  - Default: the DECOMPRESSED 4MB image already in SheepShaver's ROM
-	 *    aperture at guest 0x50000000 (ROMBaseHost). NewWorld .rom files ship
-	 *    compressed, but SheepShaver decompresses into the aperture at load, so
-	 *    ConfigInfo is in-place at +0x30D000. The Trampoline's AAPL,toolbox-parcels
-	 *    reader reads ConfigInfo from this image (KernelCodeOffset @ +0x4C =>
-	 *    NanoKernelEntry = rom_virt + 0x310000).
-	 *  - Fallback: SS_M18_PARCEL_FILE overrides the source with a staged file
-	 *    (e.g. the compressed 'prcl' Parcels container) if the headline boot shows
-	 *    the reader decompresses unconditionally (RT #3 risk). */
+	/* Source selection (FAITHFUL-STAGING default — 2026-06-15 footgun fix).
+	 *  - Default (no SS_M18_PARCEL_FILE): slice the COMPRESSED 'prcl' container
+	 *    out of the user's ROM file at boot (slice_compressed_prcl) and stage
+	 *    THAT, so the real Trampoline decompressor produces a correct NanoKernel
+	 *    image. Staging the DECOMPRESSED aperture bytes (the old default) made
+	 *    the Trampoline decompress them a SECOND time -> garbage KernelCode; that
+	 *    silent footgun is now closed (FAIL LOUD [S2B-PARCEL-NOSRC] if the prcl
+	 *    cannot be sliced — never stage decompressed garbage).
+	 *  - Override: SS_M18_PARCEL_FILE (a path) takes precedence — stage that file
+	 *    verbatim (e.g. a pre-extracted compressed 'prcl' container). */
 	const char *parcel_file = getenv("SS_M18_PARCEL_FILE");
 	uint8_t *src = NULL;
 	size_t   src_len = 0;
@@ -318,8 +382,15 @@ int TrampolineStageParcels(void)
 		}
 		src = src_owned;
 	} else {
-		src     = ROMBaseHost;
-		src_len = TRAMP_PARCEL_SIZE;
+		char ferr[160] = {0};
+		src_owned = slice_compressed_prcl(&src_len, ferr, sizeof ferr);
+		if (!src_owned) {
+			fprintf(stderr, "[S2B-PARCEL-NOSRC] cannot slice the compressed 'prcl' container "
+			        "from the ROM (%s) and no SS_M18_PARCEL_FILE override set - REFUSING to "
+			        "stage decompressed garbage (faithful-staging is the default)\n", ferr);
+			return -1;
+		}
+		src = src_owned;
 	}
 
 	uint32_t size = (uint32_t)src_len;
@@ -392,7 +463,7 @@ int TrampolineStageParcels(void)
 	        "AAPL,toolbox-parcels=(0x%08x,0x%08x); KernelCodeBase=0x%x KernelCodeOffset=0x%x; "
 	        "NK launch-stub=0x%08x -> NK body(continuation)=0x%08x\n",
 	        size / 1024, rom_virt, rom_virt + size,
-	        (parcel_file && parcel_file[0]) ? parcel_file : "ROM aperture 0x50000000",
+	        (parcel_file && parcel_file[0]) ? parcel_file : "compressed 'prcl' sliced from ROM",
 	        rom_virt, size, kcode_base, kcode_off, nk_stub, nk_entry);
 	return 0;
 }

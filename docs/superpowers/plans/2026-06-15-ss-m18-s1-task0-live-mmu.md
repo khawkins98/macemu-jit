@@ -346,3 +346,14 @@ invocation / early-init), pinned at `twi @ 0x16c`, which precedes S1's live `/mm
 owed but is gated behind this earlier bringup. Re-run candidate: `SS_M18_R3`/`R4` sweep + an
 `SS_PROBE_PC=0x211000` (shim entry) / `0x20f078` (ELF entry) trace to see how far early init gets and
 whether r5 is ever called.
+
+**Follow-up probe (2026-06-15, slot0 `20260615-095355`):** `SS_PROBE_PC=0x20f078;0x211000;0x20dbec;`
+`0x20dcc0;0x20ddb4;0x21024c` (ELF entry + shim entry + the OF-CI call wrappers + indirect glue). **NONE
+fired** — the boot runs **interpreter** (`i2j=0`, all `iRAM` interp blocks), and `SS_PROBE_PC` hooks JIT
+block-entry, so it cannot observe interp-only execution; AND the Trampoline is spinning in
+`0x180000–0x1f0000` without reaching `0x20f078`/the OF-CI wrappers as block entries. **Refinement:** the
+Trampoline is stuck in EARLY code (`0x180000–0x1f0000` = inside its loaded exec segment) — likely PIC
+self-relocation / an early clear/copy loop / a spin on an uninitialized value — BEFORE it ever calls r5
+or reaches the NK. **The next wall is a dedicated Trampoline-early-bringup RE** (interp PC trace, not
+SS_PROBE_PC which is JIT-only; or a targeted instruction dump of the `0x180000` spin region), which
+PRECEDES both S1's `/mmu` AND the r3/r4/r5-shim questions. This is a NEW focused task, not S1-impl.

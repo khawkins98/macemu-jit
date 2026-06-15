@@ -135,18 +135,26 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 {
 	(void)opaque;
 	/* Log every request - the recording half of the stub. */
-	fprintf(stderr, "[S2B-MMU-STUB] /mmu %s ih=%u n_in=%d", method, (unsigned)ih, n_in);
+	fprintf(stderr, "[S2B-MMU-STUB] /mmu %s ih=%u n_in=%d n_out=%d", method, (unsigned)ih, n_in, n_out);
 	for (int i = 0; i < n_in; i++)
 		fprintf(stderr, " in[%d]=0x%08x", i, (uint32_t)in[i]);
 	fprintf(stderr, "  (NON-ACCEPTANCE recording stub - real /mmu owed to S1)\n");
 
 	if (strcmp(method, "translate") == 0) {
-		/* translate (virt -- catch phys mode): MINIMALLY-REAL V=P.
+		/* translate ( virt -- false | phys mode true ): MINIMALLY-REAL V=P.
+		 * Apple OF /mmu `translate` returns THREE method-result cells on success
+		 * (phys, mode, and a success boolean true=-1), or a single `false` on a
+		 * miss. The CIF rets array is [catch, phys, mode, flag] (the topmost Forth
+		 * result -> the LAST rets cell). The real 9.0.1 Trampoline calls translate
+		 * with n_rets=4 and BRANCHES on the trailing flag; an unwritten/garbage flag
+		 * cell sent it down a degenerate handoff path (rfi target == 0, all-zero
+		 * boot-info, SIGSEGV at physical 0). So we MUST write out[3] explicitly:
+		 * true on a hit, false on a miss.
 		 * If virt is in a guest RAM/ROM identity aperture -> phys=virt with a
-		 * cacheable-RW mode. Else -> NOT-MAPPED (phys=0, mode=0) and a distinct
-		 * log: we do NOT fabricate a PA for an address outside the V=P regime
-		 * (Stop-rule #2/#3). A NOT-MAPPED hit here is itself the FINDING that the
-		 * Trampoline/NK has moved past identity -> S1's live paged MMU is owed. */
+		 * cacheable-RW mode. Else -> NOT-MAPPED (phys=0, mode=0, flag=false) and a
+		 * distinct log: we do NOT fabricate a PA for an address outside the V=P
+		 * regime (Stop-rule #2/#3). A NOT-MAPPED hit here is itself the FINDING that
+		 * the Trampoline/NK has moved past identity -> S1's live paged MMU is owed. */
 		uint32_t virt = (n_in >= 1) ? (uint32_t)in[0] : 0;
 		g_translate_calls++;
 		uint32_t rec_phys = 0, rec_mode = 0;
@@ -154,18 +162,21 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 			/* Honor a recorded (possibly non-identity) /mmu map FIRST. */
 			if (n_out >= 2) out[1] = (of_cell)rec_phys;
 			if (n_out >= 3) out[2] = (of_cell)rec_mode;
+			if (n_out >= 4) out[3] = (of_cell)0xffffffffu; /* translate success flag (true) */
 			fprintf(stderr, "[S2B-MMU-MAP] translate virt=0x%08x -> phys=0x%08x "
 			        "mode=0x%08x (recorded map) #%d\n",
 			        virt, rec_phys, rec_mode, g_translate_calls);
 		} else if (mmu_addr_is_identity(virt)) {
 			if (n_out >= 2) out[1] = (of_cell)virt;            /* phys = virt   */
 			if (n_out >= 3) out[2] = (of_cell)MMU_MODE_CACHEABLE_RW;
+			if (n_out >= 4) out[3] = (of_cell)0xffffffffu; /* translate success flag (true) */
 			fprintf(stderr, "[S2B-MMU-MINREAL] translate virt=0x%08x -> phys=0x%08x "
 			        "mode=0x%02x (V=P identity, bringup) #%d\n",
 			        virt, virt, MMU_MODE_CACHEABLE_RW, g_translate_calls);
 		} else {
 			if (n_out >= 2) out[1] = (of_cell)0;               /* no phys       */
 			if (n_out >= 3) out[2] = (of_cell)0;               /* no mode       */
+			if (n_out >= 4) out[3] = (of_cell)0;               /* flag = false  */
 			fprintf(stderr, "[S2B-MMU-MINREAL] translate virt=0x%08x -> NOT-MAPPED "
 			        "(outside V=P aperture RAM[0x%08x,+0x%08x)/ROM[0x%08x,+0x%08x); "
 			        "live (SR/BAT/SDR1) MMU owed to S1) #%d\n",

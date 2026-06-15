@@ -71,10 +71,11 @@ int main(void)
 	 * Publish a RAM window covering VIRT so the in-aperture identity path is
 	 * exercised; a second sub-case asserts the out-of-aperture NOT-MAPPED path.
 	 * call-method array at 0x1000:
-	 *   [0]=0x2000(->"call-method") [1]=n_args=3 [2]=n_rets=3
+	 *   [0]=0x2000(->"call-method") [1]=n_args=3 [2]=n_rets=4
 	 *   [3]=0x2100(->"translate" method name) [4]=0x7 ihandle
 	 *   [5]=0x68001234 virt(scalar nested arg0)
-	 *   [6]=catch [7]=phys [8]=mode (rets)                                      */
+	 *   [6]=catch [7]=phys [8]=mode [9]=flag (rets)  -- the real 9.0.1 Trampoline
+	 *   passes n_rets=4 and branches on the trailing success flag (true=-1).      */
 	{
 		/* RAM window [0x68000000, +0x01000000) covers VIRT below; ROM unused. */
 		tramp_ofci_set_mmu_extent(0x68000000u, 0x01000000u, 0x50000000u, 0x00500000u);
@@ -85,13 +86,14 @@ int main(void)
 		const uint32_t VIRT = 0x68001234u;
 		put_be32(0x1000 + 4 * 0, 0x2000);
 		put_be32(0x1000 + 4 * 1, 3);
-		put_be32(0x1000 + 4 * 2, 3);
+		put_be32(0x1000 + 4 * 2, 4);
 		put_be32(0x1000 + 4 * 3, 0x2100);
 		put_be32(0x1000 + 4 * 4, 0x7);
 		put_be32(0x1000 + 4 * 5, VIRT);
 		put_be32(0x1000 + 4 * 6, 0xAAAAAAAA);   /* catch (overwritten) */
 		put_be32(0x1000 + 4 * 7, 0xAAAAAAAA);   /* phys */
 		put_be32(0x1000 + 4 * 8, 0xAAAAAAAA);   /* mode */
+		put_be32(0x1000 + 4 * 9, 0xAAAAAAAA);   /* flag */
 
 		int out_ret = -999;
 		int rc = tramp_ofci_marshal(of_ci_callback, ctx, 0x1000, mock_xlate, NULL,
@@ -104,6 +106,7 @@ int main(void)
 		/* (ii) V=P identity: phys == virt written back BE-32 for in-aperture virt */
 		CHECK(get_be32(0x1000 + 4 * 7) == VIRT, "/mmu translate returned phys == virt (V=P in-aperture)");
 		CHECK(get_be32(0x1000 + 4 * 8) != 0, "/mmu translate returned a non-zero cacheable-RW mode");
+		CHECK(get_be32(0x1000 + 4 * 9) == 0xffffffffu, "/mmu translate set the trailing success flag (true) in-aperture");
 		CHECK(of_ci_unresolved_count(ctx) == 0, "translate did NOT bump the unresolved counter");
 
 		/* (ii-b) out-of-aperture virt -> NOT-MAPPED (phys==0), honest about the
@@ -111,11 +114,13 @@ int main(void)
 		const uint32_t OOB = 0x90000000u;
 		put_be32(0x1000 + 4 * 5, OOB);
 		put_be32(0x1000 + 4 * 7, 0xAAAAAAAA);
+		put_be32(0x1000 + 4 * 9, 0xAAAAAAAA);   /* flag (overwritten -> false) */
 		out_ret = -999;
 		rc = tramp_ofci_marshal(of_ci_callback, ctx, 0x1000, mock_xlate, NULL,
 		                        &out_ret, err, sizeof(err));
 		CHECK(rc == 0 && out_ret == OF_CI_OK, "marshal of out-of-aperture translate succeeded");
 		CHECK(get_be32(0x1000 + 4 * 7) == 0, "/mmu translate out-of-aperture -> phys == 0 (NOT-MAPPED)");
+		CHECK(get_be32(0x1000 + 4 * 9) == 0, "/mmu translate out-of-aperture cleared the success flag (false)");
 	}
 
 	/* ---- (i): getprop resolves in the DT (no backend) ----------------------- */

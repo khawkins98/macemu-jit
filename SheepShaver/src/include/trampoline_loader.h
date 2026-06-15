@@ -152,6 +152,34 @@ int TrampolineLoaderRun(void);
 /* True once TrampolineLoaderRun() has succeeded (for T5's two-gate forge
  * predicate: if (!TrampolineLoaderRan()) { ...forge... }). */
 bool TrampolineLoaderRan(void);
+
+/* ------------------------------------------------------------------ *
+ *  BootX pre-stage (Operation NewSheep) — stage the 4MB Mac OS ROM    *
+ *  parcel image into guest RAM so the Trampoline's BootScript can read *
+ *  ConfigInfo (at image+0x30D000) and derive the real NanoKernelEntry  *
+ *  (= rom_virt+0x310000). Models the CHRP <BOOT-SCRIPT>'s claim+copy.  *
+ * ------------------------------------------------------------------ */
+
+/* Default 4MB-aligned guest-physical base for the staged ROM image. Sits above
+ * the loaded MacOS.elf (tops ~0x211000) and below the OF-CI claim arena floor
+ * (0x01000000), so neither the loader nor the claim bump-allocator collide with
+ * it. Override with SS_M18_ROM_VIRT (hex, must be 4MB-aligned). */
+#define TRAMP_ROM_VIRT_DEFAULT  0x00C00000u
+#define TRAMP_PARCEL_SIZE       0x00400000u   /* 4 MB toolbox ROM image */
+
+/* Copy the 4MB Mac OS ROM image into guest RAM at rom_virt. Source (PHASE-0
+ * verdict — see trampoline_loader.cpp): the DECOMPRESSED image already resident
+ * in SheepShaver's ROM aperture at guest 0x50000000 (ROMBaseHost), which carries
+ * ConfigInfo at +0x30D000. SS_M18_PARCEL_FILE (a path) overrides the source with
+ * a staged file (e.g. the compressed 'prcl' Parcels container) for the
+ * decompress-path fallback. Latches TrampolineRomVirt()/TrampolineParcelSize().
+ * Returns 0 on success, <0 on failure (logged; caller stays on the launch path
+ * but the Trampoline will read a garbage NanoKernelEntry). */
+int TrampolineStageParcels(void);
+
+/* The staged ROM image base / size (0 until TrampolineStageParcels() succeeds). */
+uint32_t TrampolineRomVirt(void);
+uint32_t TrampolineParcelSize(void);
 #endif /* TRAMPOLINE_LOADER_STANDALONE_TEST */
 
 #endif /* TRAMPOLINE_LOADER_H */

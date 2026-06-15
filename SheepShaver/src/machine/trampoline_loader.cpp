@@ -272,4 +272,103 @@ bool TrampolineLoaderRan(void)
 	return g_loader_ran;
 }
 
+/* ================================================================== *
+ *  BootX pre-stage: stage the 4MB Mac OS ROM image into guest RAM.   *
+ * ================================================================== */
+
+static uint32_t g_rom_virt    = 0;
+static uint32_t g_parcel_size = 0;
+
+uint32_t TrampolineRomVirt(void)    { return g_rom_virt; }
+uint32_t TrampolineParcelSize(void) { return g_parcel_size; }
+
+int TrampolineStageParcels(void)
+{
+	/* rom_virt: 4MB-aligned guest-physical base (env-overridable). */
+	uint32_t rom_virt = TRAMP_ROM_VIRT_DEFAULT;
+	if (const char *e = getenv("SS_M18_ROM_VIRT"))
+		rom_virt = (uint32_t)strtoul(e, NULL, 0);
+	if (rom_virt & (0x400000u - 1)) {
+		fprintf(stderr, "[S2B-PARCEL] rom_virt 0x%08x is not 4MB-aligned - REFUSING\n", rom_virt);
+		return -1;
+	}
+
+	/* Source selection (PHASE-0 verdict).
+	 *  - Default: the DECOMPRESSED 4MB image already in SheepShaver's ROM
+	 *    aperture at guest 0x50000000 (ROMBaseHost). NewWorld .rom files ship
+	 *    compressed, but SheepShaver decompresses into the aperture at load, so
+	 *    ConfigInfo is in-place at +0x30D000. The Trampoline's AAPL,toolbox-parcels
+	 *    reader reads ConfigInfo from this image (KernelCodeOffset @ +0x4C =>
+	 *    NanoKernelEntry = rom_virt + 0x310000).
+	 *  - Fallback: SS_M18_PARCEL_FILE overrides the source with a staged file
+	 *    (e.g. the compressed 'prcl' Parcels container) if the headline boot shows
+	 *    the reader decompresses unconditionally (RT #3 risk). */
+	const char *parcel_file = getenv("SS_M18_PARCEL_FILE");
+	uint8_t *src = NULL;
+	size_t   src_len = 0;
+	uint8_t *src_owned = NULL;
+
+	if (parcel_file && parcel_file[0]) {
+		char ferr[160] = {0};
+		src_owned = read_asset(parcel_file, &src_len, ferr, sizeof ferr);
+		if (!src_owned) {
+			fprintf(stderr, "[S2B-PARCEL] SS_M18_PARCEL_FILE '%s' unreadable (%s) - REFUSING\n",
+			        parcel_file, ferr);
+			return -1;
+		}
+		src = src_owned;
+	} else {
+		src     = ROMBaseHost;
+		src_len = TRAMP_PARCEL_SIZE;
+	}
+
+	uint32_t size = (uint32_t)src_len;
+	if (size > TRAMP_PARCEL_SIZE) size = TRAMP_PARCEL_SIZE;  /* aperture cap */
+
+	/* PHASE-0 runtime verification: the aperture must hold the DECOMPRESSED image
+	 * (ConfigInfo ROMImageBaseOffset @ +0x30D028 == 0xFFCF3000). Verify against the
+	 * aperture regardless of source (the aperture is always the decompressed ROM). */
+	uint32_t cfg = ((uint32_t)ROMBaseHost[0x30D028] << 24) |
+	               ((uint32_t)ROMBaseHost[0x30D029] << 16) |
+	               ((uint32_t)ROMBaseHost[0x30D02A] << 8)  |
+	                (uint32_t)ROMBaseHost[0x30D02B];
+	fprintf(stderr, "[S2B-PARCEL] PHASE-0 ConfigInfo probe: aperture[0x5030D028]=0x%08x "
+	        "(expect 0xFFCF3000 = decompressed image present)\n", cfg);
+	if (cfg != 0xFFCF3000u)
+		fprintf(stderr, "[S2B-PARCEL] WARNING: ConfigInfo mismatch - the ROM aperture may "
+		        "not be the decompressed 9.0.1 image; NanoKernelEntry may be garbage\n");
+
+	/* Bounds: [rom_virt, rom_virt+size) must fit below RAMSize and not overlap the
+	 * loaded MacOS.elf / shim (tops ~0x211000). */
+	uint64_t end = (uint64_t)rom_virt + size;
+	if (end > RAMSize) {
+		fprintf(stderr, "[S2B-PARCEL] rom_virt+size 0x%llx exceeds RAMSize 0x%x - REFUSING\n",
+		        (unsigned long long)end, RAMSize);
+		if (src_owned) free(src_owned);
+		return -1;
+	}
+	if (rom_virt < 0x00220000u) {
+		fprintf(stderr, "[S2B-PARCEL] rom_virt 0x%08x overlaps the loaded MacOS.elf/shim "
+		        "region (<0x220000) - REFUSING\n", rom_virt);
+		if (src_owned) free(src_owned);
+		return -1;
+	}
+
+	uint8_t *dst = Mac2HostAddr(rom_virt);
+	memcpy(dst, src, size);
+
+	g_rom_virt    = rom_virt;
+	g_parcel_size = size;
+	if (src_owned) free(src_owned);
+
+	/* NanoKernelEntry the Trampoline will derive (KernelCodeOffset @ ConfigInfo+0x4C). */
+	uint32_t nk_entry = rom_virt + 0x310000u;
+	fprintf(stderr, "[S2B-PARCEL] staged %u KB ROM image into guest [0x%08x,0x%08x) from %s; "
+	        "AAPL,toolbox-parcels=(0x%08x,0x%08x); NanoKernelEntry=0x%08x\n",
+	        size / 1024, rom_virt, rom_virt + size,
+	        (parcel_file && parcel_file[0]) ? parcel_file : "ROM aperture 0x50000000",
+	        rom_virt, size, nk_entry);
+	return 0;
+}
+
 #endif /* TRAMPOLINE_LOADER_STANDALONE_TEST */

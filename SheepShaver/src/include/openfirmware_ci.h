@@ -89,6 +89,11 @@ void of_ci_destroy(of_ci_context *ctx);
 void of_ci_set_memory_size(of_ci_context *ctx, uint32_t ram_size);
 void of_ci_set_claim_arena(of_ci_context *ctx, uint32_t base, uint32_t limit);
 
+/*  - of_ci_set_toolbox_parcels: publish the staged Mac OS ROM image base/size
+ *    into /rom/macos AAPL,toolbox-parcels (two BE cells). The BootScript reads
+ *    this to find the 4MB toolbox image (ConfigInfo at image+0x30D000). */
+void of_ci_set_toolbox_parcels(of_ci_context *ctx, uint32_t rom_virt, uint32_t size);
+
 /* Register a call-method backend (test double). Matched by exact method name.
  * Returns false if the backend table is full. */
 bool of_ci_register_method(of_ci_context *ctx, const char *method,

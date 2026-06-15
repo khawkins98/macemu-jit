@@ -75,6 +75,7 @@ struct of_ci_context {
 	 * guest RAMSize without mutating shared static data — the unit test default
 	 * stays size=0), and a bump-allocator arena backing the `claim` service. */
 	uint8_t reg_memory[8];          /* BE (base, size); pointed-to by /memory reg */
+	uint8_t tb_parcels[8];          /* BE (rom_virt, size); /rom/macos AAPL,toolbox-parcels */
 	uint32_t mem_size;              /* RAMSize cell mirrored into reg_memory[4..7] */
 	uint32_t claim_next;            /* next free guest-physical addr (bump ptr) */
 	uint32_t claim_base;            /* arena floor (for reset/diagnostics) */
@@ -246,7 +247,19 @@ of_ci_context *of_ci_create_core99(void)
 	node_add_str(rom, "name", "rom");
 	struct of_node *macos = node_add_child(rom, node_new(ctx, "macos"));
 	node_add_str(macos, "name", "macos");
-	node_add_cells(macos, "AAPL,toolbox-parcels", CELL_ZERO_PLACEHOLDER(), 4);
+	/* AAPL,toolbox-parcels = (rom_virt, size), two BE cells; points at the
+	 * per-context tb_parcels blob so of_ci_set_toolbox_parcels() can publish the
+	 * staged ROM-image base on the gated launch path. Default (0,0) for the unit
+	 * test (no image staged). The BootScript reads this to find the 4MB Mac OS ROM
+	 * image, then reads ConfigInfo at image+0x30D000 to derive NanoKernelEntry. */
+	node_add_cells(macos, "AAPL,toolbox-parcels", ctx->tb_parcels, 8);
+
+	/* /openprom supports-bootinfo: the CHRP BootScript advertises bootinfo support
+	 * here; the Trampoline probes it. Empty (zero-length) property — presence is
+	 * the signal. */
+	struct of_node *openprom = node_add_child(root, node_new(ctx, "openprom"));
+	node_add_str(openprom, "name", "openprom");
+	node_add_prop(openprom, "supports-bootinfo", "", 0, false);
 
 	/* --- CORE99 §3 hardware nodes ----------------------------------------- */
 	struct of_node *memory = node_add_child(root, node_new(ctx, "memory@0"));
@@ -380,6 +393,22 @@ void of_ci_set_claim_arena(of_ci_context *ctx, uint32_t base, uint32_t limit)
 	if (env && *env) base = (uint32_t)strtoul(env, NULL, 0);
 	ctx->claim_base = ctx->claim_next = base;
 	ctx->claim_limit = limit;
+}
+
+/* Publish the staged Mac OS ROM image location into /rom/macos
+ * AAPL,toolbox-parcels = (rom_virt, size), two big-endian cells. The BootScript
+ * reads this property to locate the 4MB toolbox ROM image staged into guest RAM. */
+void of_ci_set_toolbox_parcels(of_ci_context *ctx, uint32_t rom_virt, uint32_t size)
+{
+	if (!ctx) return;
+	ctx->tb_parcels[0] = (uint8_t)(rom_virt >> 24);
+	ctx->tb_parcels[1] = (uint8_t)(rom_virt >> 16);
+	ctx->tb_parcels[2] = (uint8_t)(rom_virt >> 8);
+	ctx->tb_parcels[3] = (uint8_t)(rom_virt);
+	ctx->tb_parcels[4] = (uint8_t)(size >> 24);
+	ctx->tb_parcels[5] = (uint8_t)(size >> 16);
+	ctx->tb_parcels[6] = (uint8_t)(size >> 8);
+	ctx->tb_parcels[7] = (uint8_t)(size);
 }
 
 /* ---------------------------------------------------------------------- */

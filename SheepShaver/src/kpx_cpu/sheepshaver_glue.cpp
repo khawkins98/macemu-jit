@@ -3730,6 +3730,23 @@ void init_emul_ppc(void)
 			of_ci_set_claim_arena(g_s2b_ofci_ctx, 0x01000000u, RAMSize);
 			fprintf(stderr, "[S2B-OFCI] env fidelity: /memory reg size=0x%x, "
 			        "claim arena [0x01000000,0x%x)\n", RAMSize, RAMSize);
+
+			/* BootX pre-stage (Operation NewSheep): stage the 4MB Mac OS ROM image
+			 * into guest RAM and publish /rom/macos AAPL,toolbox-parcels so the
+			 * Trampoline's BootScript can read ConfigInfo (at image+0x30D000) and
+			 * derive the real NanoKernelEntry (= rom_virt+0x310000). Without this the
+			 * BootScript reads a garbage NanoKernelEntry and iNK stays 0. */
+			if (TrampolineStageParcels() == 0) {
+				of_ci_set_toolbox_parcels(g_s2b_ofci_ctx,
+				                          TrampolineRomVirt(), TrampolineParcelSize());
+				fprintf(stderr, "[S2B-OFCI] /rom/macos AAPL,toolbox-parcels=(0x%08x,0x%08x) "
+				        "published; NanoKernelEntry=0x%08x\n",
+				        TrampolineRomVirt(), TrampolineParcelSize(),
+				        TrampolineRomVirt() + 0x310000u);
+			} else {
+				fprintf(stderr, "[S2B-OFCI] WARNING: parcel staging failed - the Trampoline "
+				        "will read a garbage NanoKernelEntry (iNK will stay 0)\n");
+			}
 			int n_backends = tramp_ofci_install_backends(g_s2b_ofci_ctx);
 			tramp_ofci_set_stop_fn(s2b_shim_collide_abort);
 			/* SS_M18 S1-bringup: hand the /mmu MINIMALLY-REAL backend the guest

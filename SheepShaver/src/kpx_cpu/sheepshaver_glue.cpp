@@ -35,6 +35,8 @@
 #include "exc_inject.h"	// SS_M18 S3 T2: host->NK EXT-injection shim
 #include "trampoline_loader.h"	// SS_M18 S2b T1: staged-asset MacOS.elf loader
 #include "trampoline_ofci_shim.h"	// SS_M18 S2b T2: guest-callable r5 OF-CI marshalling shim
+#include "openfirmware_ci.h"	// SS_M18 S2b T4: OF-CI callback + Core99 DT context
+#include "trampoline_ofci_backends.h"	// SS_M18 S2b T4: pinned call-method backends
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -2858,6 +2860,21 @@ bool ss_run_opcode_test(void)
 static bool   g_s2b_launch_armed = false;
 static uint32 g_s2b_launch_entry = 0;
 
+/* SS_M18 S2b T4 — the live OF-CI context (Core99 DT) bound into the shim, created
+ * once at the gated launch. NULL until T4 wiring runs (default-OFF: stays NULL,
+ * the shim is INERT and ss_ofci_shim_invoke refuses with r3=-1). */
+static of_ci_context *g_s2b_ofci_ctx = NULL;
+
+/* The /mmu recording stub's [S2B-SHIM-COLLIDE] STOP hook (Stop-rule #13): a
+ * placement collision between the Trampoline's /mmu claim/map and the reserved
+ * r5-shim page is a loud, logged abort, never a silent post-S1 fault. */
+static void s2b_shim_collide_abort(void)
+{
+	fprintf(stderr, "[S2B-SHIM-COLLIDE] the Trampoline claimed/mapped the reserved "
+	        "r5-shim page (TRAMP_SHIM_ENTRY) - aborting (Stop-rule #13)\n");
+	abort();
+}
+
 void init_emul_ppc(void)
 {
 	// Export jitcachesize pref as env var for ppc-cpu.cpp (which can't include prefs.h).
@@ -3540,6 +3557,24 @@ void init_emul_ppc(void)
 			        ss_ofci_shim_opcode(),
 			        getenv("SS_M18_R3") ? " [SS_M18_R3 override]" : "",
 			        getenv("SS_M18_R4") ? " [SS_M18_R4 override]" : "");
+
+			/* SS_M18 S2b T4 — wire of_ci_callback behind the gate. The T3 seam
+			 * above wrote the EXEC_NATIVE intercept opcode at TRAMP_SHIM_ENTRY (= r5)
+			 * and the shim stays INERT until bound here. Create the Core99 DT context
+			 * ONCE, install the pinned call-method backends (/mmu recording stub —
+			 * NON-ACCEPTANCE, owed to S1; disk S4 stub; display no-op; RTAS stub),
+			 * install the [S2B-SHIM-COLLIDE] STOP hook, and bind the live context +
+			 * of_ci_callback into the shim. DT queries + interpret literals resolve in
+			 * of_ci_callback directly. After this, a guest bctrl through r5 marshals a
+			 * real CHRP call into the dispatcher. */
+			g_s2b_ofci_ctx = of_ci_create_core99();
+			int n_backends = tramp_ofci_install_backends(g_s2b_ofci_ctx);
+			tramp_ofci_set_stop_fn(s2b_shim_collide_abort);
+			ss_ofci_shim_bind(g_s2b_ofci_ctx, of_ci_callback);
+			fprintf(stderr, "[S2B-OFCI] wired of_ci_callback: Core99 DT context + %d "
+			        "call-method backends installed (/mmu=RECORDING STUB, NON-ACCEPTANCE "
+			        "— real /mmu owed to S1; disk=S4 stub; display=no-op; rtas=stub); "
+			        "shim bound at r5=0x%08x\n", n_backends, TRAMP_SHIM_ENTRY);
 		}
 	}
 	WriteMacInt32(XLM_RUN_MODE, MODE_68K);

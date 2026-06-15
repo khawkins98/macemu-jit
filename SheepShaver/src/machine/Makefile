@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_shm_arena_spike test_shm_arena_multientry
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_trampoline_ofci_wiring test_shm_arena_spike test_shm_arena_multientry
 
 test: $(TESTS)
 	./test_machine_profile
@@ -26,6 +26,7 @@ test: $(TESTS)
 	./test_trampoline_loader
 	./test_trampoline_ofci_shim
 	./test_trampoline_launch
+	./test_trampoline_ofci_wiring
 	./test_shm_arena_spike
 	./test_shm_arena_multientry
 
@@ -121,6 +122,20 @@ test_trampoline_launch: test_trampoline_launch.cpp trampoline_ofci_shim.cpp \
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -DTRAMPOLINE_OFCI_SHIM_STANDALONE_TEST \
 	    -DTRAMPOLINE_LOADER_STANDALONE_TEST -o $@ \
 	    test_trampoline_launch.cpp trampoline_ofci_shim.cpp
+
+# SS_M18 S2b T4: the OF-CI wiring micro-test (G(T4)). Standalone: links the pure
+# marshalling core + openfirmware_ci.cpp + the T4 call-method backends; drives a
+# planted call-method array (/mmu translate + getprop + a colliding /mmu claim)
+# END-TO-END through of_ci_callback into the pinned backends. The /mmu stub's STOP
+# hook is left NULL so the [S2B-SHIM-COLLIDE] tripwire is asserted via the catch
+# code + collision count (no abort). Emulator shim wrapper excluded.
+test_trampoline_ofci_wiring: test_trampoline_ofci_wiring.cpp trampoline_ofci_shim.cpp \
+                             openfirmware_ci.cpp trampoline_ofci_backends.cpp \
+                             ../include/trampoline_ofci_backends.h ../include/trampoline_ofci_shim.h \
+                             ../include/trampoline_loader.h ../include/openfirmware_ci.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -DTRAMPOLINE_OFCI_SHIM_STANDALONE_TEST -o $@ \
+	    test_trampoline_ofci_wiring.cpp trampoline_ofci_shim.cpp openfirmware_ci.cpp \
+	    trampoline_ofci_backends.cpp
 
 # SS_M18 S3-Task-0 item-0: Dolphin SHM-arena platform-feasibility spike.
 # Standalone (no kpx_cpu, no paged_mmu link); proves the mach VM aliasing/remap

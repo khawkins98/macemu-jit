@@ -74,6 +74,8 @@ SRCS = ../main.cpp main_unix.cpp ../prefs.cpp ../prefs_items.cpp prefs_unix.cpp 
     ../machine/a64_mmio_decode.cpp ../machine/mmio_machfault.cpp \
     ../machine/trampoline_loader.cpp \
     ../machine/trampoline_ofci_shim.cpp \
+    ../machine/openfirmware_ci.cpp \
+    ../machine/trampoline_ofci_backends.cpp \
     ../macos_util.cpp ../timer.cpp timer_unix.cpp ../xpram.cpp xpram_unix.cpp \
     ../adb.cpp ../sony.cpp ../disk.cpp ../cdrom.cpp ../scsi.cpp \
     ../gfxaccel.cpp ../video.cpp ../audio.cpp ../ether.cpp ../thunks.cpp \

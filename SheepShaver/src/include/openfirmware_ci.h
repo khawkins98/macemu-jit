@@ -2,13 +2,13 @@
  *  openfirmware_ci.h - Open Firmware Client-Interface (CHRP CI) callback +
  *  Core99 device-tree model (SS_M18 Stage 2a).
  *
- *  STRUCTURALLY INERT: this header + openfirmware_ci.cpp are NOT wired into the
- *  emulator. There is no caller in the SheepShaver binary; the only consumer is
- *  the standalone unit test SheepShaver/src/machine/test_openfirmware_ci.cpp
- *  (mirrors the paged_mmu / dev_openpic "model + test only, wiring deferred"
- *  pattern). It models the OF-CI dispatch surface the Trampoline's MacOS.elf
- *  producer drives (handed the CI callback pointer in r5 at launch) and the
- *  Core99 device tree it queries.
+ *  WIRING: as of SS_M18 S2b T4 this is linked into the SheepShaver binary and
+ *  bound into the r5 marshalling shim by the gated newworld launch seam
+ *  (sheepshaver_glue.cpp) behind SS_M18_TRAMPOLINE (default OFF — unreachable at
+ *  default). It is also still exercised standalone by the machine/ unit tests
+ *  (test_openfirmware_ci.cpp, test_trampoline_ofci_wiring.cpp). It models the
+ *  OF-CI dispatch surface the Trampoline's MacOS.elf producer drives (handed the
+ *  CI callback pointer in r5 at launch) and the Core99 device tree it queries.
  *
  *  Authority: docs/planning/newsheep/FINDINGS-s2a-ofci-dt.md (rev-2,
  *  RESIDUE-PASS) + docs/superpowers/plans/2026-06-14-ss-m18-s2a-ofci-dt-task0.md.

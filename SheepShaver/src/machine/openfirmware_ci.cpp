@@ -1,10 +1,13 @@
 /*
  *  openfirmware_ci.cpp - OF-CI callback + Core99 device-tree model (SS_M18 S2a).
  *
- *  NOTE: compiled ONLY by the machine/ unit-test Makefile; NOT linked into the
- *  SheepShaver binary yet (S1/S2a are inert until S3/S2b wiring).
+ *  NOTE: as of SS_M18 S2b T4 this TU IS linked into the SheepShaver binary; its
+ *  only live consumer is the gated newworld launch seam (sheepshaver_glue.cpp),
+ *  which binds of_ci_callback + a Core99 context into the r5 marshalling shim
+ *  behind SS_M18_TRAMPOLINE (default OFF). At default-OFF it is unreachable.
  *
- *  STRUCTURALLY INERT (no emulator caller). See openfirmware_ci.h for scope.
+ *  See openfirmware_ci.h for scope. The call-method backends are injected by
+ *  trampoline_ofci_backends.cpp (T4); /mmu is a NON-ACCEPTANCE recording stub.
  *
  *  Dispatch surface (statically closed per FINDINGS-trampoline-re Q0-A/B,
  *  re-pinned in FINDINGS-s2a-ofci-dt.md):

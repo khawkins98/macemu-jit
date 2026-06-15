@@ -34,10 +34,17 @@
 >   so `/mmu` is NOT the wall. **▶▶ NEW WALL (still pre-NK, pre-S1): the Trampoline's post-rfi PHYSICAL-MODE
 >   RELOCATION ENGINE at guest `0x20f0b8+`** (clears all BATs, then relocates/copies driven by boot-info
 >   structs `[r1+0x500]` (written by `0x202074`) + `[r1+0x2fc]` (by `0x20fe78`/the getprop chain),
->   `r27=[r4+0xc]`) → branches into the data segment `~0x100000` → SIGSEGV `pc=0x10031c`; iNK=0. **NEXT = the
->   fidelity of those boot-info structs (which OF properties feed `[r1+0x500]`/`[r1+0x2fc]`).** The iterative
->   bringup continues OF-property by OF-property toward `NanoKernelEntry 0x50310000`; S1's live SR/BAT `/mmu`
->   is owed but downstream of this relocation bringup. Plan + full ladder:
+>   `r27=[r4+0xc]`) → branches into the data segment `~0x100000` → SIGSEGV `pc=0x10031c`; iNK=0. `/mmu translate` IEEE-1275 success-flag fix LANDED (`07003fa1`): the boot-info structs were all-zero because
+>   `translate` left `out[3]` (the `( virt -- false|phys mode true )` flag) unwritten → the Trampoline
+>   discarded every translate → rfi-to-0. Fixed → the degenerate rfi-to-0 is GONE; the Trampoline advances
+>   down the real handoff. **▶▶ NEW WALL: fault at guest `pc=0x2031e4` (`lwz r30,0(r24)`, `r24=0xffffffff`
+>   from `[[r19]+0xa8]`) IMMEDIATELY AFTER the first non-identity `/mmu map` (virt `0x10000`→phys
+>   `0xf3040000` MacIO/MMIO, mode 0x2a).** The Trampoline maps the MMIO aperture, walks a struct, derefs a
+>   `-1` sentinel. **NEXT RE: the `0x2031e4` struct base (`[r19]+0xa8`) + `bl 0x207fe8(arg=-1)` → is it a DT
+>   node/property returning -1 (cheap OF fidelity) OR does the MMIO map need a LIVE host remap (the genuine
+>   S1 `/mmu` escalation / S3 co-land)?** iNK still 0. Each wall = bounded RE + small gated fix + measured
+>   commit; trajectory unmistakable (real producer boots further each step). Process playbook:
+>   `docs/MULTI-AGENT-FEATURE-WORKFLOW.md`. Plan + full ladder:
 >   `docs/superpowers/plans/2026-06-15-ss-m18-s1-task0-live-mmu.md` §FINDING. **BOTH restructures (S2b-impl
 >   T1–T5 + S3-impl T1–T4) are now validated running together gated-OFF-safe + gated-ON-executing.**
 > - **State (2026-06-15):** both Task-0s DONE → **Route A GO but MONTHS**. Staged program planned (rev-4): **S1** paged MMU → **S2** loader+OF-CI+DT → **S3** two-supervisor reconciliation → **S4** disk IM-init→CGRP (critical path S1→S3→S4 ≈ quarters). Kickoff recon DONE: Discriminator-A=COARSE, donors extracted, 9.2 ISOs in hand.

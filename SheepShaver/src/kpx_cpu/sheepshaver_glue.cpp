@@ -33,6 +33,7 @@
 #include "virt_clock.h"
 #include "exc_core.h"
 #include "exc_inject.h"	// SS_M18 S3 T2: host->NK EXT-injection shim
+#include "trampoline_loader.h"	// SS_M18 S2b T1: staged-asset MacOS.elf loader
 #include "block-alloc.hpp"
 #include "sigsegv.h"
 #include "vm_alloc.h"
@@ -2876,6 +2877,18 @@ void init_emul_ppc(void)
 	// KernelData base as a first probe; watch the next read via SS_LOG_FIRST_BLOCKS. 1.1 sets its own
 	// SPRG0 in Init, so this initial value is harmless there. See NEW-WORLD-ROM-SUPPORT-PLAN.md.
 	if (MachineProfileIsNewWorld()) {
+		/* SS_M18 S2b T1 (Operation NewSheep) — staged-asset Trampoline loader.
+		 * Boot-latched behind SS_M18_TRAMPOLINE  MachineProfileIsNewWorld()  the
+		 * 9.0.1-ROM-identity guard (default OFF => inert, this whole arm is already
+		 * newworld-only). When ON + the 9.0.1 ROM is loaded, place the real
+		 * MacOS.elf PT_LOAD segments at their ELF vaddrs (0x100000/0x200000). T1
+		 * ONLY loads; the CHRP launch seam (r5/r2/entry + jump 0x20f078) is T3, and
+		 * loader-gating the forge below is T5 — neither lands here yet. */
+		if (TrampolineLoaderGateEnabled()) {
+			if (TrampolineLoaderRun() < 0)
+				fprintf(stderr, "[S2B-LOADER] load failed - staying on the forge path\n");
+		}
+
 		/* P1: SPRG0 = per-CPU block base.
 		 * P2: the nanokernel indexes KDP at NEGATIVE offsets (lock word at [KDP-0xb50]).
 		 * P3 (new): the nanokernel's pool/heap allocator initializes a free-list at KDP-0x7000

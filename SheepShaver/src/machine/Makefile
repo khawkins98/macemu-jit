@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_shm_arena_spike test_shm_arena_multientry
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_shm_arena_spike test_shm_arena_multientry
 
 test: $(TESTS)
 	./test_machine_profile
@@ -23,6 +23,7 @@ test: $(TESTS)
 	./test_dev_openpic
 	./test_paged_mmu
 	./test_openfirmware_ci
+	./test_trampoline_loader
 	./test_shm_arena_spike
 	./test_shm_arena_multientry
 
@@ -92,6 +93,12 @@ test_paged_mmu: test_paged_mmu.cpp paged_mmu.cpp ../include/paged_mmu.h
 # Standalone (no kpx_cpu link); structurally inert (no emulator caller).
 test_openfirmware_ci: test_openfirmware_ci.cpp openfirmware_ci.cpp ../include/openfirmware_ci.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_openfirmware_ci.cpp openfirmware_ci.cpp
+
+# SS_M18 S2b T1: staged-asset MacOS.elf ELF loader. Standalone (no kpx_cpu link);
+# the pure parse/place core is compiled with TRAMPOLINE_LOADER_STANDALONE_TEST
+# (the emulator wrapper is excluded). Placement half of G2b.a.
+test_trampoline_loader: test_trampoline_loader.cpp trampoline_loader.cpp ../include/trampoline_loader.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -DTRAMPOLINE_LOADER_STANDALONE_TEST -o $@ test_trampoline_loader.cpp trampoline_loader.cpp
 
 # SS_M18 S3-Task-0 item-0: Dolphin SHM-arena platform-feasibility spike.
 # Standalone (no kpx_cpu, no paged_mmu link); proves the mach VM aliasing/remap

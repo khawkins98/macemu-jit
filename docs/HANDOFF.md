@@ -15,9 +15,16 @@
 >   `make test-jit`=100 + real `make e2e` PASS (byte-identical gate-OFF) + per-task micro-test. **GREEN-PASS
 >   (the gated boot reaching `NanoKernelEntry 0x50310000` with `of_ci_unresolved_count()==0`) is DEFERRED
 >   behind S1's real `/mmu`.** ▶▶ **NEXT: the S3 RESTRUCTURE remainder (T3 retire synthetic supervisor / T4
->   retire forge — now rebases cleanly on S2b's additive-clause gate / both gated-OFF, mergeable now), then
->   S1 (the live paged `/mmu`) as the sole GREEN-PASS unlock for BOTH S2b and S3.** *(S3-impl T1+T2 history
->   below.)*
+>   retire forge — rebased cleanly on S2b's additive-clause gate / both gated-OFF). **▶▶▶ S3-impl
+>   RESTRUCTURE is ALSO COMPLETE (T1–T4): T3 retire synthetic supervisor (`475d53df`, gate-ON skips legacy
+>   `SheepExcDeliverPending`, NK owns DEC `0x50313200`, scheduler yielded) + T4 retire forge (`f6dc02b0`,
+>   additive-clause rebase, SDR1/HTAB/MSR + Execute68k retired, `sc`/program closure via live KDP+0x390/0x37c).
+>   Each test-jit=100 + e2e PASS byte-identical, PEM untouched. BOTH supervisor-bringup halves now built.**
+>   ▶▶▶ **NEXT (the sole remaining GREEN-PASS unlock for BOTH milestones): S1 — the live paged `/mmu`** (the
+>   Dolphin SHM-arena window co-land, substrate PROVEN `acd89dce`+`cd7a62b6`). Open S1's deep Task-0
+>   re-validating the two DEFERRED plans (`…s1-taskB-window-build.md` rev-2 + `…s1-softmmu-first.md` rev-2)
+>   against the now-landed S2b+S3 restructure; then S3-T5 (live-MMU co-land) + the post-S1 gated boot deliver
+>   GREEN-PASS. *(S3-impl T1+T2 history below.)*
 > - **▶ PRIOR PROGRESS (2026-06-15 overnight) — S3-impl RESTRUCTURE half landed gated-OFF + the S2b
 >   critical-path opened:** S3-impl plan **rev-2** re-scoped (`fa44698e`) to **RESTRUCTURE + GATED-MERGE-RESIDUE**
 >   this milestone — **GREEN-PASS (T5 + the gate flip) is DEFERRED behind S2b** (T4's "S2 landed" precondition is

@@ -13,6 +13,13 @@
 
 VirtClock g_virt_clock;   // zero-initialized: now_ns==NULL -> VirtClockReady()==false
 
+// SS_M18 S3 T3: host-DEC-arming suppression flag (NK supervisor owns DEC). Pure
+// module state — default false (byte-identical); flipped only by the gated glue
+// path via VirtClockSuppressHostDEC(). No gate symbol here so the standalone
+// virt_clock/exc_chain unit tests link without ppc-cpu.o.
+static bool g_vclk_host_dec_suppressed = false;
+void VirtClockSuppressHostDEC(bool on) { g_vclk_host_dec_suppressed = on; }
+
 void VirtClockInit(VirtClock *c, uint32_t tb_freq_hz, uint64_t (*now_ns)(void *), void *opaque)
 {
 	memset(c, 0, sizeof(*c));
@@ -83,7 +90,11 @@ void VirtClockWriteDEC(VirtClock *c, uint32_t v)
 	c->dec_set_value = v;
 	uint32_t gen = (uint32_t)(__atomic_load_n(&c->dec_arm_word, __ATOMIC_RELAXED) >> 1) + 1;
 	__atomic_store_n(&c->dec_arm_word, ((uint64_t)gen << 1) | 1, __ATOMIC_RELEASE);
-	if (c->on_dec_write)
+	// SS_M18 S3 T3: under the NK supervisor the host on_dec_write arming is
+	// RETIRED — the clock state above is still updated (the NK reads DEC via
+	// mfspr / VirtClockReadDEC's lazy expiry), but the synthetic host scheduler is
+	// not armed. Default OFF => byte-identical.
+	if (c->on_dec_write && !g_vclk_host_dec_suppressed)
 		c->on_dec_write(c->cb_opaque, tb_to_ns(c, (uint64_t)v + 1), gen);
 }
 

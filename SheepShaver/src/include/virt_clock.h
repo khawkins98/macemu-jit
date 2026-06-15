@@ -89,6 +89,15 @@ extern void     VirtClockClearDECPending(VirtClock *c);
 
 extern void     VirtClockDumpStats(const VirtClock *c, FILE *f);
 
+// SS_M18 S3 T3 (Operation NewSheep): YIELD the synthetic supervisor's host-side
+// decrementer. When suppressed, VirtClockWriteDEC still updates the virtual clock
+// (the NK reads it via mfspr) but does NOT fire the host on_dec_write arming — the
+// NK's own DEC loop (0x50313200) is the live rescheduler. Default OFF (false) =>
+// byte-identical to the legacy host-armed behavior. Set ONLY by the gated glue
+// retirement path (NkSupervisorEnabled()); the pure module keeps no gate symbol so
+// the standalone unit tests link without ppc-cpu.o.
+extern void     VirtClockSuppressHostDEC(bool on);
+
 // The emulator's single instance (defined in virt_clock.cpp; init'd by main_unix).
 extern VirtClock g_virt_clock;
 

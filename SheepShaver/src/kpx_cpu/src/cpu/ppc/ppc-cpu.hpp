@@ -562,6 +562,13 @@ extern bool SheepExcDeliverPending(void);
  * the vector is unresolved (install not run — EXPECTED pre-S2b). Inert at
  * default OFF (never called paravirtual or gated-OFF newworld). */
 extern bool SheepExcDeliverExtInjection(void);
+/* SS_M18 S3 (Operation NewSheep) master gate (defined in ppc-cpu.cpp). True iff
+ * SS_M18_NK_SUPERVISOR is set AND MachineProfileIsNewWorld(); resolved ONCE at
+ * boot (default OFF => false). Consumers OUTSIDE the CPU TU (sheepshaver_glue.cpp
+ * T3 retirement) call this; the pure machine/ modules (virt_clock/event_sched)
+ * stay gate-symbol-free (their standalone unit tests don't link ppc-cpu.o) and
+ * are yielded via setters the gated glue path flips. */
+extern bool NkSupervisorEnabled(void);
 /* M3a Task 4 telemetry: out[0]=delivered_dec, out[1]=deferred_ee, out[2]=deferred_depth.
  * M6a W2: out[3]=deferred_native (DEC fence during MixedMode native excursions).
  * NK-syscall-surface Task A: out[4]=delivered_sc (plan rev 2 P-M4).

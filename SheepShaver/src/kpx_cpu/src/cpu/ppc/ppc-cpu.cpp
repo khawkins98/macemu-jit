@@ -2065,9 +2065,26 @@ bool powerpc_cpu::check_spcflags()
 				 * (paravirtual byte-identical). */
 				if (SheepExcDeliverExtInjection())
 					return true;
+				/* SS_M18 S3 T3: synthetic-supervisor RETIREMENT under the gate.
+				 * The legacy SheepExcDeliverPending() delivered BOTH the synthetic
+				 * DEC exception (the VirtClock DEC latch -> forged g_exc_entry_table
+				 * DEC vector) AND the legacy host-IRQ/PIC EXT path (via
+				 * g_exc_entry_table.external_entry). Under the NK supervisor both are
+				 * retired: the NK owns DEC via its own handler 0x50313200 (it
+				 * self-re-arms with mtspr 0x16@0x50313234), and the async
+				 * host-IRQ->NK-EXT seam is T2's injection above — which OR-composes
+				 * the SAME two sources (SheepExcHostIrqPending|SheepExcExtPending)
+				 * the legacy EXT path consumed, re-pointed at the NK's live KDP
+				 * vector. So we do NOT fall through to the legacy synthetic delivery.
+				 * (VirtClockDECPending is now advisory-only: the only delivery-gate
+				 * that consulted it was SheepExcDeliverPending, bypassed here.) */
+			} else {
+				/* Gate OFF (paravirtual is outside this MachineProfileIsNewWorld()
+				 * block entirely; gated-OFF newworld lands here): the EXACT legacy
+				 * order — byte-identical. */
+				if (SheepExcDeliverPending())
+					return true;
 			}
-			if (SheepExcDeliverPending())
-				return true;
 			/* M7 item 2 / W2-4 item 1b (INTERRUPT-INJECTION-RECON.md Q4): on
 			 * EXC_DECIDE_DEFER_NATIVE the delivery hook RE-ARMS the HANDLE flag
 			 * so this poll repeats at the next block boundary (the post-deferral

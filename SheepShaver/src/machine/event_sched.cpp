@@ -63,8 +63,22 @@ void EventScheduler::cancel_timer(uint32_t id)
     }
 }
 
+// SS_M18 S3 T3: pump-yield flag (NK supervisor owns scheduling). Pure module
+// state — default false (byte-identical); flipped only by the gated glue path via
+// EventSchedulerYield(). No gate symbol here so the standalone unit tests link
+// without ppc-cpu.o.
+static bool g_esched_yielded = false;
+void EventSchedulerYield(bool on) { g_esched_yielded = on; }
+
 uint64_t EventScheduler::process_timers()
 {
+    // SS_M18 S3 T3: under the NK supervisor the host pump is quiescent — fire no
+    // callbacks, report the idle slice (0). The sched_pump caps a 0 slice to its
+    // 10ms idle floor, so this is a quiet re-check, not a busy spin. Default OFF =>
+    // byte-identical.
+    if (g_esched_yielded)
+        return 0ULL;
+
     std::shared_ptr<TimerInfo> cur_timer;
     uint64_t time_now = get_time_now();
 

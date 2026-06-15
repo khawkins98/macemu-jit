@@ -142,4 +142,12 @@ private:
     bool cb_active = false; // true if a timer callback is executing
 };
 
+// SS_M18 S3 T3 (Operation NewSheep): YIELD the host event-scheduler pump. When
+// yielded, process_timers() runs no callbacks and returns the idle slice (0) — the
+// NK's own DEC loop (0x50313200) is the live rescheduler. Default OFF (false) =>
+// byte-identical. Set ONLY by the gated glue retirement path
+// (NkSupervisorEnabled()); the pure module carries no gate symbol so the standalone
+// event_sched / via6522 unit tests link without ppc-cpu.o.
+extern void EventSchedulerYield(bool on);
+
 #endif // EVENT_SCHED_H

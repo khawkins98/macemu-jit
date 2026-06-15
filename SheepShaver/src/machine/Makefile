@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_trampoline_ofci_wiring test_shm_arena_spike test_shm_arena_multientry
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_nk_supervisor_yield test_exc_core test_exc_chain test_exc_inject test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_trampoline_loader test_trampoline_ofci_shim test_trampoline_launch test_trampoline_ofci_wiring test_shm_arena_spike test_shm_arena_multientry
 
 test: $(TESTS)
 	./test_machine_profile
@@ -15,6 +15,7 @@ test: $(TESTS)
 	./test_mmio_machfault
 	./test_virt_clock
 	./test_event_sched
+	./test_nk_supervisor_yield
 	./test_exc_core
 	./test_exc_chain
 	./test_exc_inject
@@ -60,6 +61,14 @@ test_virt_clock: test_virt_clock.cpp virt_clock.cpp ../include/virt_clock.h
 
 test_event_sched: test_event_sched.cpp event_sched.cpp ../include/event_sched.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_event_sched.cpp event_sched.cpp
+
+# SS_M18 S3 T3: gated-ON static assertion for the synthetic-supervisor scheduler
+# YIELD (VirtClockSuppressHostDEC + EventSchedulerYield). Pure modules only — no
+# ppc-cpu.o, proving the yield mechanism the gated glue path flips is correct and
+# default-OFF byte-identical.
+test_nk_supervisor_yield: test_nk_supervisor_yield.cpp virt_clock.cpp event_sched.cpp \
+                          ../include/virt_clock.h ../include/event_sched.h
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_nk_supervisor_yield.cpp virt_clock.cpp event_sched.cpp
 
 test_exc_core: test_exc_core.cpp exc_core.cpp ../include/exc_core.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_exc_core.cpp exc_core.cpp

@@ -31,6 +31,7 @@
 #include "dev_cuda.h"
 #include "dev_openpic.h"   // W2-3: crash-path [PIC] stats (registered-instance formatters)
 #include "virt_clock.h"
+#include "event_sched.h"
 #include "exc_core.h"
 #include "exc_inject.h"	// SS_M18 S3 T2: host->NK EXT-injection shim
 #include "trampoline_loader.h"	// SS_M18 S2b T1: staged-asset MacOS.elf loader
@@ -1016,6 +1017,16 @@ int sheepshaver_cpu::compile1(codegen_context_t & cg_context)
 // Handle MacOS interrupt
 void sheepshaver_cpu::interrupt(uint32 entry)
 {
+	/* SS_M18 S3 T3: MUTE the SS-side nested-execute NK-interrupt entry under the
+	 * master gate. The NK owns interrupt delivery via its own real vectors (EXT
+	 * injected by T2 at the spcflag poll; DEC by 0x50313200) — driving a synthetic
+	 * nested-execute enter here would double-deliver and corrupt the NK's own
+	 * save/restore. Gate OFF (default) / paravirtual: NkSupervisorEnabled() is
+	 * false, the full legacy body runs => byte-identical. (On newworld the sole
+	 * caller HandleInterrupt's MODE_NATIVE arm is already !newworld-guarded, so
+	 * this is also defense-in-depth.) */
+	if (NkSupervisorEnabled())
+		return;
 #if EMUL_TIME_STATS
 	ppc_interrupt_count++;
 	const clock_t interrupt_start = clock();
@@ -3498,6 +3509,36 @@ void init_emul_ppc(void)
 					        "opt-out): program_entry=0 — twi unresolved (FATAL on "
 					        "trap-taken), parked-stop slot baseline\n");
 				}
+			}
+
+			/* SS_M18 S3 T3 (Operation NewSheep): RETIRE the synthetic supervisor
+			 * under the master gate. We are already inside MachineProfileIsNewWorld();
+			 * NkSupervisorEnabled() additionally AND-s the env flag (default OFF), so
+			 * gated-OFF newworld and paravirtual are byte-identical (this block is
+			 * never entered). */
+			if (NkSupervisorEnabled()) {
+				/* Null the synthetic DEC + EXT vectors of g_exc_entry_table. The NK
+				 * installs its own vectors; the legacy delivery hook
+				 * (SheepExcDeliverPending) is bypassed at the spcflag poll (T3,
+				 * ppc-cpu.cpp), and T2's EXT-injection resolves the live NK EXT
+				 * vector from KDP+0x374 — NOT this table. The syscall_entry /
+				 * program_entry fields are LEFT INTACT for T4 (the sc/program forge
+				 * retirement owns them; they are still live under the gate at T3). */
+				g_exc_entry_table.interrupt_entry = 0;
+				g_exc_entry_table.external_entry  = 0;
+				/* YIELD the SS scheduler. The NK's DEC loop 0x50313200 is the live
+				 * rescheduler, so: (1) suppress the host on_dec_write arming in
+				 * VirtClockWriteDEC — the guest's DEC writes STILL update the virtual
+				 * clock (the NK reads it via mfspr), only the synthetic host-side
+				 * arming is retired; (2) make the host EventScheduler pump quiescent
+				 * (process_timers returns the idle slice). Pure machine/ modules stay
+				 * gate-symbol-free; the gate flips these via setters here. */
+				VirtClockSuppressHostDEC(true);
+				EventSchedulerYield(true);
+				fprintf(stderr, "[NK-SUP] T3: synthetic supervisor retired — "
+				        "g_exc_entry_table DEC/EXT vectors nulled, host DEC arming "
+				        "suppressed, event scheduler yielded (NK owns DEC 0x50313200, "
+				        "self-re-arming mtspr 0x16@0x50313234)\n");
 			}
 		}
 

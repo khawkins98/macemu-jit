@@ -23,6 +23,7 @@
  *  short static spellings the test issues.
  */
 #include "openfirmware_ci.h"
+#include "trampoline_loader.h"   /* TRAMP_SHIM_ENTRY (macro only — no link dep) */
 
 #include <stdlib.h>
 #include <string.h>
@@ -683,6 +684,10 @@ static int of_ci_dispatch(of_ci_context *ctx, of_cell *array)
 		if (n && name) {
 			void *copy = NULL;
 			if (len > 0 && src) { copy = malloc((size_t)len); memcpy(copy, src, (size_t)len); }
+			/* Keep data/len consistent: if no buffer was copied (src==NULL or
+			 * len<=0), store an empty prop (len=0). Otherwise a later getprop would
+			 * memcpy `cp>0` bytes from a NULL data pointer. */
+			if (copy == NULL) len = 0;
 			struct of_prop *p = prop_find(n, name);
 			if (p) {
 				if (p->owned) free((void *)p->data);
@@ -758,6 +763,20 @@ static int of_ci_dispatch(of_ci_context *ctx, of_cell *array)
 		uint32_t align = (uint32_t)args[2];
 		uint32_t result;
 		if (align == 0) {
+			/* Tripwire (Stop-rule #13): a fixed-address claim overlapping the
+			 * reserved r5-shim page [TRAMP_SHIM_ENTRY,+0x1000) would silently hand
+			 * the producer our launch-shim page. The /mmu call-method `claim` is
+			 * guarded by range_hits_shim in the mmu_backend; the direct IEEE-1275
+			 * `claim` is the realistic fixed-claim path and must be loud too. */
+			uint32_t csize = size ? size : 1;
+			uint32_t cend  = virt + csize;
+			if (cend < virt) cend = 0xffffffffu;          /* wrap clamp */
+			if (virt < (TRAMP_SHIM_ENTRY + 0x1000u) && cend > TRAMP_SHIM_ENTRY)
+				fprintf(stderr, "[S2B-SHIM-COLLIDE] direct claim [0x%08x,0x%08x) "
+				        "overlaps the reserved r5-shim page [0x%08x,0x%08x) - "
+				        "STOP (Stop-rule #13)\n",
+				        virt, cend, (uint32_t)TRAMP_SHIM_ENTRY,
+				        (uint32_t)(TRAMP_SHIM_ENTRY + 0x1000u));
 			result = virt;                       /* fixed-address claim */
 		} else {
 			uint32_t a = (align < 0x1000u) ? 0x1000u : align;

@@ -394,7 +394,16 @@ int TrampolineStageParcels(void)
 	}
 
 	uint32_t size = (uint32_t)src_len;
-	if (size > TRAMP_PARCEL_SIZE) size = TRAMP_PARCEL_SIZE;  /* aperture cap */
+	if (size > TRAMP_PARCEL_SIZE) {
+		/* FAIL LOUD: silently truncating the staged container corrupts it — for the
+		 * compressed 'prcl' the decompressor would then emit garbage KernelCode, the
+		 * exact footgun faithful-staging closes. Refuse rather than cap. */
+		fprintf(stderr, "[S2B-PARCEL-OVERSIZE] staged parcel container is 0x%08x bytes > "
+		        "aperture 0x%08x - REFUSING to truncate (raise TRAMP_PARCEL_SIZE)\n",
+		        (uint32_t)src_len, (uint32_t)TRAMP_PARCEL_SIZE);
+		free(src_owned);
+		return -1;
+	}
 
 	/* PHASE-0 runtime verification: the aperture must hold the DECOMPRESSED image
 	 * (ConfigInfo ROMImageBaseOffset @ +0x30D028 == 0xFFCF3000). Verify against the

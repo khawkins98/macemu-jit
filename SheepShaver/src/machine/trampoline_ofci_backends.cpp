@@ -231,6 +231,18 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 			g_maps[g_map_count].virt = virt; g_maps[g_map_count].phys = phys;
 			g_maps[g_map_count].size = size; g_maps[g_map_count].mode = mode;
 			g_map_count++;
+		} else {
+			/* FAIL LOUD: accepting-and-dropping a map silently strands its virtual
+			 * range on the V=P identity/NOT-MAPPED path — a later translate would
+			 * return the wrong (identity) phys instead of the recorded non-identity
+			 * one, the exact fidelity S1's live MMU will be validated against. Never
+			 * silently drop: trip the stop hook (live boot abort; test = NULL). */
+			fprintf(stderr, "[S2B-MMU-OVERFLOW] /mmu map table full (%d/%d): "
+			        "virt=0x%08x -> phys=0x%08x size=0x%08x dropped - STOP "
+			        "(raise MMU_MAP_MAX or evict)\n",
+			        g_map_count, MMU_MAP_MAX, virt, phys, size);
+			if (g_stop_fn) g_stop_fn();
+			return TRAMP_OFCI_MMU_COLLIDE;
 		}
 		fprintf(stderr, "[S2B-MMU-MAP] map virt=0x%08x -> phys=0x%08x size=0x%08x "
 		        "mode=0x%08x (%s; recorded #%d/%d) #%d\n",

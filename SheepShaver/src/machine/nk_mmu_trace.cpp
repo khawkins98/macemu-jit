@@ -49,7 +49,12 @@ size_t nk_mmu_trace_format(char *buf, size_t buflen, uint32_t seq, int kind,
 {
 	int n = snprintf(buf, buflen, "%u %s pc=%08x insn=%08x idx=%u val=%08x\n",
 	                 seq, nk_mmu_trace_kind_name(kind), pc, insn, idx, val);
-	return (size_t)(n < 0 ? 0 : n);
+	/* snprintf returns the would-have-written length, which can exceed buflen on
+	 * truncation. Clamp to the actual bytes in buf so callers' fwrite(buf,1,n) never
+	 * reads past the buffer. */
+	if (n < 0) return 0;
+	if (buflen && (size_t)n >= buflen) return buflen - 1;
+	return (size_t)n;
 }
 
 /* --- runtime recorder (env-gated, single trace file, append-ordered) --- */

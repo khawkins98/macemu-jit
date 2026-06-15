@@ -204,3 +204,7 @@ the SOURCE block the NK reads (CD-3)." Both are owed to S3-impl's own boot / S4 
 consistent with the milestone's GATED-MERGE-RESIDUE scope. **No re-pick of the architecture is
 warranted** — REPLACE+EXT-shim stands; the shim's spec needs the CD-1/CD-3 refinement before T2's
 live confirmation.
+
+
+### ★ CD-1 RESOLVED = R2 CONFIRMED (2026-06-15, track-1b probe)
+The shim's `KDP+0x374` slot is CORRECT (holds `0x50314880`, the NK EXT handler). Proven by the in-tree live-KDP probe (2026-06-11, `glue:114-118`): the four sibling vectors + relocbase are mutually self-consistent at the install-seam offsets, and `git log -S 0x374` confirms no host forge — the slot is written by the real NK install, the shim only reads it. R1's `+0x37c/+0x39c=0x4b80/0x4bc0` stores are a SECONDARY table, not the primary KDP. **Keep the shim as landed.** Fresh faithful-path re-dump owed-on-S1 (the NK can't write KDP@0x68ffe000 until the live BAT exists — inseparability). **CD-3 stays the open EXT-seam item (owed S4 device wiring).**

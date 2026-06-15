@@ -322,12 +322,23 @@ oracle/sc/atomicity-placement) carried unchanged. Minors m1-m5 (SHA re-pin, seri
 T4 commits) folded into the task discipline.
 
 
-## ★ CD-1 GATE (2026-06-15, from FINDINGS-s3-nk-image-contract) — BLOCKS S3 integration trusting the EXT-shim
+## ★ CD-1 = R2 CONFIRMED (2026-06-15, probe-verified) — the EXT-shim reads the RIGHT slot; live re-confirm owed-on-S1
 The S3 NK-image static RE found the install seam (`0x50311390`) caches the vector-table base in **SPRG3** and
 writes slots +0x37c/+0x39c = `relocbase+0x4b80/0x4bc0` (NOT the primary handlers); **NO direct store into
 +0x374** (the slot the landed `exc_inject` EXT-shim reads) was found. So the shim's `KDP+0x374` assumption is
 STATICALLY UNCONFIRMED and possibly wrong (the primary EXT/SC/DEC/PROGRAM vectors may live in the separate
-low-mem ExceptionTable parcel `@0x50300000`). **BINDING GATE: before any S3 integration LEANS ON the
+low-mem ExceptionTable parcel `@0x50300000`). **★ RESOLVED R2 (track-1b CD-1 probe):** the shim's `KDP+0x374` is CORRECT. Evidence: the in-tree live-KDP
+probe (`sheepshaver_glue.cpp:114-118`, 2026-06-11) dumped `[KDP+0x374]=0x50314880` EXT / `+0x37c=0x50314700`
+PROGRAM / `+0x384=0x50313200` DEC / `+0x390=0x50314ac0` SC / `+0x64c=0x50310000` relocbase — four siblings
+mutually self-consistent at the install-seam offsets (a coherence only the real NK install produces); and
+`git log -S 0x374` confirms NO host code forged the slot (the shim purely READS it). R1's doubt is reconciled:
+the `+0x37c/+0x39c=0x4b80/0x4bc0` direct stores are a SECONDARY table, NOT the primary KDP the shim reads.
+**Keep the shim as landed.** The FRESH faithful-path re-dump is OWED-ON-S1 (the NK can't write KDP@`0x68ffe000`
+until the live BAT exists — pure S1<->S3 inseparability), NOT open doubt. CD-3 (the NK reads its
+interrupt-source block @`KDP-0x338/+0x20`, not a pending bit) remains the genuinely-open EXT-seam item, owed
+to S4 device wiring.
+
+**BINDING GATE: before any S3 integration LEANS ON the
 EXT-injection shim, RUN THE PROBE** — now that the NK executes, dump `[SPRG3+0x14]` (= table+0x374)
 post-install and ASSERT it contains `0x50314880`. If it holds `0x50314b80`/garbage → CD-1 falsified → re-point
 the shim at the low-mem ExceptionTable trampoline (a load-bearing change). This is the serial S1↔S3

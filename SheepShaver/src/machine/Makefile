@@ -3,7 +3,7 @@ CXX      = clang++
 CXXFLAGS = -std=c++11 -Wall -g
 CPPFLAGS = -I../include -DMACHINE_PROFILE_STANDALONE_TEST
 
-TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_shm_arena_spike
+TESTS = test_machine_profile test_mmio_bus test_mmio_aperture test_dev_scc8530 test_dev_via6522 test_a64_mmio_decode test_mmio_machfault test_virt_clock test_event_sched test_exc_core test_exc_chain test_dev_cuda test_adb_stub test_dev_openpic test_paged_mmu test_openfirmware_ci test_shm_arena_spike test_shm_arena_multientry
 
 test: $(TESTS)
 	./test_machine_profile
@@ -23,6 +23,7 @@ test: $(TESTS)
 	./test_paged_mmu
 	./test_openfirmware_ci
 	./test_shm_arena_spike
+	./test_shm_arena_multientry
 
 test_machine_profile: test_machine_profile.cpp machine_profile.cpp ../include/machine_profile.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_machine_profile.cpp machine_profile.cpp
@@ -91,6 +92,13 @@ test_openfirmware_ci: test_openfirmware_ci.cpp openfirmware_ci.cpp ../include/op
 # primitive on macOS arm64. Inert: linked into no emulator binary.
 test_shm_arena_spike: test_shm_arena_spike.cpp
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_shm_arena_spike.cpp
+
+# SS_M18 S3-Task-0 (live-MMU de-risk follow-on): multi-entry transaction spike.
+# Standalone (no kpx_cpu, no paged_mmu link); proves the SET re-alias / cross-region
+# concurrent-reader / mixed-perm-fork / remap-latency questions the single-remap spike
+# left OWED. Inert: linked into no emulator binary.
+test_shm_arena_multientry: test_shm_arena_multientry.cpp
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ test_shm_arena_multientry.cpp
 
 clean:
 	rm -f $(TESTS)

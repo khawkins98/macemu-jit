@@ -596,3 +596,25 @@ toolbox rom memory relocation entry one/two!"` are present in MacOS.elf — it r
   providing the decompressed `0x50000000` bytes would corrupt → must stage the COMPRESSED form. If it reads
   ConfigInfo in-place (no decompress), the decompressed copy is right. RE the Trampoline's toolbox-parcels
   reader before choosing which bytes to stage.
+
+### NK MMU-bringup wall — VERDICT (a): wrong continuation pointer, NOT S1 live MMU (2026-06-15)
+The NK runs but its launch stub mis-hands-off in PHYSICAL space — S1's live `/mmu` is NOT this wall.
+- **image `0x303000` (guest `0xF03000`) is a 0x80-byte launch STUB** (`mr r21,r3; ...; lwz r22,0x18(r21);
+  <clear 8 BATs + isync>; "RTAS"; mtlr r22; blr`), ending at `0x303080`, then a ZERO GAP to `0x310000`.
+- **The real NanoKernel BODY is at image `0x310000` (guest `0xF10000`)** = ConfigInfo(`0x30D000`) +
+  KernelCodeOffset(`0x3000`) — offsets are CONFIGINFO-RELATIVE (`b 0x31000c`, version `0227000c`=v2.27,
+  `mfmsr`/`mtspr SRR0/SRR1`/`rfi` prologue). Our launch even LOGS `NanoKernelEntry=0x00f10000`.
+- **The fault:** the stub's `blr` (`r22=[r21+0x18]`) lands at `0xF030B8` (stub+0xb8, inside the zero gap)
+  → SIGSEGV decoding garbage. `[r21+0x18]` should be the NK body `0xF10000` but is `0xF030B8`.
+- **Why (a) not (b):** the stub CLEARS all BATs + sets no SR/page-table, then jumps to r22 as a PHYSICAL
+  addr; the landing `0xF030B8` is a LOW physical addr inside the already-backed staged parcel
+  `[0xC00000,0x1000000)`, NOT a `0x68xxxxxx`/high-virtual addr a live SR/BAT would map. Every `/mmu
+  translate` is V=P identity. A perfect S1 MMU would not change where this jump goes. **S1 NOT needed for
+  this wall** (user's S1 reservation stands — S1 is the LATER wall once `0xF10000` runs + programs SR/BAT).
+- **The defect** is the entry-offset / boot-args block fidelity: the handoff lands at `0xF03000`+0xb8
+  (KernelCodeBase-relative-ish) instead of the real body `0xF10000` (ConfigInfo-relative). Our BootX impl
+  computed the entry two ways (`image+0x303000` KernelCodeBase-relative vs the logged `0xf10000`
+  ConfigInfo-relative) — INCONSISTENT. **NEXT (cheap, gated, pre-S1): make the handoff reach `0xF10000`** —
+  pin whether to (i) jump the Trampoline/launch directly to `0xF10000` (ConfigInfo-relative entry), or (ii)
+  supply the correct boot-args/config block so the stub's `[r21+0x18]` = `0xF10000`. Then measure: does the
+  real NK body run + start programming SR/BAT (= the genuine S1 re-activation point)?

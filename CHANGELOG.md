@@ -9,6 +9,36 @@ used by both, e.g. `ether_unix.cpp`, prefs), **[build]**, **[docs]**. Entries be
 (BasiliskII history lives in `BasiliskII/docs/AARCH64_JIT_BRINGUP.md` and
 `docs/planning/BasiliskII-MACOS-AARCH64-JIT-PORT.md`).
 
+## 2026-06-15 (Operation NewSheep — Cuda SR-int timer seam: discipline closure)
+
+- **[SheepShaver]** **Track-1 discipline closure for the timer-delayed Cuda SR-int delivery
+  seam** (B3's `CudaBindTimerDelivery`/`VIALatchIFRBits`, committed `9e4ae1d0`; the M14
+  [ALARM] interrupt-delivery wall, a NewWorld-only boot issue). Audited the seam against the
+  "gated-OFF byte-identical" discipline gate and confirmed it is **provably byte-identical for
+  the paravirtual 8.6 path on two independent grounds**, so it is left **ungated as-is** (the
+  conservative gate was found unnecessary, not skipped):
+  (1) **Reachability** — the entire Cuda/VIA device layer (`CudaReset`/`CudaBindADB`/
+  `VIABindCuda` in `main_unix.cpp`) is inside the `if (MachineUsesMMIOBus())` block, which is
+  FALSE for the paravirtual profile (`MachineUsesMMIOBusParse`: true only for `MACHINE_NEWWORLD`
+  or an explicit `SS_MMIO_BUS`). The paravirtual 8.6 e2e boot never instantiates or runs
+  `dev_cuda`/`dev_via6522` at all.
+  (2) **Dormancy** — even if reached, the seam is opt-in: `arm_sr_int()` with `sr_schedule==NULL`
+  (the `memset`-zeroed `CudaReset` default) is exactly the old `sr_int_pending = 1`, and
+  `CudaBindTimerDelivery`/`VIALatchIFRBits` currently have **no caller anywhere** (not even the
+  NewWorld wiring yet) — the new code is dead until S4 binds it. `via_update_irq` took a
+  comment-only change. The correct gating boundary is the device-wiring layer
+  (`MachineUsesMMIOBus`) + the default-unbound binding, NOT a `machine_profile` dependency
+  inside the pure device model (layering).
+  **Test coverage extended** to assert BOTH states the discipline gate cares about
+  (`test_dev_cuda.cpp` +20 checks → 4814, `test_dev_via6522.cpp` +6 → 89): gated-OFF
+  (unbound ⇒ no one-shot armed, raise delivered only via `CudaSettle` on the IFR-read surface,
+  timer never participates) and gated-ON (bound ⇒ arming edge posts a `CUDA_SR_DELAY_NS`
+  one-shot; firing it delivers IFR.SR through `VIALatchIFRBits` with no guest IFR read;
+  consume-once + mutual-exclusion with the lazy surface; IER masking honored; bit-7 masked).
+  Gates: `make build-ss` clean, `make test-jit` score=100 (353), full machine `make test` green.
+  The M14 wall fix remains **owed to S4** — the seam is wired but not yet bound to the live
+  NewWorld scheduler/VIA (PROSPECTIVE, needs live-S4 validation, per B3's seam contract).
+
 ## 2026-06-15 (Operation NewSheep — S1 paged-MMU mechanism, standalone)
 
 - **[SheepShaver]** **Dolphin Dynamic-BAT shadow-arena ported as a standalone, unit-tested

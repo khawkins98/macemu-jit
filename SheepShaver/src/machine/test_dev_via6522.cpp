@@ -273,6 +273,49 @@ int main()
 		CHECK(via.irq_fn == 0 && via.irq_out == 0);
 	}
 
+	// --- S4: VIALatchIFRBits — out-of-band IFR latch (timer-delayed Cuda SR int).
+	// Sets IFR bits + recomputes the summary WITHOUT a VIARead/VIAWrite register
+	// access, so the int reaches the CPU even though the NewWorld NK never polls
+	// IFR.  The IFR&IER summary gate still decides whether the CPU IRQ asserts.
+	{
+		static int edges_n = 0;
+		static bool edge_lvl[8];
+		struct Seam {
+			static void fn(void *, bool asserted) {
+				if (edges_n < 8) edge_lvl[edges_n] = asserted;
+				edges_n++;
+			}
+		};
+		VIAReset(&via, BASE, fake_clock, 0);
+		VIABindIRQOutput(&via, Seam::fn, 0);
+
+		// IER.SR (bit 2) disabled: latching IFR.SR sets the flag but the summary
+		// gate keeps the CPU IRQ LOW (the M14 ordering the lazy path could honor).
+		VIALatchIFRBits(&via, 0x04);
+		CHECK((via.ifr_latched & 0x04) == 0x04);   // flag set out-of-band
+		CHECK(via.irq_out == 0 && edges_n == 0);   // masked: no CPU IRQ
+
+		// Enable IER.SR -> the already-latched flag now asserts the summary edge.
+		wr(0x1c00, 0x84);                          // IER: set bit 2 (bit7=1 = set form)
+		CHECK(via.irq_out == 1 && edges_n == 1 && edge_lvl[0]);
+
+		// W1C the SR flag through the register path -> deassert.
+		wr(0x1a00, 0x04);
+		CHECK(via.irq_out == 0 && edges_n == 2 && !edge_lvl[1]);
+
+		// With IER.SR enabled, a fresh out-of-band latch asserts immediately.
+		VIALatchIFRBits(&via, 0x04);
+		CHECK(via.irq_out == 1 && edges_n == 3 && edge_lvl[2]);
+
+		// bits are masked to 0x7F (the composite bit 7 is never latched directly).
+		wr(0x1a00, 0x04);                          // clear SR flag again
+		(void)edge_lvl;
+		VIALatchIFRBits(&via, 0x80);
+		CHECK((via.ifr_latched & 0x80) == 0);      // bit 7 masked out
+
+		VIAReset(&via, BASE, fake_clock, 0);
+	}
+
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);
 	return 0;
 }

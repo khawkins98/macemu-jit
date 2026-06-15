@@ -122,6 +122,33 @@ static std::vector<uint8_t> roundtrip(const std::vector<uint8_t> &pkt)
 	return read_response();
 }
 
+// --- S4 timer-delayed SR-int delivery seam fakes (CudaBindTimerDelivery) ------
+// A fake one-shot scheduler (captures the most recent armed callback) and a fake
+// VIA latch (records the IFR bits delivered out-of-band).  Used to exercise the
+// gated-ON path; the default unbound path is the byte-identical lazy backstop.
+struct FakeSched { uint64_t delay; void (*cb)(void *); void *opaque; int arms; };
+static FakeSched g_fs;
+static void fake_schedule(void *o, uint64_t d, void (*cb)(void *), void *cbo)
+{
+	FakeSched *s = (FakeSched *)o;
+	s->delay = d; s->cb = cb; s->opaque = cbo; s->arms++;
+}
+struct FakeLatch { uint8_t bits; int calls; };
+static FakeLatch g_fl;
+static void fake_latch(void *o, uint8_t bits)
+{
+	FakeLatch *l = (FakeLatch *)o;
+	l->bits |= bits; l->calls++;
+}
+// One ORB write that lands in the sync/attention branch (TIP stays negated, TACK
+// toggles vs the last image) — the simplest deterministic edge that arms an SR
+// int.  Toggling TACK each call keeps successive calls on the arming path.
+static uint8_t sync_arm(CudaDevice *c)
+{
+	uint8_t tack = (c->last_b & CUDA_TACK) ? 0x00 : CUDA_TACK;  // opposite of last
+	return CudaORBWritten(c, (uint8_t)(CUDA_TIP | tack), 0x00);
+}
+
 int main()
 {
 	// ---- CV-1: fresh device, derived ORB bit 3 == 1 (idle) ----
@@ -521,6 +548,55 @@ int main()
 		CudaReset(&fresh, 0, 0);
 		CHECK(CudaFormatStats(&fresh, buf, sizeof(buf)) > 0);
 		CHECK(strstr(buf, "unknown=0 ") != 0);
+	}
+
+	// ---- S4 timer-delayed SR-int delivery seam (CudaBindTimerDelivery) ----
+	// Discipline gate: the seam is OPT-IN.  Default (unbound) = lazy CudaSettle
+	// backstop, byte-identical to the pre-S4 model.  Bound = DingusPPC-style
+	// schedule_sr_int: each arming edge posts a one-shot that LATER raises IFR.SR
+	// via the VIA latch, independent of any guest IFR read (the M14 wall fix).
+	{
+		// (a) GATED-OFF (default unbound): arming an SR int schedules NOTHING;
+		//     the raise is delivered only by CudaSettle on the IFR-read surface.
+		CudaDevice ungated;
+		CudaReset(&ungated, fake_now_mac, 0);
+		CHECK(ungated.sr_schedule == 0 && ungated.sr_latch == 0);  // reset => unbound
+		uint8_t f = sync_arm(&ungated);
+		CHECK(f == CUDA_SEAM_NONE);                  // CV-10: raise is DEFERRED
+		CHECK(ungated.sr_int_pending == 1);          // latched
+		CHECK(ungated.sr_timer_arms == 0);           // NO one-shot armed (lazy-only)
+		CHECK(CudaSettle(&ungated) & CUDA_SEAM_RAISE_SR_INT);  // delivered on read
+		CHECK(ungated.sr_timer_fires == 0);          // timer never participated
+
+		// (b) GATED-ON (bound): the arming edge posts a CUDA_SR_DELAY_NS one-shot;
+		//     firing it raises IFR.SR through the latch WITHOUT a guest IFR read.
+		g_fs = FakeSched(); g_fl = FakeLatch();
+		CudaDevice bound;
+		CudaReset(&bound, fake_now_mac, 0);
+		CudaBindTimerDelivery(&bound, fake_schedule, &g_fs, fake_latch, &g_fl);
+		sync_arm(&bound);
+		CHECK(bound.sr_int_pending == 1);
+		CHECK(bound.sr_timer_arms == 1);             // one-shot scheduled
+		CHECK(g_fs.arms == 1 && g_fs.cb != 0);
+		CHECK(g_fs.delay == CUDA_SR_DELAY_NS);        // 20us, QEMU/DingusPPC timing
+		CHECK(g_fl.calls == 0);                      // NOT yet delivered (deferred)
+		// Fire the one-shot: it delivers IFR.SR bit 2 through the VIA latch.
+		g_fs.cb(g_fs.opaque);
+		CHECK(g_fl.calls == 1 && g_fl.bits == 0x04); // IFR_SR_BIT set out-of-band
+		CHECK(bound.sr_timer_fires == 1);
+		CHECK(bound.sr_int_pending == 0);            // consume-once: latch cleared
+		// (c) Consume-once: a second fire WITHOUT a fresh arm delivers nothing.
+		g_fs.cb(g_fs.opaque);
+		CHECK(g_fl.calls == 1);                      // no double delivery
+		CHECK(bound.sr_timer_fires == 1);
+		// (d) Mutual exclusion with the lazy surface: if CudaSettle consumed the
+		//     raise first, the pending timer fire is a no-op (no double-raise).
+		sync_arm(&bound);
+		CHECK(bound.sr_timer_arms == 2);
+		CHECK(CudaSettle(&bound) & CUDA_SEAM_RAISE_SR_INT);  // lazy read wins
+		g_fs.cb(g_fs.opaque);                        // stale one-shot fires
+		CHECK(g_fl.calls == 1);                      // still no extra delivery
+		CHECK(bound.sr_timer_fires == 1);
 	}
 
 	printf("RESULT: ALL PASS (%d checks)\n", n_pass);

@@ -44,6 +44,18 @@ static uint32_t g_rom_base = 0, g_rom_size = 0;   /* ROM aperture              *
 static int      g_translate_calls = 0;
 static int      g_map_calls       = 0;
 
+/* Recorded /mmu map table. `map` RECORDS each (virt,phys,size,mode) request so a
+ * later `translate` of a mapped virtual range returns the RECORDED phys (honoring
+ * a non-identity phys!=virt map) rather than blind V=P identity. This is the point
+ * where V=P ends — the first real divergence the Trampoline establishes via map
+ * (e.g. mapping a low virtual window onto an MMIO physical aperture). Lookup order
+ * in translate: recorded mappings FIRST, then V=P identity for the RAM/ROM
+ * apertures, then NOT-MAPPED. Still NON-ACCEPTANCE: this records OF-level /mmu map
+ * fidelity; it is NOT the live-NK SR/BAT translation window (owed to S1). */
+#define MMU_MAP_MAX 32
+static struct { uint32_t virt, phys, size, mode; } g_maps[MMU_MAP_MAX];
+static int g_map_count = 0;
+
 /* A sane cacheable, read/write WIMG+PP mode default for V=P RAM/ROM at this
  * early stage (WIMG=0b0010 M=coherent, PP=0b10 RW). Bringup placeholder — the
  * real per-EA mode comes from the NK's PTE/BAT once S1's live MMU is wired. */
@@ -57,6 +69,24 @@ void tramp_ofci_set_mmu_extent(uint32_t ram_base, uint32_t ram_size,
 {
 	g_ram_base = ram_base; g_ram_size = ram_size;
 	g_rom_base = rom_base; g_rom_size = rom_size;
+	g_map_count = 0;                       /* fresh launch -> drop recorded maps */
+}
+
+/* If `virt` falls in a recorded map range, return 1 and write the recorded phys
+ * (offset-preserving) + mode through the out params. Most-recent record wins on
+ * overlap (the Trampoline re-maps a range only to change it). */
+static int mmu_lookup_recorded(uint32_t virt, uint32_t *out_phys, uint32_t *out_mode)
+{
+	for (int i = g_map_count - 1; i >= 0; i--) {
+		uint32_t b = g_maps[i].virt, e = b + g_maps[i].size;
+		if (e < b) e = 0xffffffffu;                 /* size wrap -> clamp */
+		if (virt >= b && virt < e) {
+			if (out_phys) *out_phys = g_maps[i].phys + (virt - b);
+			if (out_mode) *out_mode = g_maps[i].mode;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 int tramp_ofci_mmu_translate_count(void) { return g_translate_calls; }
@@ -119,7 +149,15 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 		 * Trampoline/NK has moved past identity -> S1's live paged MMU is owed. */
 		uint32_t virt = (n_in >= 1) ? (uint32_t)in[0] : 0;
 		g_translate_calls++;
-		if (mmu_addr_is_identity(virt)) {
+		uint32_t rec_phys = 0, rec_mode = 0;
+		if (mmu_lookup_recorded(virt, &rec_phys, &rec_mode)) {
+			/* Honor a recorded (possibly non-identity) /mmu map FIRST. */
+			if (n_out >= 2) out[1] = (of_cell)rec_phys;
+			if (n_out >= 3) out[2] = (of_cell)rec_mode;
+			fprintf(stderr, "[S2B-MMU-MAP] translate virt=0x%08x -> phys=0x%08x "
+			        "mode=0x%08x (recorded map) #%d\n",
+			        virt, rec_phys, rec_mode, g_translate_calls);
+		} else if (mmu_addr_is_identity(virt)) {
 			if (n_out >= 2) out[1] = (of_cell)virt;            /* phys = virt   */
 			if (n_out >= 3) out[2] = (of_cell)MMU_MODE_CACHEABLE_RW;
 			fprintf(stderr, "[S2B-MMU-MINREAL] translate virt=0x%08x -> phys=0x%08x "
@@ -146,30 +184,36 @@ static int mmu_backend(void *opaque, const char *method, of_ihandle ih,
 		return 0;
 	}
 	if (strcmp(method, "map") == 0) {
-		/* map (phys virt size mode -- catch): MINIMALLY-REAL V=P. At this stage
-		 * the NK intends identity, so a map where phys==virt is a no-op-success
-		 * (the underlying NATMEM page is already there). We RECORD the request
-		 * and flag a non-identity (phys!=virt) map loudly: that would be the
-		 * first real divergence from V=P -> S1's live remap is owed, do NOT
-		 * silently accept it as if mapped. Tripwire still fires on a virtual
-		 * range overlapping the reserved shim page. */
-		uint32_t phys = (n_in >= 1) ? (uint32_t)in[0] : 0;
-		uint32_t virt = (n_in >= 2) ? (uint32_t)in[1] : 0;
-		uint32_t size = (n_in >= 3) ? (uint32_t)in[2] : 1;
-		uint32_t mode = (n_in >= 4) ? (uint32_t)in[3] : 0;
+		/* Apple /mmu map ( mode size virt phys -- ) : RECORD the (virt,phys,size,
+		 * mode) so a later translate honors it. Arg order pinned from the real
+		 * Trampoline trace: the claim that precedes the map returns virt=in[2],
+		 * size=in[1]; phys=in[3] is the (MMIO/RAM) physical base, mode=in[0] the
+		 * WIMG+PP (0x2a = cache-inhibited+guarded for an MMIO window). The earlier
+		 * (phys virt size mode) reading mislabeled mode as phys.
+		 *
+		 * A phys==virt map is the identity no-op the NATMEM page already provides.
+		 * A phys!=virt map is the FIRST real V=P divergence (e.g. low virt -> MMIO
+		 * phys): we RECORD it in g_maps so translate returns the recorded phys. We
+		 * do NOT remap host pages here (that is S1's live window) — this is OF-level
+		 * map fidelity only (NON-ACCEPTANCE). Tripwire fires on a virtual range
+		 * overlapping the reserved shim page. */
+		uint32_t mode = (n_in >= 1) ? (uint32_t)in[0] : 0;
+		uint32_t size = (n_in >= 2) ? (uint32_t)in[1] : 1;
+		uint32_t virt = (n_in >= 3) ? (uint32_t)in[2] : 0;
+		uint32_t phys = (n_in >= 4) ? (uint32_t)in[3] : 0;
 		g_map_calls++;
 		if (range_hits_shim(virt, size))
 			return shim_collide(method, virt, size);
-		if (phys == virt) {
-			fprintf(stderr, "[S2B-MMU-MINREAL] map phys=0x%08x virt=0x%08x size=0x%08x "
-			        "mode=0x%08x (V=P no-op success, bringup) #%d\n",
-			        phys, virt, size, mode, g_map_calls);
-		} else {
-			fprintf(stderr, "[S2B-MMU-MINREAL] map phys=0x%08x virt=0x%08x size=0x%08x "
-			        "mode=0x%08x — NON-IDENTITY map requested; recorded but NOT "
-			        "remapped (live MMU owed to S1) #%d\n",
-			        phys, virt, size, mode, g_map_calls);
+		if (g_map_count < MMU_MAP_MAX) {
+			g_maps[g_map_count].virt = virt; g_maps[g_map_count].phys = phys;
+			g_maps[g_map_count].size = size; g_maps[g_map_count].mode = mode;
+			g_map_count++;
 		}
+		fprintf(stderr, "[S2B-MMU-MAP] map virt=0x%08x -> phys=0x%08x size=0x%08x "
+		        "mode=0x%08x (%s; recorded #%d/%d) #%d\n",
+		        virt, phys, size, mode,
+		        (phys == virt) ? "V=P identity" : "NON-IDENTITY",
+		        g_map_count, MMU_MAP_MAX, g_map_calls);
 		return 0;
 	}
 	/* Any other /mmu method is still recorded; benign ok. */

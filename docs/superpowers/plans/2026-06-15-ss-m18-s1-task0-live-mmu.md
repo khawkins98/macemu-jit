@@ -357,3 +357,32 @@ self-relocation / an early clear/copy loop / a spin on an uninitialized value �
 or reaches the NK. **The next wall is a dedicated Trampoline-early-bringup RE** (interp PC trace, not
 SS_PROBE_PC which is JIT-only; or a targeted instruction dump of the `0x180000` spin region), which
 PRECEDES both S1's `/mmu` AND the r3/r4/r5-shim questions. This is a NEW focused task, not S1-impl.
+
+**Bringup RE (2026-06-15, capstone disasm of staged `MacOS.elf`) — the wall is OF-CI ENVIRONMENT FIDELITY,
+pinned one layer deeper:**
+- **The launch path is fully CORRECT** (validates S2b T1–T5 deeply): entry `0x20f078` stub → `r2=0x1001e8`
+  from embedded const → stack `r1=0x116f30` (valid BSS) → CFM glue `0x21024c` `bctr` → **main `0x204d54`**;
+  main stashes r5 (`0x211000`) into BSS scratch and calls the OF-CI wrapper `0x20dbec` within ~40 insns.
+  The wrapper `bctr`s through `0x21024c` to `0x211000` = the shim opcode `0x180019c2` (decoded: EXEC_NATIVE
+  selector `0x27`=NATIVE_OF_CI_SHIM, FN=1 → `pc()=lr()` correct function return). **OF-CI IS entered;** the
+  early `finddevice`/`getprop` calls are serviced silently (the `[S2B-*]` logs only fire on refusal/`/mmu`).
+- **The spin cause:** the Trampoline runs the classic CHRP boot-setup (`finddevice /chosen`→`getprop
+  bootpath`→`getprop /memory reg`→…→AddMemoryRelocationEntry/RelocationEngine→`claim`). But the
+  consequential OF-CI ops are S2a-scope STUBS in `machine/openfirmware_ci.cpp`: **`claim`/`read`/`seek`/
+  `write` return `rets[0]=0`**, **`/memory reg` size=0** (`REG_MEMORY` base `0x10000000` size `0`, :150),
+  **`bootpath`=0** (:183). The Trampoline consumes `claim()=0` as an allocated base → relocates/jumps to a
+  zero-derived low address → wild execution through the unmapped `0x180000–0x1f0000` zero gap → `twi @
+  0x16c`. This is BEFORE any `/mmu` call-method (hence `iNK=0`, no `[S2B-MMU-STUB]`).
+- **`0x180000–0x1f0000` = the gap between BSS-top `0x119920` and exec-base `0x200000`** — covered by no
+  PT_LOAD, uninitialized zero RAM; the loader correctly never touches it. Execution there = wild jump, not
+  legit code (consistent with `exc=0`/`mmio=0`).
+- **r3/r4 sweep is LOW value** (the wall is downstream of OF-CI `claim`/`/memory`, not the CHRP entry ABI).
+- **CHEAPEST UNBLOCK (S2b-owned `openfirmware_ci.cpp`, gated, NOT S1):** (1) a real **`claim` bump-allocator**
+  (honor non-zero `args[0]`, else hand out page-aligned addrs from a reserved arena) — the single
+  highest-value fix (stops "allocate at 0 → jump to 0"); (2) **`/memory reg` size = real `RAMSize`** (+
+  `available`); (3) `bootpath` + minimal `open`/`read`/`seek` (heavier — defer until a trace shows it's
+  needed). **Diagnostic first:** instrument `of_ci_callback` to log every `(service, args, rets[0])`, boot
+  gated-ON once, read the last calls before the spin (predict: `getprop /memory`/`claim`→0 immediately
+  precede the wild jump). **NEXT TASK = OF-CI early-environment fidelity, which precedes S1's `/mmu`.**
+  *(High confidence the wall is the OF-CI environment + before `/mmu`/NK; medium on which stub fires first —
+  the trace resolves it cheaply.)*

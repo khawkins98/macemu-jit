@@ -1,3 +1,15 @@
+> # This project has moved -> NewSheep
+>
+> This repository was an effort to resurrect **SheepShaver** on Apple Silicon: a native
+> ARM64 JIT (PowerPC -> ARM64) plus the push toward **New World ROM support** (booting
+> Mac OS 9.2 just-in-time). Active development has moved to a new dedicated repository:
+>
+> ## -> https://github.com/khawkins98/newsheep
+>
+> This fork is kept here (archived) in case anyone finds the history or the code useful.
+>
+> ---
+
 # macemu-jit - ARM64 JITs for Macintosh Emulators
 
 ![icon](icon-256.png)

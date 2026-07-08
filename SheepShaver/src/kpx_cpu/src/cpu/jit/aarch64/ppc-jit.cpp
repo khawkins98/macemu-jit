@@ -9,11 +9,34 @@
 
 #ifdef __aarch64__
 
+/* Pull in the build configuration so the guest-memory addressing model
+ * (NATMEM_OFFSET / DIRECT_ADDRESSING / REAL_ADDRESSING) is visible here. The
+ * JIT prologue loads JIT_MEM_BASE (derived below) into the memory-base
+ * register; without this, NATMEM_OFFSET is invisible and the JIT would emit a
+ * base of 0 and fault under DIRECT addressing. */
+#if defined(HAVE_CONFIG_H) && defined(__has_include)
+#  if __has_include("config.h")
+#    include "config.h"
+#  endif
+#elif defined(HAVE_CONFIG_H)
+#  include "config.h"
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
+
+static double pjit_elapsed_s() {
+	static struct timespec t0 = {0,0};
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	if (t0.tv_sec == 0) t0 = t;
+	return (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) * 1e-9;
+}
+#define JIT_LOG(fmt, ...) fprintf(stderr, "[JIT %.2fs] " fmt "\n", pjit_elapsed_s(), ##__VA_ARGS__)
 #include "ppc-jit.h"
 #include "ppc-codegen-aarch64.h"
 #include "jit-target-cache.hpp"
@@ -36,9 +59,48 @@ static uint32_t *jit_cache_end  = NULL;
  *   Mac OS invalidates any region of PPC code (icbi/isync) or when
  *   the JIT code-cache write-pointer is reset (ppc_jit_aarch64_flush).
  */
-#define JIT_BC_BUCKETS  8192                /* must be power of 2 */
+#define JIT_BC_BUCKETS  32768               /* must be power of 2 */
 #define JIT_BC_MASK     (JIT_BC_BUCKETS - 1)
-#define JIT_BC_POOL     16384               /* max total entries across all chains */
+#define JIT_BC_POOL     65536               /* max total entries across all chains */
+
+/* ---- Block-to-block chaining (mechanism complete; default OFF) -------------
+ *
+ * JIT_BLOCK_CHAINING = 1: block exits whose target is already compiled branch
+ * directly to the target's chain entry (B <chain_code>), bypassing the C
+ * dispatcher.  Targets not yet compiled fall back to the standard LDP+RET
+ * epilogue and are back-patched (patch_chain_sites) once the target exists.
+ *
+ * Interrupt safety: every block's chain entry begins with a spcflags poll
+ * (emit_entry_spcflags_poll — the dyngen gen_start equivalent).  A chained
+ * cycle therefore polls pending interrupts at every block boundary; when a
+ * flag is set, the block returns to the dispatcher, which services it via
+ * check_spcflags() and re-dispatches.  The poll masks to actionable bits only
+ * (PPCR_SPCFLAGS_POLL_MASK = 0x0F) — SPCFLAG_JIT_EXEC_RETURN (bit 16) is not
+ * cleared at the dispatch site and must not be polled (it would loop forever).
+ *
+ * With chaining ON both harness modes pass (227/227); what remains unproven is
+ * a full boot in that configuration (boot verification is gated on the
+ * 68k-region interrupt-timing work — see LEARNINGS.md).  Until a chained boot is
+ * verified, the define stays 0; flip to 1 to test.
+ *
+ * History: chaining was originally written but never functional (a marking bug
+ * excluded every chained block from execution).  Enabling it without the entry
+ * poll hangs Mac OS I/O — see LEARNINGS.md chaining post-mortem for details. */
+#define JIT_BLOCK_CHAINING 0
+
+/* SS_JIT_NO_CHAIN=1: runtime kill-switch for block chaining (bisect aid).
+ * Read once on first use; gates both compile-time chain emission
+ * (emit_epilogue_with_pc) and runtime back-patching (patch_chain_sites).
+ * Lets a single build answer "is chaining the variable that breaks boot?"
+ * without recompiling. */
+static inline bool jit_chain_runtime_disabled(void) {
+	static int cached = -1;
+	if (cached < 0) {
+		const char *e = getenv("SS_JIT_NO_CHAIN");
+		cached = (e && *e == '1') ? 1 : 0;
+	}
+	return cached == 1;
+}
 
 /* ---- Chain patch-site pool -----------------------------------------------
  * When emit_epilogue_with_pc() cannot chain at compile time (target not yet
@@ -47,10 +109,16 @@ static uint32_t *jit_cache_end  = NULL;
  * sites are back-patched: the LDP is overwritten with a direct B <chain_code>.
  * The remaining LDP+RET instructions become unreachable dead code.
  * On full cache flush, all sites are discarded (blocks are recompiled). */
-#define JIT_CHAIN_SITE_POOL 4096
+/* ARM64 encoding of the first instruction in the standard block epilogue:
+ * LDP x27, x28, [sp], #16  — used to restore the original epilogue when
+ * reverting chain-patches during range-based JIT cache invalidation. */
+#define JIT_EPILOGUE_FIRST_LDP 0xA8C17BFBU
+
+#define JIT_CHAIN_SITE_POOL 16384
 struct jit_chain_site {
 	uint32_t  target_pc; /* PPC PC this site wants to chain to */
-	uint32_t *patch_loc; /* ARM64 addr of first LDP in std epilogue; NULL=consumed */
+	uint32_t *patch_loc; /* ARM64 addr where B<chain_code> was (or will be) written */
+	bool      patched;   /* true = B<chain_code> is live at patch_loc */
 	int       next;      /* next site in same bucket, -1=end */
 };
 static struct jit_chain_site chain_site_pool[JIT_CHAIN_SITE_POOL];
@@ -70,18 +138,61 @@ static struct jit_bc_entry jit_bc_pool[JIT_BC_POOL];
 static int jit_bc_heads[JIT_BC_BUCKETS];  /* -1=empty; initialised by jit_bc_flush() before first use */
 static int jit_bc_pool_next = 0;          /* next free pool entry */
 
+/* True once the bucket-head arrays have been set to their -1 "empty" sentinel.
+ * These are static (zero-initialised) arrays, but 0 is a VALID pool index — the
+ * empty sentinel is -1. Until jit_bc_flush() runs they contain all-zeros, which
+ * makes jit_bc_lookup() walk idx=0 -> pool[0].next=0 -> idx=0 forever (a self
+ * cycle), hanging the CPU thread. jit_bc_flush() is normally called from
+ * ppc_jit_aarch64_init(), but ONLY after the code cache allocation succeeds; if
+ * that allocation fails the arrays are left zero-filled and the first lookup
+ * hangs. jit_bc_ensure_init() guarantees the sentinel is established before any
+ * bucket walk, independent of code-cache allocation success. */
+static bool jit_bc_ready = false;
+
 static void jit_bc_flush(void) {
 	for (int i = 0; i < JIT_BC_BUCKETS; i++) jit_bc_heads[i] = -1;
 	jit_bc_pool_next = 0;
 	/* Also clear chain patch sites — all recorded epilogues are now invalid */
 	for (int i = 0; i < JIT_BC_BUCKETS; i++) chain_site_heads[i] = -1;
 	chain_site_pool_next = 0;
+	jit_bc_ready = true;
+}
+
+static inline void jit_bc_ensure_init(void) {
+	if (!jit_bc_ready)
+		jit_bc_flush();
+}
+
+/* ---- Secondary executable range (Mac ROM) ----
+ * The Mac ROM is vm_protect()ed READ|EXECUTE after rom_patches are applied
+ * (main_unix.cpp), so it is immutable during emulation: ROM blocks compiled by
+ * the JIT can never go stale and never need SMC invalidation.  ROM toolbox code
+ * is the dominant execution target during boot — compiling it is the single
+ * largest JIT speedup available.
+ * Registered once at init via ppc_jit_aarch64_set_rom_range(); zero size means
+ * "not registered" (standalone harnesses never register it). */
+static uint32_t      jit_rom_base = 0;
+static uint32_t      jit_rom_size = 0;
+static const uint8_t *jit_rom_host = NULL;
+
+/* Resolve a guest PC to a host fetch pointer for instruction reads.
+ * Returns NULL if the PC is not inside a JIT-compilable executable range. */
+static inline const uint8_t *jit_fetch_ptr(uint32_t guest_pc, const uint8_t *ram, size_t ramsize)
+{
+	const uint32_t ram_base = (uint32_t)(uintptr_t)ram;
+	if (guest_pc >= ram_base && guest_pc < ram_base + ramsize)
+		return ram + (guest_pc - ram_base);
+	if (jit_rom_size != 0 && guest_pc >= jit_rom_base &&
+	    guest_pc < jit_rom_base + jit_rom_size)
+		return jit_rom_host + (guest_pc - jit_rom_base);
+	return NULL;
 }
 
 /* Record a chain patch site: when the target block at next_pc is compiled,
  * patch_loc (pointing to the first LDP of the standard epilogue) will be
  * overwritten with B <chain_code_of_next_pc>. */
 static void record_chain_site(uint32_t next_pc, uint32_t *patch_loc) {
+	jit_bc_ensure_init();
 	if (chain_site_pool_next >= JIT_CHAIN_SITE_POOL) return; /* pool full, skip */
 	int bucket = (next_pc >> 2) & JIT_BC_MASK;
 	int idx = chain_site_pool_next++;
@@ -95,24 +206,34 @@ static void record_chain_site(uint32_t next_pc, uint32_t *patch_loc) {
  * standard epilogues that were waiting to chain to this PC. */
 static void patch_chain_sites(uint32_t pc, uint32_t *chain_code) {
 	if (!chain_code) return;
+#if !JIT_BLOCK_CHAINING
+	/* Chaining disabled: no sites are ever recorded, nothing to patch.
+	 * (record_chain_site is only called from the chaining paths.) */
+	(void)pc;
+	return;
+#endif
+	if (jit_chain_runtime_disabled()) return; /* SS_JIT_NO_CHAIN=1 */
+	jit_bc_ensure_init();
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int idx = chain_site_heads[bucket];
 	while (idx >= 0) {
 		struct jit_chain_site *site = &chain_site_pool[idx];
-		if (site->target_pc == pc && site->patch_loc) {
+		if (site->target_pc == pc && site->patch_loc && !site->patched) {
 			int32_t off = (int32_t)((uint8_t *)chain_code - (uint8_t *)site->patch_loc);
 			if (off >= -(1 << 25) && off < (1 << 25)) {
+				jit_cache_begin_write();
 				*site->patch_loc = 0x14000000 | ((off >> 2) & 0x3FFFFFF); /* B offset */
-				/* Flush ARM64 I-cache for the patched word */
 				jit_cache_flush(site->patch_loc, sizeof(uint32_t));
+				jit_cache_end_write(site->patch_loc, sizeof(uint32_t));
+				site->patched = true; /* live — kept for range-invalidation reversal */
 			}
-			site->patch_loc = NULL; /* mark consumed */
 		}
 		idx = site->next;
 	}
 }
 
 static void jit_bc_invalidate_pc(uint32_t pc) {
+	jit_bc_ensure_init();
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int prev = -1;
 	int idx = jit_bc_heads[bucket];
@@ -132,6 +253,7 @@ static void jit_bc_invalidate_pc(uint32_t pc) {
 }
 
 static const struct jit_bc_entry *jit_bc_lookup(uint32_t pc) {
+	jit_bc_ensure_init();
 	int idx = jit_bc_heads[(pc >> 2) & JIT_BC_MASK];
 	while (idx >= 0) {
 		if (jit_bc_pool[idx].pc == pc && jit_bc_pool[idx].code)
@@ -142,6 +264,7 @@ static const struct jit_bc_entry *jit_bc_lookup(uint32_t pc) {
 }
 
 static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, bool complete, int n_insns = 0) {
+	jit_bc_ensure_init();
 	/* Check if already exists */
 	int bucket = (pc >> 2) & JIT_BC_MASK;
 	int idx = jit_bc_heads[bucket];
@@ -191,15 +314,61 @@ static void jit_bc_insert(uint32_t pc, uint32_t *code, uint32_t *chain_code, boo
 #define PPCR_LR     1044
 #define PPCR_CTR    1048
 #define PPCR_PC     1052
+#define PPCR_SPCFLAGS 1056  /* basic_spcflags.mask — pending interrupt/event flags */
+/* Actionable flag bits for the block-entry poll (dyngen gen_start equivalent).
+ * These are exactly the bits powerpc_cpu::check_spcflags() clears/handles when
+ * the dispatcher regains control at the JIT post-dispatch site (ppc-cpu.cpp
+ * pdi_jit_post): EXEC_RETURN(1) | TRIGGER_INTERRUPT(2) | HANDLE_INTERRUPT(4) |
+ * ENTER_MON(8) = 0x0F.  SPCFLAG_JIT_EXEC_RETURN(16) is DELIBERATELY EXCLUDED:
+ * check_spcflags() does not clear it, and the aarch64 pdi_jit_post path does
+ * not clear it either, so polling it would make the block return, find the bit
+ * still set, re-dispatch, and spin forever.  Polling only actionable bits
+ * guarantees the dispatcher clears every bit that can fire the poll. */
+#define PPCR_SPCFLAGS_POLL_MASK 0x0F
 
 
 
 /* Host register assignments */
 #define RSTATE  20   /* x20 = regs pointer (callee-saved) */
+#define RMEMBASE 19  /* x19 = guest-memory base (VMBaseDiff); callee-saved */
 #define RTMP0    0
 #define RTMP1    1
 #define RTMP2    2
 #define RTMP3    3
+
+/* ---- Guest-memory addressing model ----
+ *
+ * SheepShaver maps Mac RAM/ROM into the host address space via one of two
+ * models (see SheepShaver/src/Unix/sysdeps.h and cpu/vm.hpp):
+ *
+ *   REAL_ADDRESSING   : host pointer == 32-bit guest address (VMBaseDiff = 0).
+ *                       Used on Linux/native builds without NATMEM_OFFSET.
+ *   DIRECT_ADDRESSING : host = NATMEM_OFFSET + (uint32)guest_addr.
+ *                       Used whenever NATMEM_OFFSET is configured (macOS arm64).
+ *
+ * The JIT computes a 32-bit guest effective address in a temp register, then
+ * accesses host memory as [RMEMBASE, EA]. RMEMBASE is loaded once per block in
+ * the prologue with JIT_MEM_BASE:
+ *   - DIRECT : NATMEM_OFFSET (a fixed 64-bit constant).
+ *   - REAL   : 0, so [0, EA] == [EA] and the codegen is identical to before.
+ *
+ * This mirrors sysdeps.h's REAL/DIRECT selection so a single codegen path works
+ * on both Linux and macOS with no behavioral #ifdefs in the emitters. */
+#if defined(REAL_ADDRESSING)
+  #define JIT_MEM_BASE ((uint64_t)0)
+#elif defined(DIRECT_ADDRESSING) && defined(NATMEM_OFFSET)
+  #define JIT_MEM_BASE ((uint64_t)NATMEM_OFFSET)
+#elif defined(NATMEM_OFFSET)
+  #define JIT_MEM_BASE ((uint64_t)NATMEM_OFFSET)
+#else
+  /* No addressing macros visible (standalone harness compile): default to the
+   * REAL model so the JIT keeps treating guest EAs as host pointers. */
+  #define JIT_MEM_BASE ((uint64_t)0)
+#endif
+
+/* emit_load_mem_base() loads JIT_MEM_BASE into RMEMBASE; defined after the
+ * shared emit_load_imm64() helper further below. */
+static void emit_load_mem_base(void);
 
 /* FPR offsets: FPR[n] at offset 128 + n*8 (each is a 64-bit double) */
 #define PPCR_FPR(n) ((uint32_t)(256 + (n) * 8))
@@ -398,6 +567,12 @@ static void emit_load_imm64(int rd, uint64_t imm) {
 		if (i != first && p[i]) a64_movk(rd, p[i], i);
 }
 
+/* Load the guest-memory base (JIT_MEM_BASE) into RMEMBASE.
+ * For REAL (JIT_MEM_BASE==0) this is a single MOVZ #0 so [RMEMBASE, EA]==[EA]. */
+static void emit_load_mem_base(void) {
+	emit_load_imm64(RMEMBASE, JIT_MEM_BASE);
+}
+
 static void emit_load_imm32(int rd, int32_t imm) {
 	uint32_t u = (uint32_t)imm;
 	uint16_t lo = u & 0xFFFF;
@@ -481,6 +656,23 @@ static void emit_set_xer_ca(int val) {
 	emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP0); /* STRB */
 }
 
+/* Write ARM64 overflow flag (from the last ADDS/SUBS) into XER.OV and
+ * accumulate it into the sticky XER.SO byte.  Used by OE=1 arithmetic
+ * (addco/subfco/addo...) — the 68k emulator inside the Mac ROM leans on
+ * these to compute 68k condition codes, so they are extremely hot.
+ * Must run while NZCV still holds the arithmetic flags (i.e. before any
+ * CMP / flag-setting instruction such as emit_update_cr0).
+ * Clobbers RTMP1 and RTMP2; preserves RTMP0 (the result) and NZCV. */
+static void emit_write_xer_ov_so_from_overflow(void) {
+	/* CSET Wd, VS — Wd = 1 if V=1 (signed overflow) */
+	emit32(0x1A9F77E0 | RTMP2); /* CSET W(RTMP2), VS = CSINC WZR,WZR,VC */
+	emit32(0x39000000 | (PPCR_XER_OV << 10) | (RSTATE << 5) | RTMP2); /* STRB → OV */
+	/* SO is sticky: SO |= OV */
+	emit32(0x39400000 | (PPCR_XER_SO << 10) | (RSTATE << 5) | RTMP1); /* LDRB ← SO */
+	emit32(0x2A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1);        /* ORR */
+	emit32(0x39000000 | (PPCR_XER_SO << 10) | (RSTATE << 5) | RTMP1); /* STRB → SO */
+}
+
 /* Sync PPC FPSCR rounding mode (bits 30-31) to ARM64 FPCR (bits 22-23).
    PPC RN: 0=nearest, 1=toward zero, 2=+inf, 3=-inf
    ARM64 RMode: 0=nearest, 3=toward zero, 1=+inf, 2=-inf
@@ -552,23 +744,31 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	ra_flush_all();
 	emit_load_imm32(RTMP0, (int32_t)next_pc);
 	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
-	/* Compile-time chaining: if the target PC is already in the JIT block
-	 * cache and has a chain entry, branch directly to it instead of
-	 * restoring callee-saved registers and returning to the dispatch loop.
-	 * The callee-saved registers (x19–x28) remain valid on the stack from
-	 * the current block's prologue — the chained block re-uses that frame. */
-	const struct jit_bc_entry *chain_target = jit_bc_lookup(next_pc);
-	if (chain_target && chain_target->chain_code) {
-		int32_t off = (int32_t)((uint8_t *)chain_target->chain_code - (uint8_t *)jit_code_ptr);
-		if (off >= -(1 << 25) && off < (1 << 25)) {
-			emit32(0x14000000 | ((off >> 2) & 0x3FFFFFF)); /* B <offset> */
-			return; /* no LDP+RET: caller re-uses current stack frame */
+#if JIT_BLOCK_CHAINING
+	if (!jit_chain_runtime_disabled()) {
+		/* Compile-time chaining: if the target PC is already in the JIT block
+		 * cache and has a chain entry, branch directly to it instead of
+		 * restoring callee-saved registers and returning to the dispatch loop.
+		 * The callee-saved registers (x19–x28) remain valid on the stack from
+		 * the current block's prologue — the chained block re-uses that frame. */
+		const struct jit_bc_entry *chain_target = jit_bc_lookup(next_pc);
+		if (chain_target && chain_target->chain_code) {
+			int32_t off = (int32_t)((uint8_t *)chain_target->chain_code - (uint8_t *)jit_code_ptr);
+			if (off >= -(1 << 25) && off < (1 << 25)) {
+				/* Record the site BEFORE emitting B so that range-based invalidation
+				 * can find and revert this patch if the target block is invalidated. */
+				record_chain_site(next_pc, jit_code_ptr);
+				chain_site_pool[chain_site_pool_next - 1].patched = true;
+				emit32(0x14000000 | ((off >> 2) & 0x3FFFFFF)); /* B <offset> */
+				return; /* no LDP+RET: caller re-uses current stack frame */
+			}
 		}
+		/* Runtime back-patching: record this epilogue location so that when
+		 * next_pc is compiled later, the first LDP can be patched to B chain_code.
+		 * patch_loc = address of the first LDP instruction we are about to emit. */
+		record_chain_site(next_pc, jit_code_ptr);
 	}
-	/* Runtime back-patching: record this epilogue location so that when
-	 * next_pc is compiled later, the first LDP can be patched to B chain_code.
-	 * patch_loc = address of the first LDP instruction we are about to emit. */
-	record_chain_site(next_pc, jit_code_ptr);
+#endif /* JIT_BLOCK_CHAINING */
 	/* Standard epilogue: restore callee-saved regs and return to dispatch */
 	a64_ldp_post(27, 28, A64_SP, 16);
 	a64_ldp_post(25, 26, A64_SP, 16);
@@ -577,6 +777,92 @@ static void emit_epilogue_with_pc(uint32_t next_pc) {
 	a64_ldp_post(19, RSTATE, A64_SP, 16);
 	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
 	a64_ret();
+}
+
+/* Inline interpreter-call bridge (defined in ppc-cpu.cpp). Decodes and executes
+ * ONE PPC instruction through the interpreter handler, advancing regs->pc.
+ * This is the dyngen do_generic / gen_invoke equivalent — see
+ * docs/superpowers/research/2026-06-02-dyngen-mechanisms.md GAP 3. */
+extern "C" void ppc_jit_interp_one(uint32_t opcode, uint32_t pc_val);
+
+/* Emit a bare epilogue (LDP x6 + RET) WITHOUT storing a PC.
+ * Used after an inline interpreter call (the bridge already advanced regs->pc)
+ * and as the return tail of the block-entry spcflags poll.
+ * This is emit_epilogue_with_pc minus the PC store and the chaining logic. */
+static void emit_bare_epilogue(void) {
+	a64_ldp_post(27, 28, A64_SP, 16);
+	a64_ldp_post(25, 26, A64_SP, 16);
+	a64_ldp_post(23, 24, A64_SP, 16);
+	a64_ldp_post(21, 22, A64_SP, 16);
+	a64_ldp_post(19, RSTATE, A64_SP, 16);
+	a64_ldp_post(A64_FP, A64_LR, A64_SP, 16);
+	a64_ret();
+}
+
+/* Emit the block-entry spcflags poll (dyngen gen_start equivalent).
+ *
+ * Placed at the chain entry point, immediately after the prologue and before
+ * the block body.  Loads the spcflags mask, masks to the actionable bits
+ * (PPCR_SPCFLAGS_POLL_MASK), and:
+ *   - if zero  -> falls through into the block body (the common, fast case);
+ *   - if nonzero -> stores this block's start PC into regs.pc and returns to
+ *     the C dispatcher via the standard epilogue.  The dispatcher runs
+ *     check_spcflags() (which clears/handles every actionable bit) and
+ *     re-dispatches the same PC, at which point the poll passes.
+ *
+ * With JIT_BLOCK_CHAINING=0 the poll runs on every normal (ABI) block entry —
+ * it never changes correct behaviour (the dispatcher already polled spcflags
+ * before entering), but it proves the guard returns to C whenever a flag is
+ * set, which is the safety valve required before block chaining is enabled.
+ *
+ * Uses RTMP0 only; emitted before any register-allocator state exists for the
+ * block, so no flush is needed. */
+static void emit_entry_spcflags_poll(uint32_t block_start_pc) {
+	/* LDR  Wtmp0, [RSTATE, #PPCR_SPCFLAGS]  — load spcflags.mask */
+	a64_ldr_w_imm(RTMP0, RSTATE, PPCR_SPCFLAGS);
+	/* AND  Wtmp0, Wtmp0, #PPCR_SPCFLAGS_POLL_MASK (0x0F) — actionable bits only */
+	emit32(0x12000C00 | (RTMP0 << 5) | RTMP0);
+	/* CBZ  Wtmp0, <body> — skip the return sequence when no flags pending.
+	 * Patched once the return sequence length is known. */
+	uint32_t *cbz_loc = jit_code_ptr;
+	emit32(0); /* placeholder CBZ */
+	/* Flags pending: store block start PC and return to the dispatcher. */
+	emit_load_imm32(RTMP0, (int32_t)block_start_pc);
+	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+	/* Standard epilogue: restore callee-saved regs and return to dispatch. */
+	emit_bare_epilogue();
+	/* Patch the CBZ to jump here (the block body follows). */
+	int32_t off = (int32_t)((uint8_t *)jit_code_ptr - (uint8_t *)cbz_loc);
+	*cbz_loc = 0x34000000 | (((off >> 2) & 0x7FFFF) << 5) | RTMP0; /* CBZ RTMP0, body */
+}
+
+/* Emit an inline call to the interpreter handler for one opcode at cur_pc,
+ * then a bare epilogue. ABI: the BLR clobbers x0-x17 and NZCV but preserves
+ * x19-x28, so RSTATE (x20) and RMEMBASE (x19) survive. All guest state is in
+ * memory (the register allocator is disabled), so nothing live is lost.
+ *
+ * Caller MUST have flushed lazy CR0 and the register allocator first, because
+ * lazy CR0 lives in NZCV which the call clobbers.
+ *
+ * Stack alignment: the block prologue pushes 6 STP pairs = 96 bytes (a multiple
+ * of 16) from a 16-aligned SP, so SP is 16-aligned at the BLR. No extra
+ * adjustment needed. */
+static void emit_inline_interp_call(uint32_t op, uint32_t cur_pc) {
+	/* Sync guest PC into regs->pc before the call. The bridge also sets it,
+	 * but emitting it here keeps the contract explicit and matches the plan.
+	 * Order matters: do this first (uses RTMP0 as scratch) before loading the
+	 * argument registers, since w0 must end holding the opcode. */
+	emit_load_imm32(RTMP0, (int32_t)cur_pc);
+	a64_str_w_imm(RTMP0, RSTATE, PPCR_PC);
+	/* Arguments: w0 = opcode, w1 = cur_pc.  RTMP0==x0, RTMP1==x1. */
+	emit_load_imm32(RTMP0, (int32_t)op);   /* w0 = opcode */
+	emit_load_imm32(RTMP1, (int32_t)cur_pc); /* w1 = cur_pc */
+	/* Load the bridge address into x16 (intra-procedure-call scratch, safe to
+	 * clobber across the call) and call it. */
+	emit_load_imm64(16, (uint64_t)(uintptr_t)&ppc_jit_interp_one);
+	a64_blr(16);
+	/* The bridge advanced regs->pc; do not store a new PC, do not chain. */
+	emit_bare_epilogue();
 }
 
 /* Emit: if lk=1, save pc+4 to PPCR_LR (bcl / bctrl / blrl semantics) */
@@ -648,7 +934,14 @@ static void lazy_flush_cr0(void) {
 /* Get ARM64 reg for writing PPC GPR n (marks dirty, allocates if needed) */
 
 /* Find the ARM64 code offset for a PPC PC within the current block */
-static uint32_t *find_code_for_pc(uint32_t target_pc) {
+/* Find the ARM64 code pointer for a FORWARD intra-block branch target.
+ *
+ * MUST only be called with forward targets (target_pc > current instruction pc).
+ * Backward targets must NOT be passed: insn_code_offset[] covers only the block
+ * body (after the spcflags poll at chain_entry_start). Branching to an address in
+ * this table for a backward target would skip the poll, creating a closed ARM64
+ * loop that starves interrupt delivery. The name encodes this contract. */
+static uint32_t *find_forward_code_for_pc(uint32_t target_pc) {
 	for (int i = 0; i < insn_count; i++) {
 		if (insn_ppc_pc[i] == target_pc)
 			return insn_code_offset[i];
@@ -914,12 +1207,35 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		case 491: /* divw */
+		{
+			/* PPC divw: if rB==0 or (rA==0x80000000 && rB==-1) the result is
+			 * architecturally undefined; the reference interpreter returns
+			 * (int32)rA >> 31 (all sign bits). Otherwise rA / rB. ARM SDIV
+			 * alone gives 0 for div-by-0 and 0x80000000 for MIN/-1, which
+			 * disagree with the interpreter, so both cases are guarded here.
+			 *
+			 * Register use: W0=rA, W1=rB, W2=SDIV result, W3=fallback/scratch. */
 			emit_load_gpr(RTMP0, ra);
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x1AC00C00 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SDIV Wd,Wn,Wm */
-			emit_store_gpr(RTMP0, rd);
-			if (op & 1) lazy_update_cr0(RTMP0);
+			emit32(0x1AC00C00 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP2); /* SDIV W2,W0,W1 */
+			/* fallback = (int32)rA >> 31  → ASR W3, W0, #31 */
+			emit32(0x13000000 | (31 << 16) | (0x1F << 10) | (RTMP0 << 5) | RTMP3);
+			/* special if rB==0:  CMP W1,#0 ; CSEL W2 = (EQ) ? W3 : W2 */
+			emit32(0x7100001F | (RTMP1 << 5));                         /* CMP W1, #0 */
+			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | RTMP2); /* CSEL W2,W3,W2,EQ */
+			/* special if MIN/-1: detect via (rA ^ 0x80000000) | (~rB) == 0.
+			 * W0 = rA ^ 0x80000000; W1 = ~rB; W0 |= W1; CMP W0,#0; CSEL EQ. */
+			emit_load_imm32(RTMP1, (int32_t)0x80000000);
+			emit32(0x4A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* EOR W0,W0,#0x80000000(reg) */
+			emit_load_gpr(RTMP1, rb);
+			emit32(0x2A2103E1);                                        /* MVN W1, W1 (~rB) */
+			emit32(0x2A010000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ORR W0,W0,W1 */
+			emit32(0x7100001F | (RTMP0 << 5));                         /* CMP W0, #0 */
+			emit32(0x1A800000 | (RTMP2 << 16) | (RTMP3 << 5) | RTMP2); /* CSEL W2,W3,W2,EQ */
+			emit_store_gpr(RTMP2, rd);
+			if (op & 1) lazy_update_cr0(RTMP2);
 			return true;
+		}
 		case 19: /* mfcr rD */
 			lazy_flush_cr0();
 			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
@@ -1036,8 +1352,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				/* CA = (rS < 0) && ((rS & ((1<<sh)-1)) != 0) */
 				/* Save original for CA computation */
 				a64_mov_reg(RTMP1, RTMP0); /* RTMP1 = original rS */
-				/* ASR Wd, Wn, #sh */
-				emit32(0x13000000 | (sh << 10) | (0x1F << 16) | (RTMP0 << 5) | RTMP0);
+				/* ASR Wd, Wn, #sh = SBFM Wd,Wn,#sh,#31 (immr=sh<<16, imms=31<<10) */
+				emit32(0x13000000 | (sh << 16) | (0x1F << 10) | (RTMP0 << 5) | RTMP0);
 				emit_store_gpr(RTMP0, ra);
 				/* Compute CA: test if source negative AND shifted-out bits nonzero */
 				/* RTMP1 = original rS. Mask = (1<<sh)-1 */
@@ -1063,18 +1379,27 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 24: /* slw rA,rS,rB (shift left word) */
 		{
-			emit_load_gpr(RTMP0, PPC_RS(op));
-			emit_load_gpr(RTMP1, rb);
-			emit32(0x1AC02000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSL Wd,Wn,Wm */
-			emit_store_gpr(RTMP0, ra);
+			/* PPC: shift amount is rB[26:31]; if bit 26 set (count >= 32) the
+			 * result is 0. A 64-bit LSLV of the zero-extended 32-bit rS by
+			 * (rB & 63) gives exactly this: for counts 32..63 the 32-bit value
+			 * shifts out of the low word, so the stored low 32 bits are 0. */
+			emit_load_gpr(RTMP0, PPC_RS(op));   /* X(RTMP0) = zero-extended rS */
+			emit_load_gpr(RTMP1, rb);           /* X(RTMP1) = zero-extended rB */
+			emit32(0x9AC02000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSLV Xd,Xn,Xm */
+			emit_store_gpr(RTMP0, ra);          /* stores low 32 bits */
+			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
 		case 536: /* srw rA,rS,rB (shift right word) */
 		{
-			emit_load_gpr(RTMP0, PPC_RS(op));
-			emit_load_gpr(RTMP1, rb);
-			emit32(0x1AC02400 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSR Wd,Wn,Wm */
+			/* PPC: count rB[26:31]; count >= 32 → 0. 64-bit LSRV of the
+			 * zero-extended 32-bit rS by (rB & 63): for counts 32..63 the only
+			 * set bits are in [31:0], so the result is 0. */
+			emit_load_gpr(RTMP0, PPC_RS(op));   /* X(RTMP0) = zero-extended rS */
+			emit_load_gpr(RTMP1, rb);           /* X(RTMP1) = zero-extended rB */
+			emit32(0x9AC02400 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* LSRV Xd,Xn,Xm */
 			emit_store_gpr(RTMP0, ra);
+			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
 		case 792: /* sraw rA,rS,rB (arithmetic shift right, set CA) */
@@ -1139,7 +1464,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit_load_gpr(RTMP1, rb);
 				emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			}
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1); /* LDR Wt, [Xn] */
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV */
 			emit_store_gpr(RTMP1, rd);
 			return true;
@@ -1152,7 +1477,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit_load_gpr(RTMP2, rb);
 				emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 			}
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1); /* STR */
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0); /* STR */
 			return true;
 
 		case 8: /* subfc rD,rA,rB (rD = rB - rA, set CA) */
@@ -1163,15 +1488,23 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
-		case 136: /* subfe rD,rA,rB (rD = ~rA + rB + CA) */
+		case 136: /* subfe rD,rA,rB (rD = ~rA + rB + CA; CA = carry-out of full sum) */
+			/* Compute in 64-bit to get correct carry-out: the two-step
+			 * ADDS+ADD approach loses the carry contribution from +CA. */
 			emit_load_gpr(RTMP0, ra);
-			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* MVN (NOT rA) */
+			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* MVN Wd, Wm → ~rA */
+			emit32(0xD3407C00 | (RTMP0 << 5) | RTMP0);  /* UXTW Xd, Wn → zero-extend to 64 */
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS ~rA + rB */
+			emit32(0xD3407C00 | (RTMP1 << 5) | RTMP1);  /* UXTW Xd, Wn → zero-extend to 64 */
+			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD Xd, Xn, Xm (64-bit) */
 			emit_read_xer_ca(RTMP1);
-			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* + CA */
+			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD Xd, Xn, Xm (64-bit) */
+			/* Carry-out = bit 32 of 64-bit result */
+			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP1);  /* LSR Xd, Xn, #32 → carry in RTMP1[0] */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
+			/* Truncate result to 32 bits */
+			emit32(0x2A0003E0 | (RTMP0 << 16) | RTMP0); /* MOV Wd, Wn (truncate to 32) */
 			emit_store_gpr(RTMP0, rd);
-			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		case 10: /* addc rD,rA,rB (set CA) */
@@ -1182,43 +1515,101 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_write_xer_ca_from_carry();
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
-		case 138: /* adde rD,rA,rB (rD = rA + rB + CA) */
+
+		/* ---- OE=1 (overflow-enabled) arithmetic ----
+		 * 10-bit XO = 512 (OE bit) + base XO.  These set XER.OV from signed
+		 * overflow and accumulate XER.SO, in addition to the base semantics.
+		 * The Mac ROM's built-in 68k emulator uses addco/subfco in its hottest
+		 * loops to derive 68k condition codes — without these, the blocks
+		 * containing them (76%+19% of all compile failures) stay interpreted.
+		 * SS_JIT_NO_OE=1: bisect switch — fall back to the interpreter for all
+		 * OE variants (diagnostic only). */
+		case 522: case 520: case 778: case 552: case 616:
+		{
+			static int no_oe = -1;
+			if (no_oe < 0) { const char *e = getenv("SS_JIT_NO_OE"); no_oe = (e && *e == '1') ? 1 : 0; }
+			if (no_oe) return false;
+		}
+		switch (xo) {
+		case 522: /* addco rD,rA,rB (set CA, OV, SO) */
 			emit_load_gpr(RTMP0, ra);
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS rA+rB */
-			/* Now add CA: read XER.CA, add it */
-			emit32(0xD53B4200 | RTMP2); /* MRS NZCV (save carry from ADDS) */
-			emit_read_xer_ca(RTMP1);
-			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD carry-in */
+			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS */
 			emit_store_gpr(RTMP0, rd);
-			/* Write new CA: set if either ADDS or the CA addition overflowed */
 			emit_write_xer_ca_from_carry();
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 520: /* subfco rD,rA,rB (rD = rB - rA; set CA, OV, SO) */
+			emit_load_gpr(RTMP0, rb);
+			emit_load_gpr(RTMP1, ra);
+			emit32(0x6B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SUBS */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ca_from_carry();
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 778: /* addo rD,rA,rB (set OV, SO; CA unchanged) */
+			emit_load_gpr(RTMP0, ra);
+			emit_load_gpr(RTMP1, rb);
+			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS (for V flag) */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 552: /* subfo rD,rA,rB (rD = rB - rA; set OV, SO; CA unchanged) */
+			emit_load_gpr(RTMP0, rb);
+			emit_load_gpr(RTMP1, ra);
+			emit32(0x6B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SUBS (for V flag) */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+
+		case 616: /* nego rD,rA (rD = -rA; set OV, SO; overflow iff rA == 0x80000000) */
+			emit_load_gpr(RTMP1, ra);
+			a64_movz(RTMP0, 0, 0);
+			emit32(0x6B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* SUBS 0 - rA */
+			emit_store_gpr(RTMP0, rd);
+			emit_write_xer_ov_so_from_overflow();
+			if (op & 1) lazy_update_cr0(RTMP0);
+			return true;
+		}
+		return false; /* nested OE switch fell through (unreachable) */
+
+		case 138: /* adde rD,rA,rB (rD = rA + rB + CA; CA = carry-out of full sum) */
+			/* 64-bit sum for correct carry-out (same fix as subfe case 136). */
+			emit_load_gpr(RTMP0, ra);
+			emit32(0xD3407C00 | (RTMP0 << 5) | RTMP0);  /* UXTW Xd, Wn */
+			emit_load_gpr(RTMP1, rb);
+			emit32(0xD3407C00 | (RTMP1 << 5) | RTMP1);  /* UXTW Xd, Wn */
+			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X, X, X */
+			emit_read_xer_ca(RTMP1);
+			emit32(0x8B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADD X, X, CA */
+			emit32(0xD360FC00 | (RTMP0 << 5) | RTMP1);  /* LSR Xd, Xn, #32 */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
+			emit32(0x2A0003E0 | (RTMP0 << 16) | RTMP0); /* MOV Wd, Wn (truncate) */
+			emit_store_gpr(RTMP0, rd);
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		case 234: /* addme rD,rA (rD = rA + CA - 1, set CA) */
 		{
-			emit_load_gpr(RTMP0, ra);
-			emit_read_xer_ca(RTMP1); /* RTMP1 = CA (0 or 1) */
-			/* rD = rA + CA + 0xFFFFFFFF. Compute as: ADDS tmp, rA, CA; ADDS tmp, tmp, -1 */
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, rA, CA */
-			emit_load_imm32(RTMP1, -1);
-			emit32(0x2B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, Wd, -1 */
-			/* CA = carry out. The second ADDS sets C correctly for the final add. */
-			/* But we need CA = carry out of the FULL operation rA + CA_in + 0xFFFFFFFF.
-			   Since we can't chain carries with two ADDS, compute in 64-bit instead. */
-			/* Actually: use ADDS+ADCS chain. ADDS rA, CA → sets C1. ADCS rD, result, -1 → C = C1|C2 */
-			/* Simpler: just compute directly. rA + CA_in - 1. If rA + CA_in >= 1, no borrow → CA=1.
-			   CA_out = (rA != 0) || (CA_in != 0), except edge case rA=0,CA=0 → result=0xFFFFFFFF, CA=0.
-			   Actually: CA_out = carry of (~0 + rA + CA_in) = carry of (rA + CA_in + 0xFFFFFFFF). */
-			/* Cleanest: reload and use ADDS/ADCS */
-			emit_load_gpr(RTMP0, ra);
-			emit_read_xer_ca(RTMP1);
-			emit_load_imm32(RTMP2, -1); /* 0xFFFFFFFF */
-			emit32(0x2B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, rA, 0xFFFFFFFF */
-			emit32(0x3A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADCS Wd, Wd, CA_in */
-			emit_store_gpr(RTMP0, rd);
-			emit_write_xer_ca_from_carry();
-			if (op & 1) lazy_update_cr0(RTMP0);
+			/* result = rA + CA_in + 0xFFFFFFFF (all 32-bit). Compute the full sum
+			 * in 64-bit so the carry-out is simply bit 32 of the result; this
+			 * avoids the ADDS/ADCS double-counting of CA. */
+			emit_load_gpr(RTMP0, ra);       /* X(RTMP0) = zero-extended rA */
+			emit_read_xer_ca(RTMP1);        /* X(RTMP1) = CA_in (0 or 1) */
+			a64_add_reg(RTMP0, RTMP0, RTMP1); /* X = rA + CA_in (64-bit) */
+			emit_load_imm32(RTMP2, -1);     /* W(RTMP2) = 0xFFFFFFFF, zero-extended */
+			a64_add_reg(RTMP0, RTMP0, RTMP2); /* X = rA + CA_in + 0xFFFFFFFF */
+			/* CA_out = bit 32 of the 64-bit sum */
+			emit_lsr64_imm(RTMP1, RTMP0, 32); /* X(RTMP1) = sum >> 32 (0 or 1) */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
+			emit_store_gpr(RTMP0, rd);      /* store low 32 bits */
+			if (op & 1) { emit_load_gpr(RTMP0, rd); lazy_update_cr0(RTMP0); }
 			return true;
 		}
 		case 202: /* addze rD,rA (rD = rA + CA, set CA) */
@@ -1233,15 +1624,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		}
 		case 232: /* subfme rD,rA (rD = ~rA + CA - 1, set CA) */
 		{
+			/* result = ~rA + CA_in + 0xFFFFFFFF (all 32-bit). 64-bit sum so the
+			 * carry-out is bit 32 (avoids ADDS/ADCS CA double-count). */
 			emit_load_gpr(RTMP0, ra);
-			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* MVN Wd, Wn = ~rA */
-			emit_read_xer_ca(RTMP1);
-			emit_load_imm32(RTMP2, -1);
-			emit32(0x2B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* ADDS Wd, ~rA, -1 */
-			emit32(0x3A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* ADCS Wd, Wd, CA_in */
+			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* MVN Wd = ~rA (zero-extends) */
+			emit_read_xer_ca(RTMP1);        /* X(RTMP1) = CA_in (0 or 1) */
+			a64_add_reg(RTMP0, RTMP0, RTMP1); /* X = ~rA + CA_in */
+			emit_load_imm32(RTMP2, -1);     /* 0xFFFFFFFF */
+			a64_add_reg(RTMP0, RTMP0, RTMP2); /* X = ~rA + CA_in + 0xFFFFFFFF */
+			emit_lsr64_imm(RTMP1, RTMP0, 32); /* carry-out = bit 32 */
+			emit32(0x39000000 | (PPCR_XER_CA << 10) | (RSTATE << 5) | RTMP1); /* STRB CA */
 			emit_store_gpr(RTMP0, rd);
-			emit_write_xer_ca_from_carry();
-			if (op & 1) lazy_update_cr0(RTMP0);
+			if (op & 1) { emit_load_gpr(RTMP0, rd); lazy_update_cr0(RTMP0); }
 			return true;
 		}
 		case 200: /* subfze rD,rA (rD = ~rA + CA, set CA) */
@@ -1255,12 +1649,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			if (op & 1) lazy_update_cr0(RTMP0);
 			return true;
 		}
-		case 476: /* nand rA,rS,rB */
+		case 476: /* nand rA,rS,rB → rA = ~(rS & rB) */
 			emit_load_gpr(RTMP0, PPC_RS(op));
 			emit_load_gpr(RTMP1, rb);
-			emit32(0x0A200000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* BIC then invert... */
-			/* Actually: AND then MVN */
-			emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* AND */
+			emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* AND Wd,Wn,Wm */
 			emit32(0x2A2003E0 | (RTMP0 << 16) | RTMP0); /* ORN Wd,WZR,Wm = MVN */
 			emit_store_gpr(RTMP0, ra);
 			if (op & 1) lazy_update_cr0(RTMP0);
@@ -1322,19 +1714,19 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 87: /* lbzx rD,rA,rB */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x39400000 | (RTMP0 << 5) | RTMP1); /* LDRB */
+			a64_ldrb_reg(RTMP1, RMEMBASE, RTMP0); /* LDRB */
 			emit_store_gpr(RTMP1, rd);
 			return true;
 		case 215: /* stbx rS,rA,rB */
 			emit_load_gpr(RTMP1, PPC_RS(op));
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x39000000 | (RTMP0 << 5) | RTMP1); /* STRB */
+			a64_strb_reg(RTMP1, RMEMBASE, RTMP0); /* STRB */
 			return true;
 		case 279: /* lhzx rD,rA,rB */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x79400000 | (RTMP0 << 5) | RTMP1); /* LDRH */
+			a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0); /* LDRH */
 			emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1); /* REV16 */
 			emit_store_gpr(RTMP1, rd);
 			return true;
@@ -1343,12 +1735,12 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1); /* REV16 */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x79000000 | (RTMP0 << 5) | RTMP1); /* STRH */
+			a64_strh_reg(RTMP1, RMEMBASE, RTMP0); /* STRH */
 			return true;
 		case 343: /* lhax rD,rA,rB (load halfword algebraic indexed) */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x79400000 | (RTMP0 << 5) | RTMP1); /* LDRH */
+			a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0); /* LDRH */
 			emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1); /* REV16 */
 			emit32(0x13003C00 | (RTMP1 << 5) | RTMP1); /* SXTH */
 			emit_store_gpr(RTMP1, rd);
@@ -1364,7 +1756,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0x39400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldrb_reg(RTMP1, RMEMBASE, RTMP0);
 			emit_store_gpr(RTMP1, rd);
 			return true;
 		case 247: /* stbux rS,rA,rB */
@@ -1372,14 +1764,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP2, rb);
 			emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0x39000000 | (RTMP0 << 5) | RTMP1);
+			a64_strb_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 311: /* lhzux rD,rA,rB */
 			/* ra==0: use 0 as base; ra==rd: update gets overwritten by load (PPC undefined but harmless) */
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0x79400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1);
 			emit_store_gpr(RTMP1, rd);
 			return true;
@@ -1389,14 +1781,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP2, rb);
 			emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0x79000000 | (RTMP0 << 5) | RTMP1);
+			a64_strh_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 375: /* lhaux rD,rA,rB */
 			/* ra==0: use 0 as base; ra==rd: update gets overwritten by load (PPC undefined but harmless) */
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0x79400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1);
 			emit32(0x13003C00 | (RTMP1 << 5) | RTMP1);
 			emit_store_gpr(RTMP1, rd);
@@ -1406,7 +1798,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 			emit_store_gpr(RTMP1, rd);
 			return true;
@@ -1416,37 +1808,37 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP2, rb);
 			emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 790: /* lhbrx rD,rA,rB (byte-reversed = native order on LE) */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x79400000 | (RTMP0 << 5) | RTMP1); /* LDRH (native LE = byte-reversed for PPC) */
+			a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0); /* LDRH (native LE = byte-reversed for PPC) */
 			emit_store_gpr(RTMP1, rd);
 			return true;
 		case 918: /* sthbrx rS,rA,rB */
 			emit_load_gpr(RTMP1, PPC_RS(op));
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0x79000000 | (RTMP0 << 5) | RTMP1);
+			a64_strh_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 534: /* lwbrx rD,rA,rB (byte-reversed = native order on LE) */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 			emit_store_gpr(RTMP1, rd);
 			return true;
 		case 662: /* stwbrx rS,rA,rB */
 			emit_load_gpr(RTMP1, PPC_RS(op));
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 
 		case 535: /* lfsx frD,rA,rB */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 			emit32(0x1E270000 | (RTMP1 << 5) | 0);
 			emit32(0x1E22C000 | (0 << 5) | 0);
@@ -1456,7 +1848,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_ea_base(ra); emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 			emit32(0x1E270000 | (RTMP1 << 5) | 0);
 			emit32(0x1E22C000 | (0 << 5) | 0);
@@ -1465,7 +1857,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 599: /* lfdx frD,rA,rB */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 			emit32(0x9E670000 | (RTMP1 << 5) | 0);
 			emit_store_fpr(0, rd);
@@ -1474,7 +1866,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_ea_base(ra); emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 			emit32(0x9E670000 | (RTMP1 << 5) | 0);
 			emit_store_fpr(0, rd);
@@ -1486,7 +1878,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 695: /* stfsux frS,rA,rB */
 			emit_load_fpr(0, PPC_RS(op));
@@ -1496,7 +1888,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP2, rb);
 			emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 727: /* stfdx frS,rA,rB */
 			emit_load_fpr(0, PPC_RS(op));
@@ -1504,7 +1896,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xF9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_x_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 759: /* stfdux frS,rA,rB */
 			emit_load_fpr(0, PPC_RS(op));
@@ -1513,7 +1905,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP0, ra); emit_load_gpr(RTMP2, rb);
 			emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xF9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_x_reg(RTMP1, RMEMBASE, RTMP0);
 			return true;
 		case 1014: /* dcbz rA,rB — zero cache line (32 bytes) */
 		{
@@ -1522,6 +1914,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			/* Align to 32 bytes */
 			emit_load_imm32(RTMP1, ~31);
 			emit32(0x0A000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
+			/* Form host address: X(RTMP0) = RMEMBASE + (zero-extended guest EA).
+			 * The AND above leaves RTMP0 as a 32-bit value zero-extended to 64;
+			 * a 64-bit ADD with RMEMBASE yields the host pointer. */
+			a64_add_reg(RTMP0, RMEMBASE, RTMP0);
 			/* STP XZR,XZR,[Xn] four times = 32 bytes */
 			emit32(0xA9000000 | (31 << 10) | (RTMP0 << 5) | 31); /* STP XZR,XZR,[Xn,#0] */
 			emit32(0xA9010000 | (31 << 10) | (RTMP0 << 5) | 31); /* STP XZR,XZR,[Xn,#16] */
@@ -1533,7 +1929,16 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 86:   /* dcbf  — data cache block flush */
 		case 246:  /* dcbt  — data cache block touch (prefetch hint) */
 		case 278:  /* dcbtst — data cache block touch for store */
-		case 982:  /* icbi  — instruction cache block invalidate */
+		case 982:  /* icbi  — instruction cache block invalidate.
+		            * Compiled as a NOP (upstream behavior).  KNOWN GAP: this leaves
+		            * stale JIT translations live if guest code is rewritten in place
+		            * (same address, different code).  In practice extensions load into
+		            * fresh RAM (no prior translation exists), so this rarely bites.
+		            * The correct fix is bucket-based invalidation called from the
+		            * interpreter's execute_icbi — NOT falling icbi/isync back to the
+		            * interpreter: isync appears after every mtmsr/mtspr in OS code, so
+		            * isync-falls-back marks most toolbox blocks incomplete and was
+		            * measured to make JIT boot 42x slower than interpreter boot. */
 			return true;
 
 		/* Memory barriers — NOPs (single-threaded emulator) */
@@ -1571,7 +1976,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 20: /* lwarx rD,rA,rB — load word and reserve (treat as lwzx) */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 			emit_store_gpr(RTMP1, rd);
 			return true;
@@ -1580,7 +1985,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP2, rb); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 			/* Set CR0.EQ to indicate success */
 			lazy_flush_cr0();
 			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
@@ -1625,7 +2030,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			uint32_t bytes_done = 0;
 			while (bytes_done < nb) {
 				if (nb - bytes_done >= 4) {
-					emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+					a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 					emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 					emit_store_gpr(RTMP1, r);
 					if (bytes_done + 4 < nb) emit32(0x11001000 | (RTMP0 << 5) | RTMP0);
@@ -1633,7 +2038,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				} else {
 					a64_movz(RTMP1, 0, 0);
 					for (uint32_t b = 0; b < nb - bytes_done; b++) {
-						emit32(0x38401400 | (RTMP0 << 5) | RTMP2);
+						/* LDRB W(RTMP2), [RMEMBASE, X(RTMP0)] then advance EA by 1 */
+						a64_ldrb_reg(RTMP2, RMEMBASE, RTMP0);
+						emit32(0x11000400 | (RTMP0 << 5) | RTMP0); /* ADD W(RTMP0), W(RTMP0), #1 */
 						uint32_t sh = (3 - b) * 8;
 						if (sh) { emit_load_imm32(3, sh); emit32(0x1AC02000 | (3 << 16) | (RTMP2 << 5) | RTMP2); }
 						emit32(0x2A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1);
@@ -1657,7 +2064,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				if (nb - bytes_done >= 4) {
 					emit_load_gpr(RTMP1, r);
 					emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
-					emit32(0xB8004400 | (RTMP0 << 5) | RTMP1);
+					/* STR W(RTMP1), [RMEMBASE, X(RTMP0)] then advance EA by 4 */
+					a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
+					emit32(0x11001000 | (RTMP0 << 5) | RTMP0); /* ADD W(RTMP0), W(RTMP0), #4 */
 					bytes_done += 4;
 				} else {
 					emit_load_gpr(RTMP1, r);
@@ -1665,7 +2074,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 						a64_mov_reg(RTMP2, RTMP1);
 						uint32_t sh = (3 - b) * 8;
 						if (sh) { emit_load_imm32(3, sh); emit32(0x1AC02400 | (3 << 16) | (RTMP2 << 5) | RTMP2); }
-						emit32(0x38001400 | (RTMP0 << 5) | RTMP2);
+						/* STRB W(RTMP2), [RMEMBASE, X(RTMP0)] then advance EA by 1 */
+						a64_strb_reg(RTMP2, RMEMBASE, RTMP0);
+						emit32(0x11000400 | (RTMP0 << 5) | RTMP0); /* ADD W(RTMP0), W(RTMP0), #1 */
 					}
 					bytes_done = nb;
 				}
@@ -1776,7 +2187,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		case 21: /* ldx rD,rA,rB */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1); /* LDR Xt,[Xn] */
+			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Xt,[Xn] */
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xt */
 			emit_store_gpr64(RTMP1, rd);
 			return true;
@@ -1786,7 +2197,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit_load_gpr(RTMP1, rb);
 			emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 			emit_store_gpr(RTMP0, ra);
-			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 			emit_store_gpr64(RTMP1, rd);
 			return true;
@@ -1797,7 +2208,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2); /* save EA before 64-bit load clobbers RTMP0 */
 			emit_load_gpr64(RTMP1, PPC_RS(op));
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
-			emit32(0xF9000000 | (RTMP2 << 5) | RTMP1);
+			a64_str_x_reg(RTMP1, RMEMBASE, RTMP2);
 			return true;
 
 		case 181: /* stdux rS,rA,rB */
@@ -1808,13 +2219,13 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2); /* save EA before 64-bit load clobbers RTMP0 */
 			emit_load_gpr64(RTMP1, PPC_RS(op));
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
-			emit32(0xF9000000 | (RTMP2 << 5) | RTMP1);
+			a64_str_x_reg(RTMP1, RMEMBASE, RTMP2);
 			return true;
 
 		case 84: /* ldarx rD,rA,rB — simplified as load */
 			emit_load_gpr(RTMP0, ra == 0 ? rb : ra);
 			if (ra != 0) { emit_load_gpr(RTMP1, rb); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1);
+			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0);
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 			emit_store_gpr64(RTMP1, rd);
 			return true;
@@ -1825,7 +2236,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2); /* save EA before 64-bit load clobbers RTMP0 */
 			emit_load_gpr64(RTMP1, PPC_RS(op));
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
-			emit32(0xF9000000 | (RTMP2 << 5) | RTMP1);
+			a64_str_x_reg(RTMP1, RMEMBASE, RTMP2);
 			/* CR0 = EQ (reserve succeeded) */
 			lazy_flush_cr0();
 			a64_ldr_w_imm(RTMP0, RSTATE, PPCR_CR);
@@ -1855,7 +2266,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			}
 		}
 		/* LDR W(RTMP1), [X(RTMP0)] — load 32-bit from host address */
-		emit32(0xB9400000 | (RTMP0 << 5) | RTMP1); /* LDR Wt, [Xn] */
+		a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 		/* Byte-swap: PPC is big-endian, ARM64 is little-endian */
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV Wd, Wn */
 		emit_store_gpr(RTMP1, rd);
@@ -1871,14 +2282,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 		}
 		/* STR Wt, [Xn] */
-		emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+		a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 		return true;
 
 	case 34: /* lbz rD,d(rA) */
 		rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-		emit32(0x39400000 | (RTMP0 << 5) | RTMP1); /* LDRB Wt, [Xn] */
+		a64_ldrb_reg(RTMP1, RMEMBASE, RTMP0); /* LDRB Wt, [Xn] */
 		emit_store_gpr(RTMP1, rd);
 		return true;
 
@@ -1887,14 +2298,14 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		emit_load_gpr(RTMP1, rd);
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP2, (int32_t)simm); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-		emit32(0x39000000 | (RTMP0 << 5) | RTMP1); /* STRB Wt, [Xn] */
+		a64_strb_reg(RTMP1, RMEMBASE, RTMP0); /* STRB Wt, [Xn] */
 		return true;
 
 	case 40: /* lhz rD,d(rA) */
 		rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-		emit32(0x79400000 | (RTMP0 << 5) | RTMP1); /* LDRH Wt, [Xn] */
+		a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0); /* LDRH Wt, [Xn] */
 		emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1); /* REV16 Wd, Wn (byte-swap halfword) */
 		emit_store_gpr(RTMP1, rd);
 		return true;
@@ -1905,7 +2316,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1); /* REV16 */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP2, (int32_t)simm); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-		emit32(0x79000000 | (RTMP0 << 5) | RTMP1); /* STRH Wt, [Xn] */
+		a64_strh_reg(RTMP1, RMEMBASE, RTMP0); /* STRH Wt, [Xn] */
 		return true;
 
 	case 12: /* addic rD,rA,SIMM (sets XER[CA]) */
@@ -1989,7 +2400,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		emit_load_imm32(RTMP1, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); /* effective addr */
 		emit_store_gpr(RTMP0, ra); /* update rA */
-		emit32(0xB9400000 | (RTMP0 << 5) | RTMP1); /* LDR Wt, [Xn] */
+		a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV (byte-swap) */
 		emit_store_gpr(RTMP1, rd);
 		return true;
@@ -2002,7 +2413,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		emit_load_imm32(RTMP2, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); /* effective addr */
 		emit_store_gpr(RTMP0, ra); /* update rA */
-		emit32(0xB9000000 | (RTMP0 << 5) | RTMP1); /* STR */
+		a64_str_w_reg(RTMP1, RMEMBASE, RTMP0); /* STR */
 		return true;
 
 
@@ -2086,6 +2497,18 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		return true;
 	}
 
+	/* bc (Branch Conditional) — intra-block forward-branch optimization
+	 *
+	 * INVARIANT: find_forward_code_for_pc() is called ONLY with forward targets
+	 * (target_pc > pc). Backward branches MUST use emit_epilogue_with_pc() instead.
+	 *
+	 * Rationale: the spcflags poll (emit_entry_spcflags_poll) sits at chain_entry_start,
+	 * BEFORE insn_code_offset[0]. insn_code_offset[] tracks only the block body — i.e.,
+	 * addresses AFTER the poll. A direct native branch to insn_code_offset[i] bypasses
+	 * the poll entirely. For forward branches this is safe (they only run once per block
+	 * entry). For backward branches it creates a closed ARM64 loop that never returns to
+	 * the C dispatcher, starving interrupt delivery (VBL, spcflags) indefinitely.
+	 */
 	case 16: /* bc/bdnz/bdz/beq/bne family */
 	{
 		uint32_t bo = (op >> 21) & 0x1F;
@@ -2117,7 +2540,9 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 
 			if (!ctr_eq_zero) {
 				/* bdnz: branch if CTR != 0 */
-				uint32_t *target_code = find_code_for_pc(target_pc);
+				/* Forward-only: backward intra-block branches must return to the dispatcher
+				 * so the spcflags poll at block entry runs each iteration (VBL hang fix). */
+				uint32_t *target_code = (target_pc > pc) ? find_forward_code_for_pc(target_pc) : NULL;
 				if (target_code) {
 					int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 					if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2136,7 +2561,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				return true;
 			} else {
 				/* bdz: branch if CTR == 0 */
-				uint32_t *target_code = find_code_for_pc(target_pc);
+				/* Forward-only: same spcflags poll reason as bdnz above. */
+				uint32_t *target_code = (target_pc > pc) ? find_forward_code_for_pc(target_pc) : NULL;
 				if (target_code) {
 					int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 					if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2168,7 +2594,10 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 			emit32(0x12000000 | (RTMP0 << 5) | RTMP0); /* AND #1 */
 			/* BO[3] (bit 1 of BO): 1=branch if set, 0=branch if clear */
 			bool branch_if_set = cond_bit_val;
-			uint32_t *target_code = find_code_for_pc(target_pc);
+			/* Forward-only: backward intra-block branches bypass the spcflags poll
+			 * (poll is before insn_code_offset[0], not in find_forward_code_for_pc range).
+			 * A backward branch must return to the dispatcher so the poll runs. */
+			uint32_t *target_code = (target_pc > pc) ? find_forward_code_for_pc(target_pc) : NULL;
 			if (target_code) {
 				int32_t offset = (int32_t)((uint8_t *)target_code - (uint8_t *)jit_code_ptr);
 				if (offset >= -(1 << 20) && offset < (1 << 20)) { /* 19-bit signed ±1MB */
@@ -2374,7 +2803,8 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				return true;
 			}
 		}
-		case 150: /* isync */
+		case 150: /* isync — NOP (no emulated pipeline).  See icbi (case 982) for why
+		           * this must stay native: isync is ubiquitous in OS code. */
 			return true;
 
 		case 0: /* mcrf crfD,crfS — copy CR field */
@@ -2436,7 +2866,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit32(0x4A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); break;
 			case 33:  /* crnor:  ~(a | b) = NOR */
 				emit32(0x2A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* OR */
-				emit32(0x2A2003E0 | RTMP1); /* MVN Wd, Wn → ORN WZR, Wn */
+				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */
 				emit_load_imm32(RTMP2, 1);
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;
@@ -2444,15 +2874,24 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 				emit32(0x0A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* BIC */ break;
 			case 289: /* creqv:  ~(a ^ b) = XNOR */
 				emit32(0x4A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* XOR */
-				emit32(0x2A2003E0 | RTMP1); /* MVN */
+				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */
 				emit_load_imm32(RTMP2, 1);
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;
 			case 417: /* crorc:  a | ~b */
-				emit32(0x2A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* ORN */ break;
+				/* ORN gives a | ~b over the FULL 32-bit register: with 1-bit inputs the
+				 * result is 0xFFFFFFFE/0xFFFFFFFF, and the merge below ORs that whole
+				 * value into CR (CR becomes ~0) — this was the root cause of the
+				 * deterministic 68k-region boot crash (crorc miscompilation).
+				 * It is also wrong on truth value: crorc(0,1) must be 0.
+				 * Mask back to bit 0, same as the MVN-based ops above. */
+				emit32(0x2A200000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* ORN */
+				emit_load_imm32(RTMP2, 1);
+				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
+				break;
 			case 225: /* crnand: ~(a & b) */
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND */
-				emit32(0x2A2003E0 | RTMP1); /* MVN */
+				emit32(0x2A2003E0 | (RTMP1 << 16) | RTMP1); /* MVN RTMP1 = ~RTMP1 */
 				emit_load_imm32(RTMP2, 1);
 				emit32(0x0A000000 | (RTMP2 << 16) | (RTMP1 << 5) | RTMP1); /* AND #1 */
 				break;
@@ -2497,7 +2936,7 @@ static bool compile_one(uint32_t op, uint32_t pc) {
 		rd = PPC_RD(op); ra = PPC_RA(op); simm = PPC_SIMM(op);
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
-		emit32(0x79400000 | (RTMP0 << 5) | RTMP1); /* LDRH Wt, [Xn] */
+		a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0); /* LDRH Wt, [Xn] */
 		emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1); /* REV16 (byte-swap) */
 		/* Sign-extend from 16 to 32 bits */
 		emit32(0x13003C00 | (RTMP1 << 5) | RTMP1); /* SXTH Wd, Wn */
@@ -2722,7 +3161,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP1, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0x39400000 | (RTMP0 << 5) | RTMP1);
+		a64_ldrb_reg(RTMP1, RMEMBASE, RTMP0);
 		emit_store_gpr(RTMP1, rd);
 		return true;
 
@@ -2733,7 +3172,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP2, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0x39000000 | (RTMP0 << 5) | RTMP1);
+		a64_strb_reg(RTMP1, RMEMBASE, RTMP0);
 		return true;
 
 	case 41: /* lhzu rD,d(rA) */
@@ -2743,7 +3182,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP1, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0x79400000 | (RTMP0 << 5) | RTMP1);
+		a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0);
 		emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1);
 		emit_store_gpr(RTMP1, rd);
 		return true;
@@ -2755,7 +3194,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP1, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0x79400000 | (RTMP0 << 5) | RTMP1);
+		a64_ldrh_reg(RTMP1, RMEMBASE, RTMP0);
 		emit32(0x5AC00400 | (RTMP1 << 5) | RTMP1);
 		emit32(0x13003C00 | (RTMP1 << 5) | RTMP1);
 		emit_store_gpr(RTMP1, rd);
@@ -2769,7 +3208,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP2, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0x79000000 | (RTMP0 << 5) | RTMP1);
+		a64_strh_reg(RTMP1, RMEMBASE, RTMP0);
 		return true;
 
 	case 49: /* lfsu frD,d(rA) */
@@ -2778,7 +3217,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP1, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0xB9400000 | (RTMP0 << 5) | RTMP1);
+		a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0);
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1);
 		emit32(0x1E270000 | (RTMP1 << 5) | 0);
 		emit32(0x1E22C000 | (0 << 5) | 0);
@@ -2791,7 +3230,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP1, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0xF9400000 | (RTMP0 << 5) | RTMP1);
+		a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0);
 		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 		emit32(0x9E670000 | (RTMP1 << 5) | 0);
 		emit_store_fpr(0, rd);
@@ -2807,7 +3246,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP2, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0xB9000000 | (RTMP0 << 5) | RTMP1);
+		a64_str_w_reg(RTMP1, RMEMBASE, RTMP0);
 		return true;
 
 	case 55: /* stfdu frS,d(rA) */
@@ -2819,7 +3258,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_imm32(RTMP2, (int32_t)simm);
 		emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0);
 		emit_store_gpr(RTMP0, ra);
-		emit32(0xF9000000 | (RTMP0 << 5) | RTMP1);
+		a64_str_x_reg(RTMP1, RMEMBASE, RTMP0);
 		return true;
 
 	case 46: /* lmw rD,d(rA) — load multiple words */
@@ -2828,7 +3267,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
 		for (uint32_t r = rd; r < 32; r++) {
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1); /* LDR Wt, [Xn] */
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV */
 			emit_store_gpr(RTMP1, r);
 			if (r < 31) emit32(0x11001000 | (RTMP0 << 5) | RTMP0); /* ADD Wn, Wn, #4 */
@@ -2844,7 +3283,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		for (uint32_t r = rd; r < 32; r++) {
 			emit_load_gpr(RTMP1, r);
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV */
-			emit32(0xB9000000 | (RTMP0 << 5) | RTMP1); /* STR Wt, [Xn] */
+			a64_str_w_reg(RTMP1, RMEMBASE, RTMP0); /* STR Wt, [Xn] */
 			if (r < 31) emit32(0x11001000 | (RTMP0 << 5) | RTMP0); /* ADD +4 */
 		}
 		return true;
@@ -2855,7 +3294,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
 		/* Load 32-bit float, byte-swap, convert to double */
-		emit32(0xB9400000 | (RTMP0 << 5) | RTMP1); /* LDR Wt, [Xn] */
+		a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV Wd */
 		/* Move int to float reg: FMOV Sd, Wn */
 		emit32(0x1E270000 | (RTMP1 << 5) | 0); /* FMOV S0, Wn */
@@ -2869,7 +3308,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP1, (int32_t)simm); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
 		/* Load 64-bit, byte-swap */
-		emit32(0xF9400000 | (RTMP0 << 5) | RTMP1); /* LDR Xt, [Xn] (64-bit) */
+		a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Xt, [Xn] (64-bit) */
 		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xd, Xn (64-bit byte-swap) */
 		/* Move to FP reg: FMOV Dd, Xn */
 		emit32(0x9E670000 | (RTMP1 << 5) | 0); /* FMOV D0, Xn */
@@ -2887,7 +3326,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP2, (int32_t)simm); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
-		emit32(0xB9000000 | (RTMP0 << 5) | RTMP1); /* STR Wt, [Xn] */
+		a64_str_w_reg(RTMP1, RMEMBASE, RTMP0); /* STR Wt, [Xn] */
 		return true;
 
 	case 54: /* stfd frS,d(rA) — store float double */
@@ -2900,7 +3339,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_ea_base(ra);
 		if (simm) { emit_load_imm32(RTMP2, (int32_t)simm); emit32(0x0B000000 | (RTMP2 << 16) | (RTMP0 << 5) | RTMP0); }
 		/* STR Xt, [Xn] (64-bit store) */
-		emit32(0xF9000000 | (RTMP0 << 5) | RTMP1);
+		a64_str_x_reg(RTMP1, RMEMBASE, RTMP0);
 		return true;
 
 	case 63: /* double-precision FP ops */
@@ -3345,7 +3784,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		if (ds) { emit_load_imm32(RTMP1, ds); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
 		if (sub == 2) {
 			/* lwa — load word algebraic (sign-extend 32→64) */
-			emit32(0xB9400000 | (RTMP0 << 5) | RTMP1); /* LDR Wt, [Xn] */
+			a64_ldr_w_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Wt, [Xn] */
 			emit32(0x5AC00800 | (RTMP1 << 5) | RTMP1); /* REV Wt, Wt (byte-swap) */
 			emit_store_gpr(RTMP1, rd);
 			/* Sign extend to hi: ASR Wt, Wt, #31 */
@@ -3353,7 +3792,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 			a64_str_w_imm(RTMP2, RSTATE, PPCR_GPR_HI(rd));
 		} else {
 			/* ld — load doubleword */
-			emit32(0xF9400000 | (RTMP0 << 5) | RTMP1); /* LDR Xt, [Xn] */
+			a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Xt, [Xn] */
 			emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xt, Xt (byte-swap 64-bit) */
 			emit_store_gpr64(RTMP1, rd);
 			if (sub == 1 && ra != 0) { /* ldu: update rA */
@@ -3377,7 +3816,7 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2); /* MOV RTMP2, RTMP0 */
 		emit_load_gpr64(RTMP1, rs);
 		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV Xt, Xt (byte-swap) */
-		emit32(0xF9000000 | (RTMP2 << 5) | RTMP1); /* STR Xt, [Xn] */
+		a64_str_x_reg(RTMP1, RMEMBASE, RTMP2); /* STR Xt, [Xn] */
 		if (sub == 1 && ra != 0) { /* stdu: update rA */
 			emit_load_ea_base(ra);
 			if (ds) { emit_load_imm32(RTMP1, ds); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
@@ -3394,14 +3833,14 @@ case 782: /* vpkpx — pack pixel 32→16 bit (approximate narrow) */
 		emit_load_ea_base(ra);
 		if (dq) { emit_load_imm32(RTMP1, dq); emit32(0x0B000000 | (RTMP1 << 16) | (RTMP0 << 5) | RTMP0); }
 		/* Load first doubleword → GPR[rd] */
-		emit32(0xF9400000 | (RTMP0 << 5) | RTMP1); /* LDR Xt, [Xn] */
+		a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP0); /* LDR Xt, [Xn] */
 		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1); /* REV64 */
 		/* Save EA to RTMP2 before emit_store_gpr64 clobbers RTMP0 via LSR */
 		emit32(0xAA000000 | (RTMP0 << 16) | (31 << 5) | RTMP2); /* MOV RTMP2, RTMP0 */
 		emit_store_gpr64(RTMP1, rd);
 		/* Load second doubleword → GPR[rd+1]: use saved EA in RTMP2 */
 		emit32(0x91002000 | (RTMP2 << 5) | RTMP2); /* ADD RTMP2, RTMP2, #8 */
-		emit32(0xF9400000 | (RTMP2 << 5) | RTMP1);
+		a64_ldr_x_reg(RTMP1, RMEMBASE, RTMP2);
 		emit32(0xDAC00C00 | (RTMP1 << 5) | RTMP1);
 		emit_store_gpr64(RTMP1, rd + 1);
 		return true;
@@ -3501,12 +3940,21 @@ bool ppc_jit_aarch64_init(size_t cache_size_kb)
 	jit_cache_size = cache_size_kb * 1024;
 	jit_cache_base = (uint8_t *)jit_cache_alloc(jit_cache_size);
 	if (!jit_cache_base) {
-		fprintf(stderr, "PPC-JIT-A64: failed to allocate %zu KB code cache\n", cache_size_kb);
+		fprintf(stderr, "PPC-JIT-A64: failed to allocate %zu KB code cache; "
+		        "falling back to interpreter (emulation continues, slower)\n", cache_size_kb);
+		/* Establish the bucket-head sentinels even though the code cache is
+		 * unavailable: jit_bc_lookup()/compile() are still reached from the
+		 * execute loop and MUST NOT walk a zero-initialised (cyclic) bucket. */
+		jit_bc_flush();
 		return false;
 	}
 	jit_cache_wp = (uint32_t *)jit_cache_base;
 	jit_cache_end = (uint32_t *)(jit_cache_base + jit_cache_size);
 	jit_bc_flush();
+#if defined(__APPLE__) && defined(__aarch64__)
+	fprintf(stderr, "PPC-JIT-A64: code cache allocated (MAP_JIT) %zu KB at %p\n",
+	        cache_size_kb, jit_cache_base);
+#endif
 	fprintf(stderr, "PPC-JIT-A64: code cache %zu KB at %p, block cache %d buckets / %d pool\n",
 	        cache_size_kb, jit_cache_base, JIT_BC_BUCKETS, JIT_BC_POOL);
 	return true;
@@ -3524,8 +3972,9 @@ void ppc_jit_aarch64_exit(void)
 void ppc_jit_aarch64_flush(void)
 {
 	/* Reset code cache write pointer and invalidate block address cache.
-	 * Called on Mac OS icbi/isync events or when the JIT must start fresh.
+	 * Called when the JIT must start completely fresh (cache full, explicit reset).
 	 * Contract: see SheepShaver/docs/AARCH64_JIT_RUNTIME_CONTRACT.md — flush discipline. */
+	JIT_LOG("JIT cache flush, blocks compiled so far: %d", jit_bc_pool_next);
 	jit_cache_wp = (uint32_t *)jit_cache_base;
 	jit_bc_flush();
 }
@@ -3535,16 +3984,155 @@ void ppc_jit_aarch64_invalidate_pc(uint32_t pc)
 	jit_bc_invalidate_pc(pc);
 }
 
+bool ppc_jit_aarch64_has_block(uint32_t pc)
+{
+	/* One hash-bucket walk; called from the interpreter inner loop after every
+	 * interpreted block, so it must stay allocation-free and cheap. */
+	const struct jit_bc_entry *e = jit_bc_lookup(pc);
+	return e != NULL && e->complete;
+}
+
+ppc_jit_entry_fn ppc_jit_aarch64_lookup_fast(uint32_t pc)
+{
+	/* Dispatch fast path: hash lookup only, no compile, tiny stack frame.
+	 * The dispatcher calls this before the full ppc_jit_aarch64_compile() —
+	 * for already-compiled blocks (the overwhelmingly common case) this avoids
+	 * compile()'s function-call and stack-frame overhead per block execution. */
+	const struct jit_bc_entry *e = jit_bc_lookup(pc);
+	return (e != NULL && e->complete) ? (ppc_jit_entry_fn)(void *)e->code : (ppc_jit_entry_fn)0;
+}
+
+/* Guest RAM range, cached from the compile() parameters so that
+ * ppc_jit_aarch64_is_compilable() can answer without them. */
+static uint32_t jit_ram_base_cached = 0;
+static uint32_t jit_ram_size_cached = 0;
+
+bool ppc_jit_aarch64_is_compilable(uint32_t pc)
+{
+	/* Range check only (2-4 compares).  Called from the interpreter inner loop
+	 * after every interpreted block: returns true if this PC belongs to the
+	 * JIT's domain (guest RAM or the registered ROM range), regardless of
+	 * whether a block has been compiled yet.  The dispatcher will compile it.
+	 *
+	 * This intentionally does NOT require an existing compiled block: code
+	 * first reached from inside an interpreter session (e.g. toolbox routines
+	 * called by the interpreter-only 68k emulator) would otherwise never meet
+	 * the compiler at all. */
+	if (!jit_cache_base)
+		return false; /* JIT disabled/unavailable — keep everything interpreted */
+	if (jit_ram_size_cached != 0 &&
+	    pc >= jit_ram_base_cached && pc < jit_ram_base_cached + jit_ram_size_cached)
+		return true;
+	if (jit_rom_size != 0 && pc >= jit_rom_base && pc < jit_rom_base + jit_rom_size)
+		return true;
+	return false;
+}
+
+void ppc_jit_aarch64_invalidate_range(uint32_t start, uint32_t end)
+{
+	/* Range-based JIT block invalidation for icbi/isync handling.
+	 *
+	 * Step 1: Revert any live chain-patches (B instructions) whose target PC
+	 * falls in [start, end).  If we only nullify the pool entry without reverting
+	 * the B, calling blocks would still jump directly to the now-invalid ARM64
+	 * code, bypassing the JIT gate and running stale translations.  Reverting
+	 * restores the original LDP+RET epilogue so the JIT gate is re-entered on
+	 * the next visit and the block is recompiled from fresh guest code.
+	 *
+	 * Step 2: Nullify pool entries for PCs in range.  jit_bc_lookup skips
+	 * entries with code==NULL, causing a recompile on the next lookup. */
+	jit_bc_ensure_init();
+	/* Step 1 — revert live chain-patches targeting the invalidated range.
+	 * jit_cache_begin_write makes the JIT region writable (Apple W^X).
+	 * We collect the first/last patched addresses for the icache flush range. */
+	uint32_t *flush_lo = NULL, *flush_hi = NULL;
+	jit_cache_begin_write();
+	for (int i = 0; i < chain_site_pool_next; i++) {
+		struct jit_chain_site *s = &chain_site_pool[i];
+		if (s->patched && s->patch_loc &&
+		    s->target_pc >= start && s->target_pc < end) {
+			*s->patch_loc = JIT_EPILOGUE_FIRST_LDP; /* restore LDP x27,x28,[sp],#16 */
+			if (!flush_lo || s->patch_loc < flush_lo) flush_lo = s->patch_loc;
+			if (!flush_hi || s->patch_loc > flush_hi) flush_hi = s->patch_loc;
+			s->patched = false;
+		}
+	}
+	/* jit_cache_end_write re-protects (W→X) and flushes the icache range.
+	 * Must always be called to pair with jit_cache_begin_write above. */
+	{
+		void *fw_addr = flush_lo ? (void *)flush_lo : (void *)jit_cache_base;
+		size_t fw_len = flush_lo ? (size_t)((uint8_t *)(flush_hi + 1) - (uint8_t *)flush_lo) : 0;
+		jit_cache_end_write(fw_addr, fw_len);
+	}
+	/* Step 2 — nullify block pool entries for invalidated PCs */
+	for (int i = 0; i < jit_bc_pool_next; i++) {
+		if (jit_bc_pool[i].code &&
+		    jit_bc_pool[i].pc >= start && jit_bc_pool[i].pc < end)
+			jit_bc_pool[i].code = NULL;
+	}
+}
+
+void ppc_jit_aarch64_set_rom_range(uint32_t guest_base, uint32_t size, const uint8_t *host_base)
+{
+	/* Register the Mac ROM as a second JIT-compilable range.  The ROM is
+	 * write-protected (READ|EXECUTE) after rom_patches are applied, so blocks
+	 * compiled from it are permanently valid — no SMC invalidation needed. */
+	jit_rom_base = guest_base;
+	jit_rom_size = size;
+	jit_rom_host = host_base;
+}
+
+/* Periodic cumulative-blocker report.  Kept OUT of ppc_jit_aarch64_compile():
+ * its 4 KB of local sort arrays would otherwise live in compile()'s stack frame,
+ * forcing __chkstk probing on every call — and compile() is called per block
+ * dispatch, making that measurable (profiled during boot). */
+__attribute__((noinline))
+static void jit_report_cum_blockers(void) {
+	fprintf(stderr, "PPC-JIT-A64-CUM: %u fail opcodes in %u blocks (%u attempted), top blockers:\n",
+	        jit_cum_fail_total, jit_blocks_attempted - jit_blocks_complete, jit_blocks_attempted);
+	/* Copy arrays for sorted output without destroying data */
+	uint32_t tmp_opc[64]; memcpy(tmp_opc, jit_cum_fail_opc, sizeof(tmp_opc));
+	for (int pass = 0; pass < 15; pass++) {
+		uint32_t max_v = 0; int max_i = -1;
+		for (int i = 0; i < 64; i++) if (tmp_opc[i] > max_v) { max_v = tmp_opc[i]; max_i = i; }
+		if (max_i < 0 || max_v == 0) break;
+		fprintf(stderr, "  opc=%d: %u blocks\n", max_i, max_v);
+		tmp_opc[max_i] = 0;
+	}
+	uint32_t tmp_xo[1024]; memcpy(tmp_xo, jit_cum_fail_xo31, sizeof(tmp_xo));
+	fprintf(stderr, "PPC-JIT-A64-CUM: top XO31 blockers:\n");
+	for (int pass = 0; pass < 10; pass++) {
+		uint32_t max_v = 0; int max_i = -1;
+		for (int i = 0; i < 1024; i++) if (tmp_xo[i] > max_v) { max_v = tmp_xo[i]; max_i = i; }
+		if (max_i < 0 || max_v == 0) break;
+		fprintf(stderr, "  XO=%d: %u blocks\n", max_i, max_v);
+		tmp_xo[max_i] = 0;
+	}
+}
+
+/* SS_JIT_DEBUG_PC=<hex>: trace every compile decision for one PC (diagnostic) */
+static uint32_t jit_debug_pc(void) {
+	static uint32_t v = 1; /* 1 = uninitialized (PC values are word-aligned, never 1) */
+	if (v == 1) {
+		const char *s = getenv("SS_JIT_DEBUG_PC");
+		v = s ? (uint32_t)strtoul(s, NULL, 16) : 0;
+	}
+	return v;
+}
+
 bool ppc_jit_aarch64_compile(
 	uint32_t pc,
 	const uint8_t *ram,
 	size_t ramsize,
 	ppc_jit_block *out)
 {
+	const bool dbg = (jit_debug_pc() != 0 && pc == jit_debug_pc());
 	/* Block address cache lookup — return cached block without recompiling.
 	 * Contract: see AARCH64_JIT_RUNTIME_CONTRACT.md — block lifecycle. */
 	const struct jit_bc_entry *cached = jit_bc_lookup(pc);
 	if (cached) {
+		if (dbg) fprintf(stderr, "JIT-DBG %08x: cache HIT complete=%d code=%p\n",
+		                 pc, cached->complete, (void *)cached->code);
 		out->code       = cached->code;
 		out->chain_code = cached->chain_code;
 		out->code_size    = 0; /* not tracked for cached entries */
@@ -3555,7 +4143,50 @@ bool ppc_jit_aarch64_compile(
 		return true;
 	}
 
-	if (!jit_cache_wp || jit_cache_wp >= jit_cache_end - 256) {
+	/* Code cache could not be allocated at init — JIT is permanently disabled,
+	 * the interpreter handles everything. Bail out quietly; logging here would
+	 * fire on every block and flood the terminal (the one-time fallback notice
+	 * was already printed in ppc_jit_aarch64_init). */
+	if (!jit_cache_base)
+		return false;
+
+	/* Cache the RAM range for ppc_jit_aarch64_is_compilable() (the interpreter
+	 * handoff check, which has no access to the compile parameters). */
+	jit_ram_base_cached = (uint32_t)(uintptr_t)ram;
+	jit_ram_size_cached = (uint32_t)ramsize;
+
+	/* Log first compile of each 64KB region (rate-limited — one line per 64K chunk).
+	 * 65536 entries × 1 byte = 64KB static array covers all 32-bit guest space. */
+	{
+		static uint8_t seen_64k[65536] = {0};
+		uint32_t chunk = pc >> 16;
+		if (!seen_64k[chunk]) {
+			seen_64k[chunk] = 1;
+			JIT_LOG("first compile in 64KB region %08x (pc=%08x)", chunk << 16, pc);
+		}
+	}
+
+	/* Fast out-of-range check: SheepMem, kernel data, and other non-compilable
+	 * PCs bail BEFORE the W^X toggle + prologue — on macOS the
+	 * pthread_jit_write_protect_np() pair is ~microseconds per call; paying it
+	 * for every non-compilable block visit makes JIT mode dramatically slower
+	 * than interpreter-only mode.  Compilable ranges: guest RAM and (when
+	 * registered) the immutable Mac ROM. */
+	if (jit_fetch_ptr(pc, ram, ramsize) == NULL) {
+		if (dbg) fprintf(stderr, "JIT-DBG %08x: fetch_ptr NULL (out of range; rom_base=%08x rom_size=%08x)\n",
+		                 pc, jit_rom_base, jit_rom_size);
+		out->complete  = false;
+		out->code      = NULL;
+		out->chain_code = NULL;
+		out->n_insns   = 0;
+		return false;
+	}
+
+	/* Cache-full margin must exceed the worst-case single-block emission:
+	 * 512 PPC insns × ~50 ARM64 insns each (pathological mfspr/mtspr packing)
+	 * ≈ 100 KB.  256 KB gives comfortable headroom and is negligible against
+	 * the full cache size. */
+	if (!jit_cache_wp || jit_cache_wp >= jit_cache_end - (256 * 1024 / 4)) {
 		/* Code cache full — flush everything and start over.
 		 * This invalidates all cached blocks, which is safe because
 		 * the code they point to is about to be overwritten. */
@@ -3567,6 +4198,12 @@ bool ppc_jit_aarch64_compile(
 	uint32_t *code_start = jit_cache_wp;
 	jit_code_ptr = jit_cache_wp;
 
+	/* W^X: make the JIT code cache writable on this (compile) thread for the
+	 * duration of block emission. jit_cache_end_write() below flips it back to
+	 * executable before this thread can call into the freshly compiled code.
+	 * No-op on Linux. */
+	jit_cache_begin_write();
+
 	/* Prologue: save callee-saved regs, set x20 = regs ptr from x0 */
 	a64_stp_pre(A64_FP, A64_LR, A64_SP, -16);
 	a64_stp_pre(19, RSTATE, A64_SP, -16);  /* save x19, x20 */
@@ -3575,11 +4212,39 @@ bool ppc_jit_aarch64_compile(
 	a64_stp_pre(25, 26, A64_SP, -16);      /* save x25, x26 */
 	a64_stp_pre(27, 28, A64_SP, -16);      /* save x27, x28 */
 	a64_mov_reg(RSTATE, A64_X0);
+	/* Load the guest-memory base (VMBaseDiff) into RMEMBASE (x19). All guest
+	 * memory accesses use register-offset addressing [RMEMBASE, EA]. The value
+	 * is a fixed per-build constant (NATMEM_OFFSET on DIRECT, 0 on REAL), so a
+	 * chained block re-using this frame inherits the same correct base. */
+	emit_load_mem_base();
 
 	/* Chain entry: code position after prologue.
-	 * Other blocks chain here via B <chain_code> — RSTATE (x20) must
-	 * already be valid and callee-saved regs remain on the outer frame. */
+	 * With JIT_BLOCK_CHAINING=0 this is recorded but never branched to —
+	 * blocks are only entered through the ABI entry (code_start) by the
+	 * dispatcher, which polls spcflags between blocks. */
 	uint32_t *chain_entry_start = jit_code_ptr;
+
+	/* Block-entry spcflags poll (dyngen gen_start equivalent): if any
+	 * actionable interrupt/event flag is pending, return to the C dispatcher
+	 * (which services it) instead of executing the block body.  The chain
+	 * entry deliberately INCLUDES this poll so that, once block chaining is
+	 * enabled, a chained cycle still returns to the dispatcher whenever a
+	 * flag becomes set — closing the "chained loop never services interrupts"
+	 * hole.  With chaining off it runs on every ABI entry and is behaviourally
+	 * transparent (the dispatcher already polled before entering).
+	 *
+	 * EXCEPTION: DR emulator blocks (ROM+0x460000..+0x500000).  These form
+	 * the 68k instruction dispatch loop; their bclr 5,8 interrupt gate
+	 * expects CR2.LT to be updated only between dispatch cycles.  A block-
+	 * entry poll would trigger check_spcflags → HandleInterrupt → CR2.LT=1
+	 * BEFORE the handler for the current 68k instruction runs, causing the
+	 * bclr to skip the handler and enter the interrupt path prematurely.
+	 * The C dispatcher's between-block spcflags check is sufficient here. */
+	bool in_dr_emulator = (jit_rom_size > 0x460000 &&
+	                       pc >= jit_rom_base + 0x460000 &&
+	                       pc <  jit_rom_base + 0x500000);
+	if (!in_dr_emulator)
+		emit_entry_spcflags_poll(pc);
 
 	jit_blocks_attempted++;
 	uint32_t cur_pc = pc;
@@ -3591,11 +4256,10 @@ bool ppc_jit_aarch64_compile(
 	ra_reset();
 
 	for (int i = 0; i < 512; i++) {
-		if (cur_pc < (uint32_t)(uintptr_t)ram ||
-		    cur_pc >= (uint32_t)(uintptr_t)ram + ramsize)
+		const uint8_t *p = jit_fetch_ptr(cur_pc, ram, ramsize);
+		if (!p)
 			break;
 
-		const uint8_t *p = ram + (cur_pc - (uint32_t)(uintptr_t)ram);
 		uint32_t op = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
 		              ((uint32_t)p[2] << 8) | p[3];
 
@@ -3625,7 +4289,16 @@ bool ppc_jit_aarch64_compile(
 		}
 
 		if (op == 0x00000000) { /* illegal — end of test code / zero-filled memory */
-			if (n_compiled == 0) return false; /* don't compile empty blocks */
+			if (dbg) fprintf(stderr, "JIT-DBG %08x: zero opcode at +%#x (n_compiled=%d)\n",
+			                 pc, (unsigned)(cur_pc - pc), n_compiled);
+			if (n_compiled == 0) {
+				/* Bail without emitting a usable block. Restore the cache to the
+				 * executable state we entered with (W^X; no-op on Linux). The
+				 * prologue bytes written so far are discarded — jit_cache_wp is
+				 * not advanced, so they will be overwritten by the next compile. */
+				jit_cache_end_write(code_start, (uint8_t *)jit_code_ptr - (uint8_t *)code_start);
+				return false; /* don't compile empty blocks */
+			}
 			lazy_flush_cr0();
 			emit_epilogue_with_pc(cur_pc);
 			n_compiled++;
@@ -3641,14 +4314,34 @@ bool ppc_jit_aarch64_compile(
 		}
 
 		if (!compile_one(op, cur_pc)) {
+			if (dbg) fprintf(stderr, "JIT-DBG %08x: compile_one FALLBACK->inline-interp at +%#x op=%08x (opc=%u xo=%u)\n",
+			                 pc, (unsigned)(cur_pc - pc), op, op >> 26, (op >> 1) & 0x3FF);
 			jit_total_miss++;
 			jit_miss_count[op >> 26]++;
 			jit_cum_fail_opc[op >> 26]++;
 			if ((op >> 26) == 31) jit_cum_fail_xo31[(op >> 1) & 0x3FF]++;
 			jit_cum_fail_total++;
+			/* Dyngen do_generic equivalent: instead of ending the block as
+			 * incomplete (which forces mixed JIT/interpreter execution of the
+			 * same PC and corrupts the ROM's 68k emulator), emit an inline call
+			 * to the interpreter handler for this one instruction. The block
+			 * stays COMPLETE — every instruction is accounted for, either by
+			 * native codegen or by an inline handler call.
+			 *
+			 * Flush lazy CR0 + register allocator first: the BLR clobbers NZCV
+			 * (where lazy CR0 lives) and x0-x17, and all guest state must be in
+			 * the regs struct before the handler reads it. The handler may have
+			 * been a branch, so we end the block here (bare epilogue, no PC
+			 * store, no chaining) and break. This differs from dyngen, which
+			 * continues compiling after an inline call (multiple inline calls per
+			 * block); breaking after one costs one extra dispatch round-trip per
+			 * fallback op but keeps the change minimal and correct. */
 			lazy_flush_cr0();
-			emit_epilogue_with_pc(cur_pc);
-			complete = false;
+			ra_flush_all();
+			emit_inline_interp_call(op, cur_pc);
+			n_compiled++;
+			cur_pc += 4;
+			/* complete stays true */
 			break;
 		}
 
@@ -3668,10 +4361,20 @@ bool ppc_jit_aarch64_compile(
 	if ((jit_blocks_attempted) % 100000 == 0 && jit_blocks_attempted > 0)
 		jit_report_misses();
 
-	/* If we didn't emit a ret yet, do it now */
+	/* If the block didn't end with a control-flow exit, emit a fallback epilogue.
+	 * Valid endings are RET (standard epilogue) or an unconditional B (compile-time
+	 * chain to another block's code — emitted by emit_epilogue_with_pc when the
+	 * branch target is already cached).  Treating chained endings as "no exit"
+	 * was a critical bug: it marked every chained block incomplete, so GATE2
+	 * permanently excluded exactly the hottest blocks (hot targets are compiled
+	 * first, so hot blocks are the most likely to chain). */
 	if (n_compiled > 0 && jit_code_ptr > code_start) {
 		uint32_t last = *(jit_code_ptr - 1);
-		if (last != 0xD65F03C0) { /* not a RET */
+		bool ends_with_ret    = (last == 0xD65F03C0);
+		bool ends_with_branch = ((last & 0xFC000000) == 0x14000000); /* B <imm26> */
+		if (!ends_with_ret && !ends_with_branch) {
+			/* Ran off the end (e.g. 512-insn limit) without a terminator:
+			 * emit an epilogue resuming at cur_pc and mark partial. */
 			lazy_flush_cr0();
 			emit_epilogue_with_pc(cur_pc);
 			complete = false;
@@ -3680,6 +4383,9 @@ bool ppc_jit_aarch64_compile(
 
 	size_t code_bytes = (uint8_t *)jit_code_ptr - (uint8_t *)code_start;
 	jit_cache_flush(code_start, code_bytes);
+	/* W^X: flip the region back to executable and invalidate the icache for the
+	 * bytes just written (on Apple). Must happen before any call into code_start. */
+	jit_cache_end_write(code_start, code_bytes);
 	jit_cache_wp = jit_code_ptr;
 
 	out->code = code_start;
@@ -3697,8 +4403,8 @@ bool ppc_jit_aarch64_compile(
 		
 		if (!complete) {
 			/* Record the opcode that caused the failure */
-			if (cur_pc >= (uint32_t)(uintptr_t)ram && cur_pc < (uint32_t)(uintptr_t)ram + ramsize) {
-				const uint8_t *fail_p = ram + (cur_pc - (uint32_t)(uintptr_t)ram);
+			const uint8_t *fail_p = jit_fetch_ptr(cur_pc, ram, ramsize);
+			if (fail_p) {
 				uint32_t fail_op = ((uint32_t)fail_p[0] << 24) | ((uint32_t)fail_p[1] << 16) |
 				                   ((uint32_t)fail_p[2] << 8) | fail_p[3];
 				uint32_t fail_opc = fail_op >> 26;
@@ -3710,28 +4416,11 @@ bool ppc_jit_aarch64_compile(
 		
 		if (jit_blocks_attempted >= cum_report_at) {
 			cum_report_at += 100000;
-			fprintf(stderr, "PPC-JIT-A64-CUM: %u fail opcodes in %u blocks (%u attempted), top blockers:\n", jit_cum_fail_total, jit_blocks_attempted - jit_blocks_complete, jit_blocks_attempted);
-			/* Copy arrays for sorted output without destroying data */
-			uint32_t tmp_opc[64]; memcpy(tmp_opc, jit_cum_fail_opc, sizeof(tmp_opc));
-			for (int pass = 0; pass < 15; pass++) {
-				uint32_t max_v = 0; int max_i = -1;
-				for (int i = 0; i < 64; i++) if (tmp_opc[i] > max_v) { max_v = tmp_opc[i]; max_i = i; }
-				if (max_i < 0 || max_v == 0) break;
-				fprintf(stderr, "  opc=%d: %u blocks\n", max_i, max_v);
-				tmp_opc[max_i] = 0;
-			}
-			uint32_t tmp_xo[1024]; memcpy(tmp_xo, jit_cum_fail_xo31, sizeof(tmp_xo));
-			fprintf(stderr, "PPC-JIT-A64-CUM: top XO31 blockers:\n");
-			for (int pass = 0; pass < 10; pass++) {
-				uint32_t max_v = 0; int max_i = -1;
-				for (int i = 0; i < 1024; i++) if (tmp_xo[i] > max_v) { max_v = tmp_xo[i]; max_i = i; }
-				if (max_i < 0 || max_v == 0) break;
-				fprintf(stderr, "  XO=%d: %u blocks\n", max_i, max_v);
-				tmp_xo[max_i] = 0;
-			}
+			jit_report_cum_blockers();
 		}
 	}
 
+	if (dbg) fprintf(stderr, "JIT-DBG %08x: compiled n=%d complete=%d\n", pc, n_compiled, complete);
 	out->complete = complete;
 	if (complete && n_compiled > 0) jit_blocks_complete++;
 
